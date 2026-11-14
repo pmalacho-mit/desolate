@@ -14,7 +14,8 @@ in its own devcontainer, with `DESOLATE_WORKSPACE=1` in the environment. That me
   the root within seconds. When a branch is ready, `desolate offer --base v3`. A person
   reviews it on the dashboard and pushes it, approving the exact commit on the Mac. Do not
   look for a way around that. It is the product working (principle P2), not an obstacle.
-- **Branches:** start from `origin/v3` and offer with `--base v3`. The person names pushed
+- **Branches:** start from `origin/v3` and offer with `desolate offer --base v3`. (A plain
+  `git push` offers too, but for the default branch, `main`, which is not where this work goes.) The person names pushed
   branches `mac/<topic>` and merges them into `v3` by pull request. Never aim at `main` or
   `release`: `release` is what v2's users install from.
 - **The network is the domain's proxy.** Hosts you need and do not have are the person's to
@@ -124,8 +125,15 @@ table, feature by feature.
 - **`desolate upstream`:** T1, T2, and against github.com.
 - **`desolate clone --keys-by-hand`:** against github.com.
 - **Pushes:** through the pusher, against github.com.
-- **`desolate task`** with Claude: install, first run, and the token substituted by the proxy,
-  tried with a fake token (Anthropic answered 401, as it should).
+- **The recipes** (`release/recipes/`), on the M1: `agent.sh` with the stand-in agent, to an
+  offer (T2 `12-agent` too); `claude.sh` with a fake token: installed, first run answered,
+  started, the token substituted by the proxy, and Anthropic answering 401, as it should.
+  `issues.sh` and `suede.sh` have not been run.
+- **A person's day in a workspace**, by hand on the M1: commits carry the Mac's git identity;
+  `git push` offers the branch and says nothing went to the remote; `git fetch` brings a
+  commit made on GitHub a moment before (3.7 s); a dev server opens at its workspace's name.
+  The editor itself was loaded, but not clicked through: its Source Control and Sync were
+  checked as the git commands they run.
 - **The pull-request link after a push:** T1 (the URL it builds).
 - **The "merged into <base>" mark:**
   - T1: a merge, a squash, a rebase, a half-merged branch, and a base that changed the file
@@ -147,7 +155,7 @@ table, feature by feature.
   sandbox.
 - **The Touch ID approver** (`host/approver/touchid.swift`): it has never been compiled or run.
   The terminal approver and the approval page are what is tested.
-- **A real Claude subscription token** in `desolate task`.
+- **A real Claude subscription token** in `recipes/claude.sh`.
 - **A compose service that is not glibc:** it gets no port relay and no editor.
 - **Safari and Firefox:** they cannot say whether the approval page's Approve button is covered,
   which Chrome can. Safari cannot resolve `*.localhost` at all.

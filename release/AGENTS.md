@@ -18,12 +18,13 @@ reach is unreachable on purpose, and is not a bug in the project.
 
 **No credential exists in this VM, and there is no route to use one.**
 
-- **Do:** commit, branch, rebase, stash, diff, log. `git fetch` works: `origin` is the
-  read-only mirror, so it needs no key and no network.
-- **To get what the remote has now:** `desolate fetch` asks the root to refresh the mirror,
-  then fetches. `origin/main` is then current.
+- **Do:** commit, branch, rebase, stash, diff, log. `git fetch` and `git pull` get what the
+  remote has now: the root refreshes its read-only mirror first, and `origin` is that mirror,
+  so they need no key and no network here. (`desolate fetch` does the same for every
+  repository at once.)
 - **When your work is ready:** commit it, then `desolate offer` (in the checkout, on the
-  branch). That hands the branch to the person, who reviews it and pushes it. **Offering is
+  branch), or `git push origin <branch>`, which does the same and says so. That hands the
+  branch to the person, who reviews it and pushes it. **Offering is
   not pushing, and nothing you do here pushes.** Do not look for a token, install `gh`, or
   add a remote: there is nothing to find. If the pull request should go into a branch other
   than the default one, say which: `desolate offer --base <branch>`.

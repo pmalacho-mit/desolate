@@ -21,7 +21,7 @@ describe("T1 the CLI's flags", () => {
   // (Verbs whose subcommand comes first are given one.)
   const lines: Record<string, string[]> = {
     domain: ["domain", "dev", "show"], root: ["root", "shell"], net: ["net", "log"], agent: ["agent", "list"],
-    factory: ["factory", "issues"], suede: ["suede", "changed", "a/b", "0".repeat(40)],
+    suede: ["suede", "changed", "a/b", "0".repeat(40)],
   };
   for (const verb of completionVerbs().filter((verb) => verb !== "help" && verb !== "completion"))
     it(`${verb}: an unknown flag is a usage error`, () => {

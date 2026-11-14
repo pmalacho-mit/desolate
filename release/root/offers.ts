@@ -75,8 +75,11 @@ export const take = async (domain: string, request: Record<string, unknown>): Pr
   const missing = await missingLfs(repo, request.commit);
   if (missing.length > 0) return { ok: false, error: `the offered commits reference ${missing.length} LFS object(s) the root does not have (${missing[0]!.slice(0, 12)}...)`, fix: "offer again from the workspace that made them" };
 
+  // An offer again without --base (a `git push`) keeps the base the branch was offered for.
+  const before = offersOf(domain).find((o) => o.repo === id && o.branch === request.branch);
+  const base = isBranch(request.base) ? request.base : before?.base;
   const offers = offersOf(domain).filter((o) => !(o.repo === id && o.branch === request.branch));
-  offers.push({ domain, repo: id, branch: request.branch, commit: request.commit, workspace: String(request.workspace ?? "").slice(0, 40), lfs: staged.length, at: new Date().toISOString(), ...(isBranch(request.base) ? { base: request.base } : {}) });
+  offers.push({ domain, repo: id, branch: request.branch, commit: request.commit, workspace: String(request.workspace ?? "").slice(0, 40), lfs: staged.length, at: new Date().toISOString(), ...(base ? { base } : {}) });
   writeJson(file(domain), offers);
   return { ok: true };
 };

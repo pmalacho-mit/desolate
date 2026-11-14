@@ -64,7 +64,7 @@ workspace nests-dev/w1 is up  [NOT ISOLATED: fake backend]
   dev servers  http://nests-dev-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor nests-dev/w1 --open      its editor, in your browser
-      desolate exec nests-dev/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec nests-dev/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## a second workspace in the domain
@@ -84,7 +84,7 @@ workspace nests-dev/issue-12 is up  [NOT ISOLATED: fake backend]
   dev servers  http://nests-dev-issue-12-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor nests-dev/issue-12 --open      its editor, in your browser
-      desolate exec nests-dev/issue-12 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec nests-dev/issue-12 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## fetch, then start from the remote's main
@@ -99,7 +99,7 @@ workspace nests-dev/fresh is up  [NOT ISOLATED: fake backend]
   dev servers  http://nests-dev-fresh-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: mirrors refreshed <duration>, asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor nests-dev/fresh --open      its editor, in your browser
-      desolate exec nests-dev/fresh -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec nests-dev/fresh -- <command>     a command in its devcontainer (bash, for a shell)
 fetching acme/consumer with the read key
 fetching acme/widgets with the read key
 [exit 0]
@@ -131,7 +131,7 @@ workspace other/w1 is up  [NOT ISOLATED: fake backend]
   dev servers  http://other-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor other/w1 --open      its editor, in your browser
-      desolate exec other/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec other/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## exec and list
@@ -181,7 +181,7 @@ workspace nests-dev/taker is up  [NOT ISOLATED: fake backend]
   dev servers  http://nests-dev-taker-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor nests-dev/taker --open      its editor, in your browser
-      desolate exec nests-dev/taker -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec nests-dev/taker -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## remove a domain

@@ -1,16 +1,20 @@
-# desolate: coding agents in VMs of their own, on your Mac
+# desolate: development in VMs of their own, on your Mac
 
-**desolate** (dev + isolate) lets you work alongside coding agents without handing them your
-machine, your credentials or your remotes. Each agent works in a **workspace**: a VM with
-its own checkouts, the project's devcontainer and an editor in a browser tab, no keys, and
-no network but its own proxy. It commits freely and offers its work; you review it in the
-root VM's dashboard, and a push happens only when you approve the exact commit, with one
-click.
+**desolate** (dev + isolate) is a way to develop without letting the code you work on reach
+your machine, your credentials or your remotes. A project's code, its dependencies and its
+dev servers run in a **workspace**: a VM with its own checkouts, the project's devcontainer
+and an editor in a browser tab, no keys, and no network but its own proxy. A dependency with
+a malicious install script, a compromised build tool, or a coding agent you handed a task:
+what any of them can reach is that VM. You review what was committed in the root VM's
+dashboard, and a push happens only when you approve the exact commit, with one click.
+
+You work in a workspace as in any development environment; an agent works in one the same
+way, with the same limits. Neither needs anything from the other.
 
 ![The dashboard: what needs you on top, then each domain's workspaces and their live branches](docs/assets/dashboard.png)
 
-**Start here: [docs/getting-started.md](docs/getting-started.md)**: from nothing to an agent
-working on your repository, in under half an hour (most of it the first download). Below:
+**Start here: [docs/getting-started.md](docs/getting-started.md)**: from nothing to working on
+your repository in a workspace, in under half an hour (most of it the first download). Below:
 the one rule to keep, the shape of the stack, the commands, and the principles; the details
 are in [docs/reference.md](docs/reference.md). The design and its
 reasons are in [`move-to-vms.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/move-to-vms.md); the security decisions and their
@@ -23,17 +27,18 @@ audits in [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/isolated-devc
 That is the state of computing, not something desolate can remove: your Mac controls every
 VM, and the root VM holds the keys that write to your remotes. So:
 
-- code an agent wrote, or a dependency you have not read, runs **in a workspace**: that is
-  what workspaces are for;
+- code you have not read (a dependency, a pull request's branch, what an agent wrote) runs
+  **in a workspace**: that is what workspaces are for;
 - in the root you **look and decide**. The root gives you a dashboard, a diff that is plain
   text, and a terminal with ordinary git (`fetch`, `log`, `diff`, `checkout`, `merge`,
-  `push`). All of that is safe on a tree an agent wrote, and desolate's tests attack it
+  `push`). All of that is safe on a tree from a workspace, and desolate's tests attack it
   ([`tests/v3/t2/10-hostile-content.test.ts`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/tests/v3/t2/10-hostile-content.test.ts));
 - in the root you do **not** build, install, test or open the tree in a tool that runs
-  tasks. `git checkout dev/some-branch` is fine; `npm install` after it is running an
-  agent's code beside your keys. There is no editor in the root, on purpose.
+  tasks. `git checkout dev/some-branch` is fine; `npm install` after it is running that
+  branch's code beside your keys. There is no editor in the root, on purpose.
 
-Keep that rule, and what an agent can reach is its own VM and the hosts you allowed.
+Keep that rule, and what the code you work on can reach is its own VM and the hosts you
+allowed.
 
 ## The shape of it
 
@@ -44,8 +49,8 @@ host (your Mac)      the desolate CLI and one daemon: the port forwarder and eac
                      domains/<d>/ (each domain's clones, outbox and inbox)
 root VM              every deploy key, the mirrors, your clones, one proxy per workspace.
                      Runs no workspace code. Pushes start here, and only from you.
-workspace VMs        one per workspace, in a domain. Its checkouts, its agent. One link out:
-                     to its own proxy.
+workspace VMs        one per workspace, in a domain. Its checkouts, its devcontainer, its
+                     editor, and whatever runs there. One link out: to its own proxy.
 ```
 
 A **domain** is a trust boundary: a set of repositories and network rules shared by every
@@ -65,11 +70,12 @@ desolate domain dev size --cpus 4 --memory 12g       # its workspaces' size (def
 desolate ui --open                                   # the dashboard, in Chrome or Firefox (not Safari)
 desolate editor dev/issue-12 --open                  # its editor (VSCodium, in its VM), in a tab:
                                                      # every checkout of the workspace in one window
-desolate exec dev/issue-12 -- <an agent, or any command>     # in its devcontainer (--vm: the VM itself)
+desolate exec dev/issue-12 -- bash                   # a shell in its devcontainer (--vm: the VM itself)
+desolate agent start dev/issue-12 -- npm run dev     # a program kept running there: a dev server, an agent
 desolate domain dev secret set MYAPP-OPENAI-KEY --hosts api.openai.com --headers authorization
                                                      # the value on stdin; workspaces send the name
 desolate ports                                       # each dev server's URL, at the port it has inside
-desolate status dev/issue-12 --json                  # what the agent says of its work
+desolate status dev/issue-12 --json                  # what the workspace says of its work
 desolate list                                        # each workspace, and the branch each checkout is on now
 desolate offers                                      # what workspaces have offered: needs you
 desolate branches dev                                # every branch the domain has, offered or not;
@@ -81,18 +87,20 @@ desolate git acme/widgets --open                     # git in your browser: a sh
 desolate upstream acme/consumer lib acme/lib --from dev/fix   # a vendored suede dependency's change, proposed to it
                                                      # (suede's own upstream, pinned; you approve the push)
 desolate events                                      # what happens, as JSON lines, for your own scripts
-desolate notify                                      # ... or as notifications: a push waiting, an agent asking
+desolate notify                                      # ... or as notifications: a push waiting, a workspace asking
 desolate root shell                                  # ordinary git on your clones: fetch --all, diff, push
 desolate approve                                     # ... and this approves a `git push origin` made there
 desolate approve --web                               # or: the approval page's address, for one click
 ```
 
-Inside a workspace: `git fetch` (from the mirror: no key, no network), `desolate fetch`
-(ask the root to refresh the mirror first), `desolate offer` (mark a branch ready for you;
-`--base <branch>` names the branch its pull request goes into). After the push, desolate
-gives GitHub's page for opening that pull request, filled in, for you to create as yourself.
+Inside a workspace, git works as you expect, within what a workspace may do: `git fetch` and
+`git pull` get what the remote has now (the root refreshes its mirror first; the workspace
+reaches no remote itself), and `git push` hands your branch to the root, as `desolate offer`
+does (`--base <branch>` names the branch its pull request goes into), for you to review and
+push. After the push, desolate gives GitHub's page for opening that pull request, filled
+in, for you to create as yourself.
 Offering is not how work reaches the root: every commit on every branch is written out as
-the agent makes it, and the root imports it within seconds (`desolate branches`, the
+it is made, and the root imports it within seconds (`desolate branches`, the
 dashboard's Branches, `git fetch <domain>` in the git VM). An offer says "this is ready", and
 brings the branch's new LFS objects with it. And `desolate status set green "ready: ..."`
 says how the work is going. See [`AGENTS.md`](AGENTS.md), which is what an
@@ -108,8 +116,10 @@ cannot take is approving a push, so a script's work ends at an offer.
 - [docs/reference.md](docs/reference.md): how approval works, the git terminal, `desolate events`,
   what the root takes from a workspace, devcontainers, secrets, the macOS firewall dialog, what
   is and is not done, and where the code is.
-- [docs/agents.md](docs/agents.md): agents kept running and attached to (no tmux), Claude Code,
-  and the factories: GitHub issues to agents in parallel, and suede upstreaming.
+- [docs/agents.md](docs/agents.md): programs kept running in a workspace and attached to (no
+  tmux), coding agents among them, and Claude Code start to finish.
+- [recipes/](recipes/README.md): scripts of ordinary desolate commands for tasks you do often:
+  an agent on a task, Claude Code, GitHub issues to agents in parallel, suede upstreaming.
 - [docs/suede.md](docs/suede.md): a vendored suede dependency changed in a consumer, proposed
   back to the dependency: `desolate upstream`, and the suede factory.
 - [docs/developing-desolate.md](docs/developing-desolate.md): desolate developed from a desolate
@@ -133,8 +143,8 @@ a control showing the test would have noticed.
 - **P4. Every `.git` has exactly one owner, and git runs only under its owner.** The root
   never runs git in a domain's repository. Work crosses between owners only as data: a bundle
   file, LFS objects checked against their ids, or a read-only mirror.
-- **P5. A boundary is enforced outside what it contains.** Assume an agent is root inside its
-  VM. Its network path, its mounts and its view of other domains are decided by the host and
+- **P5. A boundary is enforced outside what it contains.** Assume whatever runs in a workspace
+  (a dependency, an agent, you by mistake) is root inside its VM. Its network path, its mounts and its view of other domains are decided by the host and
   the root, never by anything inside the VM.
 - **P6. Fail closed, and say so.** A step that cannot be checked refuses rather than
   proceeding. Every refusal names what to do. A probe that failed to run is not a probe that

@@ -8,12 +8,12 @@ you deciding, and nothing pushed that you did not approve.
 
 There are two ways, for two situations:
 
-| | `desolate upstream` | `desolate factory suede` |
+| | `desolate upstream` | the recipe `recipes/suede.sh` |
 |---|---|---|
 | You start from | a consumer branch you have read and want proposed | a push to a consumer's default branch |
 | Who ports the change | nobody: suede's own split, mechanical | an agent, in the dependency's own checkout |
 | The branch it makes | `downstream/<owner>/<consumer>-<commit>` (suede's) | `upstream/<consumer>-<commit>` |
-| The pull request | the dependency's own `suede-downstream-to-main` Action opens it | the factory opens it with your `gh` |
+| The pull request | the dependency's own `suede-downstream-to-main` Action opens it | you open it, from the page desolate gives after the push |
 | Needs | the dependency cloned (pushable) | a domain holding the consumer and the dependency |
 
 Both end in an ordinary push: the approval page names the dependency, the branch and the
@@ -82,14 +82,16 @@ the push goes to the dependency you named either way.
 Exit codes: 0 proposed (a pull request is open, or there was nothing new), 1 refused or failed,
 2 pushed but no pull request within the wait, 64 usage.
 
-## `desolate factory suede`: should any of this go upstream?
+## The recipe `recipes/suede.sh`: should any of this go upstream?
 
-When a consumer's default branch is pushed, the factory works out which vendored dependencies
-the push changed and, for each that the domain `suede` holds, starts an agent in a workspace
+When a consumer's default branch is pushed, the recipe asks the root which vendored
+dependencies which vendored dependencies
+the push changed (`desolate suede changed`) and, for each that the domain `suede` holds, starts an agent in a workspace
 with the dependency checked out on `upstream/<consumer>-<commit>`. The agent decides whether
 the change belongs upstream, makes it in the dependency's own layout (under `release/` on
 `main`), runs its tests and offers the branch. You push it (the approval page, as always), and
-the factory opens the pull request. See [agents.md](agents.md#the-suede-factory-desolate-factory-suede).
+open the pull request from the page desolate gives. See [agents.md](agents.md#suede-dependencies-recipessuedesh)
+and the recipe itself, [`recipes/suede.sh`](../recipes/suede.sh).
 
 ## What not to do
 

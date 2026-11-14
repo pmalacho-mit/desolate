@@ -75,6 +75,7 @@ docker_ready() {
   docker image inspect desolate/base:latest >/dev/null 2>&1 || need "the base image desolate/base:latest is not in Docker's image store" "sudo release/image/build.sh --out <dir>   (on Linux; it imports the image)"
   command -v git-lfs >/dev/null 2>&1 || need "git-lfs is needed on this machine to make the test repositories" "apt-get install git-lfs  /  brew install git-lfs"
   command -v python3 >/dev/null 2>&1 || need "python3 is needed (tests/v3/lib/person.py plays the person at a terminal)" "install python3"
+  command -v jq >/dev/null 2>&1 || need "jq is needed (the recipes in release/recipes/ use it, and T2 runs one)" "apt-get install jq  /  brew install jq"
 }
 
 t2() {

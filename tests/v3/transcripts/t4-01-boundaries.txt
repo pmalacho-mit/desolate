@@ -74,7 +74,7 @@ workspace a/w1 is up
   dev servers  http://a-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor a/w1 --open      its editor, in your browser
-      desolate exec a/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec a/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## root in the VM against the read-only shares
@@ -136,7 +136,7 @@ workspace b/w1 is up
   dev servers  http://b-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor b/w1 --open      its editor, in your browser
-      desolate exec b/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec b/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## destroy

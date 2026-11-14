@@ -121,7 +121,7 @@ $ desolate clone acme/widgets
   write key: registered (it asks you before every push)
 cloned acme/widgets: 1 branch(es), default main, 1 LFS object(s); pushable.
 domain acme--widgets: made for acme/widgets.
-next: desolate up acme--widgets   (or: desolate task acme--widgets "<what to do>")
+next: desolate up acme--widgets   (a workspace: a VM with its checkout, its devcontainer and an editor)
 fetching acme/widgets with the read key
 [exit 0]
 
@@ -195,7 +195,7 @@ $ desolate clone acme/consumer --no-push
   read key: registered
 cloned acme/consumer: 1 branch(es), default main, 0 LFS object(s); read-only (no write key).
 domain acme--consumer: made for acme/consumer.
-next: desolate up acme--consumer   (or: desolate task acme--consumer "<what to do>")
+next: desolate up acme--consumer   (a workspace: a VM with its checkout, its devcontainer and an editor)
 fetching acme/consumer with the read key
 [exit 0]
 
@@ -214,7 +214,7 @@ $ desolate clone acme/widgets
   write key: registered (it asks you before every push)
 cloned acme/widgets: 1 branch(es), default main, 1 LFS object(s); pushable.
 domain acme--widgets: already holds acme/widgets.
-next: desolate up acme--widgets   (or: desolate task acme--widgets "<what to do>")
+next: desolate up acme--widgets   (a workspace: a VM with its checkout, its devcontainer and an editor)
 fetching acme/widgets with the read key
 [exit 0]
 
@@ -222,7 +222,7 @@ $ desolate clone other/widgets --no-push
   read key: registered
 cloned other/widgets: 1 branch(es), default main, 0 LFS object(s); read-only (no write key).
 domain other--widgets: made for other/widgets.
-next: desolate up other--widgets   (or: desolate task other--widgets "<what to do>")
+next: desolate up other--widgets   (a workspace: a VM with its checkout, its devcontainer and an editor)
 fetching other/widgets with the read key
 [exit 0]
 
@@ -230,7 +230,7 @@ $ desolate clone acme/lib --no-push --domain acme--widgets
   read key: registered
 cloned acme/lib: 1 branch(es), default main, 0 LFS object(s); read-only (no write key).
 domain acme--widgets: acme/lib added.
-next: desolate up acme--widgets   (or: desolate task acme--widgets "<what to do>")
+next: desolate up acme--widgets   (a workspace: a VM with its checkout, its devcontainer and an editor)
 fetching acme/lib with the read key
 [exit 0]
 

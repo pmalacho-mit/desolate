@@ -24,6 +24,9 @@ export type WorkspacePlan = {
   /** The VM's size, as it was made (shared/size.ts). Absent for one made before sizes were
    *  recorded: it got the defaults of its day. */
   size?: { cpus: number; memoryMiB: number; diskGiB: number };
+  /** Who commits here: the person's own git identity on the Mac, when it has one (their
+   *  name and email are not credentials). Without it, the workspace's own name. */
+  author?: { name: string; email: string };
   /** Refresh origin/* from the mirror before creating worktrees. */
   fetch: boolean;
   createdAt: string;

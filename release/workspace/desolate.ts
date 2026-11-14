@@ -44,11 +44,15 @@ const repoOf = async (named: string | undefined): Promise<string> => {
 
 const [, , verb, ...args] = process.argv;
 if (verb === "fetch") {
-  const repos = args[0] ? [await repoOf(args[0])] : domainRepos();
+  // --mirror-only: the request alone, for `git fetch` (git-remote-desolate-mirror).
+  const only = args.includes("--mirror-only");
+  const named = args.filter((a) => a !== "--mirror-only");
+  const repos = named[0] ? [await repoOf(named[0])] : domainRepos();
   for (const repo of repos) {
     const reply = await request({ op: "fetch", repo, workspace: workspace.workspace });
     if (reply.ok !== true) fail(`the root could not refresh ${repo}: ${String(reply.error)}`, "on the host: desolate fetch " + repo);
-    const fetched = await run("git", ["-C", `/workspaces/${repo}`, "fetch", "--prune", "origin"]);
+    if (only) continue;
+    const fetched = await run("git", ["-C", `/workspaces/${repo}`, "fetch", "--prune", "origin"], { env: { ...process.env, DESOLATE_MIRROR_FRESH: "1" } });
     if (fetched.code !== 0) fail(`git fetch failed in ${repo}: ${fetched.stderr.trim()}`, "git -C /workspaces/" + repo + " fetch origin");
     const delivered = await importDeliveries(repo);
     process.stdout.write(`${repo}: the mirror is refreshed and origin/* is up to date${delivered.length ? `; delivered from the root: ${delivered.map((b) => `root/${b}`).join(", ")}` : ""}.\n`);
@@ -71,7 +75,7 @@ if (verb === "fetch") {
   const reply = await request({ op: "offer", repo, branch, commit, workspace: workspace.workspace, lfs, ...(base ? { base } : {}) });
   if (reply.ok !== true) fail(`the root did not take the offer: ${String(reply.error)}`, String(reply.fix ?? "on the host: desolate doctor"));
   process.stdout.write(`offered ${repo} ${branch} at ${commit.slice(0, 12)}${base ? `, for ${base}` : ""}${lfs.length ? `, with ${lfs.length} LFS object(s)` : ""}.\n`);
-  process.stdout.write("It is now under \"Needs you\" in the root. Offering is not pushing: a person reviews it there and pushes.\n");
+  process.stdout.write("It is under \"Needs you\" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.\n");
   if (dirty.stdout.trim()) process.stdout.write("note: the main checkout has uncommitted changes; only commits are offered.\n");
 } else if (verb === "sync") {
   for (const repo of domainRepos()) {
