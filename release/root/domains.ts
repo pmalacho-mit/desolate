@@ -117,7 +117,15 @@ type Wanted = { repo: string; kind: "main" | "worktree"; branch?: string };
 
 /** Decide what a new workspace is: its checkouts, and that nobody else holds them. One
  *  workspace holds a given checkout at a time, the main checkout included (section 5.2). */
-export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown }): Workspace => {
+/** A git identity as the host read it: printable, short, or none. */
+const authorOf = (value: unknown): { name: string; email: string } | undefined => {
+  const v = value as { name?: unknown; email?: unknown } | null;
+  const clean = (x: unknown) => (typeof x === "string" ? x.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 200) : "");
+  const name = clean(v?.name), email = clean(v?.email);
+  return name && /^[^\s@]+@[^\s@]+$/.test(email) ? { name, email } : undefined;
+};
+
+export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown; author?: unknown }): Workspace => {
   const d = domain(slugOf(args.domain, "domain"));
   if (d.repos.length === 0) refuse(`the domain '${d.slug}' has no repositories yet`, `desolate domain ${d.slug} add --repo <owner>/<repo>`);
   const existing = workspaces(d.slug);
@@ -173,6 +181,7 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   const value: Workspace = {
     ...(d.env ? { env: d.env } : {}),
     ...(size ? { size: { cpus: size.cpus, memoryMiB: size.memoryMiB, diskGiB: size.diskGiB } } : {}),
+    ...(authorOf(args.author) ? { author: authorOf(args.author)! } : {}),
     domain: d.slug, workspace: workspaceName, vm: workspaceVmName(args.instance, d.slug, workspaceName),
     title: d.title, checkouts, fetch: args.fetch === true, createdAt: new Date().toISOString(), state: "planned",
   };

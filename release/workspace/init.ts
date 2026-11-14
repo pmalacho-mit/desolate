@@ -19,8 +19,9 @@ if (!plan) {
   process.exit(1);
 }
 
+// (DESOLATE_MIRROR_FRESH: a `--fetch` here follows the host's own refresh of the mirror.)
 const git = async (dir: string | null, args: string[]) => {
-  const result = await run("git", dir ? ["-C", dir, ...args] : args, { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeoutMs: 600_000 });
+  const result = await run("git", dir ? ["-C", dir, ...args] : args, { env: { ...process.env, GIT_TERMINAL_PROMPT: "0", DESOLATE_MIRROR_FRESH: "1" }, timeoutMs: 600_000 });
   if (result.code !== 0) throw new Error(`git ${args.join(" ")} failed${dir ? ` in ${dir}` : ""}: ${(result.stderr || result.stdout).trim().slice(-800)}`);
   return result.stdout.trim();
 };
@@ -73,6 +74,11 @@ for (const checkout of plan.checkouts) {
       await git(clone, ["checkout", "--quiet", branch]);
       made.push(`domain clone ${checkout.repo}`);
     }
+    // `git push` offers the branch to the root instead (git-remote-desolate-offer): set on
+    // every start, so a clone made before this has it too.
+    await git(clone, ["config", "remote.origin.pushurl", `desolate-offer::${checkout.repo}`]);
+    // And `git fetch` asks the root to refresh the mirror first (git-remote-desolate-mirror).
+    await git(clone, ["config", "remote.origin.url", `desolate-mirror::${checkout.repo}`]);
     if (plan.fetch) await git(clone, ["fetch", "--quiet", "--prune", "origin"]);
     if (checkout.kind === "worktree" && !fs.existsSync(path.join(checkout.path, ".git"))) {
       const exists = await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", `refs/heads/${checkout.branch}`]);
@@ -85,11 +91,13 @@ for (const checkout of plan.checkouts) {
   });
 }
 
-// An identity for commits, if the workspace has none: who worked here is the workspace.
+// An identity for commits, if the workspace has none: the person's (their git identity on
+// the Mac, in the plan), else the workspace's own name. The devcontainer gets the same
+// (devcontainer.ts). Changed with `git config --global user.name ...` as anywhere.
 const who = await run("git", ["config", "--global", "user.email"]);
 if (who.code !== 0) {
-  await git(null, ["config", "--global", "user.name", `${plan.domain}/${plan.workspace}`]);
-  await git(null, ["config", "--global", "user.email", `${plan.workspace}@${plan.domain}.desolate.invalid`]);
+  await git(null, ["config", "--global", "user.name", plan.author?.name ?? `${plan.domain}/${plan.workspace}`]);
+  await git(null, ["config", "--global", "user.email", plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`]);
 }
 fs.mkdirSync(path.join(os.homedir(), ".desolate"), { recursive: true });
 fs.writeFileSync(path.join(os.homedir(), ".desolate", "workspace.json"), JSON.stringify(plan, null, 2));

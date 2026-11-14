@@ -56,16 +56,11 @@ const HELP = `desolate: a VM per workspace, an editor inside it, and every push 
                                                                  host, on your terminal
   desolate events [--replay <n>]                                 what happens, as JSON lines, until stopped: pushed,
                                                                  offered, status, approval-waiting, workspace-up, ...
-  desolate task <domain> "<what to do>" [--name <w>] [--branch <b>] [--attach] [-- <agent...>]
-                                                                 a workspace, its branch and an agent on it, at once
   desolate agent start <domain>/<workspace> [--name <n>] [--checkout <repo>] -- <command...>
-                                                                 an agent kept running in a workspace (no tmux)
+                                                                 any program kept running in a workspace (a dev server,
+                                                                 a watcher, a coding agent), with its terminal; no tmux
   desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   your terminal on it; Ctrl-] detaches
-  desolate agent list [<domain>[/<workspace>]] [--json]          every agent, in every workspace
-  desolate factory issues --repo <owner/repo> --domain <d> [--max 3]
-                                                                 labelled issues -> workspaces with agents, in parallel
-  desolate factory suede [--domain suede]                        pushes to a default branch -> an agent on each
-                                                                 vendored suede dependency they changed
+  desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
   desolate suede changed <owner/repo> <commit> [--from <commit>] [--json]
                                                                  which vendored suede dependencies a commit changed
   desolate upstream <consumer> <dependency-dir> <owner/repo> [--from <domain>/<branch>] [--no-wait] [--remote <url>]
@@ -292,19 +287,9 @@ const main = async (argv: string[]): Promise<number> => {
     else refuse("desolate agent what?", "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]", EXIT.usage);
     return EXIT.ok;
   }
-  if (verb === "task") {
-    // From a sentence to an agent at work on it (release/factory/task.ts).
-    const { RELEASE_DIR } = await import("./paths.ts");
-    const child = (await import("node:child_process")).spawn(process.execPath, ["--disable-warning=ExperimentalWarning", `${RELEASE_DIR}/factory/task.ts`, ...rest], { stdio: "inherit" });
-    return new Promise<number>((resolve) => child.on("close", (code) => resolve(code ?? 1)));
-  }
-  if (verb === "factory") {
-    // Harnesses on top of desolate (release/factory/): they drive this CLI and your gh.
-    const [which, ...args] = rest;
-    if (which !== "issues" && which !== "suede") refuse("desolate factory what?", "desolate factory issues --repo <owner/repo> --domain <d> | desolate factory suede [--domain <d>]", EXIT.usage);
-    const { RELEASE_DIR } = await import("./paths.ts");
-    const child = (await import("node:child_process")).spawn(process.execPath, ["--disable-warning=ExperimentalWarning", `${RELEASE_DIR}/factory/${which}.ts`, ...args], { stdio: "inherit" });
-    return new Promise<number>((resolve) => child.on("close", (code) => resolve(code ?? 1)));
+  if (verb === "task" || verb === "factory") {
+    // Recipes now: scripts of ordinary desolate commands, to read, run and change.
+    refuse(`'desolate ${verb}' is a recipe now`, verb === "task" ? 'release/recipes/claude.sh <domain> "<what to do>"   (or agent.sh, for any other program; see release/recipes/README.md)' : "release/recipes/issues.sh or release/recipes/suede.sh   (see release/recipes/README.md)", EXIT.usage);
   }
   if (verb === "suede" && rest[0] === "changed") {
     const { values, positionals } = flags(rest.slice(1), { from: { type: "string" } });

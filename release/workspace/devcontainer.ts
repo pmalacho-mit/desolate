@@ -113,6 +113,8 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
     bind("/etc/ssl/certs", "/desolate/ca", true),
     bind("/usr/local/bin/node", "/desolate/bin/node", true),
     bind("/desolate/release/workspace/desolate", "/usr/local/bin/desolate", true),
+    bind("/desolate/release/workspace/git-remote-desolate-offer", "/usr/local/bin/git-remote-desolate-offer", true),
+    bind("/desolate/release/workspace/git-remote-desolate-mirror", "/usr/local/bin/git-remote-desolate-mirror", true),
     bind("/desolate/release/workspace/status", "/desolate/status", true),
     bind("/desolate/cache", "/desolate/cache"),
     // The VM's own disk, at the same path (start.sh): binds for docker-outside-of-docker.
@@ -257,6 +259,11 @@ const main = async () => {
     /* no .gitattributes */
   }
   const lfsMissing = usesLfs && (await run("docker", ["exec", id, "sh", "-c", "git lfs version"])).code !== 0;
+  // Who commits from the editor and its terminals: the workspace's identity (init.ts: the
+  // person's, from the Mac), unless the container's user has one of its own. Without it a
+  // first `git commit` in the editor failed with "Please tell me who you are".
+  const identity = [plan.author?.name ?? `${plan.domain}/${plan.workspace}`, plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`];
+  await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "sh", "-c", 'git config --global user.email >/dev/null 2>&1 || { git config --global user.name "$1" && git config --global user.email "$2"; }', "_", ...identity]);
   // A compose service's own network, reached from the VM (bridge.ts): its listeners, its
   // `service:port` forwards, and the editor's server when it runs there.
   const compose = spec.dockerComposeFile !== undefined;

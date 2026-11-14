@@ -47,6 +47,10 @@ else
 fi
 # `desolate` and `/desolate/status` inside a workspace: its own small CLI.
 ln -sf "$HERE/desolate" /usr/local/bin/desolate
+# `git push` here offers the branch to the root (git-remote-desolate-offer).
+ln -sf "$HERE/git-remote-desolate-offer" /usr/local/bin/git-remote-desolate-offer
+# ... and `git fetch` asks the root to refresh the mirror first (git-remote-desolate-mirror).
+ln -sf "$HERE/git-remote-desolate-mirror" /usr/local/bin/git-remote-desolate-mirror
 "$HERE/net/up.sh" "$LINK"
 "$HERE/net/trust-ca.sh"
 # /desolate/status: say how the work is going (v2's, unchanged).

@@ -48,7 +48,7 @@ workspace svc/w1 is up  [NOT ISOLATED: fake backend]
   dev servers  http://svc-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor svc/w1 --open      its editor, in your browser
-      desolate exec svc/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec svc/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 $ desolate start svc/w1

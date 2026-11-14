@@ -446,6 +446,29 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.equal(now?.landed, null, "the branch moved on: no longer marked");
   });
 
+  it("git in a workspace: a fetch gets what the remote has now; a push offers, and says nothing went out", () => {
+    stack.step("git fetch and git push in a workspace");
+    // Someone else pushes to the remote. A plain `git fetch` in the workspace sees it: the
+    // root refreshes the mirror first (git-remote-desolate-mirror).
+    const theirs = stack.forge("commit", "acme/widgets", "elsewhere", "THEIRS.md", "pushed by someone else\n").trim();
+    const fetched = inWs("dev/w1", `cd ${WT} && git fetch 2>&1 && git rev-parse origin/elsewhere`);
+    assert.equal(fetched.stdout.trim().split("\n").pop(), theirs, fetched.stdout + fetched.stderr);
+    // A push offers the branch, and is reported refused so no origin/<branch> appears.
+    inWs("dev/w1", `cd ${WT} && git switch -q -c pushed-here && echo more >> README.md && git commit -qam 'from git push'`);
+    const tip = inWs("dev/w1", `cd ${WT} && git rev-parse HEAD`).stdout.trim();
+    const pushed = inWs("dev/w1", `cd ${WT} && git push origin pushed-here 2>&1`);
+    assert.notEqual(pushed.code, 0, "the push is not reported as done: nothing reached the remote");
+    assert.match(pushed.stdout, /offered acme\/widgets pushed-here at [0-9a-f]{12}/);
+    assert.match(pushed.stdout, /offered to the root, not pushed: nothing went to the remote/);
+    assert.equal(inWs("dev/w1", `cd ${WT} && git rev-parse --verify --quiet refs/remotes/origin/pushed-here`).stdout.trim(), "", "no origin/pushed-here");
+    const offers = JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as { branch: string; commit: string }[];
+    assert.ok(offers.some((o) => o.branch === "pushed-here" && o.commit === tip), JSON.stringify(offers));
+    assert.equal(forgeRefs("acme/widgets")["pushed-here"], undefined, "and the remote has nothing of it");
+    // A delete of a branch the remote has is refused, saying where branches are deleted.
+    assert.match(inWs("dev/w1", `cd ${WT} && git push origin :elsewhere 2>&1`).stdout, /deleting a branch is not something a workspace does/);
+    assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");
+  });
+
   it("the transcript reads as reviewed", () => {
     stack.checkTranscript("t2-04-offers");
   });

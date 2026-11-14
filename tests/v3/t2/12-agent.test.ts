@@ -1,10 +1,11 @@
 // T2 (fake backend). `desolate agent`: an agent kept running in a workspace without tmux,
 // attachable from the person's own terminal (workspace/agent-holder.py, host/agent.ts).
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { bootstrap, git, newStack } from "../lib/harness.ts";
+import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
@@ -56,12 +57,17 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     assert.equal(stack.desolate("agent", "start", "dev/w1", "--name", "../x", "--", "true").code, 64, "a name is a name");
   });
 
-  it("desolate task: a sentence becomes a workspace on its own branch, an agent at work in it, and an offer", async () => {
-    const agent = ["--", "bash", "/desolate/release/factory/echo-agent.sh"];
-    const started = stack.desolate("task", "dev", "Add a shout() greeting", ...agent);
+  it("the agent recipe: a sentence becomes a workspace on its own branch, a program at work in it, and an offer", async () => {
+    // A recipe is a script of ordinary desolate commands (release/recipes/): run here as a
+    // person runs it, with this stack's environment.
+    const recipe = (...args: string[]) => {
+      const ran = spawnSync(path.join(REPO_ROOT, "release", "recipes", "agent.sh"), args, { env: stack.env, encoding: "utf8" });
+      return { code: ran.status ?? 1, stdout: ran.stdout, stderr: ran.stderr };
+    };
+    const agent = ["--", "bash", "/desolate/release/recipes/echo-agent.sh"];
+    const started = recipe("dev", "Add a shout() greeting", ...agent);
     assert.equal(started.code, 0, started.stderr);
-    assert.match(started.stdout, /dev\/add-a-shout-greeting: starting, every repository on task\/add-a-shout-greeting/);
-    assert.match(started.stdout, /the agent is working on it\.\n {2}watch it: {3}desolate agent attach dev\/add-a-shout-greeting/);
+    assert.match(started.stdout, /dev\/add-a-shout-greeting: working on it, on task\/add-a-shout-greeting\.\n {2}watch it: {3}desolate agent attach dev\/add-a-shout-greeting/);
     // The stand-in agent writes its task down, commits, offers the branch and goes green.
     let offers: { branch: string; workspace: string }[] = [];
     for (let i = 0; i < 120 && !offers.some((o) => o.branch === "task/add-a-shout-greeting"); i++) {
@@ -72,14 +78,17 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     const log = stack.desolate("agent", "log", "dev/add-a-shout-greeting").stdout;
     assert.match(log, /task: Add a shout\(\) greeting/, "the sentence is the agent's task");
     // The same sentence again: a workspace of its own, never the first one's.
-    const again = stack.desolate("task", "dev", "Add a shout() greeting", ...agent);
+    const again = recipe("dev", "Add a shout() greeting", ...agent);
     assert.equal(again.code, 0, again.stderr);
-    assert.match(again.stdout, /dev\/add-a-shout-greeting-2: starting, every repository on task\/add-a-shout-greeting-2/);
+    assert.match(again.stdout, /dev\/add-a-shout-greeting-2: working on it, on task\/add-a-shout-greeting-2/);
     // Refused before anything is made.
-    assert.equal(stack.desolate("task", "dev").code, 64, "a task is a domain and a sentence");
-    const nowhere = stack.desolate("task", "nowhere", "Do it", ...agent);
-    assert.equal(nowhere.code, 64);
-    assert.match(nowhere.stderr, /there is no domain 'nowhere'/);
+    assert.equal(recipe("dev").code, 64, "a task is a domain, a sentence and a command");
+    assert.equal(recipe("dev", "Do it").code, 64, "... and the command");
+    assert.notEqual(recipe("nowhere", "Do it", ...agent).code, 0, "no such domain: `desolate up` refuses, and the recipe stops there");
+    // The old command says where it went.
+    const old = stack.desolate("task", "dev", "Do it");
+    assert.equal(old.code, 64);
+    assert.match(old.stderr, /'desolate task' is a recipe now/);
     for (const name of ["add-a-shout-greeting", "add-a-shout-greeting-2"]) stack.desolate("agent", "stop", `dev/${name}`);
   });
 });

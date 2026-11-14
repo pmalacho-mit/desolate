@@ -98,7 +98,7 @@ export const clone = async (name: string | undefined, options: { push: boolean; 
   out(`cloned ${repo}: ${fetched.branches} branch(es), default ${fetched.defaultBranch ?? "none"}, ${fetched.lfsObjects} LFS object(s); ${prepared.pushable ? "pushable" : prepared.anonymous ? "read-only, fetched anonymously" : "read-only (no write key)"}.`);
   if (domain) {
     out(domain.made ? `domain ${domain.slug}: made for ${repo}.` : domain.added ? `domain ${domain.slug}: ${repo} added.` : `domain ${domain.slug}: already holds ${repo}.`);
-    return out(`next: desolate up ${domain.slug}   (or: desolate task ${domain.slug} "<what to do>")`);
+    return out(`next: desolate up ${domain.slug}   (a workspace: a VM with its checkout, its devcontainer and an editor)`);
   }
   if (placed && "taken" in placed) out(`no domain was made: ${placed.taken.join(" and ")} is a domain already, holding other repositories.`);
   out(`next: desolate domain create <slug> --repo ${repo}   (or, to a domain you have: desolate domain <slug> add --repo ${repo}; or clone again with --domain <slug>)`);

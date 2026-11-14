@@ -48,7 +48,7 @@ workspace app/w1 is up  [NOT ISOLATED: fake backend]
   dev servers  http://app-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor app/w1 --open      its editor, in your browser
-      desolate exec app/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec app/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## the devcontainer comes up
@@ -90,7 +90,7 @@ workspace plain/w1 is up  [NOT ISOLATED: fake backend]
   dev servers  http://plain-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor plain/w1 --open      its editor, in your browser
-      desolate exec plain/w1 -- <agent>       an agent (or any command), in its devcontainer
+      desolate exec plain/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
 
 ## the spec changes

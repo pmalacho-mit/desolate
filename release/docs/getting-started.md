@@ -1,8 +1,11 @@
 # Getting started with desolate
 
-From nothing to a coding agent working on one of your repositories in a VM of its own, its
-work reviewed by you and pushed with one click. Under half an hour, most of it waiting for the
-first VM images to download.
+From nothing to working on one of your repositories in a VM of its own: its code, its
+dependencies and its dev servers run there, in the project's devcontainer, with an editor in
+your browser, and none of your credentials. What you commit is reviewed by you and pushed with
+one click. Under half an hour, most of it waiting for the first VM images to download.
+Handing a task to a coding agent is the same workspace, with a program working in it instead
+of you (step 6).
 
 ![The dashboard: what needs you on top, then each domain's workspaces and their live branches](assets/dashboard.png)
 
@@ -14,9 +17,8 @@ first VM images to download.
   - Lima **2.3 or newer** (`limactl --version`): older versions let a confined VM's pings out.
   - node **22.18 or newer**: desolate is TypeScript that node runs directly.
   - GitHub's CLI, signed in (`gh auth login`) as someone who can add deploy keys to the
-    repositories you want agents to work on: that is admin on the repository. Without it,
-    see step 3: such a repository can be read and worked on, and you push its branches
-    yourself, outside desolate.
+    repositories you want to work on: that is admin on the repository. Without it, see step
+    3 (`--keys-by-hand`, or `--no-push`).
 - **Chrome or Firefox.** desolate's pages live at names under `localhost`
   (`desolate.localhost`, `desolate-git.localhost`, ...). Those browsers resolve them; Safari
   does not.
@@ -43,7 +45,7 @@ desolate bootstrap
 ```
 
 This makes the **root VM**, which holds every deploy key and your repositories' mirrors and
-never runs an agent's code, then starts the host daemon, then runs `desolate doctor`. The
+never runs any repository's code, then starts the host daemon, then runs `desolate doctor`. The
 first time it downloads a base image and takes 5 to 10 minutes; after that, seconds. It ends
 with every check passed:
 
@@ -66,15 +68,16 @@ desolate clone you/app                        # makes a read and a write deploy 
   write key: registered (it asks you before every push)
 cloned you/app: 2 branch(es), default main, 2 LFS object(s); pushable.
 domain you--app: made for you/app.
-next: desolate up you--app   (or: desolate task you--app "<what to do>")
+next: desolate up you--app   (a workspace: a VM with its checkout, its devcontainer and an editor)
 ```
 
-- `clone` keeps the keys in the root VM, where nothing an agent runs can reach them, and
+- `clone` keeps the keys in the root VM, where nothing a workspace runs can reach them, and
   mirrors the repository (with its LFS files). The keys are deploy keys on GitHub, titled
   `desolate read (host ...)` and `desolate write (host ...)`.
-- Not an admin of the repository? `--no-push` registers a read key only: agents can work on
-  it and you review their branches, but desolate cannot push it. `--anonymous` registers no
-  key at all, for a public repository.
+- Not an admin of the repository? `--keys-by-hand` prints the two keys for an admin to add
+  (then run the same command again). `--no-push` registers a read key only: you work on it
+  and review its branches, but desolate cannot push it. `--anonymous` registers no key at
+  all, for a public repository.
 - A **domain** is a trust boundary: its repositories, its network rules, its secrets.
   Workspaces in one domain can see each other's branches; workspaces in different domains
   share nothing. `clone` makes one per repository, named `owner--repo` (`you--app`).
@@ -84,17 +87,17 @@ next: desolate up you--app   (or: desolate task you--app "<what to do>")
 ## 4. Start a workspace
 
 ```bash
-desolate up you--app --name agent-1 --branch feature/greet-by-name
+desolate up you--app --name greet --branch feature/greet-by-name
 ```
 
 ```
-workspace you--app/agent-1 is up
+workspace you--app/greet is up
   you/app  worktree feature/greet-by-name from main  /workspaces/you/app/.worktrees/feature-greet-by-name
   devcontainer up (mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm, user node)
   ...
 the start took 81.9 s: template 63.7 s, asked the root 0.2 s, VM booted 9.6 s, services, checkouts, devcontainer and editor 8.2 s
-next: desolate editor you--app/agent-1 --open      its editor, in your browser
-      desolate exec you--app/agent-1 -- <agent>       an agent (or any command), in its devcontainer
+next: desolate editor you--app/greet --open      its editor, in your browser
+      desolate exec you--app/greet -- <command>     a command in its devcontainer (bash, for a shell)
 ```
 
 A workspace is a VM with a worktree of each repository, on the branch you named. Each
@@ -122,9 +125,57 @@ next ones start from it in about 20 seconds.
 The workspace has **no credentials and no network** but its own proxy (HTTP and HTTPS to
 named hosts; `desolate domain you--app net enforce` limits even that to a list).
 
-## 5. Put an agent to work
+## 5. Work in it
 
-**Claude Code**, once (a subscription token, held in the root VM and never in a workspace):
+```bash
+desolate editor you--app/greet --open        # VSCodium, running in the workspace's VM, in a browser tab
+desolate exec you--app/greet -- bash         # or a shell in its devcontainer, in your own terminal
+```
+
+![The workspace's editor: both repositories in one window, and a terminal inside the devcontainer](assets/editor.png)
+
+It is a development environment as you know it: the project's devcontainer, its tools, a
+terminal, extensions. What is different is what it cannot reach: no key, no token, your Mac's
+files only as its own checkouts, and the network only through its own proxy.
+
+- **Run it.** Start a dev server in the editor's terminal (`npm run dev`, or anything that
+  listens) and open the address `desolate ports` prints:
+  `http://you--app-greet-<id>.localhost:<the same port>`. Nothing to declare: a port is
+  forwarded as soon as something listens on it, and each workspace's has a name of its own,
+  so two workspaces can both use 3000.
+- **Commit** as usual, from the terminal or the editor's Source Control. Your commits carry
+  your own name and email (your Mac's `git config --global user.name` and `user.email`).
+- **`git pull` and `git fetch`** get what GitHub has now: the workspace asks the root to
+  refresh its copy first (a second or two), and fetches from it.
+- **`git push`** (or the editor's Sync) hands your branch to the root, which is as far as
+  anything in a workspace can push. It says so:
+
+  ```
+  offered you/app feature/greet-by-name at 3f2a91c0d4e1.
+  It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. ...
+   ! [remote rejected] feature/greet-by-name -> feature/greet-by-name (offered to the root, not pushed: ...)
+  ```
+
+  Nothing reached GitHub yet: that is step 7, from the root, and only once you approve it.
+  (`desolate offer` in the workspace does the same.)
+
+Every commit on every branch reaches the root within seconds, offered or not; offering says
+"this one is ready".
+
+## 6. Or hand it to an agent
+
+A coding agent works in a workspace the way you do, and runs with the same limits: what it
+can break is its own VM. desolate has no agent built in. It keeps a program running in a
+workspace with its own terminal, whether or not you are watching:
+
+```bash
+desolate agent start you--app/greet -- <command>    # any program: an agent, a watcher, a long test run
+desolate agent attach you--app/greet                # your terminal on it; Ctrl-] lets go, it keeps running
+```
+
+and its **recipes** ([`recipes/`](../recipes/README.md)) put the steps for a whole task in
+one script you can read: a workspace on its own branch, the agent, and what to tell it. For
+Claude Code, once (a subscription token, held in the root VM and never in a workspace):
 
 ```bash
 claude setup-token        # on your Mac
@@ -134,32 +185,25 @@ desolate domain you--app secret set CLAUDE-OAUTH --hosts api.anthropic.com --hea
 then, for each task:
 
 ```bash
-desolate task you--app "Greet the user by name, with a test"     # a workspace, a branch, Claude on it
-desolate agent attach you--app/greet-the-user-by-name-with-a      # watch it; Ctrl-] lets go, it keeps working
+~/desolate/recipes/claude.sh you--app "Greet the user by name, with a test"
 ```
 
 The workspace holds the name `CLAUDE-OAUTH`, which its proxy replaces on the way to
-api.anthropic.com. desolate installs Claude Code in the domain if the project's devcontainer
-has none. All of it, including several agents at once and agents for labelled GitHub issues:
-[agents.md](agents.md). Any other agent or command: `desolate exec you--app/agent-1 -- <command>`,
-or the workspace's editor, `desolate editor you--app/agent-1 --open`.
+api.anthropic.com. Another agent is the same recipe with its own credential and install
+steps: [`recipes/README.md`](../recipes/README.md). The agent reads
+[`AGENTS.md`](../AGENTS.md) (in every workspace at `/desolate/release/AGENTS.md`): it commits,
+says how it is going with `desolate status set <colour> "<message>"`, and offers its branch
+when it is done. Running agents, watching them and several at once: [agents.md](agents.md).
 
-![The workspace's editor: both repositories in one window, and a terminal inside the devcontainer](assets/editor.png)
-
-The agent reads [`AGENTS.md`](../AGENTS.md) (it is in every workspace at
-`/desolate/release/AGENTS.md`): it commits freely, says how it is going with
-`desolate status set <colour> "<message>"`, and when the work is ready, runs
-`desolate offer`. It cannot push, and does not need to try.
-
-## 6. Review
+## 7. Review
 
 ```bash
 desolate ui --open                           # the dashboard
 ```
 
-Everything an agent commits reaches the root within seconds. The dashboard shows each
-checkout's branch as it changes, what needs you (offers, agents asking for help), and every
-branch of every domain under **Branches**:
+Everything committed in a workspace reaches the root within seconds. The dashboard shows
+each checkout's branch as it changes, what needs you (offers, a workspace asking for help),
+and every branch of every domain under **Branches**:
 
 ![Every branch a domain has, offered or not, with Review and Open in git](assets/dashboard-branches.png)
 
@@ -168,7 +212,7 @@ the root VM, from the objects alone (nothing in the branch runs):
 
 ![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
 
-## 7. Push it
+## 8. Push it
 
 Two ways, and both end with you approving the exact commit:
 
@@ -193,10 +237,10 @@ it; one click, and the root pushes exactly that commit.
 
 ![A push from the git terminal, waiting for approval beside it](assets/git-approve.png)
 
-## 8. Hear about it
+## 9. Hear about it
 
 ```bash
-desolate notify            # macOS notifications: a push waiting, an offer, an agent asking for you
+desolate notify            # macOS notifications: a push waiting, an offer, a workspace asking for you
 desolate events            # the same, as JSON lines, for your own scripts
 ```
 
@@ -248,7 +292,7 @@ next `up`.
 ## Removing it
 
 ```bash
-desolate rm you--app/agent-1          # a workspace's VM (its branches stay)
+desolate rm you--app/greet            # a workspace's VM (its branches stay)
 desolate rm you--app                   # a domain and its clones
 desolate destroy                  # every VM; your clones, keys and secrets stay (the next bootstrap puts them back)
 desolate destroy --all            # and ~/.desolate: mirrors, clones, the root's keys
@@ -262,7 +306,8 @@ Then, on GitHub, delete the deploy keys titled `desolate read (host ...)` and
 - **`desolate doctor`** says what is wrong and what to run. Every refusal desolate prints
   ends with a `fix:` line.
 - **A page "cannot be found"**: open it in Chrome or Firefox, not Safari.
-- **An agent says it cannot reach something**: that is usually the point. Its requests, and
-  why each was refused, are in `desolate net log you--app`.
+- **Something in a workspace cannot reach a host**: that is usually the point. Its requests,
+  and why each was refused, are in `desolate net log you--app`; `desolate domain you--app net
+  allow <host>` lets one through.
 - **A push was refused at approval**, or timed out: it waits two minutes; run it again.
 - What desolate has got wrong before, and how it was found: [`incidents.md`](incidents.md).

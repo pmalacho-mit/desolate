@@ -1,7 +1,8 @@
 # Developing desolate inside desolate
 
-desolate can be developed from a desolate workspace: agents work on its code there, run its
-tests there, and hand you a branch to push like any other project. What still needs the Mac
+desolate can be developed from a desolate workspace: you, or an agent you hand a task to,
+work on its code there, run its tests there, and push the branch from the Mac like any
+other project. What still needs the Mac
 is short: the vz tests (T4) and running the new code for real. Everything below was measured
 on the M1 Max on 2026-11-13, with a private copy of this repository standing in for it.
 
@@ -14,7 +15,7 @@ on the M1 Max on 2026-11-13, with a private copy of this repository standing in 
 | **An inner stack** (`desolate bootstrap` on the fake backend) | yes, and its dashboard, approval page and editors open in your Mac's browser | n/a |
 | **T3** (real VMs, QEMU) | in principle, under software emulation (the M1 has no nested virtualization): hours. Not tried | n/a |
 | **T4** (real VMs, vz) | no: it needs the Mac's hypervisor | yes, from your checkout |
-| **Claude on it** | yes, as for any repository (`desolate task`) | |
+| **An agent on it** | yes, as for any repository (`recipes/claude.sh`, or any other) | |
 
 T2 inside the workspace is faster than on the Mac (the root suite takes 23 s against about
 two minutes under Colima), and two suites that always fail under Colima pass there (05,
@@ -41,7 +42,7 @@ desolate domain desolate size --cpus 6 --memory 16g --disk 60g     # T2 runs a s
   the owner adds them under Settings, then Deploy keys (the write one with "Allow write
   access"); then run the same command again.
 - Claude: `desolate domain desolate secret set CLAUDE-OAUTH ...` as in [agents.md](agents.md),
-  or let the first `desolate task` copy it from another domain.
+  or let `recipes/claude.sh` copy it from another domain.
 
 The repository's own devcontainer gives the workspace what the tests need: Node, Python,
 docker-outside-of-docker (the VM's Docker, which T2 drives), git-lfs, and
@@ -60,16 +61,23 @@ bind; and a socket's path must stay under 108 bytes.)
 
 ## The loop
 
-**1. Work in the workspace, and push from the Mac.**
+**1. Work in the workspace, and push from the Mac.** Yourself:
 
 ```bash
-desolate task desolate "Make the dashboard's Push button say which commit it pushes"
+desolate up desolate --name push-label --branch mac/push-label
+desolate editor desolate/push-label --open     # change it, `make test`, commit
 ```
 
-The agent works on `task/<name>`, runs `make test` and `tests/v3/run.sh t2` inside, commits,
-and offers it for v3 (`desolate offer --base v3`: the repository's [`AGENTS.md`](../../AGENTS.md),
-which agents working on desolate read, says so). Name the branch `mac/<topic>` if you want
-your usual convention: `desolate task desolate --branch mac/push-label "..."`. Then, on the Mac:
+then `git push` in the workspace (or `desolate offer --base v3`), which offers the branch for
+v3. Or hand it to an agent:
+
+```bash
+recipes/claude.sh desolate "Make the dashboard's Push button say which commit it pushes" --branch mac/push-label
+```
+
+It works on the branch, runs `make test` and `tests/v3/run.sh t2` inside, commits, and offers
+it for v3 (the repository's [`AGENTS.md`](../../AGENTS.md), which agents working on desolate
+read, says to). Then, on the Mac:
 
 ```bash
 desolate ui --open      # Review the offer, then Push, and approve the exact commit

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# A stand-in agent, for trying `desolate task` and the factories without an AI (and for
-# testing them): it does what an agent is told to, with nothing clever in between. It writes
-# its task to TASK.md on its branch, commits it, offers the branch, and goes green.
+# A stand-in agent, for trying the recipes without an AI (and for testing them): it does what
+# an agent is told to, with nothing clever in between. It writes its task to TASK.md on its
+# branch, commits it, offers the branch, and goes green.
 #
-#   desolate task acme "Add a shout() greeting" -- bash /desolate/release/factory/echo-agent.sh
+#   release/recipes/agent.sh acme "Add a shout() greeting" -- bash /desolate/release/recipes/echo-agent.sh
 set -euo pipefail
 task=${*:-"(no task given)"}
 say() { printf '\033[1;36magent\033[0m %s\n' "$*"; sleep "${ECHO_AGENT_PACE:-0.6}"; }

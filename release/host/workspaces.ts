@@ -1,5 +1,6 @@
 // Workspaces, from the host: up, list, stop, rm, exec.
 import { printableLines } from "../shared/text.ts";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -201,7 +202,10 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   }
   // Its size: the flags, then the domain's, then the stack's defaults (each part on its own).
   const size = merge(options.size, (view as DomainView & { size?: Partial<Size> }).size, stackDefaults());
-  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size }, { quiet: true });
+  // Who commits in it: your own git identity, as on this Mac (as the git VM takes it).
+  const mine = (key: string) => spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
+  const author = { name: mine("user.name"), email: mine("user.email") };
+  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author }, { quiet: true });
   // (The domain, whether it has a template to make, and the plan, which is two small files:
   // asks of the root, about 0.2 s each. No network: --fetch is its own phase, above.)
   phase("asked the root");
@@ -235,7 +239,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   out(`  dev servers  ${urls.dev}:<port>   (the port it listens on inside, nothing to declare)`);
   out(breakdown);
   out(`next: desolate editor ${domain}/${plan.workspace} --open      its editor, in your browser`);
-  out(`      desolate exec ${domain}/${plan.workspace} -- <agent>       an agent (or any command), in its devcontainer`);
+  out(`      desolate exec ${domain}/${plan.workspace} -- <command>     a command in its devcontainer (bash, for a shell)`);
 };
 
 export const list = async (out: Out, json: boolean, only?: string) => {

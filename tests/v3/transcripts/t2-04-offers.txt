@@ -41,7 +41,7 @@ doctor: all checks passed.
 
 $ desolate exec dev/w1 --checkout acme/widgets -- desolate offer
 offered acme/widgets issue/12 at <id>, with 1 LFS object(s).
-It is now under "Needs you" in the root. Offering is not pushing: a person reviews it there and pushes.
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.
 [exit 0]
 
 $ desolate offers
@@ -198,3 +198,5 @@ $ desolate branches dev
   dev  acme/widgets  main  <id>
     review: desolate review dev acme/widgets main
 [exit 0]
+
+## git fetch and git push in a workspace

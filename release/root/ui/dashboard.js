@@ -408,7 +408,7 @@ const firstRun = () => {
   return el("div", { class: "card" }, el("h3", {}, "Getting started"), el("p", { class: "sub" }, "Each step shows the command it runs, so you can do the same from a terminal."),
     el("ol", { class: "steps" },
       el("li", { class: hasRepo ? "done" : "" }, "Clone a repository. Its deploy keys are made in the root VM; adding them at GitHub is yours to do, so this one starts on the host. It also makes the repository a domain, the trust boundary its workspaces share, named owner--repo: ", el("code", {}, "desolate clone <owner>/<repo>"), hasRepo ? `  (have: ${state.repos.map((r) => r.repo).join(", ")})` : ""),
-      el("li", {}, "Start a workspace: a VM with the project's devcontainer and an editor in it, ", el("code", {}, `desolate up ${firstDomain ? firstDomain.slug : "<owner>--<repo>"}`), "; or one with Claude at work in it, ", el("code", {}, `desolate task ${firstDomain ? firstDomain.slug : "<owner>--<repo>"} "<what to do>"`), hasBoth ? " (or New workspace on its card below)" : "")));
+      el("li", {}, "Start a workspace: a VM with the project's devcontainer and an editor in it, ", el("code", {}, `desolate up ${firstDomain ? firstDomain.slug : "<owner>--<repo>"}`), hasBoth ? " (or New workspace on its card below)" : "", ". Open its editor, work, commit; ", el("code", {}, "git push"), " there offers your branch, and it comes back here for you to review and push.")));
 };
 
 const render = () => {

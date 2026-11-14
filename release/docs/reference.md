@@ -124,6 +124,20 @@ git is configured so that a checked-out tree cannot make it run anything.
 [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/v3/decisions.md) has the audit, and what is left by
 nature.
 
+**Git in a workspace.** Ordinary git, with what a workspace cannot do handled for it. Each
+clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate-mirror` and
+`-offer`):
+- `git fetch` and `git pull` first ask the root to refresh the mirror from the remote (the
+  request `desolate fetch` makes; the root fetches with its read key), then read from the
+  read-only mirror. If the root cannot (offline, or the domain's 30 requests a minute are
+  used up), the fetch still happens, from the mirror as it is, and says so.
+- `git push origin <branch>` offers the branch (`desolate offer`), then reports the push as
+  refused, saying it was offered and that nothing went to the remote, so that no
+  `origin/<branch>` appears for a branch the remote does not have.
+- Commits carry the person's git identity from the Mac (`git config --global user.name` and
+  `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
+  container's user has one of its own. Without one on the Mac, the workspace's own name.
+
 **Devcontainers.** A workspace runs its project's own `devcontainer.json`, unchanged, with
 the devcontainer CLI and a docker daemon inside the workspace's VM. Nothing in a spec is
 refused: the VM is the boundary. A spec that does not come up leaves the workspace as the
@@ -213,6 +227,8 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | One-click approval in the browser, beside the git terminal | yes | T1, T2, and in Chrome | Firefox and Safari cannot say whether Approve is covered (Chrome can) |
 | The git VM: your git in a browser tab, no network or keys; a remote per domain; LFS | yes | T2 | |
 | `desolate events` and `desolate notify` | yes | T1, T2 | |
+| Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
+| Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`agent.sh`); on the M1, `claude.sh` with a stand-in token | `issues.sh` and `suede.sh` not run |
 | After a push: the pull request's page on GitHub; "merged into <base>" once the mirror shows it | yes | T1 (the link; a merge, a squash, a rebase), T2 (a squash on the stand-in forge) | the link has not been opened on github.com; the 15-minute fetch not watched in real use |
 
 ## Layout
