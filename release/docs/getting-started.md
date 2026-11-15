@@ -136,13 +136,16 @@ desolate exec you--app/greet -- bash         # or a shell in its devcontainer, i
 
 It is a development environment as you know it: the project's devcontainer, its tools, a
 terminal, extensions. What is different is what it cannot reach: no key, no token, your Mac's
-files only as its own checkouts, and the network only through its own proxy.
+files only as its own checkouts, and the network only through its own proxy, on ports 80
+and 443 ([what that means for registries and builds](reference.md)).
 
 - **Run it.** Start a dev server in the editor's terminal (`npm run dev`, or anything that
   listens) and open the address `desolate ports` prints:
   `http://you--app-greet-<id>.localhost:<the same port>`. Nothing to declare: a port is
   forwarded as soon as something listens on it, and each workspace's has a name of its own,
-  so two workspaces can both use 3000.
+  so two workspaces can both use 3000. The `http://localhost:5173` a dev server prints works
+  too: clicked, it is sent on to that address. Inside the devcontainer the name is
+  `$DESOLATE_DEV_HOSTNAME`, for what needs its own address (an OAuth callback, a public URL).
 - **Commit** as usual, from the terminal or the editor's Source Control. Your commits carry
   your own name and email (your Mac's `git config --global user.name` and `user.email`).
 - **`git pull` and `git fetch`** get what GitHub has now: the workspace asks the root to
