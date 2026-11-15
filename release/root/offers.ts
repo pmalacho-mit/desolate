@@ -6,11 +6,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { refuse } from "../shared/exit.ts";
 import { readJson, writeJson } from "../shared/json.ts";
-import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
+import { isBranch, isCommit, isLfsOid, isSlug, parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
-import { domain as domainOf, domains } from "./domains.ts";
+import { domain as domainOf, domains, workspaces } from "./domains.ts";
 import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
-import { clonePath, domainPath, GITCONFIG, mirrorPath, ROOT } from "./layout.ts";
+import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
 
@@ -79,7 +79,10 @@ export const take = async (domain: string, request: Record<string, unknown>): Pr
   const before = offersOf(domain).find((o) => o.repo === id && o.branch === request.branch);
   const base = isBranch(request.base) ? request.base : before?.base;
   const offers = offersOf(domain).filter((o) => !(o.repo === id && o.branch === request.branch));
-  offers.push({ domain, repo: id, branch: request.branch, commit: request.commit, workspace: String(request.workspace ?? "").slice(0, 40), lfs: staged.length, at: new Date().toISOString(), ...(base ? { base } : {}) });
+  // Which workspace offered it, as the workspace says: kept only when it names one of this
+  // domain's own (it is shown, and a domain could name another, or write escapes into it).
+  const from = isSlug(request.workspace) && workspaces(domain).some((w) => w.workspace === request.workspace) ? request.workspace : "";
+  offers.push({ domain, repo: id, branch: request.branch, commit: request.commit, workspace: from, lfs: staged.length, at: new Date().toISOString(), ...(base ? { base } : {}) });
   writeJson(file(domain), offers);
   return { ok: true };
 };

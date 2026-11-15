@@ -113,6 +113,8 @@ cannot take is approving a push, so a script's work ends at an offer.
 ## More
 
 - [docs/getting-started.md](docs/getting-started.md): the whole loop, step by step, with pictures.
+- [docs/dogfooding.md](docs/dogfooding.md): for its first users: what is solid, what is rough,
+  what has never been tried, and what to send when something goes wrong.
 - [docs/reference.md](docs/reference.md): how approval works, the git terminal, `desolate events`,
   what the root takes from a workspace, devcontainers, secrets, the macOS firewall dialog, what
   is and is not done, and where the code is.
@@ -121,7 +123,7 @@ cannot take is approving a push, so a script's work ends at an offer.
 - [recipes/](recipes/README.md): scripts of ordinary desolate commands for tasks you do often:
   an agent on a task, Claude Code, GitHub issues to agents in parallel, suede upstreaming.
 - [docs/suede.md](docs/suede.md): a vendored suede dependency changed in a consumer, proposed
-  back to the dependency: `desolate upstream`, and the suede factory.
+  back to the dependency: `desolate upstream`, and the suede recipe.
 - [docs/developing-desolate.md](docs/developing-desolate.md): desolate developed from a desolate
   workspace: its tests there, an inner stack, and pushing, pulling and restarting on the change.
   An agent doing that reads the repository's own [`AGENTS.md`](../AGENTS.md).

@@ -14,7 +14,10 @@
 #   while :; do release/recipes/issues.sh --repo acme/app --domain acme--app; sleep 60; done
 #
 # An issue's text becomes an agent's instructions. Label only issues whose text you would hand
-# to an agent yourself: anyone who can edit the issue is writing to the agent.
+# to an agent yourself: anyone who can edit the issue is writing to the agent. And every
+# issue's workspace is in the one domain, which is one trust boundary: an agent misled by one
+# issue can change the other issues' branches too. Your review before each push is the check
+# (or give issues you trust less a domain of their own: --domain).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 desolate() { "$here/../cli.sh" "$@"; }   # the same as typing `desolate`, from this checkout
@@ -31,6 +34,9 @@ while [ $# -gt 0 ] && [ "$1" != -- ]; do
 done
 [ "${1:-}" = -- ] && shift
 [ -n "$repo" ] && [ -n "$domain" ] || usage
+[[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "--repo is <owner>/<repo>" >&2; exit 64; }
+[[ $max =~ ^[0-9]+$ ]] || { echo "--max is a number" >&2; exit 64; }
+number() { [[ $1 =~ ^[0-9]+$ ]]; }   # issue numbers, as GitHub and the workspaces' names give them
 
 # What there is: the labelled open issues, and the domain's workspaces for issues.
 open=$(gh issue list --repo "$repo" --label "$label" --state open --limit 100 --json number --jq '.[].number')
@@ -38,7 +44,8 @@ have=$(desolate list "$domain" --json | jq -r '.[].workspaces[].workspace | sele
 
 # Closed since: stop the agent, keep the workspace.
 for n in $have; do
-  grep -qx "$n" <<<"$open" && continue
+  number "$n" || continue
+  grep -qxF "$n" <<<"$open" && continue
   echo "#$n is closed: stopping its agent (the workspace stays: desolate rm $domain/issue-$n)"
   for a in $(desolate agent list "$domain/issue-$n" --json 2>/dev/null | jq -r '.[] | select(.state == "running") | .name'); do
     desolate agent stop "$domain/issue-$n" --name "$a" || true
@@ -48,9 +55,11 @@ done
 # New: a workspace and an agent for each, up to --max open at once.
 working=$(grep -c . <<<"$(comm -12 <(sort <<<"$have") <(sort <<<"$open"))" || true)
 for n in $open; do
-  grep -qx "$n" <<<"$have" && continue
+  number "$n" || continue
+  grep -qxF "$n" <<<"$have" && continue
   [ "$working" -lt "$max" ] || { echo "--max $max are working: #$n waits for the next pass"; continue; }
-  task=$(gh issue view "$n" --repo "$repo" --json title,body,url --jq '"GitHub issue #'"$n"' of '"$repo"': \(.title)\n\n\(.body)\n\n(\(.url))"')
+  # (Values go to jq as --arg, never into its program: a program can read the environment.)
+  task=$(gh issue view "$n" --repo "$repo" --json title,body,url | jq -r --arg n "$n" --arg repo "$repo" '"GitHub issue #\($n) of \($repo): \(.title)\n\n\(.body)\n\n(\(.url))"')
   echo "#$n: starting $domain/issue-$n"
   if [ $# -gt 0 ]; then
     "$here/agent.sh" "$domain" "$task" --name "issue-$n" --branch "issue/$n" --checkout "$repo" -- "$@"

@@ -39,7 +39,7 @@
 //     then each LFS object's bytes in that order, then N bytes of pack
 //                                       -> {"ok":true,...} | {"ok":false,"error","moved"}
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
@@ -308,7 +308,6 @@ const push = async (socket: Socket, request: Record<string, unknown>, rest: Buff
   if (!Number.isInteger(packSize) || packSize < 32 || packSize > LIMIT.pack) return { ok: false, error: "a pack is a whole number of bytes, at most 2 GiB" };
   if (lfs.length > LIMIT.objects || lfs.some((o) => !isLfsOid(o.oid) || !Number.isInteger(o.size) || (o.size as number) < 0 || (o.size as number) > LIMIT.lfs))
     return { ok: false, error: "LFS objects are named by sha256, with a size of at most 5 GiB" };
-  const ref = `refs/heads/${approved.ref}`;
   const onto = approved.onto ?? ZERO;
   const forge = forgeAddress();
   const work = fs.mkdtempSync(path.join(PUSHER.home, "push-"));

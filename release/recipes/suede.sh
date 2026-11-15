@@ -20,6 +20,8 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 desolate() { "$here/../cli.sh" "$@"; }   # the same as typing `desolate`, from this checkout
+# Text from a repository, GitHub or a VM, printed: what a terminal would act on is replaced.
+say() { printf '%s\n' "$*" | jq -Rr 'gsub("[\\p{Cc}\\p{Cf}\\p{Co}\\p{Cn}\\p{Zl}\\p{Zp}]"; "?")'; }
 usage() { echo "usage: $0 <owner/repo>@<commit> [--from <commit>] [--branch <pushed to>] [--domain <d>] [-- <command...>]" >&2; exit 64; }
 [ $# -ge 1 ] || usage
 project=${1%@*} commit=${1#*@}
@@ -35,6 +37,8 @@ while [ $# -gt 0 ] && [ "$1" != -- ]; do
 done
 [ "${1:-}" = -- ] && shift
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || usage
+[ -z "$from" ] || [[ $from =~ ^[0-9a-f]{40}$ ]] || usage
+[[ $project =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || usage
 
 # Only a push to the project's default branch asks the question.
 if [ -n "$pushed_to" ]; then
@@ -44,7 +48,7 @@ fi
 
 # 1. What the push changed, dependency by dependency (the root reads its own clone).
 changed=$(desolate suede changed "$project" "$commit" ${from:+--from "$from"} --json | jq -c '.[] | select(.files | length > 0)')
-[ -n "$changed" ] || { echo "$project ${commit:0:12}: no vendored suede dependency changed"; exit 0; }
+[ -n "$changed" ] || { say "$project ${commit:0:12}: no vendored suede dependency changed"; exit 0; }
 
 # The domain must already hold both repositories: which repositories share a domain is yours
 # to decide, never a .gitrepo's (a pushed commit's text could name any repository desolate
@@ -54,8 +58,8 @@ desolate fetch "$project" >/dev/null   # the pushed commit is on the remote: the
 
 while IFS= read -r dep; do
   dir=$(jq -r .dir <<<"$dep") remote=$(jq -r '.remote // ""' <<<"$dep") branch=$(jq -r .branch <<<"$dep") files=$(jq '.files | length' <<<"$dep")
-  if [ -z "$remote" ] || ! grep -qx "$remote" <<<"$holds" || ! grep -qx "$project" <<<"$holds"; then
-    echo "$project: $dir/ changed ($remote), but the domain $domain does not hold both: desolate domain $domain add --repo $project --repo ${remote:-<owner/repo>}"
+  if [ -z "$remote" ] || ! grep -qxF "$remote" <<<"$holds" || ! grep -qxF "$project" <<<"$holds"; then
+    say "$project: $dir/ changed ($remote), but the domain $domain does not hold both: desolate domain $domain add --repo $project --repo ${remote:-<owner/repo>}"
     continue
   fi
   short=${commit:0:8}
@@ -79,7 +83,7 @@ If you cannot tell: \`desolate status set orange \"<the question>\"\`."
   #    claude.sh check out every repository on one branch; here each gets its own, so `up`
   #    is called directly, then the agent recipe is given the workspace by name.)
   desolate up "$domain" --name "$name" --fetch --checkout "$remote=worktree:$upstream" --checkout "$project=worktree:suede/$short"
-  echo "$project: $dir/ changed: $domain/$name, an agent deciding whether it goes to $remote"
+  say "$project: $dir/ changed: $domain/$name, an agent deciding whether it goes to $remote"
   if [ $# -gt 0 ]; then
     desolate agent start "$domain/$name" --name agent --checkout "$remote" -- "$@" "$task"
   else

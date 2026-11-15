@@ -60,9 +60,6 @@ declare namespace parseRepo {
 
 export const repoId = (repo: Repo) => `${repo.owner}/${repo.name}`;
 
-/** Text as a slug: lower case, every run of anything else one dash, at most 40. */
-const slugFrom = (text: string) =>
-  text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "").slice(0, 40).replace(/-+$/, "");
 
 /** The domain `clone` makes a repository: `owner--repo`, each part a slug (its runs of
  *  anything else one dash, so `--` is only ever the separator). Too long for a slug: cut, and

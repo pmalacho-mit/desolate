@@ -13,6 +13,7 @@
 //
 // desolate keeps its own Lima home under ~/.desolate, so it never touches a VM it did not
 // make, and refuses Lima's user-wide _config overrides, which could add a network.
+import { attachFiltered } from "./attach.ts";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
@@ -438,8 +439,9 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     attach(name, argv, options = {}) {
-      const child = spawn(LIMACTL, shellArgs(name, argv, { cwd: options.cwd }), { stdio: "inherit", env: env() });
-      return new Promise((resolve) => child.on("close", (code) => resolve(code ?? 1)));
+      // A terminal for the VM's program when this has one (--tty: its output is piped, to be
+      // filtered, so Lima cannot tell from that), and what it prints filtered (attach.ts).
+      return attachFiltered(LIMACTL, [`--tty=${process.stdin.isTTY ? "true" : "false"}`, ...shellArgs(name, argv, { cwd: options.cwd })], env());
     },
 
     dial(name, target) {

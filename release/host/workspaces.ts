@@ -1,5 +1,5 @@
 // Workspaces, from the host: up, list, stop, rm, exec.
-import { printableLines } from "../shared/text.ts";
+import { forTerminal, printableLines } from "../shared/text.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -196,7 +196,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   let template: string | null = null;
   if (b.kind !== "fake" && process.env.DESOLATE_TEMPLATES !== "0") {
     const { ensure } = await import("./templates.ts");
-    const say = (line: string) => (json ? process.stderr.write(`${line}\n`) : out(line));
+    const say = (line: string) => (json ? process.stderr.write(`${forTerminal(line)}\n`) : out(line));
     template = await ensure(domain, view.repos, { specOf, startServices }, say);
     if (template) phase("template");
   }

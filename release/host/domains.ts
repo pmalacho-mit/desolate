@@ -1,6 +1,5 @@
 // `desolate domain ...`: create, add, show.
 import { EXIT, refuse } from "../shared/exit.ts";
-import * as fs from "node:fs";
 import { guest } from "./paths.ts";
 import { backend, changeSecrets, ensureProxyUser, rootctl } from "./stack.ts";
 

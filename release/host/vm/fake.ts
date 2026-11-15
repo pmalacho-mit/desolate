@@ -9,6 +9,7 @@
 //   read-only shares   read-only bind mounts
 //   egress "none"      --network none: the container has a loopback interface and nothing else
 //   sockets            the socket's host directory, bind-mounted read-only
+import { attachFiltered } from "./attach.ts";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
@@ -212,8 +213,7 @@ export const fakeBackend = (): Backend => {
     attach(name, argv, options = {}) {
       const args = ["exec", "-i", ...(process.stdin.isTTY ? ["-t"] : []), "-u", GUEST_USER, "-e", `HOME=/home/${GUEST_USER}`, "-e", `TERM=${process.env.TERM ?? "xterm"}`];
       if (options.cwd) args.push("-w", options.cwd);
-      const child = spawn("docker", [...args, name, ...argv], { stdio: "inherit" });
-      return new Promise((resolve) => child.on("close", (code) => resolve(code ?? 1)));
+      return attachFiltered("docker", [...args, name, ...argv]);
     },
 
     dial(name, target) {

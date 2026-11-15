@@ -42,7 +42,7 @@ import { connect } from "node:net";
 import type { Socket } from "node:net";
 import { openedWithToken, refusal } from "../shared/gate.ts";
 
-export { hostnameOf, openedWithToken, refusal } from "../shared/gate.ts";
+export { openedWithToken, refusal } from "../shared/gate.ts";
 
 const DOCUMENTS = new Set(["document", "iframe", "frame", "embed", "object", "fencedframe"]);
 

@@ -1,5 +1,6 @@
 // Every operation the host can ask of the root. A fixed table: the CLI channel carries an
 // operation's name and JSON arguments, never a command line.
+import { printable } from "../shared/text.ts";
 import { pendingIn } from "./approvals.ts";
 import { takeHashed } from "../shared/copy.ts";
 import { spawnSync } from "node:child_process";
@@ -154,8 +155,8 @@ export const ops: Record<string, Op> = {
   async "offers.refused"(args) {
     return domains.domains().filter((d) => typeof args.domain !== "string" || d.slug === args.domain).flatMap((d) => refusalsOf(d.slug));
   },
-  /** Which vendored suede dependencies a push changed (`desolate suede changed`, the suede
-   *  factory): each directory with a .gitrepo in the commit, the repository and branch it
+  /** Which vendored suede dependencies a push changed (`desolate suede changed`, and
+   *  recipes/suede.sh): each directory with a .gitrepo in the commit, the repository and branch it
    *  names, and the files under it the push touched. In the root's own clone; read as data
    *  (a .gitrepo is a few lines of text, and only its remote and branch are taken). */
   async "suede.changed"(args) {
@@ -176,6 +177,10 @@ export const ops: Record<string, Op> = {
     const ownerOf = (file: string) => dirs.filter((d) => file.startsWith(`${d}/`)).sort((a, b) => b.length - a.length)[0];
     for (const record of records.slice(0, 200)) {
       const dir = record.slice(0, -"/.gitrepo".length);
+      // A path is the commit's to name, and it is printed (desolate suede changed, the
+      // recipe): one a terminal would act on, or that hides what it is, is not a dependency
+      // anyone vendored on purpose. Left out, not cleaned: a cleaned name names another path.
+      if (printable(dir, 400) !== dir) continue;
       const text = (await gitIn(clone, ["cat-file", "blob", `${to}:${record}`])).stdout.slice(0, 4096);
       const remote = /^\s*remote\s*=\s*(\S+)/m.exec(text)?.[1] ?? "";
       const branch = /^\s*branch\s*=\s*(\S+)/m.exec(text)?.[1] ?? "release";
