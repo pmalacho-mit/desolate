@@ -1,19 +1,22 @@
-# What carries over from v2, and is not ported yet
+# v2 code that v3 has not ported yet
 
-move-to-vms.md section 10 lists what v3 keeps from v2 "mostly as code". This directory holds
-the pieces of that list that have **not** been ported into `release/` yet, with their v2
-tests, so that whoever ports one has it in front of them rather than in history. Nothing here
-is shipped, run or type-checked: the imports point at v2 files that no longer exist.
+Each piece here is something v3 still lacks, kept with its v2 tests so that whoever ports it
+has it in front of them rather than in history. Nothing here is shipped, run or type-checked:
+imports point at v2 files that no longer exist, or at their v3 replacements by their old
+names. All of v2 is in history at commit `4f32c77`, and on the `release` branch until v3 is
+published there.
 
-The whole of v2 is in history at commit `4f32c77` and on the `release` branch.
+What v2 had and v3 has replaced is gone from here: completion (`release/completion.bash`),
+the dispatchers and the suede factory (`release/recipes/`), status (`release/workspace/status`,
+`desolate status`, the dashboard), transfer (offers, review, push and `desolate upstream`),
+reading `devcontainer.json` (`release/workspace/devcontainer.ts`, `release/shared/jsonc.ts`),
+and the editor's gate and held settings (`release/workspace/editor-gate.ts`,
+`editor-settings.ts`).
 
-| Here | What it is | Where it goes in v3 | Notes |
+| Here | What it is | Where it goes in v3 | What v3 has meanwhile |
 |---|---|---|---|
-| `proxy/addon.py`, `test_addon.py`, `settings.example.json` | the mitmproxy addon: secret substitution, SNI-proven destinations, header confinement, scrubbing, the self-test fixture, on/off and TTL, learn then enforce | **Ported in part**: `release/root/proxy/secrets_addon.py` (proving a destination, the allowlist, header confinement, overlapping names, scrubbing), tested by `tests/v3/t2/07-secrets.test.ts` | Still only here: on/off and TTL (`off`, `until`), the self-test fixture, TLS passthrough. Network rules and learn/enforce are `release/root/proxy/proxy.ts`'s, not the addon's, in v3. |
-| `proxy/install-ca.sh`, `trust-proxy-in-builds.sh`, `with-ca.sh`, `certificates.ts` | trusting the proxy's CA in containers and builds | `release/workspace/` | The VM's own trust store is done (`release/workspace/net/trust-ca.sh`). These are for the devcontainer and its image builds, once it is started. |
-| `editor/` | the editor server's launch, its gate, held settings, appearance, the extension and its model, the extension's browser test, `docs` for the panel | **Ported**: the gate (`release/workspace/editor-gate.ts`), held settings (`editor-settings.ts`), the launch (`editor.sh`). Still only here: `editor.ts` (launching inside a devcontainer, extensions from `devcontainer.json`, the port map in the environment), appearance, the extension and its model, the browser test | The extension goes to `release/workspace/editor/` (a workspace's) and `release/root/ui/` (the root editor and dashboard, section 4.8). |
-| `devcontainer/` | reading `devcontainer.json`, pinning features to digests, JSONC | `release/workspace/` (run `devcontainer up` in the VM) and `release/root/` (freeze the environment, section 4.5) | Shape A: the spec runs unchanged inside the VM; v2's policy is gone. Measured on the M1: it works in a Lima/vz VM (docs/v3/decisions.md). |
-| `completion/` | shell completion and its hardening | `release/` | Rewrite for v3's verbs. |
-| `agents/` | the dispatchers, the suede factory, telemetry, and their docs | `examples/` | Section 9: everything up to an offer can be scripted. The contract changes from projects and worktrees to domains and workspaces. |
-| `status/status.ts`, `panel.ts` | reading statuses for the panel | `release/root/ui/` | The status script itself is ported (`release/workspace/status`, unchanged) and `desolate status` / `board` read it. |
-| `transfer/` | v2's bundle transfer, review, and the suede `upstream` push | reference for `desolate upstream` (section 5.5) | Offers, review and push are reimplemented (`release/root/offers.ts`, `push.ts`). The rule that a proposal must not change the dependency's `.github/` is here, and `upstream` needs it. |
+| `proxy/addon.py`, `test_addon.py`, `settings.example.json` | v2's mitmproxy addon, whole | `release/root/proxy/secrets_addon.py` is cut down from it (proving a destination, the allowlist, header confinement, scrubbing, on/off and TTL), tested by `tests/v3/t2/07-secrets.test.ts` | Still only here: the self-test fixture and TLS passthrough |
+| `proxy/install-ca.sh`, `trust-proxy-in-builds.sh`, `with-ca.sh`, `certificates.ts` | trusting the proxy's CA inside containers and their image builds | `release/workspace/` | The VM's own trust store (`release/workspace/net/trust-ca.sh`), and the devcontainer's, through `/desolate/ca` |
+| `devcontainer/feature-pins.ts`, `.test.ts` | a devcontainer's features pinned to digests | the domain's environment, frozen once (move-to-vms.md section 4.5) | Features resolved by `devcontainer up` each time a container is made |
+| `editor/extension/`, `model.test.ts`, `panel.md`, `extension-browser-test.sh` | the workspace-side editor extension: `localhost` addresses mapped to the workspace's own hostname, and its panel | `release/workspace/editor/` | `desolate ports` prints each dev server's address |
+| `editor/editor.ts`, `.test.ts`, `appearance.ts`, `hosts.ts`, `git-codium.sh` | the editor's launch with its extensions from `devcontainer.json`, its appearance, its host names | `release/workspace/editor.sh` and `editor-*.ts` | The editor runs in the devcontainer, without the project's extensions preinstalled |

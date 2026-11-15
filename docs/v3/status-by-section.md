@@ -117,9 +117,9 @@ and v2's exit codes: done.
 ## 9. Agents and automation
 
 9.1 Everything up to an offer can be scripted; a script's work ends at an offer: **done**
-(T2 `04`). The dispatchers and the suede factory (`carryover/agents/`) are **not ported** to
-v3's contract (domains and workspaces instead of projects and worktrees). 9.2's example
-therefore has no runnable form yet.
+(T2 `04`). The dispatchers and the suede factory are v3 recipes now (`release/recipes/`:
+`agent.sh`, `claude.sh`, `issues.sh`, `suede.sh`), scripts of ordinary desolate commands on
+v3's contract (domains and workspaces).
 
 ## 10 to 12. Carry-over, migration, non-goals
 
