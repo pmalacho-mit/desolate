@@ -1,0 +1,43 @@
+#!/bin/sh
+# `git push` in a workspace: the branch is OFFERED to the root, and nothing goes to the remote.
+#
+# A workspace holds no key, so a push from it could never reach GitHub. Before this, it went
+# to the read-only mirror and failed with "remote unpack failed: unable to create temporary
+# object directory", which told a person (pressing Sync in the editor) nothing. Now each
+# clone's push URL is `desolate-offer::<owner/repo>` (init.ts), and git runs this helper,
+# which offers each branch pushed (`desolate offer`). It then reports the push as refused,
+# saying why, so that no origin/<branch> appears here for a branch the remote does not have.
+# The person pushes it from the dashboard, or with `desolate push` on the Mac.
+#
+# git's remote-helper protocol (gitremote-helpers(7)), the push half only: git sends
+# "capabilities", "list for-push" (answered with the mirror's branches, which are the
+# remote's: so git's own checks, a non-fast-forward among them, see what is there), then a
+# batch of "push <src>:<dst>" lines ended by a blank line; each gets "ok <dst>" or
+# "error <dst> <why>", and the batch a blank line.
+repo=$2
+mirror=/desolate/mirrors/$repo.git
+pushes=''
+while IFS= read -r line; do
+  case $line in
+    capabilities) printf 'push\n\n' ;;
+    list*) git -c safe.directory="$mirror" --git-dir="$mirror" for-each-ref --format='%(objectname) %(refname)' refs/heads 2>/dev/null; printf '\n' ;;
+    push\ *) pushes="$pushes ${line#push }" ;;
+    '')
+      [ -n "$pushes" ] || exit 0
+      for spec in $pushes; do
+        spec=${spec#+} src=${spec%%:*} dst=${spec#*:} branch=${dst#refs/heads/}
+        if [ -z "$src" ]; then
+          printf 'error %s deleting a branch is not something a workspace does: on the Mac, in desolate git\n' "$dst"
+        elif [ "$src" != "$dst" ] || [ "$branch" = "$dst" ]; then
+          printf 'error %s push a branch by its own name (git push origin <branch>): that branch is what is offered\n' "$dst"
+        elif desolate offer "$repo" "$branch" >&2; then
+          printf 'error %s offered to the root, not pushed: nothing went to the remote. Push it from the dashboard (desolate ui, on the Mac)\n' "$dst"
+        else
+          printf 'error %s not offered: see above\n' "$dst"
+        fi
+      done
+      printf '\n'
+      pushes=''
+      ;;
+  esac
+done

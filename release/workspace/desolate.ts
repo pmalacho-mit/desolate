@@ -1,0 +1,89 @@
+// `desolate`, inside a workspace: the two things a workspace may ask of the root, and both
+// only ask. Nothing here pushes: offering is not pushing (P2).
+//
+//   desolate fetch [<owner/repo>]          ask the root to refresh the mirror, then git fetch
+//   desolate offer [<owner/repo>] [<branch>]  bundle a branch for the root; a person pushes it
+//   desolate sync                          write this domain's branches out for the root now
+//   desolate status ...                    /desolate/status (the wrapper, workspace/desolate, runs it)
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { isBranch, parseRepo, repoId } from "../shared/names.ts";
+import { run } from "../shared/run.ts";
+import { branches, domainRepos, importDeliveries, request, stageLfs, syncRepo } from "./sync.ts";
+
+// Its output piped into something that stops reading (`desolate offer | head -1`): done,
+// not a crash (an agent's script with pipefail died on it).
+process.stdout.on("error", (error: NodeJS.ErrnoException) => (error.code === "EPIPE" ? process.exit(0) : process.exit(1)));
+
+const fail = (message: string, fix: string): never => {
+  process.stderr.write(`desolate: ${message}\n  fix: ${fix}\n`);
+  process.exit(1);
+};
+const workspace = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ".desolate", "workspace.json"), "utf8")) as { workspace: string; domain: string };
+  } catch {
+    // In the devcontainer: the names its environment carries (devcontainer.ts).
+    return { workspace: process.env.DESOLATE_WORKSPACE_NAME || "unknown", domain: process.env.DESOLATE_DOMAIN || "unknown" };
+  }
+})();
+
+/** The repository the current directory is a checkout of, or the one named. */
+const repoOf = async (named: string | undefined): Promise<string> => {
+  if (named) {
+    const repo = parseRepo(named) ?? fail(`'${named}' is not a repository`, "name it as <owner>/<repo>");
+    if (!domainRepos().includes(repoId(repo))) fail(`${named} is not in this domain`, `this domain has: ${domainRepos().join(", ") || "no repositories"}`);
+    return repoId(repo);
+  }
+  const top = await run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const match = /^\/workspaces\/([^/]+\/[^/]+)\/\.git$/.exec(top.stdout.trim());
+  if (!match) fail("this directory is not a checkout of one of the domain's repositories", "cd into one under /workspaces, or name the repository: desolate offer <owner>/<repo>");
+  return match![1]!;
+};
+
+const [, , verb, ...args] = process.argv;
+if (verb === "fetch") {
+  // --mirror-only: the request alone, for `git fetch` (git-remote-desolate-mirror).
+  const only = args.includes("--mirror-only");
+  const named = args.filter((a) => a !== "--mirror-only");
+  const repos = named[0] ? [await repoOf(named[0])] : domainRepos();
+  for (const repo of repos) {
+    const reply = await request({ op: "fetch", repo, workspace: workspace.workspace });
+    if (reply.ok !== true) fail(`the root could not refresh ${repo}: ${String(reply.error)}`, "on the host: desolate fetch " + repo);
+    if (only) continue;
+    const fetched = await run("git", ["-C", `/workspaces/${repo}`, "fetch", "--prune", "origin"], { env: { ...process.env, DESOLATE_MIRROR_FRESH: "1" } });
+    if (fetched.code !== 0) fail(`git fetch failed in ${repo}: ${fetched.stderr.trim()}`, "git -C /workspaces/" + repo + " fetch origin");
+    const delivered = await importDeliveries(repo);
+    process.stdout.write(`${repo}: the mirror is refreshed and origin/* is up to date${delivered.length ? `; delivered from the root: ${delivered.map((b) => `root/${b}`).join(", ")}` : ""}.\n`);
+  }
+} else if (verb === "offer") {
+  // --base <branch>: the branch a pull request of this one would go into (else the default).
+  const at = args.indexOf("--base");
+  const base = at >= 0 ? args[at + 1] : undefined;
+  if (at >= 0 && !isBranch(base)) fail("--base names the branch a pull request would go into", "desolate offer --base main");
+  if (at >= 0) args.splice(at, 2);
+  const repo = await repoOf(args[0] && args[0].includes("/") && parseRepo(args[0]) ? args[0] : undefined);
+  const named = args[0] && !(args[0].includes("/") && parseRepo(args[0])) ? args[0] : args[1];
+  const current = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
+  const branch = named ?? current;
+  if (!isBranch(branch)) fail(`'${branch}' is not a branch desolate will carry`, "check out the branch to offer, or name it: desolate offer <owner>/<repo> <branch>");
+  const commit = (await branches(repo))[branch] ?? fail(`${repo} has no branch '${branch}' in this domain`, "git branch --list");
+  const dirty = await run("git", ["-C", `/workspaces/${repo}`, "status", "--porcelain", "--untracked-files=no"]);
+  const lfs = await stageLfs(repo, branch).catch((error: Error) => fail(error.message, "git lfs fsck"));
+  await syncRepo(repo);
+  const reply = await request({ op: "offer", repo, branch, commit, workspace: workspace.workspace, lfs, ...(base ? { base } : {}) });
+  if (reply.ok !== true) fail(`the root did not take the offer: ${String(reply.error)}`, String(reply.fix ?? "on the host: desolate doctor"));
+  process.stdout.write(`offered ${repo} ${branch} at ${commit.slice(0, 12)}${base ? `, for ${base}` : ""}${lfs.length ? `, with ${lfs.length} LFS object(s)` : ""}.\n`);
+  process.stdout.write("It is under \"Needs you\" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.\n");
+  if (dirty.stdout.trim()) process.stdout.write("note: the main checkout has uncommitted changes; only commits are offered.\n");
+} else if (verb === "sync") {
+  for (const repo of domainRepos()) {
+    const result = await syncRepo(repo);
+    await importDeliveries(repo);
+    process.stdout.write(`${repo}: ${result.branches} branch(es) written for the root${result.bundled ? "" : " (nothing new to bundle)"}.\n`);
+  }
+} else {
+  process.stdout.write("desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n");
+  process.exit(verb && verb !== "help" ? 64 : 0);
+}

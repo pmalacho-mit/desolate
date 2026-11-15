@@ -1,0 +1,9 @@
+{
+  "name": "desolate",
+  "private": true,
+  "type": "module",
+  "description": "desolate as it ships: the release branch is this folder. No dependencies: it runs on node's own modules, TypeScript run directly.",
+  "engines": {
+    "node": ">=22.18"
+  }
+}

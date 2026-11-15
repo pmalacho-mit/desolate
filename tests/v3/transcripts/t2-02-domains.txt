@@ -1,0 +1,220 @@
+$ desolate bootstrap --forge stand-in:ssh://git@<forge>:22 --forge-known-hosts <work>/forge-state/known_hosts
+desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; tests only), instance <instance>
+  + home <home>
+    base image desolate/base:latest present (<id>)
+  = base image
+  + config: backend fake, forge stand-in (<forge>:22)
+    approver: a software key in <home>/approver; every push will ask on your terminal
+  + approver (terminal): the key that approves pushes, held on this host
+  + root VM dsl-<instance>-root created
+  + root VM running
+  + root services: keyring
+  + root: the approver's public key and the host daemon's token
+  dashboard    http://desolate.localhost:31591/?tkn=<token>   (and: desolate ui)
+  workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
+bootstrap: 7 step(s) done.
+  ok   home: <home>
+  ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
+  ok   docker daemon: docker <version>
+  ok   base image: desolate/base:latest <id>
+  ok   root VM running: dsl-<instance>-root
+  ok   approver: terminal; pushes are approved on this host
+  ok   root: keyring answers: 0 key(s) held
+  ok   root: the write agent's askpass socket is closed to the root's own user: only the keyring's user can answer for a signature
+  ok   root: private keys are unreadable to the root's own user: /var/lib/desolate-root/keyring is the keyring user's alone
+  ok   root: the root's own user cannot become root: sudo refuses it
+  ok   root: the programs root runs are root's: node (/usr/local/bin/node) and root's PATH
+  ok   root: each domain's proxies run as that domain's own user: none shares a group with the root's user, reaches the shares, or reaches another domain's secrets
+  ok   root: secret values are unreadable to the root's own user: /var/lib/desolate-proxies/secrets: root's, and each domain's proxies'
+  ok   root: git's settings are root's: /var/lib/desolate-root/gitconfig
+  ok   root: approver key installed: sha256 <oid>
+  ok   root: forge configured: yes
+  ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
+  ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
+  ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   root: runs this desolate's code: its share of the release is <repo>/release
+  ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
+doctor: all checks passed.
+[exit 0]
+
+## create a domain and start a workspace
+
+$ desolate domain create nests-dev --title suede.nests agentic development
+created the domain nests-dev ("suede.nests agentic development").
+next: desolate domain nests-dev add --repo <owner>/<repo>
+[exit 0]
+
+$ desolate domain nests-dev add --repo acme/widgets
+acme/widgets is now in the domain nests-dev: every workspace in it gets a checkout, borrowing the mirror's objects.
+next: desolate up nests-dev
+[exit 0]
+
+$ desolate domain nests-dev add --repo acme/consumer
+acme/consumer is now in the domain nests-dev: every workspace in it gets a checkout, borrowing the mirror's objects.
+next: desolate up nests-dev
+[exit 0]
+
+$ desolate up nests-dev
+workspace nests-dev/w1 is up  [NOT ISOLATED: fake backend]
+  acme/consumer  main checkout (main)  /workspaces/acme/consumer
+  acme/widgets  main checkout (main)  /workspaces/acme/widgets
+  size         <size>
+  devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
+  editor       http://nests-dev-w1-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Fw1.code-workspace
+  dev servers  http://nests-dev-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor nests-dev/w1 --open      its editor, in your browser
+      desolate exec nests-dev/w1 -- <command>     a command in its devcontainer (bash, for a shell)
+[exit 0]
+
+## a second workspace in the domain
+
+$ desolate up nests-dev --name issue-12 --checkout acme/widgets=main
+desolate: the main checkout of acme/widgets is held by the workspace 'nests-dev/w1'. Two editors and two agents in one working tree is a corruption, not a feature
+  fix: take a worktree instead: --checkout acme/widgets=worktree:<branch>
+[exit 75]
+
+$ desolate up nests-dev --name issue-12 --checkout acme/widgets=worktree:issue/12
+workspace nests-dev/issue-12 is up  [NOT ISOLATED: fake backend]
+  acme/consumer  worktree issue-12 from main  /workspaces/acme/consumer/.worktrees/issue-12
+  acme/widgets  worktree issue/12 from main  /workspaces/acme/widgets/.worktrees/issue-12
+  size         <size>
+  devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
+  editor       http://nests-dev-issue-12-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Fissue-12.code-workspace
+  dev servers  http://nests-dev-issue-12-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor nests-dev/issue-12 --open      its editor, in your browser
+      desolate exec nests-dev/issue-12 -- <command>     a command in its devcontainer (bash, for a shell)
+[exit 0]
+
+## fetch, then start from the remote's main
+
+$ desolate up nests-dev --name fresh --fetch --base origin/main --checkout acme/widgets=worktree:issue/13
+workspace nests-dev/fresh is up  [NOT ISOLATED: fake backend]
+  acme/consumer  worktree fresh from origin/main  /workspaces/acme/consumer/.worktrees/fresh
+  acme/widgets  worktree issue/13 from origin/main  /workspaces/acme/widgets/.worktrees/issue-13
+  size         <size>
+  devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
+  editor       http://nests-dev-fresh-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Ffresh.code-workspace
+  dev servers  http://nests-dev-fresh-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: mirrors refreshed <duration>, asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor nests-dev/fresh --open      its editor, in your browser
+      desolate exec nests-dev/fresh -- <command>     a command in its devcontainer (bash, for a shell)
+fetching acme/consumer with the read key
+fetching acme/widgets with the read key
+[exit 0]
+
+## a second domain with the same repository
+
+$ desolate domain create other --title another boundary
+created the domain other ("another boundary").
+next: desolate domain other add --repo <owner>/<repo>
+[exit 0]
+
+$ desolate domain other add --repo acme/widgets
+acme/widgets is now in the domain other: every workspace in it gets a checkout, borrowing the mirror's objects.
+next: desolate up other
+[exit 0]
+
+$ desolate domain other add --repo acme/private
+acme/private is now in the domain other: every workspace in it gets a checkout, borrowing the mirror's objects.
+next: desolate up other
+[exit 0]
+
+$ desolate up other
+workspace other/w1 is up  [NOT ISOLATED: fake backend]
+  acme/private  main checkout (main)  /workspaces/acme/private
+  acme/widgets  main checkout (main)  /workspaces/acme/widgets
+  size         <size>
+  devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
+  editor       http://other-w1-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Fw1.code-workspace
+  dev servers  http://other-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor other/w1 --open      its editor, in your browser
+      desolate exec other/w1 -- <command>     a command in its devcontainer (bash, for a shell)
+[exit 0]
+
+## exec and list
+
+$ desolate exec nests-dev/issue-12 --checkout acme/widgets -- bash -c pwd; git branch --show-current; exit 7
+/workspaces/acme/widgets/.worktrees/issue-12
+issue/12
+[exit 7]
+
+$ desolate list
+nests-dev  "suede.nests agentic development"  acme/consumer, acme/widgets
+  nests-dev/fresh  running  [not isolated]  acme/consumer@fresh, acme/widgets@issue/13  (<size>)
+  nests-dev/issue-12  running  [not isolated]  acme/consumer@issue-12, acme/widgets@issue/12  (<size>)
+  nests-dev/w1  running  [not isolated]  acme/consumer@main, acme/widgets@main  (<size>)
+other  "another boundary"  acme/private, acme/widgets
+  other/w1  running  [not isolated]  acme/private@main, acme/widgets@main  (<size>)
+[exit 0]
+
+## stop, start, rm
+
+$ desolate stop nests-dev/w1
+stopped nests-dev/w1. Its checkouts stay held; start it again with: desolate start nests-dev/w1
+[exit 0]
+
+$ desolate up nests-dev --name taker --checkout acme/widgets=main
+desolate: the main checkout of acme/widgets is held by the workspace 'nests-dev/w1'. Two editors and two agents in one working tree is a corruption, not a feature
+  fix: take a worktree instead: --checkout acme/widgets=worktree:<branch>
+[exit 75]
+
+$ desolate start nests-dev/w1
+workspace nests-dev/w1 is up (<duration>)
+  size         <size>
+  devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
+[exit 0]
+
+$ desolate rm nests-dev/w1
+removed nests-dev/w1. Its branches and worktrees stay in the domain's clones.
+[exit 0]
+
+$ desolate up nests-dev --name taker --checkout acme/widgets=main
+workspace nests-dev/taker is up  [NOT ISOLATED: fake backend]
+  acme/consumer  main checkout (main)  /workspaces/acme/consumer
+  acme/widgets  main checkout (main)  /workspaces/acme/widgets
+  size         <size>
+  devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
+  editor       http://nests-dev-taker-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Ftaker.code-workspace
+  dev servers  http://nests-dev-taker-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor nests-dev/taker --open      its editor, in your browser
+      desolate exec nests-dev/taker -- <command>     a command in its devcontainer (bash, for a shell)
+[exit 0]
+
+## remove a domain
+
+$ desolate rm other
+desolate: the domain 'other' still has 1 workspace(s): w1
+  fix: desolate rm other/w1
+[exit 75]
+
+$ desolate rm other/w1
+removed other/w1. Its branches and worktrees stay in the domain's clones.
+[exit 0]
+
+$ desolate rm other
+removed the domain other; the root clones keep this domain's branches for as long as they are wanted.
+[exit 0]
+
+## the domain's environment
+
+$ desolate domain nests-dev env
+nests-dev: its workspaces run the devcontainer.json of the first checkout that has one. To choose: desolate domain nests-dev env --from <owner>/<repo>.
+[exit 0]
+
+$ desolate domain nests-dev env --from acme/elsewhere
+desolate: acme/elsewhere is not in the domain nests-dev
+  fix: desolate domain nests-dev add --repo acme/elsewhere
+[exit 1]
+
+$ desolate domain nests-dev env --from acme/widgets
+nests-dev: its workspaces run acme/widgets's devcontainer.json. (New workspaces; an existing one keeps what it was made with.)
+[exit 0]
+
+$ desolate domain nests-dev env compose
+desolate: composing one environment from several specs is not built yet
+  fix: choose one repository's: desolate domain nests-dev env --from <owner>/<repo>
+[exit 1]

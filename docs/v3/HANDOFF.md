@@ -1,0 +1,485 @@
+# desolate v3: handoff
+
+Written 2026-11-11 and revised 2026-11-12 by an agent in a cloud sandbox (x86_64 Linux, no
+`/dev/kvm`, no Mac), in four passes: the overnight one; a second that added the editor,
+secrets, and push approval on the host (section 2a); a third that added the devcontainer,
+the root UI, and what was still missing from v2 (section 2b); and a fourth that removed the
+root's editor, put the diff in the dashboard, made the terminal approver the default, and
+audited what the root takes from a domain (section 2c).
+[`status-by-section.md`](status-by-section.md) goes
+through the spec point by point. It is for the owner and for an agent working **directly
+on the owner's M1**. It says where v3 stands, what each claim rests on, and what to do next,
+in order.
+
+Read with it: [`move-to-vms.md`](../../move-to-vms.md) (the spec),
+[`decisions.md`](decisions.md) (what was decided, with measurements),
+[`release/README.md`](../../release/README.md) (the status table),
+[`tests/v3/README.md`](../../tests/v3/README.md) (the tiers).
+
+## 1. Applying this work
+
+The work is a branch of commits on top of `main` at `4f32c77` ("adding v3 document").
+
+```bash
+git checkout -b v3 4f32c77
+git am < v3.mbox                 # or: git fetch /path/to/v3.bundle v3 && git checkout v3
+git log --oneline 4f32c77..v3
+git push -u origin v3
+```
+
+**Push it as a branch. Do not merge it to `main` yet.** `main`'s `release/` is pushed to the
+`release` branch that users install from, and `release/` here is v3, unfinished: it does not
+cache a project's environment and has never run on a Mac (section 3). v2 is untouched in history and on `release`.
+
+## 2. Where it stands
+
+Phases are move-to-vms.md section 13.4's. "T2" is the fake backend (containers; not
+isolated). "T3" is real VMs under QEMU, in the sandbox under software emulation.
+
+| Phase | State | Evidence |
+|---|---|---|
+| 0. Probes | **Partly done.** Lima/vz measured on the M1: boot, clone, shares, a shared `.git`, read-only shares, the egress cut, devcontainers, the template flow. Apple Container and microsandbox not measured (not installed). One question open: ICMP. | `docs/v3/phase0/`, `decisions.md` |
+| 1. Root VM | **Done.** Keyring (read keys; write keys that sign only against a person's approval), mirrors with LFS, root clones, `clone [--no-push]`, `fetch`, the CLI channel. | T2 `01-root` (13 tests), T3 |
+| 2. One workspace | **Done but for caches.** Domain clone from the read-only mirror, forced egress through its own proxy, ports forwarded as they open, the editor, **the project's devcontainer from its own spec, inside the VM**, the start-up breakdown line. **Missing: caches C2 to C4, templates, the workspace-side extension.** | T2 `02`, `03`, `05`, `06`, `08`; T3 |
+| 3. Domains | **Mostly.** Several repositories, the shared `.git`, worktrees, `--base`/`--fetch`, checkout locks, the board, two domains with one repository, the root's view, the poisoning test for storage. **The environment is one repository's spec (`env --from`). Missing: composing specs, templates and package caches (C3, C4).** | T2 `02`, `04`; T3 |
+| 4. Secrets and policy | **Done but for the self-test fixture and timed learn.** Per-domain open/enforce, allowlist, `recommend`, internal-address refusal, audit by link; per-domain secrets with hosts, headers, off/on and `--ttl`. | T2 `05`, `07`; T3 |
+| 5. Offers and pushes | **Done except `upstream`.** `offer`, the request channel, import by bundle (every object strictly checked before it enters a root clone), review with a diff, push, `--expect`, exit codes, LFS first, the hostile domain repository and hostile content; **approval given on the host, outside every VM, by a signed challenge, on the terminal** (Touch ID: opt-in, written, never run); a raw `git push origin` in the root shell, approved with `desolate approve`. | T2 `04` (11 tests), `10` (6 tests) |
+| 6. Root UI and agents | **The UI: done as a dashboard page. Agents: not started.** A state service in the root that pushes changes; the dashboard at `desolate.localhost` (cards, Needs you, one-click actions, review with the diff as text, push, first run). No editor in the root, by decision. The dispatchers are not ported. | T2 `09` (the spec's three budgets; a real browser); T3 |
+| 7. Hardening | **Partly.** P1 to P6 are in the README; doctor's false-pass rule holds for the root's checks; the incidents page has v3's findings. | |
+
+Test counts at this commit, in the sandbox: **T1 40, T2 96, T3 11; all passing.** (T3 with workspaces at 3 GiB, `DESOLATE_WORKSPACE_MEMORY_MIB=3072`: the sandbox has 8 GB for three VMs.)
+T2 takes about 9 minutes. T3 takes about 27 minutes under software emulation.
+
+### 2a. What the second pass changed
+
+- **Every workspace has an editor.** `desolate up` prints its address; `desolate editor
+  <domain>/<workspace>` prints it again. It is the pinned VSCodium `reh-web` server, baked
+  into the base image, running in the workspace VM as the workspace's user, behind v2's
+  gate. The sandbox could download it this time, so it is the real server that the tests
+  drive, including from headless Chrome. `release/workspace/editor.sh`, `editor-gate.ts`,
+  `editor-settings.ts`; the forwarder's part is in `release/host/daemon.ts`.
+- **Secrets.** `desolate domain <d> secret set NAME --hosts ... [--headers ...]` (value on
+  stdin), `secret list`, `secret rm`. `release/root/proxy/secrets.ts` and
+  `secrets_addon.py` (mitmproxy 11.0.2, v2's addon cut down). TLS is terminated only for
+  the hosts of a domain's secrets.
+- **Push approval left the root VM.** `release/host/approver.ts`,
+  `release/host/approver/touchid.swift`, `release/shared/approval.ts`; the keyring verifies
+  signatures instead of trusting a terminal. `desolate approve [--selftest]`.
+  `release/root/keyring-confirm.ts` and its sudo rule are gone.
+- **A bug the first pass shipped:** a raw `git push origin` in the root shell could never
+  have asked for confirmation from the pre-push hook, because git authenticates to the
+  remote before it runs that hook. It now goes through `git-remote-desolate-push`.
+
+### 2b. What the third pass changed
+
+- **Devcontainers.** `release/workspace/devcontainer.ts` runs the devcontainer CLI in the
+  workspace VM against the checkout's own spec; `enter.sh` is how `desolate exec` and the
+  editor's terminal get into it; the editor's server runs in the container when it can.
+  `desolate domain <d> env --from <repo>` chooses whose spec a domain runs.
+- **The root UI.** `release/root/stated.ts` (the state service), `release/root/ui/` (the
+  dashboard), and the host daemon's side of it in `release/host/daemon.ts`. (This pass
+  also had an editor in the root; the fourth removed it.) `desolate ui` prints the address;
+  [`dashboard.png`](dashboard.png) is what it looks like.
+- **From v2:** secret switches (`secret off | on --ttl`), `net recommend`, `down`, tab
+  completion (`desolate completion`).
+- **Two things that changed under existing behaviour:** `bootstrap` now always runs the
+  root's `start.sh` (it starts what a newer desolate added) and starts the host daemon; a
+  workspace VM starts a docker daemon when something asks for one (socket activation), so
+  it may have a `docker0` bridge beside loopback.
+
+### 2c. What the fourth pass changed
+
+- **The rule, stated.** The Mac and the root VM hold sensitive things, and untrusted code
+  is never run in either (`release/README.md`, "The one rule you keep"). The rest of this
+  pass follows from taking that as given.
+- **No editor in the root.** `release/root/editor.sh` and `editor-settings.ts` are deleted.
+  The root offers the dashboard, a diff as plain text (in the dashboard, and
+  `desolate review <domain> <repo> <branch> --diff`), and a terminal for git.
+- **The terminal approver is the default**, on the Mac too. `DESOLATE_APPROVER=touchid`
+  opts in to the Secure Enclave key. Bootstrap on the Mac no longer starts with Swift.
+- **What the root takes from a domain was audited by test, and two holes were found and
+  closed** (`decisions.md`, "What the root takes from a domain"; `release/docs/incidents.md`):
+  bundles were not checked on import (this file's own "known gaps" had it as unmeasured;
+  measured, it was open), and the root removed a file of its own through a link planted in
+  an outbox. Also closed: an LFS object was verified and then copied by path; status files
+  were checked by name and then read. `release/root/outbox.ts` is now the only code that
+  touches an outbox, and its top says how. New tests: T2 `10-hostile-content`, T1 `status`,
+  more in T1 `outbox`.
+- **A bug that only real VMs showed:** the state service ended the first time a bundle
+  was checked (a watched directory tree; `release/docs/incidents.md`), and nothing started
+  it again. Fixed; `rootd` and the state service are now kept running by
+  `release/root/start.sh`. The real-VM tier found it because this pass added an offer to
+  it; T3 had never carried one. **Expect more of this kind on the Mac**: what T2 proves
+  is logic, not timing.
+- **A refused bundle is said out loud**: to the workspace that offered, on the dashboard,
+  and in `desolate offers`, with what to do.
+
+### 2d. What the Mac bring-up found (2026-11-12, an agent on the M1)
+
+The branches `mac/*` and their pull requests into `v3`; `docs/v3/mac-audit-notes.md` keeps
+the security findings, open and closed.
+
+- **The vz backend runs.** Bootstrap passed on first contact; the first workspace was up in
+  13 s (VM boot 10 s). **Tier T4 passes, 11 of 11** (`TMPDIR=~/t tests/v3/run.sh t4`,
+  3 min 15 s including a base VM provisioned from nothing): read-only shares and forced
+  egress against root in the VM, ICMP included, no path between domains, an offer and
+  hostile content over a real share, the editor, a secret.
+- **ICMP** is closed on Lima 2.3.0 (measured); vz requires 2.3.
+- **First-contact bugs**, each in `release/docs/incidents.md`: a `safe.directory` pattern
+  git 2.43 ignores; a VM used before its shares were mounted; vz's per-guest view of
+  ownership and its ~1 s of staleness between VMs (`decisions.md`, "On vz, a share is the
+  host's files seen through each guest's own cache").
+- **Security, fixed:** the root VM's login user had `NOPASSWD: ALL` (it runs the proxies
+  and the git that reads a domain's packs); start-up followed links that user could
+  plant; node and `/usr/local/bin` belonged to uid 1001; the dashboard answered any local
+  program and handed it every editor's token; mitmproxy's dependencies were unpinned.
+- **Security, also fixed:** the proxies ran as rootd's user; on vz any user of a guest who
+  reaches a share can write it. The proxies now run as their own user, closed out of the
+  shares, one user per domain, and each secrets proxy takes only its own domain's token.
+- **Templates (C3)**: a domain's environment is built once and cloned: 18.8 s per
+  workspace with a real devcontainer, from 54 s (`decisions.md`, "A domain's template").
+- **Package caches (C4)**: each domain's npm, pip and the rest in a share of its own, mounted
+  into its workspaces and devcontainers (`mac/package-caches`).
+- **Not done, and why:** mapping `localhost` links in the workspace's editor to the
+  workspace's hostname (section 4.4). VSCodium's web workbench resolves external URLs through
+  hooks its embedder supplies (a tunnel provider), which the reh-web server does not expose
+  to configure; `carryover/editor/extension` is v2's panel, not this. `desolate ports` and
+  the dashboard give the right address.
+- **T2 on a Mac is partial** (the fake backend's link is a host socket Colima cannot reach):
+  `tests/v3/README.md`.
+
+### 2e. Working it end to end (2026-11-13, an agent on the M1)
+
+Five steps, each audited (PRs #84 to #91): the pusher (the one user that reaches a write
+key; it speaks receive-pack and parses nothing), one-click approval in the browser, the git
+VM with a terminal in a browser tab, the root VM walled off from the Mac's loopback, and
+`desolate events`. Then a promo video of the whole flow, which found three bugs (#89–#91), and
+the ergonomics that the video showed were missing (#92, #93, and `mac/ergonomics-2`):
+
+- each checkout's live branch (its HEAD, from the Mac's file events) on the dashboard, in
+  `desolate list` and as `head` events;
+- every branch a domain makes reaches the root as it is written, reviewable without an offer
+  (`desolate branches`, the dashboard's Branches, `--against domain`);
+- `desolate status` inside a workspace;
+- in the git VM, a remote per domain (`git fetch acme`, `git push acme <branch>` delivers) and
+  `desolate fetch`;
+- push and approve in one tab: the approval page framed beside the git terminal, by that
+  origin alone;
+- `domain create --repo`, `up --branch`, `--open`, the Mac's git identity in the git VM;
+- no devcontainer lockfile written into an agent's checkout.
+
+Then **`desolate upstream`** (`mac/upstream`): a consumer's change to a vendored suede
+dependency, proposed to the dependency. The spec put it in the root; the root no longer has a
+terminal, so it runs in the git VM (decisions.md, "`desolate upstream`", says why, and how it
+sits beside the suede factory): suede's own `upstream.sh`, pinned by commit and hash, and the
+image's git-subrepo, in a scratch clone whose push is caught, checked (the named dependency is
+`.gitrepo`'s, `.github/` untouched, the split is the dependency's files), shown (red for
+`.suede/core/`), then pushed as any git VM push is (approval page, pusher). The root refuses a
+`downstream/...` push that changes `.github/` whichever way it comes. On the Mac it waits for
+the PR. `release/docs/suede.md` is the workflow end to end. Run on GitHub once, end to end:
+https://github.com/mitdesolate/desolate-upstream-lib/pull/1. Dummy repositories:
+`mitdesolate/desolate-upstream-lib` (a suede dependency made from suede's template, with its
+downstream Action) and `mitdesolate/desolate-upstream-app` (vendors it at `lib/`).
+
+Dummy repositories for demos: `mitdesolate/desolate-promo-app` (LFS, a devcontainer with the
+git-lfs feature, a test) and `mitdesolate/desolate-promo-lib`. The recording script is
+`tests/v3/demo/promo/promo.ts`; the approval-only one is `tests/v3/demo/record-approval.ts`.
+
+### 2f. Compose, and Docker inside the devcontainer (2026-11-13, an agent on the M1)
+
+`mac/compose-docker`. A real repository, `mitdesolate/desolate-compose-demo` (private): a
+compose devcontainer (an app service on `javascript-node:22`, and Postgres), the
+`docker-outside-of-docker` feature on `main`, `docker-in-docker` on `dind`, a single container
+with `docker-in-docker` on `dind-single`; a web app on 8000 and a test that talks to the db.
+
+What was broken, on `v3` as it was (the spec came up; nothing in it worked as a workspace):
+- **git in the service**: "unable to normalize alternate object path": the domain clone
+  borrows the mirror by its absolute path, and a compose service got none of desolate's
+  mounts. Nor `desolate`, `/desolate/status`, the outbox, the caches;
+- **the folder** was the project's (`/workspaces/<repo>`), not the VM's path, so a worktree's
+  `.git` (an absolute VM path) and the multi-checkout `.code-workspace` did not resolve;
+- **Docker outside of Docker bind mounts**: `docker run -v "$PWD:/src"` from the service
+  named a path the VM does not have, and docker made it, empty, in the domain's share on
+  the Mac (`domains/<d>/repos/<repo>`);
+- **ports**: a server in the app service, and `forwardPorts` (`db:5432`), were not
+  forwarded; only what a service published (docker's proxy in the VM) was;
+- **the editor** stayed in the VM.
+
+What changed (`workspace/devcontainer.ts`, `svcnet.ts`, `bridge.ts`, `wsd.ts`, `editor.sh`,
+`enter.sh`):
+- the primary service gets desolate's mounts, as a single container does, and the VM's
+  `/workspaces` at `/workspaces`, over the project's own mount there (compose merges a
+  service's volumes by target); the folder is the checkout's own path. The CLI drops
+  `readonly` from a compose mount (it writes `source:target`), so the mode rides in the
+  target (`:ro`); T2 checks the mirrors refuse root's write beside the cache taking it;
+- `svcnet.ts` runs in the primary service (the editor's node, as the VM's user) on a unix
+  socket in `/run/desolate`; `bridge.ts` in wsd mirrors each of the service's listeners,
+  and each `forwardPorts` `service:port`, onto the VM's 127.0.0.1, where the forwarder
+  finds them like any listener (so raw-port and reservation rules are unchanged). A
+  `service:port` is connected from inside the app's network, by name. Docker's embedded
+  resolver (127.0.0.11) is not a listener;
+- the editor runs in the primary service when it is glibc and the relay is up; the gate
+  stays in the VM and reaches the server through the same mirror.
+
+Measured on the M1 (vz, 4 CPUs and 8 GiB per workspace):
+- first `up` of the demo (template built): **114.5 s** (template 88.3 s: pulls of the app
+  image, Postgres and the feature, through the workspace's proxy); the same on `v3` before
+  the change, 122.4 s;
+- second `up`, from the template: **27.8 s** (VM boot 10.8 s; services, checkouts,
+  devcontainer and editor 16.5 s); `stop` then `start`: 24 s;
+- from the Mac: `:8000` served "visit number 3, counted in postgres"; `:5432` answered a
+  Postgres SSLRequest; a sibling container started from the service (`./sibling.sh 8081`)
+  served the checkout, through a bind mount of `$PWD`; `npm test` 2 of 2;
+- service to service on port 80 is not caught by the VM's redirect (measured: 200 by name
+  and by address).
+
+**Docker outside of Docker or Docker in Docker: outside.** Both work, ports included. The
+workspace VM is the boundary, so a devcontainer that drives the VM's daemon gives up
+nothing; inside costs, measured on the same VM:
+- a privileged service, and a second dockerd and containerd in it (131 MB resident);
+- a second image store, in a volume, that shares nothing with the VM's: what the template
+  pulled (3.1 GB of images there) is not in it, and every image the work uses is pulled
+  again (93 MB, of the two the test used);
+- first `up` on the DooD template: 61.2 s for the devcontainer (the feature built in the
+  clone), against 16.5 s;
+- the same per operation, once running: pull 2.1 s against 3.3 s, `docker run` 0.50 s
+  against 0.52 s, a one-step build 0.67 s against 0.84 s, `stop`/`start` 22 s against 24 s;
+- a nested container's published port is in the service's network, so it reaches the Mac
+  only through the relay (it does); a sibling's is docker's own listener in the VM.
+- **docker-in-docker in a single-container spec is worse than that**: desolate runs a
+  single container on the VM's network, so the nested daemon shares the VM's network
+  namespace and its `docker0`, and both daemons hand out the same addresses: measured,
+  `172.17.0.2` and `172.17.0.3` each given twice, once by each daemon, on one bridge (the
+  nested one also writes iptables-legacy rules beside the VM's nftables). It ran, and its
+  published port was forwarded, but two containers with one address is a fault waiting.
+  Docker-outside-of-docker has none of this.
+
+Not done: a compose service that is not glibc (alpine) gets no relay, so neither its own
+ports nor `service:port` forwards nor the editor; `up` says so (the VM's docker-proxy
+still publishes `ports:`). The other services get no desolate mounts (by design). The
+template keeps docker volumes (Postgres' data directory as the builder left it, a DinD
+store), as it keeps images.
+
+### What has never been run
+
+(Revised 2026-11-13. The vz backend, arm64, a real devcontainer with a feature, the dashboard
+on the Mac, the image's Dockerfile, and `clone` and pushes against GitHub have all run on the
+M1 since this list was first written: sections 2d and 2e.)
+
+- **The Touch ID approver** (opt-in: `DESOLATE_APPROVER=touchid`). It compiles on the M1;
+  running it makes a Secure Enclave key and asks for a fingerprint, which is a person's to do.
+  The default `terminal` approver and the approval page are what every test uses.
+- **The editor in a browser other than Chrome** (Safari cannot open `*.localhost` names).
+- **Claude Code with a real token.** The way it is wired (a domain secret, substituted by
+  the workspace's proxy on the way to api.anthropic.com) is exercised with a stand-in token
+  that Anthropic refuses; a real subscription's first run is the owner's.
+
+## 3. What is missing that matters most
+
+1. **Nothing caches an environment.** Each workspace builds its project's devcontainer
+   itself, from the network, every time it is made (section 4.7's C2 to C4, and templates).
+   With a real toolchain that is minutes per workspace, against a target of 15 seconds.
+2. **The write key is a file in the root VM**, and a program running as you on the Mac can
+   enter the root VM as root and read it. Under the rule (no untrusted code on the Mac)
+   that is accepted, not open. If the rule ever needs to be weaker, `decisions.md` section
+   5.3 says what would close it: a write key held by the Secure Enclave.
+3. **The Mac backend is unproven.** (Its ICMP row was measured closed on Lima 2.3.0.)
+4. **A domain can fill the disk.** Nothing limits the size of an outbox or of a workspace's
+   share. That costs availability, not integrity.
+
+## 4. First things to do on the M1, in order
+
+**Done, 2026-11-12, by an agent on the M1** (section 2d; pull requests #65 to #75 into `v3`,
+stacked in that order but for #65 and #68, which stand alone): steps 1 to 4 below, and T2 on
+the Mac as far as it can go there. What is left of this section: running the Touch ID
+approver (a person's), and the first bootstrap from a fresh home with the hash-locked image
+(#68). Section 5 is where the work is now; its item 1 is half done (C3 templates, C4 caches).
+
+1. **T1.** `npm install && make test`. Seconds. If this fails on macOS, fix it first: it is
+   the one tier that should be identical everywhere.
+
+2. **Close Phase 0's open question.** `bash tests/probes/v3/phase0-mac-egress3.sh` (2 minutes).
+   It tells whether a workspace's ping really leaves the Mac. Record the answer in
+   `decisions.md` section 4.3 and change the "vz: ICMP from a workspace" row in
+   `release/host/vm/lima.ts` (`check()`) to say what was found. If echoes do leave, that is
+   a real channel and needs closing before vz is called isolated; `decisions.md` lists what
+   was already tried.
+
+3. **Bring up the `vz` backend.**
+   ```bash
+   brew install lima node git-lfs            # Lima >= 2.3 for vz (ICMP); the Mac has 2.3.0
+   release/cli.sh bootstrap                  # backend vz is the default on macOS
+   ```
+   What it does, and where it may stop:
+   - **first, the approver**: a key file in `~/.desolate/approver`, nothing to compile.
+     `release/cli.sh approve --selftest` asks you to type a word on the terminal and prints
+     that the signature verifies. (Touch ID is opt-in, later, and unrun:
+     `DESOLATE_APPROVER=touchid release/cli.sh bootstrap` compiles
+     `release/host/approver/touchid.swift` with `swiftc`. If you try it, check by hand that
+     cancelling the dialog approves nothing, and whether an unsigned binary may use the
+     enclave on this macOS: if not, `codesign -s - <binary>`.)
+   - makes a base VM from Lima's pinned Ubuntu image and runs `release/image/provision.sh` in
+     it (several minutes; needs the network). Watch for: a tool whose checksum in
+     `release/pins.env` no longer matches (it refuses, correctly; re-pin deliberately); the
+     editor server's download (`/opt/desolate/EDITOR-MISSING` in the VM means it did not come).
+   - clones the base into the root VM with `limactl clone --set`, starts it, and runs
+     `release/root/start.sh` as root in it. Watch for: the guest user's home and group (the
+     script takes the uid and looks the rest up).
+   - ends with `doctor`. Every failure names a fix.
+   desolate keeps its own Lima home: `LIMA_HOME=~/.desolate/lima limactl list` shows its VMs,
+   and `~/.desolate/lima/<vm>/ha.stderr.log` is where a VM that will not start says why.
+   Bootstrap ends by printing the dashboard's address (`http://desolate.localhost:31581/?tkn=...`;
+   `desolate ui` prints it again): open it. Without its token the dashboard answers 401,
+   to any program on the Mac. It should say "host connected" and walk through the first steps; if it says
+   the host is not connected, `~/.desolate/logs/daemon.log` says why.
+   Then: `release/cli.sh clone <a test repository>`, a domain, `up` (open the editor address
+   it prints in a browser), and the checks of `tests/v3/t3/01-boundaries.test.ts` by hand.
+   The editor's port on the Mac is 31581 (`DESOLATE_EDITOR_PORT`); `*.localhost` resolves to
+   loopback in Chrome, Firefox and Safari without any setup.
+
+4. **Make tier T4.** `tests/v3/t3/` runs on the Mac as it is, with `DESOLATE_TIER=T4`
+   (`tests/v3/lib/harness.ts` maps T4 to the `vz` backend), **except** that it needs the
+   stand-in forge, which is a container: the Mac needs Docker (Colima is installed) and the
+   base image for it (`docker build -t desolate/base:latest -f release/image/Dockerfile release`).
+   The two assertions that read QEMU's command line apply to `qemu` only and are skipped on
+   other tiers. Record its timings against section 4.7's targets: the M1 measured 11.0 s from
+   clone to a running devcontainer, by hand.
+
+5. **T2 on the Mac**, with the same image: `make e2e-fast`. It should pass unchanged; if a
+   transcript differs only by platform, that is worth knowing about too.
+
+## 5. Then, in this order
+
+Each item names where to start. The order is by what unblocks use.
+
+1. **Templates and caches (section 4.7).** `Backend.clone` exists and the M1 measured it:
+   build a domain's environment once in a builder VM with the domain's trust (never the
+   root's), and clone workspaces from its disk (C3). Then the pull-through registry (C2)
+   and the domain's package caches (C4). Freeze the environment when the domain is made
+   and pin its features then (`carryover/devcontainer/feature-pins.ts`).
+   Also here: the domain's CA for tools that ignore the environment
+   (`carryover/proxy/install-ca.sh`). (Compose specs: done, section 2f.)
+2. **The workspace-side extension** (`carryover/editor/extension`), which is what maps
+   `localhost` URLs to the workspace's hostname (section 4.4). And v2's self-test fixture
+   for secrets.
+3. **A quota for a domain's outbox and share; a side-by-side diff in the dashboard** if
+   the unified one proves too little for review.
+4. **[x] `desolate upstream` (section 5.5).** Done (`mac/upstream`, section 2e): in the git
+   VM, not the root, with suede's `scripts/upstream.sh` pinned at `SUEDE_COMMIT` (9db3faf,
+   chosen by the agent: suede's main on 2026-11-13; move it with `tools/pin-suede.sh`).
+   Left: LFS files inside a dependency (the split's LFS objects are not looked for); a
+   dashboard button (the split is the git VM's, which the dashboard does not drive).
+5. **The environment (4.5) and the caches (4.7: C2, C4).**
+6. **Hardening**, the list in section 6.
+7. **Ergonomics (13.3):** the fresh-eyes run, screenshots, budgets as tests. The transcripts
+   are in place and are the thing to read first: `tests/v3/transcripts/`.
+8. **[ ] Tests that document the TypeScript, with `nests`** (the owner's request, 2026-11-12:
+   once the code has settled after the Mac bring-up; not before). `pmalacho-mit/suede.nests`
+   writes tests as TypeScript namespaces beside the code they test, run by Vitest through a
+   Vite plugin, so a module's tests read as its documentation. Start with the modules a
+   reader most needs to trust: `shared/link.ts`, `shared/approval.ts`, `root/outbox.ts`,
+   `host/vm/lima.ts` (`unmounted`), `root/proxy/as-proxy.ts`, `host/templates.ts`. Keep the
+   tiers' rules: a test's name says its tier, every negative check has a control. Mind
+   desolate's own:
+   - **dev-only.** `release/` carries no `package.json` and ships no test code; the
+     namespaces must not change what node runs in the VMs, or be stripped where they would;
+   - **pinned.** A suede dependency by commit, as `SUEDE_COMMIT` is meant to be (`pins.env`),
+     never `curl | bash` of a moving branch; vite and vitest in the dev lockfile;
+   - **T1 stays one command** (`make test`), seconds, the same on Linux and macOS.
+
+## 6. Known gaps and sharp edges
+
+Things that are true of the code as it is, that the next person should not have to discover.
+
+**Boundaries**
+- **vz, ICMP:** closed on Lima 2.3.0 (measured; `decisions.md` 4.3). Lima 2.1.2 behaved differently and unexplainedly, so vz requires 2.3.0.
+- **The vz link is a loopback port on the Mac** (the guest's confinement allows it that one
+  port). Any process on the Mac can connect to a loopback port, and behind this one is a
+  workspace's proxy, which substitutes its domain's secrets. So a connection must open with
+  a token the host made for that workspace and passed into its VM (`release/shared/link.ts`,
+  unit-tested over a real socket in `tests/v3/t1/link.test.ts`); the daemon closes one that
+  does not. The token is in the VM's metadata under `~/.desolate`, so this keeps out other
+  users and sandboxed programs, not a program running as you. **Like the rest of the vz
+  backend, the wiring of it has never run.**
+- **Push approval** is outside the VMs. It is a gate against work going out unread, not
+  against hostile code on the Mac: a program running as you there can read the approver's
+  key file, and can reach the write key through the VM layer (`decisions.md` section 5.3).
+  The rule is that no such program is run.
+- **Keys and `sudo`:** the root VM's login user has **no sudo** (it was Lima's
+  `NOPASSWD: ALL` until the Mac bring-up; `release/docs/incidents.md`). That user runs
+  rootd, the state service, git on a domain's packs and every proxy, so the write keys are
+  now safe from a bug in any of those. The host reaches root by ssh as root with Lima's
+  key. Each domain's proxies run as that domain's own user, which reads that domain's
+  policy and secrets and reaches neither the keyring, nor any share, nor another domain's
+  secrets or secrets proxy (`decisions.md`, "Each domain's proxies run as a user of that
+  domain's own"). Secrets are readable by the root's user and by their domain's proxies.
+- **A secret can be USED by whatever can reach its domain's proxy**, though never read:
+  every workspace of the domain (by design), and anything on the host that can run
+  `desolate exec` in one.
+- **What the root takes from a domain** (bundles, refs, LFS objects, requests, statuses)
+  is checked data: `decisions.md` has the audit and what is left by nature (git's parsers
+  on a pack an agent wrote; size; a person running a tree's code in the root). One branch
+  with a dangerous object blocks its whole domain until it is deleted there, and says so.
+
+## 8. A map of the code
+
+```
+release/host/cli.ts            every verb; thin: each lives in a file beside it
+release/host/stack.ts          which backend; the root VM's spec; rootctl (the CLI channel)
+release/host/bootstrap.ts      bootstrap, doctor, destroy
+release/host/workspaces.ts     up, list, start, stop, rm, exec (through enter.sh), editor
+release/host/domains.ts        domain create, add, net, secret
+release/host/push.ts           offers, review, push (challenge, approve, run), approve
+release/host/approver.ts       the key that approves pushes (terminal by default; approver/touchid.swift is opt-in)
+release/host/daemon.ts         the forwarder (ports by name; editors on one port) and each workspace's link
+release/host/vm/types.ts       THE interface every backend implements; read this first
+release/host/vm/fake.ts        containers                    lima.ts  qemu and vz
+release/host/vm/qemu-wrapper.sh  restrict=on and guestfwd for a workspace's QEMU
+
+release/root/ops.ts            every operation the host can ask of the root: a fixed table
+release/root/keyring.ts        two agents behind filtering relays; challenges, signed approvals; no export
+release/root/repos.ts          keys, the mirror (with LFS), the root clone and its config
+release/root/git.ts            how the root runs git, and the check that it is in its own repo
+release/root/domains.ts        domains, workspaces, who holds which checkout
+release/root/outbox.ts         THE ONLY code that touches a domain's outbox: a checked, held directory; names only
+release/root/git-remote-desolate.ts  a domain as a git remote: fetch (bundles, strictly checked in quarantine), push (deliver)
+release/root/offers.ts         taking an offer, LFS verification, review, the diff as text
+release/root/push.ts           `desolate push` in the root: prepare (refusals, challenge), run
+release/root/git-remote-desolate-push.ts  `git push origin` in the root shell: waits for `desolate approve`
+release/root/send.ts           hands a push to the pusher: the approval's id, a pack, LFS objects
+release/root/pusher.ts         the only user with the write agent: one ref update, onto -> commit; parses nothing
+release/root/forge-pin.ts      root's copy of the forge's address, for the pusher
+release/root/reviewer.ts       a user of its own: what a push would send, for the approval page
+release/root/review-client.ts  the root's user's side: sends the reviewer the objects; review-ask.ts is the host's question
+release/host/approve-web.ts    the approval page: one click, served by the host daemon (approve-ui/ is the page)
+release/host/git-vm.ts         the git VM: the person's clones, no network; hands its pushes to the root
+release/host/git-web.ts        the git terminal in a browser tab (git-ui/, with xterm.js vendored by hash)
+release/git/                   inside the git VM: provision.sh, terminal.py, the push helper
+release/git/upstream.ts        `desolate upstream`: suede's pinned upstream (suede-upstream.sh), checked, then a push
+release/host/upstream.ts       ... on the Mac: runs it in the git VM, then waits for the PR
+release/shared/suede.ts        suede's names, and the .github/ rule for every downstream/... push
+release/root/raw-push.ts       a push asked for with git (root terminal or git VM): review, approval, pusher
+release/root/intake.ts         every object of a bundle checked before a root clone takes it
+release/root/wall.sh           the root VM does not reach the Mac's loopback (nftables)
+release/host/events.ts         `desolate events`: what happened, from whom (pusher, host, root)
+release/root/pre-push.ts       a hand-made push to the remote's address is refused (it has no key either)
+release/root/rootd.ts          the request channel
+release/root/stated.ts         the state service: holds the state, pushes it; ui/ is the dashboard
+release/shared/actions.ts      what the dashboard may ask the host to do: a fixed list
+release/root/proxy/            proxy.ts, manage.ts: a workspace's proxy, one per workspace
+                               secrets.ts, secrets_addon.py: a domain's secrets and its secrets proxy
+
+release/workspace/init.ts      the domain's own git: clones and worktrees
+release/workspace/wsd.ts       ports, reservations, bundles of branches, deliveries
+release/workspace/sync.ts      bundles, LFS staging, the request channel's client
+release/workspace/desolate.ts  `desolate fetch | offer | sync` inside a workspace
+release/workspace/devcontainer.ts  the project's devcontainer, in the VM; enter.sh enters it
+release/workspace/net/         the stub resolver, the redirect, the egress relay, trust-ca.sh
+release/workspace/editor.sh    the editor: codium-server and editor-gate.ts in front of it
+release/shared/approval.ts     the text a person approves      link.ts  the token that opens a vz link
+release/workspace/status       /desolate/status (v2's, unchanged)
+```
+
+Conventions worth keeping: TypeScript that node runs by stripping types (no enums, no
+parameter properties; `tsc -p .` is the only thing that checks it); every external program by
+argv, never a shell string; every refusal a `Refusal` with a `fix`; comments that say why.

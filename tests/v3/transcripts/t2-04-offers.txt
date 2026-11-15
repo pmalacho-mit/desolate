@@ -1,0 +1,202 @@
+$ desolate bootstrap --forge stand-in:ssh://git@<forge>:22 --forge-known-hosts <work>/forge-state/known_hosts
+desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; tests only), instance <instance>
+  + home <home>
+    base image desolate/base:latest present (<id>)
+  = base image
+  + config: backend fake, forge stand-in (<forge>:22)
+    approver: a software key in <home>/approver; every push will ask on your terminal
+  + approver (terminal): the key that approves pushes, held on this host
+  + root VM dsl-<instance>-root created
+  + root VM running
+  + root services: keyring
+  + root: the approver's public key and the host daemon's token
+  dashboard    http://desolate.localhost:31591/?tkn=<token>   (and: desolate ui)
+  workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
+bootstrap: 7 step(s) done.
+  ok   home: <home>
+  ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
+  ok   docker daemon: docker <version>
+  ok   base image: desolate/base:latest <id>
+  ok   root VM running: dsl-<instance>-root
+  ok   approver: terminal; pushes are approved on this host
+  ok   root: keyring answers: 0 key(s) held
+  ok   root: the write agent's askpass socket is closed to the root's own user: only the keyring's user can answer for a signature
+  ok   root: private keys are unreadable to the root's own user: /var/lib/desolate-root/keyring is the keyring user's alone
+  ok   root: the root's own user cannot become root: sudo refuses it
+  ok   root: the programs root runs are root's: node (/usr/local/bin/node) and root's PATH
+  ok   root: each domain's proxies run as that domain's own user: none shares a group with the root's user, reaches the shares, or reaches another domain's secrets
+  ok   root: secret values are unreadable to the root's own user: /var/lib/desolate-proxies/secrets: root's, and each domain's proxies'
+  ok   root: git's settings are root's: /var/lib/desolate-root/gitconfig
+  ok   root: approver key installed: sha256 <oid>
+  ok   root: forge configured: yes
+  ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
+  ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
+  ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   root: runs this desolate's code: its share of the release is <repo>/release
+  ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
+doctor: all checks passed.
+[exit 0]
+
+## offer a branch from a workspace
+
+$ desolate exec dev/w1 --checkout acme/widgets -- desolate offer
+offered acme/widgets issue/12 at <id>, with 1 LFS object(s).
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.
+[exit 0]
+
+$ desolate offers
+Needs you:
+  dev  acme/widgets  issue/12  <id>  from w1  1 LFS object(s)
+    review: desolate review dev acme/widgets issue/12
+[exit 0]
+
+$ desolate board dev
+dev/w1  [green] ready: fix for issue 12
+  acme/consumer@main  (no status)
+  acme/widgets@issue/12  [green] ready: fix for issue 12  (<time>)
+    | touches README only
+[exit 0]
+
+## the root's view
+
+## review
+
+$ desolate review dev acme/widgets issue/12
+acme/widgets  issue/12  at <commit>, against origin/main
+a push would send 1 commit(s): 2 files changed, 4 insertions(+), and 1 LFS object(s) first
+  <id>  fix: issue 12
+  README.md
+  new.bin
+read the diff: desolate review dev acme/widgets issue/12 --diff
+  or in the dashboard: http://desolate.localhost:31591/?review&domain=dev&repo=acme%2Fwidgets&branch=issue%2F12
+  or with git, in `desolate root shell`
+to push exactly this: desolate push dev acme/widgets issue/12 --expect <commit>
+[exit 0]
+
+## automation tries to push
+
+$ desolate push dev acme/widgets issue/12 --expect <commit>
+desolate: a push needs a person's confirmation, and there is no terminal to ask on
+desolate: no person confirmed the push, so nothing was pushed
+  fix: run it from a terminal of your own, on the host
+[exit 78]
+
+## refusals before and at the prompt
+
+$ desolate push dev acme/widgets issue/12 --expect <commit>
+desolate: issue/12 is at <id>, not the <id> that was reviewed: it moved since
+  fix: review it again (desolate review dev acme/widgets issue/12), then push with --expect <commit>
+[exit 79]
+
+$ desolate push dev acme/widgets issue/12
+desolate: a push names the commit you reviewed
+  fix: desolate review dev acme/widgets issue/12, then: desolate push dev acme/widgets issue/12 --expect <commit>
+[exit 64]
+
+$ desolate push dev acme/widgets main --expect <commit>
+desolate: main is acme/widgets's default branch
+  fix: push a branch and open a pull request; or, to push the default branch itself, add --allow-default
+[exit 77]
+
+$ desolate push dev acme/widgets issue/12 --expect <commit>    # at a terminal; the person types: yes
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      issue/12
+  commit      <commit>
+  onto        none: the remote has no issue/12 yet
+  sends       1 commit(s) the remote does not have, 2 file(s), 1 of them LFS
+              (desolate's reviewer, in the root)
+Type the branch name (issue/12) to push, or anything else to refuse: yes
+desolate: not confirmed
+desolate: no person confirmed the push, so nothing was pushed
+  fix: run the push again, and type the branch name when it asks
+[exit 78]
+
+## a person pushes
+
+$ desolate push dev acme/widgets issue/12 --expect <commit>    # at a terminal; the person types: issue/12
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      issue/12
+  commit      <commit>
+  onto        none: the remote has no issue/12 yet
+  sends       1 commit(s) the remote does not have, 2 file(s), 1 of them LFS
+              (desolate's reviewer, in the root)
+Type the branch name (issue/12) to push, or anything else to refuse: issue/12
+uploading 1 LFS object(s)
+pushed acme/widgets issue/12 at <commit> (1 commit(s), 1 LFS object(s) first).
+[exit 0]
+
+$ desolate offers
+no offers. In a workspace, `desolate offer` marks a branch ready for you.
+[exit 0]
+
+## a raw git push, approved on the host
+
+$ desolate approve
+nothing is waiting for approval. (`desolate push` asks by itself; this is for a raw `git push` in `desolate root shell`.)
+[exit 0]
+
+$ desolate approve
+desolate: a push needs a person's confirmation, and there is no terminal to ask on
+desolate: no person confirmed the push, so nothing was pushed
+  fix: run it from a terminal of your own, on the host
+[exit 78]
+
+$ desolate approve    # at a terminal; the person types: raw-push
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      raw-push
+  commit      <commit>
+  onto        none: the remote has no raw-push yet
+  sends       0 commit(s) the remote does not have, 2 file(s), 1 of them LFS
+              (desolate's reviewer, in the root)
+Type the branch name (raw-push) to push, or anything else to refuse: raw-push
+approved; the push waiting in the root continues.
+[exit 0]
+
+## a raw git push, approved on the approval page
+
+$ desolate approve --web
+approvals    http://desolate-approve.localhost:31591/?tkn=<token>
+[exit 0]
+
+## a repository the root cannot push
+
+$ desolate push dev acme/consumer tweak --expect <commit>    # at a terminal; the person types: tweak
+desolate: acme/consumer is not pushable: the root holds no write key for it
+  fix: it was cloned --no-push. To make it pushable: desolate clone acme/consumer
+[exit 1]
+
+## a hostile domain repository
+
+## a delivery to another domain
+
+## a pushed branch, squash-merged on the forge
+
+$ desolate push dev acme/widgets issue/12 --expect <commit>    # at a terminal; the person types: issue/12
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      issue/12
+  commit      <commit>
+  onto        <commit>  (the remote's issue/12 now: it moves from this to the commit, or not at all)
+  sends       1 commit(s) the remote does not have, 1 file(s)
+              (desolate's reviewer, in the root)
+Type the branch name (issue/12) to push, or anything else to refuse: issue/12
+pushed acme/widgets issue/12 at <commit> (2 commit(s)).
+[exit 0]
+
+$ desolate branches dev
+  dev  acme/consumer  main  <id>
+    review: desolate review dev acme/consumer main
+  dev  acme/consumer  tweak  <id>  offered  checked out in w1
+    review: desolate review dev acme/consumer tweak
+  dev  acme/widgets  experiment  <id>
+    review: desolate review dev acme/widgets experiment
+  dev  acme/widgets  issue/12  <id>  merged into main  checked out in w1
+    review: desolate review dev acme/widgets issue/12
+  dev  acme/widgets  main  <id>
+    review: desolate review dev acme/widgets main
+[exit 0]
+
+## git fetch and git push in a workspace
