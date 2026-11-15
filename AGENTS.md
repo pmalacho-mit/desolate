@@ -47,6 +47,23 @@ change needs.
 - The principles, P1 to P6, are at the end of [`release/README.md`](release/README.md).
   Every change keeps them.
 
+## Publishing: the suede flow
+
+This repository is a suede dependency ([suede](https://github.com/pmalacho-mit/suede), v3
+layout). `release/` is what ships: the `release` branch is that folder, published by the
+`subrepo-push-release` workflow when a change under `release/` lands on `main`.
+- **suede's own machinery** is four subrepos: `.suede/core`, `.github/workflows`,
+  `release/.suede/core`, `release/.github/workflows`. Update them all with
+  `bash .suede/core/sync.sh`, on `main` (git-subrepo 0.4.9 needed). Never by hand, and never by
+  checking out `release`.
+- **Dependencies:** `release/.suede/nests` is vendored (it ships inside `release/`);
+  `.suede/devcontainers-suede` and `docs/typescript2mermaid-suede` are development-only.
+  `bash .suede/core/list.sh` shows them; nothing is declared for consumers.
+- **A release that changes `release/.github/workflows`** (what `sync.sh` does when suede's
+  release workflow moves) is refused by the Actions token, which may not change workflow
+  files. Publish it from `main` on the Mac instead: `bash .suede/core/push-release.sh`, which
+  pushes over the clone's own credentials. The person does that, not an agent.
+
 ## How the code is written here
 
 - **A boundary is claimed only with a test that tries to break it, beside a control** that
