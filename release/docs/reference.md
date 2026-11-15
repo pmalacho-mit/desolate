@@ -124,6 +124,20 @@ git is configured so that a checked-out tree cannot make it run anything.
 [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/v3/decisions.md) has the audit, and what is left by
 nature.
 
+**What reaches your terminal.** Text a VM, a repository or GitHub wrote (a branch name, a
+path in a commit, a status, an error) never reaches your terminal as something it would act
+on. Every line desolate's CLI prints passes one function (`shared/text.ts`, `forTerminal`):
+in text, control characters, bidirectional overrides and invisible formatting become `?`; in
+a JSON line (`--json`, `desolate events`) they are kept as `\u` escapes, exact and still JSON,
+so a script's `jq -r` decides what to print. A terminal session in a VM (`desolate exec`,
+`root shell`, `agent attach`, a push's run, `upstream`) is passed through
+`shared/terminal-filter.ts`, which keeps what a screen needs (colour, cursor movement, the
+alternate screen) and drops every OSC, DCS and other string sequence (the clipboard, files,
+the title, window operations); the root's shell and the git VM's page through `less`, which
+shows any other control as text. The recipes print text from a repository or GitHub through
+the same rule (their `say`), and pass every value to a command as one argument, never into a
+shell or jq program.
+
 **Git in a workspace.** Ordinary git, with what a workspace cannot do handled for it. Each
 clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate-mirror` and
 `-offer`):
@@ -214,19 +228,21 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T3, T4 | |
 | Offers, the root's view (`git fetch --all`), deliveries between domains | yes | T2 | |
 | `desolate upstream`: a consumer's change to a vendored suede dependency, split by suede's own upstream (pinned) in the git VM, pushed as `downstream/...` after your approval ([suede.md](suede.md)) | yes | T1, T2; against github.com | LFS files in the dependency |
-| Ports: same number, routed by name, reservations | yes | T2 | forwarded connections on real VMs are untested |
+| Ports: same number, routed by name, reservations | yes | T2; on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
 | P5: read-only shares against root in the VM | yes | **T3** (and measured on an M1 for the Mac) | |
 | P5: forced egress against root in the VM | yes | **T3**; Mac: measured for TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
 | Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T3 | |
 | Secrets: per domain, substituted for the hosts and headers they name, proven by the upstream's certificate, scrubbed from responses, switched off and on (`--ttl`) | yes | T2, T3 | v2's self-test fixture; "learn" as a timed mode |
 | **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T3 | desolate's workspace extension ([`carryover/editor/extension`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/carryover/editor/extension): mapping `localhost` URLs) is not ported |
 | The project's devcontainer, from its own `devcontainer.json` (features included), inside the workspace VM; `exec` and the editor enter it | yes | T2 (an image, a Dockerfile, a failing spec, no spec, a changed spec, a compose spec and its ports); on the M1, a public image with a feature, compose with Docker outside and inside | a compose service that is not glibc gets no port relay and no editor |
-| The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T3 (the state reaches the dashboard) | a side-by-side diff |
+| The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T3 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
 | The Mac backend (`vz`) | yes | **T4 on an M1**: read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over a real share, the editor, a secret | |
 | Pushes by the pusher alone (it speaks receive-pack; compare-and-swap from the commit you saw) | yes | T1, T2; against github.com | |
 | One-click approval in the browser, beside the git terminal | yes | T1, T2, and in Chrome | Firefox and Safari cannot say whether Approve is covered (Chrome can) |
 | The git VM: your git in a browser tab, no network or keys; a remote per domain; LFS | yes | T2 | |
 | `desolate events` and `desolate notify` | yes | T1, T2 | |
+| Upgrades: `git pull` then `bootstrap` (root and base re-provisioned in place when the image changed); `destroy` keeps the root's keys, secrets and rules for the next `bootstrap` | yes | T1, T2 (`13-rebuild`); by hand on the M1 | |
+| Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T3 inside a workspace |
 | Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
 | Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`agent.sh`); on the M1, `claude.sh` with a stand-in token | `issues.sh` and `suede.sh` not run |
 | After a push: the pull request's page on GitHub; "merged into <base>" once the mirror shows it | yes | T1 (the link; a merge, a squash, a rebase), T2 (a squash on the stand-in forge) | the link has not been opened on github.com; the 15-minute fetch not watched in real use |
@@ -244,11 +260,15 @@ root/              runs in the root VM: keyring, mirrors, clones, offers, push, 
   stated.ts, ui/   the state service and the dashboard it serves
   outbox.ts        the only code that touches what a domain wrote: how, and why, is at its top
 workspace/         runs in each workspace VM: its init, its daemon, its network, its
-                   devcontainer (devcontainer.ts, enter.sh), its editor
+                   devcontainer (devcontainer.ts, enter.sh), its editor, and git's helpers
+                   there (git-remote-desolate-mirror, -offer)
+git/               runs in the git VM: your git in a browser tab, and suede's upstream (pinned)
+recipes/           scripts of ordinary desolate commands, for tasks you do often (README.md)
 completion.bash    tab completion: source <(desolate completion)
 shared/            names, exit codes, the name sniffer: used on more than one side
 image/             what a VM image contains (provision.sh) and how it is built
-docs/incidents.md  ways desolate has been wrong, and what each taught
+docs/              getting started, the reference, agents, suede, developing desolate, dogfooding;
+                   incidents.md: ways desolate has been wrong, and what each taught
 ```
 
 The code runs straight from this tree: every VM mounts it read-only at `/desolate/release`.

@@ -37,3 +37,34 @@ declare namespace printableLines {
     [args: [value: "+ x = 1; \u202e// \u2066evil\u2069\n\u001b[2J"], expected: "+ x = 1; ?// ?evil?\n?[2J"],
   ]>;
 }
+
+/** A line on its way to the person's terminal from desolate's CLI, whatever it holds: the
+ *  one place every line passes (host/cli.ts), so that text another wrote cannot act on the
+ *  terminal however it got into the line. A JSON line (`--json`, `desolate events`) keeps
+ *  every character, as an escape (\u009b), so it stays exact and stays JSON, and a script's
+ *  `jq -r` is what decides to print it; any other line has them replaced, as printable does.
+ *  Newlines and tabs pass. */
+export const forTerminal = (line: string): string => {
+  const first = line.trimStart()[0];
+  if (first === "{" || first === "[" || first === "\"") {
+    try {
+      JSON.parse(line);
+      return line.replace(UNSAFE, (c) => (c === "\n" || c === "\t" ? c : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`));
+    } catch {
+      /* not JSON: a line of text that starts with a bracket */
+    }
+  }
+  return printableLines(line);
+};
+
+declare namespace forTerminal {
+  /** text: replaced; JSON: escaped, exact and still JSON; desolate's own lines unchanged */
+  export type Cases = Table<typeof forTerminal, [
+    [args: [line: "  dev  acme/app  issue/12  0123456789ab  from w1"], expected: "  dev  acme/app  issue/12  0123456789ab  from w1"],
+    [args: [line: "  vendor/\u001b]52;c;aGk=\u0007lib  changed"], expected: "  vendor/?]52;c;aGk=?lib  changed"],
+    [args: [line: "a\tb\nc\u009bd"], expected: "a\tb\nc?d"],
+    [args: [line: "[{\"dir\":\"x\u009b31m\"}]"], expected: "[{\"dir\":\"x\\u009b31m\"}]"],
+    [args: [line: "{\"m\":\"\u202eevil\"}"], expected: "{\"m\":\"\\u202eevil\"}"],
+    [args: [line: "[not json \u001b[2J"], expected: "[not json ?[2J"],
+  ]>;
+}

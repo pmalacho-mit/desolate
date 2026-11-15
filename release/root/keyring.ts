@@ -3,8 +3,8 @@
 // approved that exact push (P2, section 5.3).
 //
 // THE CONTROL PROTOCOL has no export or read operation, by design. Everything it can do is
-// something a root process could do by other means (make a key, read a public key, drop a
-// key); nothing it can do yields private key material. Adding one would undo this file.
+// something a root process could do by other means (make a key, read a public key); nothing
+// it can do yields private key material, or deletes a key. Adding one would undo this file.
 //
 // TWO AGENTS, because fetches must not prompt and pushes must:
 //   read-agent   holds each repository's read key. Signs freely.
@@ -90,16 +90,6 @@ const create = (repo: Repo, role: Role): string => {
   }
   publish(repo, role);
   return fs.readFileSync(`${key}.pub`, "utf8").trim();
-};
-
-const remove = (repo: Repo, role: Role) => {
-  try {
-    execFileSync("ssh-add", ["-d", `${keyFile(repo, role)}.pub`], { env: { ...process.env, SSH_AUTH_SOCK: agentOf(role) }, stdio: "ignore" });
-  } catch {
-    /* not loaded */
-  }
-  for (const file of [keyFile(repo, role), `${keyFile(repo, role)}.pub`, pubFile(repo, role)]) fs.rmSync(file, { force: true });
-  audit({ event: "removed", repo: repoId(repo), role });
 };
 
 // ---------------------------------------------------------------- approvals (P2)
@@ -223,7 +213,7 @@ const publicOps = (request: Record<string, unknown>): Record<string, unknown> =>
   if (op === "approve") return approve(request);
   if (op === "approved") return approved(request);
   if (op === "revoke") return revoke(request);
-  if (op === "create" || op === "pubkey" || op === "remove") {
+  if (op === "create" || op === "pubkey") {
     const repo = parseRepo(request.repo);
     if (!repo) return { ok: false, error: `not a repository: ${String(request.repo)}` };
     if (!isRole(request.role)) return { ok: false, error: "role is 'read' or 'write'" };
@@ -233,8 +223,6 @@ const publicOps = (request: Record<string, unknown>): Record<string, unknown> =>
       publish(repo, request.role);
       return { ok: true, pubkey: fs.readFileSync(`${keyFile(repo, request.role)}.pub`, "utf8").trim(), identity: pubFile(repo, request.role) };
     }
-    remove(repo, request.role);
-    return { ok: true };
   }
   return { ok: false, error: `unknown op '${String(op)}': this socket has no operation that returns private key material, by design (see keyring.ts)` };
 };

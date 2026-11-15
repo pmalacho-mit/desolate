@@ -40,7 +40,6 @@ import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
 import { hostArgv } from "../shared/actions.ts";
-import { parseApproval } from "../shared/approval.ts";
 import { isBranch, isCommit, isLocalhostSuffix, isSlug, parseRepo, pullRequestUrl, ROOT_HOSTNAME, ROOT_UI } from "../shared/names.ts";
 import { statusView } from "../shared/status.ts";
 import type { Head } from "../shared/status.ts";

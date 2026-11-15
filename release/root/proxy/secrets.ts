@@ -16,7 +16,6 @@ import { createServer } from "node:net";
 import * as path from "node:path";
 import { refuse } from "../../shared/exit.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
-import { normalizeName } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import { inbox } from "../outbox.ts";
 import { indexFile, storeFile } from "./secret-store.ts";
@@ -37,8 +36,6 @@ export const runningFile = (domain: string) => path.join(proxyDomainDir(domain),
 const confdir = (domain: string) => path.join(proxyOutDir(domain), "ca");
 const store = (domain: string): Store => ({ domain, secrets: Object.fromEntries(readJson<Indexed[]>(indexFile(domain), []).filter((s) => s && typeof s.name === "string").map(({ name, ...rest }) => [name, rest])) });
 
-const NAME = /^[A-Z][A-Z0-9_-]{7,63}$/;
-const HEADER = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
 const free = (port: number) =>
   new Promise<boolean>((resolve) => {
     const probe = createServer();

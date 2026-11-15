@@ -42,7 +42,7 @@ if [ -z "$name" ]; then
   fi
   base=${base:-task} name=$base
   taken=$(desolate list "$domain" --json | jq -r '.[].workspaces[].workspace')
-  for n in 2 3 4 5 6 7 8 9; do grep -qx "$name" <<<"$taken" || break; name="${base:0:27}-$n"; done
+  for n in 2 3 4 5 6 7 8 9; do grep -qxF "$name" <<<"$taken" || break; name="${base:0:27}-$n"; done
 fi
 branch=${branch:-task/$name}
 

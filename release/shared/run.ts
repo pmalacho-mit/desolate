@@ -1,6 +1,5 @@
 // Running other programs: always an argv, never a shell string.
 import { spawn } from "node:child_process";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = {
@@ -48,9 +47,6 @@ export const must = async (command: string, args: string[], options: RunOptions 
     throw new Error(`${command} ${args.join(" ")} exited ${result.code}: ${(result.stderr || result.stdout).trim().slice(-2000)}`);
   return result.stdout;
 };
-
-export const spawnPiped = (command: string, args: string[], options: SpawnOptions = {}): ChildProcess =>
-  spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], ...options });
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

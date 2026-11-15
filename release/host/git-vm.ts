@@ -18,7 +18,7 @@ import { copyOut, openPlain } from "../shared/copy.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { refuse } from "../shared/exit.ts";
 import { gitVmName, isBranch, isCommit, isLfsOid, isSlug, parseRepo, repoId } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";

@@ -9,6 +9,7 @@
 // It says "landed" only when every file the branch changed is, in the base, exactly as the
 // branch left it; a base that has since changed one of those files again is not recognised
 // (the branch is then just not marked).
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isCommit, pullRequestUrl } from "../shared/names.ts";
@@ -27,6 +28,28 @@ export type Pushed = {
 
 const FILE = () => path.join(ROOT.state, "pushed.json");
 const KEEP = 500;
+/** One change to the file at a time, across processes (push.ts, raw-push.ts, rootd's fetches):
+ *  a lock directory, which a process that died leaves for at most a minute. */
+const changing = <T>(change: () => T): T => {
+  const lock = `${FILE()}.lock`;
+  fs.mkdirSync(path.dirname(lock), { recursive: true });
+  for (const until = Date.now() + 10_000; ; ) {
+    try {
+      fs.mkdirSync(lock);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now()) > 60_000) fs.rmSync(lock, { recursive: true, force: true });
+      else if (Date.now() > until) throw new Error("pushed.json stayed locked for 10 s");
+      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    }
+  }
+  try {
+    return change();
+  } finally {
+    fs.rmSync(lock, { recursive: true, force: true });
+  }
+};
 export const pushedList = (): Pushed[] => {
   const list = readJson<unknown>(FILE(), []);
   return Array.isArray(list) ? (list as Pushed[]) : [];
@@ -36,9 +59,11 @@ export const pushedList = (): Pushed[] => {
 export const recordPushed = (entry: { repo: string; branch: string; commit: string; base: string | null }) => {
   if (!isBranch(entry.branch) || !isCommit(entry.commit)) return;
   const base = entry.base && isBranch(entry.base) && entry.base !== entry.branch ? entry.base : null;
-  const list = pushedList().filter((p) => !(p.repo === entry.repo && p.branch === entry.branch));
-  list.push({ repo: entry.repo, branch: entry.branch, commit: entry.commit, base, at: new Date().toISOString() });
-  writeJson(FILE(), list.slice(-KEEP));
+  changing(() => {
+    const list = pushedList().filter((p) => !(p.repo === entry.repo && p.branch === entry.branch));
+    list.push({ repo: entry.repo, branch: entry.branch, commit: entry.commit, base, at: new Date().toISOString() });
+    writeJson(FILE(), list.slice(-KEEP));
+  });
 };
 
 /** After a push that landed: record it, and return GitHub's page for opening its pull
@@ -98,7 +123,7 @@ export const settle = async (repo: string, git: Git): Promise<number> => {
       found++;
     }
   }
-  if (found > 0) {
+  if (found > 0) changing(() => {
     // Written over what is there now, so a push recorded meanwhile is kept.
     const now = pushedList();
     for (const p of list) if (p.landed) {
@@ -106,7 +131,7 @@ export const settle = async (repo: string, git: Git): Promise<number> => {
       if (same && !same.landed) same.landed = p.landed;
     }
     writeJson(FILE(), now);
-  }
+  });
   return found;
 };
 

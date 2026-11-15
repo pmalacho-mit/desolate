@@ -5,7 +5,7 @@ dependencies and its dev servers run there, in the project's devcontainer, with 
 your browser, and none of your credentials. What you commit is reviewed by you and pushed with
 one click. Under half an hour, most of it waiting for the first VM images to download.
 Handing a task to a coding agent is the same workspace, with a program working in it instead
-of you (step 6).
+of you (step 6). One of desolate's first users? Read [dogfooding.md](dogfooding.md) first.
 
 ![The dashboard: what needs you on top, then each domain's workspaces and their live branches](assets/dashboard.png)
 

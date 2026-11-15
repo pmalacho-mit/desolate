@@ -11,7 +11,7 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo, repoId } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { downstreamBranch } from "../shared/suede.ts";
-import { printable } from "../shared/text.ts";
+import { forTerminal, printable } from "../shared/text.ts";
 import { ensureGitClone, ensureGitVm, GIT_VM } from "./git-vm.ts";
 import { guest } from "./paths.ts";
 import { backend, config, rootctl } from "./stack.ts";
@@ -84,7 +84,7 @@ export const upstreamCommand = async (positionals: string[], values: Record<stri
   if (!dep) refuse(`desolate does not hold ${repoId(dependency)}`, `desolate clone ${repoId(dependency)}`);
   if (!dep!.pushable) refuse(`${repoId(dependency)} is not pushable: the root holds no write key for it, so nothing can be proposed to it`, `it was cloned --no-push. To make it pushable: desolate clone ${repoId(dependency)}`);
 
-  await ensureGitVm((line) => process.stderr.write(`${line}\n`));
+  await ensureGitVm((line) => process.stderr.write(`${forTerminal(line)}\n`));
   const clone = await ensureGitClone(consumer);
   // The consumer commit, so the branch can be waited on: what the git VM's command will take.
   const resolved = await backend().exec(GIT_VM, ["bash", "-c", 'cd "$1" || exit 1; case "$2" in */*) r=${2%%/*}; git remote | grep -qx -- "$r" && git fetch --quiet -- "$r";; esac; git rev-parse --verify --quiet "$2^{commit}"', "_", clone, from ?? "HEAD"], { timeoutMs: 600_000 });

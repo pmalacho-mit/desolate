@@ -30,6 +30,7 @@ holds() { desolate domain "$1" secret list --json | jq -e --arg s "$SECRET" 'any
 if ! holds "$domain"; then
   from=''
   for d in $(desolate list --json | jq -r '.[].domain'); do
+    [[ $d =~ ^[a-z0-9-]+$ ]] || continue
     if [ "$d" != "$domain" ] && holds "$d"; then from=$d; break; fi
   done
   if [ -z "$from" ]; then
@@ -60,7 +61,7 @@ if [ -z "$name" ]; then
   fi
   base=${base:-task} name=$base
   taken=$(desolate list "$domain" --json | jq -r '.[].workspaces[].workspace')
-  for n in 2 3 4 5 6 7 8 9; do grep -qx "$name" <<<"$taken" || break; name="${base:0:27}-$n"; done
+  for n in 2 3 4 5 6 7 8 9; do grep -qxF "$name" <<<"$taken" || break; name="${base:0:27}-$n"; done
 fi
 w=$domain/$name
 if [ -z "$existing" ]; then

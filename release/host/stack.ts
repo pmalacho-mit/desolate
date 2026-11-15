@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Refusal, refuse } from "../shared/exit.ts";
 import { readJson, writeJson } from "../shared/json.ts";
+import { forTerminal } from "../shared/text.ts";
 import { rootVmName } from "../shared/names.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
@@ -88,7 +89,7 @@ const viaService = <T>(op: string, args: Record<string, unknown>, options: { qui
         try {
           const message = JSON.parse(line) as { accepted?: boolean; progress?: unknown; reply?: Reply<T>; stale?: boolean };
           if (message.accepted) accepted = true;
-          if (typeof message.progress === "string" && !options.quiet) process.stderr.write(`${message.progress}\n`);
+          if (typeof message.progress === "string" && !options.quiet) process.stderr.write(`${forTerminal(message.progress)}\n`);
           if (message.reply) reply = message.reply;
         } catch {
           /* not a line of the service's */

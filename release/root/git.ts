@@ -3,7 +3,7 @@
 import * as fs from "node:fs";
 import { run } from "../shared/run.ts";
 import type { RunOptions, RunResult } from "../shared/run.ts";
-import { parseRepo, repoId } from "../shared/names.ts";
+import { parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { readJson } from "../shared/json.ts";
 import { FORGE, GITCONFIG, KEYRING, ROOT } from "./layout.ts";
@@ -104,4 +104,3 @@ export const repoOf = (value: unknown): Repo => {
   if (!repo) throw new Error(`not a repository name (owner/repo): ${String(value)}`);
   return repo;
 };
-export { repoId };

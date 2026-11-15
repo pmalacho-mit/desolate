@@ -234,6 +234,9 @@ cat >"$SYS/gitconfig.new" <<G
 	protectHFS = true
 	protectNTFS = true
 	fsmonitor = false
+# What git shows in the person's terminal (a commit message, a file name, a diff an agent
+# wrote) goes through less, which passes colour and shows any other control as text.
+	pager = less
 # A directory inside a checked-out tree that is shaped like a bare repository (with a
 # config of its own) is not a repository: git run from inside it does not read that config.
 [safe]
@@ -266,6 +269,10 @@ chmod 0644 "$SYS/gitconfig.new" && mv "$SYS/gitconfig.new" "$SYS/gitconfig"
 # every time: the file's place moved.)
 cat >/etc/profile.d/desolate-root.sh <<'P'
 export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig
+# A terminal shows bytes another wrote: less passes colour and nothing else raw (-R), and
+# runs nothing (LESSSECURE). As the git VM's (git/provision.sh). The host filters what this
+# shell prints too (host/vm/attach.ts); this is for the shell's own pagers.
+export LESS=-FRX LESSSECURE=1 PAGER=less GIT_PAGER=less
 export PS1='[desolate root: review and push here; never run a repository'"'"'s own code] \w \$ '
 # A domain's repositories are its own, and their config is the domain's to write: git run in
 # one would act on it (P4). Where a person's shell is in one, git says so instead.

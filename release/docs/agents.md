@@ -115,7 +115,8 @@ its task; at most `--max` at once. When an issue is closed, its agent is stopped
 workspace and branch stay for you (`desolate rm` when you are done). After you push its
 branch, desolate gives you GitHub's page for opening the pull request. An issue's text
 becomes an agent's instructions: label only issues whose text you would hand an agent
-yourself.
+yourself. All of a run's workspaces share one domain, so an agent misled by one issue can
+change the other issues' branches too: review each before you push it.
 
 ## Suede dependencies: `recipes/suede.sh`
 
