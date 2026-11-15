@@ -1,4 +1,4 @@
-# Isolated Devcontainers Suede (`desolate`)
+# `desolate`
 
 **desolate** (dev + isolate) is a browser-based, container-isolated VS Code
 environment for macOS[^1].
