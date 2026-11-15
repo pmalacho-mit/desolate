@@ -138,6 +138,41 @@ shows any other control as text. The recipes print text from a repository or Git
 the same rule (their `say`), and pass every value to a command as one argument, never into a
 shell or jq program.
 
+**Dev servers.** A server that listens in a workspace is forwarded under the same port
+number, at the workspace's own name: `http://<domain>-<workspace>-<id>.localhost:<port>`
+(`desolate ports` prints each). The name is what keeps workspaces apart in your browser: each
+workspace's apps have an origin of their own, so their cookies and storage never mix with
+another workspace's, or with the editor's. Two workspaces can both serve 3000.
+- **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
+  clicked) is sent on to the workspace serving that port, at its own name, the path kept;
+  with several serving it, the page lists them. Nothing is ever served at bare `localhost`.
+  (Plain HTTP only: `https://localhost` cannot be redirected without a certificate for it.)
+- **Inside the devcontainer, `DESOLATE_DEV_HOSTNAME`** is the workspace's own name, so the
+  address of a server on port 5173 is `http://$DESOLATE_DEV_HOSTNAME:5173`. Give it to what
+  builds absolute URLs: a framework's public origin, an OAuth callback, a CORS allowlist.
+- **The editor's own origin never serves a dev server**: no port is forwarded under its name
+  (T2 `06` asks it at the paths web editors forward ports at). Open dev servers by their own
+  address, not through the editor's Ports view.
+
+**What a workspace can reach.** A workspace's only way out is its own proxy, in the root.
+- **Ports 80 and 443 only.** Every connection to those, from the VM, its devcontainer, or a
+  container building an image, is taken to the proxy without any proxy settings. Nothing
+  else leaves at all: a registry on another port (`:5000`), ssh to a forge, a database
+  outside: none of it can be reached from a workspace. Fetch what needs those on the Mac or
+  in the root, or serve it on 443.
+- **TLS stays end to end,** with the real certificates, for every host but the hosts of the
+  domain's own secrets: image pulls and `apt`, `npm` or `pip` in a build need nothing of
+  desolate's. Only a secret's host is answered by the domain's secrets proxy, with a
+  certificate of the domain's own CA, so that it can put the secret's value in.
+- **That CA is trusted in the VM and in the devcontainer** (the VM's bundle, and
+  `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
+  `GIT_SSL_CAINFO` pointed at it), **not in a container building an image.** So a build step
+  that talks to a secret's host (a private registry whose token is a desolate secret, used by
+  `npm install` in a Dockerfile or by a devcontainer feature) fails TLS. Do that install in
+  the devcontainer's `postCreateCommand` instead, which runs in the container that trusts it.
+  Trusting the CA in image builds too is v2 code in `carryover/proxy/`, worth porting when
+  someone needs a private registry during a build, and not before.
+
 **Git in a workspace.** Ordinary git, with what a workspace cannot do handled for it. Each
 clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate-mirror` and
 `-offer`):
@@ -228,7 +263,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T3, T4 | |
 | Offers, the root's view (`git fetch --all`), deliveries between domains | yes | T2 | |
 | `desolate upstream`: a consumer's change to a vendored suede dependency, split by suede's own upstream (pinned) in the git VM, pushed as `downstream/...` after your approval ([suede.md](suede.md)) | yes | T1, T2; against github.com | LFS files in the dependency |
-| Ports: same number, routed by name, reservations | yes | T2; on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
+| Ports: same number, routed by name, reservations; a bare `localhost` sent to the workspace serving the port; none forwarded under the editor's name | yes | T2 (`03`, `06`); on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
 | P5: read-only shares against root in the VM | yes | **T3** (and measured on an M1 for the Mac) | |
 | P5: forced egress against root in the VM | yes | **T3**; Mac: measured for TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
 | Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T3 | |

@@ -135,6 +135,29 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
     assert.match(second, /HTTP\/1\.1 421 [\s\S]*desolate editor-gate: refused this is the editor of/, second.slice(-300));
   });
 
+  it("the editor's own origin never serves a dev server: no port is forwarded under the editor's name", async () => {
+    stack.step("the editor's port forwarding");
+    const e = editors.one!;
+    const cookie = `Cookie: vscode-tkn=${e.token}`;
+    const dev = e.host.replace("-editor-", "-");
+    stack.inVm(vmOf("web/one"), ["bash", "-c", "mkdir -p /tmp/devm && echo DEV-SERVER-MARKER > /tmp/devm/index.html && cd /tmp/devm && (setsid nohup python3 -m http.server 3457 --bind 127.0.0.1 >/tmp/devm.log 2>&1 </dev/null &); sleep 1"]);
+    // CONTROL: the server is there, at the workspace's own name.
+    let own = "";
+    for (let i = 0; i < 60 && !/DEV-SERVER-MARKER/.test(own); i++) {
+      if (await accepts(3457)) own = await raw(3457, ["GET / HTTP/1.1", `Host: ${dev}:3457`, "Connection: close"]);
+      if (!/DEV-SERVER-MARKER/.test(own)) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    assert.match(own, /DEV-SERVER-MARKER/, "control: the dev server answers at its own name");
+    // Under the editor's name, with the editor's cookie, at every path a web editor forwards
+    // ports at (code-server's /proxy and /absproxy; VS Code's own forwarding): nothing of it.
+    // An app served there would share the editor's origin, and so its cookie.
+    for (const at of ["/proxy/3457/", "/absproxy/3457/", "/proxy/3457/index.html", "/ports/3457/", "/forward/3457/"]) {
+      const answer = await get(e, at, [cookie]);
+      assert.doesNotMatch(answer, /DEV-SERVER-MARKER/, `${at} must not serve the dev server at the editor's origin (${answer.slice(0, 120)})`);
+    }
+    stack.inVm(vmOf("web/one"), ["bash", "-c", "pkill -f 'http.server 3457'; true"]);
+  });
+
   it("a page somewhere else cannot drive the editor: cross-site requests and foreign origins are refused", async () => {
     stack.step("requests another page started");
     const e = editors.one!;

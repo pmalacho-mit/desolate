@@ -53,6 +53,8 @@ next: desolate editor web/one --open      its editor, in your browser
 
 ## names that are not the editor's
 
+## the editor's port forwarding
+
 ## requests another page started
 
 ## a browser opens the editor

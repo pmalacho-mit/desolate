@@ -155,6 +155,16 @@ const serve = async () => {
     client.resume();
   };
 
+  /** The path of the request a connection opened with, for a redirect: printable ASCII and
+   *  starting with "/", or "/". */
+  const requestPath = (head: Buffer) => {
+    const path = /^[A-Z]{3,10} (\S{1,2048}) HTTP\/1\.[01]\r?\n/.exec(head.toString("latin1"))?.[1] ?? "/";
+    return /^\/[\x21-\x7e]*$/.test(path) ? path : "/";
+  };
+  const redirectHttp = (client: Socket, location: string) => {
+    const text = `desolate: served at ${location}\n`;
+    client.end(`HTTP/1.1 307 Temporary Redirect\r\nLocation: ${location}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
+  };
   const refuseHttp = (client: Socket, status: string, text: string) => {
     client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
   };
@@ -166,8 +176,19 @@ const serve = async () => {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
         // A request that names no workspace reaches nothing (v2's ingress "WHOSE NAME").
-        if (sniffed.kind === "http") refuseHttp(client, "421 Misdirected Request", "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n");
-        else client.destroy();
+        if (sniffed.kind !== "http") return void client.destroy();
+        // But a bare localhost is usually a dev server's own "Local: http://localhost:5173",
+        // clicked: the browser is sent to the workspace serving this port, at its own name
+        // (one workspace), or told which do (several). It is only told where to go: nothing
+        // is ever served at bare localhost, so no two workspaces, and no workspace and its
+        // editor, share an origin, and what the request carried (its cookies) reaches no
+        // server. (TLS cannot be answered so: it names no certificate this could present.)
+        const serving = sniffed.name === "localhost" || sniffed.name === "127.0.0.1" ? [...entries.values()].filter((e) => e.listeners.has(port)) : [];
+        const at = (e: Entry) => `http://${devHostname(INSTANCE, e.domain, e.workspace)}:${port}`;
+        if (serving.length === 1) return redirectHttp(client, `${at(serving[0]!)}${requestPath(head)}`);
+        refuseHttp(client, "421 Misdirected Request", serving.length > 1
+          ? `desolate: port ${port} is served by more than one workspace, each at its own address:\n${serving.map((e) => `  ${e.domain}/${e.workspace}  ${at(e)}/\n`).join("")}`
+          : "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n");
         return;
       }
       // A workspace's editor name answers for its editor only, and its dev name never for it.

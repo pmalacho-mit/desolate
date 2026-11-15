@@ -73,6 +73,12 @@ workspace, the network rules, upgrading with `git pull` and `desolate bootstrap`
 - **macOS may ask whether `limactl` may accept incoming connections.** Click Deny.
 - **`desolate rm <domain>/<workspace>` removes the workspace and anything uncommitted in it.**
   `desolate stop` keeps everything.
+- **Only ports 80 and 443 reach the network from a workspace.** A registry on another port
+  (`:5000`), ssh to a forge, or a database outside cannot be reached at all.
+- **A private registry during an image build** (its token a desolate secret, used by a
+  Dockerfile's `npm install` or a devcontainer feature) fails TLS: the build container does
+  not trust the domain's certificate. Do that install in `postCreateCommand` instead. Public
+  registries need nothing: their TLS is never opened.
 - **A repository whose devcontainer uses Docker Compose with a service that is not glibc**
   (Alpine) gets no port forwarding and no editor inside that service.
 

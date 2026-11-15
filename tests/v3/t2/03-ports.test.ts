@@ -143,6 +143,9 @@ else {
       assert.match(reply, /^HTTP\/1\.1 421 /, `Host: ${name} must be refused`);
       assert.doesNotMatch(reply, /workspace:/, `Host: ${name} must reach no server`);
     }
+    // Two workspaces serve 5173: a bare localhost is told both, and sent to neither.
+    const both = await request(5173, "localhost:5173");
+    assert.match(both, /served by more than one workspace[\s\S]*web\/one {2}http:\/\/[\s\S]*web\/two {2}http:\/\//, both);
     // No Host header at all.
     const bare = await new Promise<string>((resolve) => {
       const socket = net.connect(5173, "127.0.0.1");
@@ -213,6 +216,14 @@ else {
     const reply = await request(5173, "web-two-000000.localhost:5173");
     assert.match(reply, /^HTTP\/1\.1 421 /);
     assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/, "the other workspace's server is untouched");
+    // One workspace serves 5173 now: a bare localhost (a dev server's own "Local:" link,
+    // clicked) is sent there, at its own name, path kept; it is not served there.
+    const sent = await request(5173, "localhost:5173");
+    assert.match(sent, /^HTTP\/1\.1 307 /, sent.slice(0, 200));
+    assert.match(sent, new RegExp(`\\r\\nLocation: ${urlOf("web/one", 5173)!.replace(/\/$/, "").replace(/[.]/g, "\\.")}/\\r\\n`));
+    assert.doesNotMatch(sent, /workspace:/, "a redirect, never the server's page");
+    assert.match(await request(5173, "127.0.0.1:5173"), /^HTTP\/1\.1 307 /);
+    assert.match(await request(5173, "evil.example:5173"), /^HTTP\/1\.1 421 /, "CONTROL: a name that is not bare localhost still reaches nothing");
   });
 
   it("destroy leaves no listener behind", async () => {
