@@ -1,0 +1,166 @@
+// A workspace's proxy (section 4.3). One instance per running workspace, in the root VM,
+// reached only over that workspace's link. Which instance a connection arrives at is what
+// attributes it: `domain=<d> workspace=<w>` comes from this process's arguments, never from
+// anything the workspace says.
+//
+//   node proxy.ts <port> <domain> <workspace>
+//
+// It speaks one thing: `CONNECT <name>:<80|443>`. For each it
+//   - refuses a destination that is not a hostname, or a port other than 80 and 443;
+//   - applies the DOMAIN's network rules (open, or enforce an allowlist of hosts);
+//   - resolves the name itself, outside the workspace, and refuses an internal address
+//     (loopback, private, link-local, CGNAT, metadata) unless the domain was given that
+//     address explicitly; then connects to the address it checked, not to the name again;
+//   - audits the verdict.
+//
+// SECRETS (Phase 4): this process never sees one. A connection to port 443 of a host that
+// one of the domain's secrets names is handed, after every check above, to the domain's
+// secrets proxy (secrets.ts, secrets_addon.py), with the name and the ADDRESS checked here:
+// that proxy terminates TLS for that name only, substitutes placeholders, and connects to
+// that address, never resolving again. Every other connection stays end-to-end TLS between
+// the workspace and the real server.
+import { lookup } from "node:dns/promises";
+import * as fs from "node:fs";
+import { connect, createServer, isIP } from "node:net";
+import type { Socket } from "node:net";
+import { readJson } from "../../shared/json.ts";
+import { normalizeName } from "../../shared/sniff.ts";
+import { ROOT } from "../layout.ts";
+import type { Running } from "./secrets.ts";
+import { listenerUid } from "./as-proxy.ts";
+
+const [, , socketArg, domain, workspace] = process.argv;
+// The domain names this proxy's directories: a slug, or nothing at all. Its socket is in
+// its domain's out/ (root/proxy-user.sh): there and nowhere else.
+if (process.argv[1]?.endsWith("proxy.ts") && (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(domain ?? "") || !(socketArg ?? "").startsWith(`${ROOT.proxies}/out/${domain}/`) || !/^[a-z0-9-]{1,60}\.sock$/.test((socketArg ?? "").slice(`${ROOT.proxies}/out/${domain}/`.length)))) {
+  console.error("proxy.ts: usage: proxy.ts <its socket, in its domain's out/> <domain> <workspace>");
+  process.exit(2);
+}
+// What it reads is its domain's directory, and what it writes is its domain's proxies' own
+// (as-proxy.ts; it runs as that domain's proxies' user).
+const DOMAIN_DIR = `${ROOT.proxies}/domains/${domain}`;
+const AUDIT = `${ROOT.proxies}/out/${domain}/audit.log`;
+export type Policy = { mode: "open" | "enforce"; hosts: string[]; internal: string[] };
+const policy = (): Policy => ({ mode: "open", hosts: [], internal: [], ...readJson<Partial<Policy>>(`${DOMAIN_DIR}/policy.json`, {}) });
+
+const audit = (entry: Record<string, unknown>) =>
+  fs.appendFileSync(AUDIT, JSON.stringify({ time: new Date().toISOString(), domain, workspace, ...entry }) + "\n");
+
+/** Addresses a workspace must never be carried to: this machine, the LAN, link-local,
+ *  carrier NAT, cloud metadata, multicast, and anything that is not a public unicast IPv4. */
+export const isInternal = (address: string): boolean => {
+  if (isIP(address) !== 4) return true;
+  const [a, b] = address.split(".").map(Number) as [number, number];
+  return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 192 && b === 0) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+};
+
+/** `*.example.com` matches any depth below example.com, never example.com itself. */
+export const hostAllowed = (host: string, patterns: string[]): boolean =>
+  patterns.some((pattern) => (pattern.startsWith("*.") ? host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1 : host === pattern));
+
+const answer = (client: Socket, status: string, reason: string) =>
+  client.end(`HTTP/1.1 ${status}\r\nX-Desolate-Reason: ${reason.replace(/[\r\n]/g, " ").slice(0, 300)}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
+
+const handle = async (client: Socket, head: string) => {
+  const match = /^CONNECT (\S+) HTTP\/1\.[01]\r\n/.exec(head);
+  const target = match?.[1] ?? "";
+  const colon = target.lastIndexOf(":");
+  const host = normalizeName(target.slice(0, colon));
+  const port = Number(target.slice(colon + 1));
+  const refuse = (reason: string) => {
+    audit({ host: host ?? target.slice(0, 100), port, verdict: "refused", reason });
+    answer(client, "403 Forbidden", reason);
+  };
+  if (!match || !host || isIP(host) !== 0) return refuse("a destination is a hostname: an address alone is not carried");
+  if (port !== 80 && port !== 443) return refuse("only ports 80 and 443 leave a workspace");
+  const rules = policy();
+  if (rules.mode === "enforce" && !hostAllowed(host, rules.hosts)) return refuse(`${host} is not on the domain ${domain}'s allowlist`);
+  let address: string;
+  try {
+    address = (await lookup(host, { family: 4 })).address;
+  } catch {
+    return refuse(`${host} does not resolve`);
+  }
+  if (isInternal(address) && !rules.internal.includes(address)) return refuse(`${host} resolves to an internal address (${address}), which a workspace is not carried to`);
+  // A host one of the domain's secrets names goes through the domain's secrets proxy. If
+  // that proxy is not running the connection is refused, not passed around it: a
+  // placeholder must never reach such a host as if it were the value (P6).
+  const secrets = port === 443 ? readJson<Running | null>(`${DOMAIN_DIR}/secrets-proxy.json`, null) : null;
+  const viaSecrets = secrets !== null && hostAllowed(host, secrets.hosts);
+  // And only to a secrets proxy that is this domain's: the same user as this process is what
+  // listens on that port (a port is anyone's to take first).
+  if (viaSecrets && listenerUid(secrets.port) !== process.getuid!()) return refuse(`${host} is a host of one of this domain's secrets, and what listens where its secrets proxy should is not this domain's`);
+  // To the address that was checked: a second lookup could answer differently.
+  const upstream = viaSecrets ? connect({ host: "127.0.0.1", port: secrets.port }) : connect({ host: address, port });
+  let open = false;
+  upstream.setTimeout(30_000, () => upstream.destroy(new Error("timed out")));
+  const established = () => {
+    open = true;
+    upstream.setTimeout(0);
+    audit({ host, port, address, verdict: "allowed", ...(viaSecrets ? { via: "secrets" } : {}) });
+    client.write("HTTP/1.1 200 Connection established\r\n\r\n");
+    client.pipe(upstream);
+    upstream.pipe(client);
+  };
+  upstream.on("connect", () => {
+    if (!viaSecrets) return established();
+    // The tunnel into the secrets proxy: the checked address as the destination, and what
+    // this process knows about the connection in headers the workspace cannot set (its own
+    // bytes begin after this exchange).
+    // And the domain's token: the secrets proxy listens on the root VM's loopback, where any
+    // user of the VM can connect, and substitutes only for a connection that shows it.
+    let token = "";
+    try {
+      token = fs.readFileSync(`${DOMAIN_DIR}/link-token`, "utf8").trim();
+    } catch {
+      return refuse(`${host} is a host of one of this domain's secrets, and its handoff token cannot be read`);
+    }
+    upstream.write(`CONNECT ${address}:443 HTTP/1.1\r\nHost: ${address}:443\r\nX-Desolate-Workspace: ${workspace}\r\nX-Desolate-Host: ${host}\r\nX-Desolate-Token: ${token}\r\n\r\n`);
+    let reply = "";
+    const onReply = (chunk: Buffer) => {
+      reply += chunk.toString("latin1");
+      if (!reply.includes("\r\n\r\n") && reply.length < 8192) return;
+      upstream.off("data", onReply);
+      if (!/^HTTP\/1\.[01] 200/.test(reply)) return refuse(`the domain's secrets proxy refused the connection to ${host}`);
+      established();
+    };
+    upstream.on("data", onReply);
+  });
+  const close = () => {
+    client.destroy();
+    upstream.destroy();
+  };
+  upstream.on("error", (error) => (open ? close() : refuse(viaSecrets ? `${host} is a host of one of this domain's secrets, and the domain's secrets proxy is not running (${error.message})` : `could not connect to ${host}: ${error.message}`)));
+  upstream.on("close", close);
+  client.on("close", close);
+};
+
+if (socketArg) {
+  // A unix socket, not a loopback port: a port in the root VM is any of its users' to
+  // connect to, and the proxies of another domain would have been one of them, asking this
+  // workspace's proxy for this domain's secret hosts (it adds the domain's handoff token to
+  // what it is asked): found by an audit on the M1. The socket is in the domain's out/,
+  // which its proxies own and the root's user's group reads (root/proxy-user.sh): the host
+  // daemon reaches it as that user, and no other domain's proxies can.
+  try {
+    fs.unlinkSync(socketArg);
+  } catch {
+    /* none left over */
+  }
+  createServer((client) => {
+    client.on("error", () => client.destroy());
+    // A client that does not finish asking in ten seconds holds nothing open.
+    client.setTimeout(10_000, () => client.destroy());
+    let head = "";
+    const onData = (chunk: Buffer) => {
+      head += chunk.toString("latin1");
+      if (head.length > 8192) return client.destroy();
+      if (!head.includes("\r\n\r\n")) return;
+      client.off("data", onData);
+      client.setTimeout(0);
+      void handle(client, head);
+    };
+    client.on("data", onData);
+  }).listen(socketArg, () => fs.chmodSync(socketArg, 0o660));
+}
