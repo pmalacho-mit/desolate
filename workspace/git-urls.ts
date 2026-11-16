@@ -14,7 +14,7 @@
 //
 // Only the `.git` spellings: insteadOf rewrites a prefix, and `https://github.com/o/app`
 // would also rewrite `https://github.com/o/app-other.git` into a repository that is not it.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 /** `git config --global` argument lists, in order: each rule's old values, then the new ones. */
 export const urlRules = (repos: readonly string[]): string[][] =>

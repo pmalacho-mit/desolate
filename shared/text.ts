@@ -3,7 +3,7 @@
 // change what is seen (bidirectional overrides reorder a line; zero-width characters hide in
 // one). One rule for every place desolate shows such text.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 /** Controls, format characters (bidirectional overrides, zero-width), private-use and
  *  unassigned code points, and the line and paragraph separators. */

@@ -14,6 +14,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { paths } from "./paths.ts";
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, readState, stateFiles, writeState } from "../../tests/nests/home.harness.ts";
 
 const file = () => path.join(paths.state, "tokens-retired");
 
@@ -32,6 +34,25 @@ export const retire = () => {
   fs.writeFileSync(file(), `${Math.max(Date.now(), retiredAt() + 1)}\n`, { mode: 0o600 });
   for (const name of ["approve-token", "git-token", "ui-token"]) fs.rmSync(path.join(paths.state, name), { force: true });
 };
+
+declare namespace retire {
+  /** the three page tokens go, and the retiring is on record */
+  export type RemovesTheTokens = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "approve-token", text: "a"]>,
+      Invoke<typeof writeState, [name: "git-token", text: "g"]>,
+      Invoke<typeof writeState, [name: "ui-token", text: "u"]>,
+      Invoke<typeof retire>,
+    ],
+    Expect<Invoke<typeof stateFiles>, "=", ["tokens-retired"]>
+  >;
+  /** a clock that went back since the last retiring still gives a larger number */
+  export type AlwaysLarger = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "99999999999999"]>, Invoke<typeof retire>],
+    Expect<Invoke<typeof readState, [name: "tokens-retired"]>, "=", "100000000000000\n">
+  >;
+}
 
 /** Whether a token marked with `epoch` (the retiring it was made after; 0 if none, or not
  *  known) was made before the last retiring. */

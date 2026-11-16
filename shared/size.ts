@@ -9,7 +9,7 @@
 // touches them, and is slow to take them back, so a VM that once used 8 GiB tends to hold
 // them until it stops. Disk grows as it is written, up to the size.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Size = { cpus: number; memoryMiB: number; diskGiB: number };
 // (Disk from 30 GiB: every VM is cloned from a 30 GiB base, and a clone's disk can only grow.)

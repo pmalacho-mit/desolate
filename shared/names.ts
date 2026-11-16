@@ -3,7 +3,7 @@
 // v2's `owner/repo` as `owner__repo` needed a whole rule set, so v3 never encodes one).
 import { createHash } from "node:crypto";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** GitHub's own rules, narrowed: no leading dot or dash, no "..", no ".git" suffix. */

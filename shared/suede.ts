@@ -2,7 +2,7 @@
 // git VM), the root (a push of a `downstream/...` branch) and the reviewer agree on.
 // Nothing here runs a program; the checks that need git take one that the caller runs.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import { isCommit, parseRepo, repoId } from "./names.ts";
 import type { Repo } from "./names.ts";
 
