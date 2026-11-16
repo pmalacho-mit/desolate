@@ -21,18 +21,19 @@ This repo is a [suede dependency](https://github.com/pmalacho-mit/suede).
 
 To see the installable source code along with the full documentation, please checkout the [release branch](https://github.com/pmalacho-mit/desolate/tree/release).
 
-## Status: v3 in progress on this branch
+## Status: v3, being tried by its first users
 
-This branch replaces v2 (containers on a sysbox daemon in one Colima VM) with **v3: a VM per
-workspace**, as specified in [`move-to-vms.md`](move-to-vms.md). v3 is not finished, and
-`release/` on this branch is **not** an installable replacement for v2 yet: do not merge it
-to `main`, whose `release/` is pushed to the `release` branch that users install from.
+`main` is **v3: a VM per workspace**, as specified in [`move-to-vms.md`](move-to-vms.md). It
+replaced v2 (containers on a sysbox daemon in one Colima VM), and its `release/` is what the
+`release` branch publishes and people install.
 
-- What v3 is, its principles, and exactly what works today: [`release/README.md`](release/README.md).
-- Where it stands and how to carry on: [`docs/v3/HANDOFF.md`](docs/v3/HANDOFF.md).
+- What desolate is, its principles, and what works today: [`release/README.md`](release/README.md)
+  and its [reference](release/docs/reference.md).
+- For its first users, what to expect and what to report: [`release/docs/dogfooding.md`](release/docs/dogfooding.md).
+- For developing it (from inside a desolate workspace), and what has and has not been tested:
+  [`AGENTS.md`](AGENTS.md) and [`release/docs/developing-desolate.md`](release/docs/developing-desolate.md).
 - What was decided along the way, with the measurements: [`docs/v3/decisions.md`](docs/v3/decisions.md).
-- v2 is in history at `4f32c77` and on the `release` branch. The v2 code that v3 will reuse
-  and has not ported yet is in [`carryover/`](carryover/README.md).
+- v2 is in history at `4f32c77`. The v2 code v3 has not ported yet is in [`carryover/`](carryover/README.md).
 
 ## At a glance
 
@@ -47,8 +48,9 @@ How desolate has been wrong before, and what each time taught:
 
 ## System requirements
 
-- macOS, with [Lima](https://lima-vm.io) 2.0 or newer (`brew install lima`) and node 22.18 or
-  newer. (Linux with QEMU is a backend for testing and CI, not a supported host.)
+- A Mac with Apple silicon, with [Lima](https://lima-vm.io) 2.3 or newer (`brew install lima`)
+  and node 22.18 or newer. (Linux with QEMU is a backend for testing and CI, not a supported
+  host.) [getting-started](release/docs/getting-started.md) has the rest.
 - GitHub CLI (`gh`), to register deploy keys when you clone a repository.
 
 ## Working on this repo
@@ -59,12 +61,12 @@ suede dependency workflow, and must be respected when adding files.
 
 ```
 release/           THE SHIPPED TREE (see release/README.md for its layout)
-tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (end to end, real VMs)
+tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (real VMs, QEMU), t4 (the Mac's own VMs)
 tests/probes/v3/   Phase 0 probes to run on a Mac
-docs/v3/           the handoff, the decisions and the Mac's measurements
+docs/v3/           the decisions, the Mac's measurements, and the first pass's handoff (a record)
 carryover/         v2 code that v3 keeps and has not ported yet; not shipped, not run
 samples/           example devcontainers; fixtures
-.devcontainer/     the INSECURE bootstrap container this work happens in
+.devcontainer/     this repository's devcontainer, for developing desolate in a desolate workspace
 ```
 
 ```bash
@@ -72,6 +74,7 @@ npm install              # TypeScript, for the type check
 make test                # T1: seconds, anywhere
 make e2e-fast            # T2: minutes; needs Docker and the base image (tests/v3/README.md)
 make e2e-slow            # T3: real VMs; run whenever something structural changes
+tests/v3/run.sh t4       # T4: the boundary tests on the Mac's own VMs (vz); about 3 minutes
 ```
 
 Three conventions the code holds to, all load-bearing:
