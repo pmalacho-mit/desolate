@@ -35,8 +35,14 @@ echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 desolate help
 ```
 
-Leave the clone where it is: every VM reads desolate's code from it. For tab completion, add
-`source <(desolate completion)` to `~/.zshrc`.
+Leave the clone where it is: every VM reads desolate's code from it. Tab completion (TAB
+completes commands, and your domains and workspaces by name):
+
+```bash
+echo 'source <(desolate completion)' >> ~/.zshrc && source ~/.zshrc
+```
+
+(In bash, `~/.bashrc` instead.)
 
 ## 2. Bootstrap the stack
 

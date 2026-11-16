@@ -300,7 +300,7 @@ workspace/         runs in each workspace VM: its init, its daemon, its network,
                    there (git-remote-desolate-mirror, -offer)
 git/               runs in the git VM: your git in a browser tab, and suede's upstream (pinned)
 recipes/           scripts of ordinary desolate commands, for tasks you do often (README.md)
-completion.bash    tab completion: source <(desolate completion)
+completion.bash    tab completion, zsh and bash: echo 'source <(desolate completion)' >> ~/.zshrc
 shared/            names, exit codes, the name sniffer: used on more than one side
 image/             what a VM image contains (provision.sh) and how it is built
 docs/              getting started, the reference, agents, suede, developing desolate, dogfooding;

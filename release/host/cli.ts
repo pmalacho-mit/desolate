@@ -83,11 +83,11 @@ The stack itself:
   desolate down                                                  stop every VM and the daemon; remove nothing
   desolate destroy [--all]                                       remove the VMs (--all: and ~/.desolate)
   desolate root shell                                            the root's terminal: git on the root clones
-  desolate completion                                            tab completion: source <(desolate completion)
+  desolate completion                                            tab completion for zsh and bash (below)
   desolate help                                                  this text
 
 Recipes (scripts of these commands, for tasks you do often: an agent on a task, Claude Code, issues):
-  ~/desolate/recipes/README.md. Tab completion names your domains and workspaces: source <(desolate completion)
+  ~/desolate/recipes/README.md. Tab completion names your domains and workspaces: echo 'source <(desolate completion)' >> ~/.zshrc
 
 Every command that reads takes --json. Exit codes: 0 ok, 1 failed, 64 usage, 75 busy,
 77 default branch refused, 78 no person confirmed the push, 79 --expect did not match.`;

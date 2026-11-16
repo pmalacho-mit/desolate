@@ -38,11 +38,15 @@ And two habits:
 
 ## The first hour
 
-Follow [getting-started.md](getting-started.md) from the top, and turn on tab completion
-(`source <(desolate completion)` in `~/.zshrc`): domain names are `owner--repo`, and TAB
-completes them and their workspaces. It takes under half an hour, most
-of it the first download. Then do a real piece of your own work in a workspace, start to
-finish: open the editor, change something, run it (a dev server opens at the address
+Follow [getting-started.md](getting-started.md) from the top, and turn on tab completion:
+domain names are `owner--repo`, and TAB completes them and their workspaces.
+
+```bash
+echo 'source <(desolate completion)' >> ~/.zshrc && source ~/.zshrc
+```
+
+Getting started takes under half an hour, most of it the first download. Then do a real
+piece of your own work in a workspace, start to finish: open the editor, change something, run it (a dev server opens at the address
 `desolate ports` prints), commit, `git push` (which hands the branch to the root), review it on
 the dashboard, push it, and open the pull request from the page desolate gives you.
 
