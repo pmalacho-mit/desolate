@@ -98,7 +98,7 @@ desolate up you--app --name greet --branch feature/greet-by-name
 
 ```
 workspace you--app/greet is up
-  you/app  worktree feature/greet-by-name from main  /workspaces/you/app/.worktrees/feature-greet-by-name
+  you/app  worktree feature/greet-by-name from origin/main  /workspaces/you/app/.worktrees/feature-greet-by-name
   devcontainer up (mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm, user node)
   ...
 the start took 81.9 s: template 63.7 s, asked the root 0.2 s, VM booted 9.6 s, services, checkouts, devcontainer and editor 8.2 s

@@ -352,6 +352,18 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     }
     assert.ok(gaveUp, inRootClone("cat /tmp/web-refused.log").stdout);
     assert.equal(forgeRefs("acme/widgets")["web-refused"], undefined);
+
+    // A large text diff (as a first push with a lockfile is): the reviewer's account is far
+    // bigger than a pipe's buffer, and still reaches the page whole. (It once ended at
+    // 146,175 bytes, cut by process.exit, and the page said the reviewer could not be asked.)
+    const big = inRootClone(`git checkout -q --detach ${commit} && seq 1 40000 | sed 's/^/a line of a large generated file, number /' > large.txt && git add large.txt && git -c user.name=t -c user.email=t@example.invalid commit -qm "a large file" && git rev-parse HEAD && git checkout -q -`);
+    const bigCommit = big.stdout.trim().split("\n").pop()!;
+    inRootClone(`setsid nohup git push origin ${bigCommit}:refs/heads/web-large >/tmp/web-large.log 2>&1 </dev/null & sleep 0.2`);
+    const large = await waitingFor("web-large");
+    assert.ok(large, inRootClone("cat /tmp/web-large.log").stdout);
+    assert.equal(large!.summary.ok, true, String(large!.summary.error).slice(0, 300));
+    assert.deepEqual(large!.summary.commits!.map((c) => c.subject), ["a large file"]);
+    assert.equal((await act("refuse", large!)).status, 200);
   });
 
   it("a repository cloned --no-push is never written: there is no key to write it with", () => {

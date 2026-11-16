@@ -329,13 +329,19 @@ const once = async () => {
   const repo = parseRepo(request.repo);
   const onto = request.onto ?? null;
   if (!repo || !isBranch(request.branch) || !isCommit(request.commit) || (onto !== null && !isCommit(onto))) throw new Error("a summary names a repository, a branch, a commit and onto");
-  process.stdout.write(JSON.stringify(await summary(repo, request.branch, request.commit, onto as string | null)) + "\n");
+  await written(JSON.stringify(await summary(repo, request.branch, request.commit, onto as string | null)) + "\n");
 };
+/** Written all the way out before the process ends. To a pipe, node writes asynchronously,
+ *  and process.exit() then cut a large answer short: a 146 KB summary (a first push with a
+ *  package-lock.json) reached the host as 146,175 bytes of unterminated JSON, and the
+ *  approval page said the reviewer "could not be asked", showing lockfile text (dogfooding,
+ *  2026-11-16). Every summary in the tests had fit in the pipe's buffer. */
+const written = (text: string) => new Promise<void>((resolve) => process.stdout.write(text, () => resolve()));
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname) {
   if (process.argv[2] === "summary")
-    once().then(() => process.exit(0), (error: Error) => {
-      process.stdout.write(JSON.stringify({ ok: false, error: error.message }) + "\n");
+    once().then(() => process.exit(0), async (error: Error) => {
+      await written(JSON.stringify({ ok: false, error: error.message }) + "\n");
       process.exit(1);
     });
   else void main();

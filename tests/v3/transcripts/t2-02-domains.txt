@@ -76,8 +76,8 @@ desolate: the main checkout of acme/widgets is held by the workspace 'nests-dev/
 
 $ desolate up nests-dev --name issue-12 --checkout acme/widgets=worktree:issue/12
 workspace nests-dev/issue-12 is up  [NOT ISOLATED: fake backend]
-  acme/consumer  worktree issue-12 from main  /workspaces/acme/consumer/.worktrees/issue-12
-  acme/widgets  worktree issue/12 from main  /workspaces/acme/widgets/.worktrees/issue-12
+  acme/consumer  worktree issue-12 from origin/main  /workspaces/acme/consumer/.worktrees/issue-12
+  acme/widgets  worktree issue/12 from origin/main  /workspaces/acme/widgets/.worktrees/issue-12
   size         <size>
   devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
   editor       http://nests-dev-issue-12-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Fissue-12.code-workspace

@@ -170,7 +170,11 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   const checkouts: Checkout[] = d.repos.map((repo) => {
     const want = wanted.get(repo);
     const defaultBranch = registry().repos[repo]?.defaultBranch ?? "main";
-    const base = baseArg ?? defaultBranch;
+    // From what the remote has (origin/<default>, which `git fetch` and `up --fetch` move),
+    // not the domain clone's local branch of that name: that is the main checkout's, and
+    // nothing moves it, so every new branch started from a main as old as the domain
+    // (dogfooding: a branch made right after a merge did not have the merge).
+    const base = baseArg ?? `origin/${defaultBranch}`;
     const worktree = (branch: string): Checkout => {
       const dir = branch.replace(/\//g, "-");
       const holder = held(repo, "worktree", dir);

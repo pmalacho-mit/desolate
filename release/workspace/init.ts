@@ -83,7 +83,9 @@ for (const checkout of plan.checkouts) {
     if (checkout.kind === "worktree" && !fs.existsSync(path.join(checkout.path, ".git"))) {
       const exists = await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", `refs/heads/${checkout.branch}`]);
       if (exists.code === 0) await git(clone, ["worktree", "add", "--quiet", checkout.path, checkout.branch]);
-      else await git(clone, ["worktree", "add", "--quiet", "-b", checkout.branch, checkout.path, checkout.base]);
+      // --no-track: from origin/main, git would make origin/main the new branch's upstream,
+      // and a plain `git push` on it would then refuse (its upstream's name is not its own).
+      else await git(clone, ["worktree", "add", "--quiet", "--no-track", "-b", checkout.branch, checkout.path, checkout.base]);
       // Locked against pruning by another VM that cannot see this worktree's files as live.
       await git(clone, ["worktree", "lock", "--reason", `workspace ${plan.workspace}`, checkout.path]).catch(() => "");
       made.push(`worktree ${checkout.repo} ${checkout.branch}`);
