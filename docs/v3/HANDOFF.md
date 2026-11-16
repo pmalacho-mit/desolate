@@ -6,7 +6,7 @@ secrets, and push approval on the host (section 2a); a third that added the devc
 the root UI, and what was still missing from v2 (section 2b); and a fourth that removed the
 root's editor, put the diff in the dashboard, made the terminal approver the default, and
 audited what the root takes from a domain (section 2c).
-[`status-by-section.md`](status-by-section.md) goes
+[`spec-progress.md`](spec-progress.md) goes
 through the spec point by point. It is for the owner and for an agent working **directly
 on the owner's M1**. It says where v3 stands, what each claim rests on, and what to do next,
 in order.
@@ -143,7 +143,7 @@ the security findings, open and closed.
 - **Not done, and why:** mapping `localhost` links in the workspace's editor to the
   workspace's hostname (section 4.4). VSCodium's web workbench resolves external URLs through
   hooks its embedder supplies (a tunnel provider), which the reh-web server does not expose
-  to configure; `carryover/editor/extension` is v2's panel, not this. `desolate ports` and
+  to configure; v2's `release/vscode-image/extension` is its panel, not this. `desolate ports` and
   the dashboard give the right address.
 - **T2 on a Mac is partial** (the fake backend's link is a host socket Colima cannot reach):
   `tests/v3/README.md`.
@@ -356,10 +356,10 @@ Each item names where to start. The order is by what unblocks use.
    build a domain's environment once in a builder VM with the domain's trust (never the
    root's), and clone workspaces from its disk (C3). Then the pull-through registry (C2)
    and the domain's package caches (C4). Freeze the environment when the domain is made
-   and pin its features then (`carryover/devcontainer/feature-pins.ts`).
+   and pin its features then (v2's `release/vscode-image/feature-pins.ts`, at `4f32c77`).
    Also here: the domain's CA for tools that ignore the environment
-   (`carryover/proxy/install-ca.sh`). (Compose specs: done, section 2f.)
-2. **The workspace-side extension** (`carryover/editor/extension`), which is what maps
+   (v2's `release/proxy/container/install-ca.sh`). (Compose specs: done, section 2f.)
+2. **The workspace-side extension** (v2's `release/vscode-image/extension`), which is what maps
    `localhost` URLs to the workspace's hostname (section 4.4). And v2's self-test fixture
    for secrets.
 3. **A quota for a domain's outbox and share; a side-by-side diff in the dashboard** if

@@ -36,7 +36,5 @@
   // (ts-morph, uninstalled here), and .worktrees holds whole other checkouts of
   // this same repo -- type-checking either would report failures that say
   // nothing about the change in front of you.
-  // carryover/ is v2 code waiting to be ported (carryover/README.md): its imports point at
-  // files that no longer exist, so it is not checked until each piece moves into release/.
-  "exclude": ["node_modules", ".worktrees", "docs", "carryover"]
+  "exclude": ["node_modules", ".worktrees", "docs"]
 }

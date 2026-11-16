@@ -1,4 +1,4 @@
-# desolate v3: where each point of `move-to-vms.md` stands
+# Progress against the spec: where each point of `move-to-vms.md` stands
 
 Written 2026-11-11 after the third pass; revised 2026-11-12 after the fourth (no editor in the root, the diff as text, the terminal approver as the default, and the audit of what the root takes from a domain). One row per point of the spec, in the spec's
 order. **Done** means implemented and exercised by a test that is named. **Partly** says
@@ -40,11 +40,11 @@ T2 `03-ports`, `06-editor`, `09-ui`).
 | 4.4 Same port number, nothing declared, routed by name | **Done** | T2 `03-ports`; in a devcontainer, T2 `08`. `forwardPorts` and `customizations.desolate.ports` as labels: not read. |
 | 4.4 Reservations for what has no name; nothing below 1024; loopback only | **Done** | T2 `03-ports`. |
 | 4.4 One hostname per surface | **Done** | Dev, editor and dashboard each have their own (T2 `06`, `09`). |
-| 4.4 The editor maps `localhost` URLs to the workspace's hostname | **Not done** | It is the workspace-side desolate extension (`carryover/editor/extension`), not ported. Ctrl-clicking `http://localhost:5173` in the editor's terminal opens the wrong page today; `desolate ports` and the dashboard give the right one. |
+| 4.4 The editor maps `localhost` URLs to the workspace's hostname | **Not done** | It is the workspace-side desolate extension (v2's `release/vscode-image/extension`), not ported. Partly covered since: a bare `http://localhost:5173`, Ctrl-clicked anywhere, is sent on by the Mac's forwarder to the one workspace serving that port; `DESOLATE_DEV_HOSTNAME` is in the devcontainer; `desolate ports` and the dashboard give the address. What is left is v2's panel. |
 | 4.5 `devcontainer.json` is the environment | **Done** | As 4.2. |
 | 4.5 Way 1: one repository's spec, `--env` | **Done** | `desolate domain <d> env --from <owner/repo>`; T2 `02-domains`. The default is the first checkout with a spec. |
 | 4.5 Way 2: a composed spec, as a published tool | **Not done** | `env compose` refuses and says so. |
-| 4.5 The environment frozen per workspace; features resolved to digests once | **Not done** | The spec is read from the checkout at every start (a changed spec makes a new container: T2 `08`). `carryover/devcontainer/feature-pins.ts` is v2's pinning; its security reason (a spec policy that could be told one thing and `up` another) is gone in v3, its start-up reason arrives with templates. |
+| 4.5 The environment frozen per workspace; features resolved to digests once | **Not done** | The spec is read from the checkout at every start (a changed spec makes a new container: T2 `08`). v2's `release/vscode-image/feature-pins.ts` is its pinning; its security reason (a spec policy that could be told one thing and `up` another) is gone in v3, its start-up reason arrives with templates. |
 | 4.6 The root runs the keyring, mirrors, clones, proxies, the admin UI, a terminal | **Done** | `desolate root shell`; the dashboard. |
 | 4.6 The root clones are safe for ordinary git | **Done** | Config by desolate, bundles only and strictly checked, pinned `lfs.url`, a root-owned hooks path, `safe.bareRepository=explicit`, `core.protectHFS/NTFS`, no fsmonitor, no submodule recursion, protocols limited: T2 `01`, `04`, `10` (a person checks out a tree that plants a repository, attributes, a hook and a link, walks it and runs git everywhere: nothing runs; with the setting off for one command, it does). **Not safe, and cannot be made so:** running the tree's code there. |
 | 4.6 The root has an editor, in Restricted Mode, for review | **Reversed, on purpose** | There is no editor in the root (`decisions.md`, "The root has no editor"). Review is the dashboard's diff, `desolate review --diff`, or git in the root's terminal. T2 `09-ui` checks that nothing listens where it was. |
@@ -142,6 +142,20 @@ Also from v2 and not in the spec's list: `proxy recommend` (ported as `net recom
 a running workspace, `watch`: not ported.
 
 Migration (v3 beside v2, re-clone): nothing to build; not exercised. Non-goals: unchanged.
+
+### Not ported from v2, and where it is
+
+v2 is in history at commit `4f32c77` ([browse it](https://github.com/pmalacho-mit/desolate/tree/4f32c77)). These are the pieces v3 still
+lacks, with v2's files and tests, for whoever ports one. (They were kept in a `carryover/`
+folder until 2026-11-15; nothing ran or type-checked them there.)
+
+| What v2 had | v2's files at `4f32c77` | Where it goes in v3 | What v3 has meanwhile |
+|---|---|---|---|
+| the secrets proxy's self-test fixture: a known placeholder sent through the proxy, to prove substitution and leak detection live | `release/proxy/vm/addon.py`, `settings.example.json`; tests in `tests/unit/proxy/test_addon.py` | `release/root/proxy/secrets_addon.py`, which is cut down from v2's addon | T2 `07-secrets` proves substitution and leak detection instead. TLS passthrough needs no porting: every host but a secret's is passed through by design |
+| trusting the proxy's CA inside image builds | `release/proxy/container/install-ca.sh`, `trust-proxy-in-builds.sh`; `release/vscode-image/with-ca.sh`, `certificates.ts` | `release/workspace/` | The VM's trust store (`release/workspace/net/trust-ca.sh`) and the devcontainer's (`/desolate/ca` and its environment). A build step that talks to a secret's host (a private registry) fails TLS, so that install goes in `postCreateCommand`. Public registries need none of this. Worth porting when someone needs a private registry during a build, and not before |
+| a devcontainer's features pinned to digests | `release/vscode-image/feature-pins.ts`; tests in `tests/unit/desolate/feature-pins.test.ts` | the domain's environment, frozen once (4.5 above) | Features resolved by `devcontainer up` each time a container is made |
+| the workspace-side editor extension's panel | `release/vscode-image/extension/`, `docs/panel.md`; tests in `tests/unit/extension/model.test.ts`, `tests/environments/extension/run.sh` | `release/workspace/editor/` | The forwarder sends a bare `localhost:<port>` to the workspace serving it (4.4 above); `DESOLATE_DEV_HOSTNAME`; `desolate ports` |
+| the editor launched with the extensions `devcontainer.json` names, its appearance, its host names | `release/vscode-image/editor.ts`, `appearance.ts`, `hosts.ts`, `git-codium.sh`; tests in `tests/unit/desolate/` | `release/workspace/editor.sh` and `editor-*.ts` | The editor runs in the devcontainer, without the project's extensions preinstalled |
 
 ## 13. Bootstrapping, testing, phases
 

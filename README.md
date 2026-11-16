@@ -19,7 +19,29 @@ all without giving up the ergonomics key to their workflow.
 
 This repo is a [suede dependency](https://github.com/pmalacho-mit/suede).
 
-To see the installable source code along with the full documentation, please checkout the [release branch](https://github.com/pmalacho-mit/desolate/tree/release).
+## Install
+
+On a Mac with Apple silicon, with [Homebrew](https://brew.sh), and Chrome or Firefox (Safari
+cannot open desolate's `*.localhost` pages):
+
+```bash
+brew install lima node gh                 # Lima 2.3 or newer, node 22.18 or newer
+gh auth login                             # as someone who can add deploy keys to your repositories
+git clone --branch release https://github.com/pmalacho-mit/desolate ~/desolate
+mkdir -p ~/.local/bin && ln -sf ~/desolate/cli.sh ~/.local/bin/desolate
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+desolate bootstrap                        # the root VM and the daemon; 5 to 10 minutes the first time
+```
+
+Leave `~/desolate` where it is: every VM reads desolate's code from it. Then clone a
+repository and open a workspace on it: [getting started](https://github.com/pmalacho-mit/desolate/blob/release/docs/getting-started.md) goes
+on from here, step by step. One of desolate's first users? Read
+[dogfooding](https://github.com/pmalacho-mit/desolate/blob/release/docs/dogfooding.md) first.
+
+**From here on, the documentation is in your clone**: `~/desolate/README.md` and
+`~/desolate/docs/`, for the version you installed. It is the [`release`
+branch](https://github.com/pmalacho-mit/desolate/tree/release), which is this branch's
+`release/` folder. Update with `git -C ~/desolate pull && desolate bootstrap`.
 
 ## Status: v3, being tried by its first users
 
@@ -33,7 +55,7 @@ replaced v2 (containers on a sysbox daemon in one Colima VM), and its `release/`
 - For developing it (from inside a desolate workspace), and what has and has not been tested:
   [`AGENTS.md`](AGENTS.md) and [`release/docs/developing-desolate.md`](release/docs/developing-desolate.md).
 - What was decided along the way, with the measurements: [`docs/v3/decisions.md`](docs/v3/decisions.md).
-- v2 is in history at `4f32c77`. The v2 code v3 has not ported yet is in [`carryover/`](carryover/README.md).
+- v2 is in history at `4f32c77`. What v3 has not ported from it, with v2's files: [`docs/v3/spec-progress.md`](docs/v3/spec-progress.md#not-ported-from-v2-and-where-it-is).
 
 ## At a glance
 
@@ -63,8 +85,7 @@ suede dependency workflow, and must be respected when adding files.
 release/           THE SHIPPED TREE (see release/README.md for its layout)
 tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (real VMs, QEMU), t4 (the Mac's own VMs)
 tests/probes/v3/   Phase 0 probes to run on a Mac
-docs/v3/           the decisions, the Mac's measurements, and the first pass's handoff (a record)
-carryover/         v2 code that v3 keeps and has not ported yet; not shipped, not run
+docs/v3/           the decisions, progress against the spec, and the first pass's handoff (a record)
 samples/           example devcontainers; fixtures
 .devcontainer/     this repository's devcontainer, for developing desolate in a desolate workspace
 ```
