@@ -78,9 +78,11 @@ desolate close fix-docs                # remove one you started, once nothing in
   only made. It has the domain's secrets by name, like you, and not your shell's state.
 - Its work reaches you as any workspace's does: its branch, once committed, is in your clone
   (`git branch -a`), and `desolate status board` shows what it says.
-- `desolate events` says when it is made (`workspace-made`, with `startedBy`), stopped or
-  removed, what it offered, its status, and how each of your requests ended (`request`, with
-  `ok` and why not). `--all` starts from the beginning of what is kept.
+- `desolate events` says when it is made (`workspace-made`, with `startedBy`, as soon as it
+  is planned; `workspace-state` with `state: up` once it runs), stopped or removed, what it
+  offered, its status, and how each request the host ran ended (`request`, with `ok` and
+  why not; one the root refuses at once is refused on the spot instead). `--follow` starts
+  now: a spawn is answered in seconds, so use `--all` to see what already happened.
 - `desolate close <name>` works only on one you started, and only if every checkout in it
   has nothing uncommitted, untracked or stashed: commit there first. Its branches stay. If
   you are removed first, the ones you started stay, flagged for the person.

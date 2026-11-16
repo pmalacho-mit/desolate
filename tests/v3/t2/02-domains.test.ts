@@ -142,7 +142,10 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     // (nothing of its own) is now only behind. A new branch starts from what was merged.
     // (Test 7 is the other case: a local main with work of its own is where branches start.)
     const merged = stack.forge("commit", "acme/consumer", "main", "MERGED.md", "merged on the forge\n").trim();
-    const up = stack.quiet("up", "nests-dev", "--name", "after-merge", "--fetch", "--checkout", "acme/consumer=worktree:after-merge");
+    // The mirror has it (the root's own fetch, every 15 minutes; here by hand); the domain's
+    // clone has not fetched since. No --fetch: the clone catches up from the mirror itself.
+    assert.equal(stack.quiet("fetch", "acme/consumer").code, 0);
+    const up = stack.quiet("up", "nests-dev", "--name", "after-merge", "--checkout", "acme/consumer=worktree:after-merge");
     assert.equal(up.code, 0, up.stderr);
     const head = inWs("nests-dev/after-merge", "cd /workspaces/acme/consumer/.worktrees/after-merge && git rev-parse HEAD && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>&1 | head -1");
     const [at, upstream] = head.stdout.trim().split("\n");

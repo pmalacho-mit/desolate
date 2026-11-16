@@ -91,6 +91,11 @@ for (const checkout of plan.checkouts) {
         // then. A local branch with commits of its own is the person's work: start from it.
         let from = checkout.base;
         const remote = `refs/remotes/origin/${from}`;
+        // origin/* as the mirror has it now, first: the clone's are as old as its last fetch,
+        // and without --fetch (and for every spawn) a branch started from a main the domain
+        // had not fetched in days (dogfooding again, after the fix above). From the mirror,
+        // over the share: no network, and the root is not asked to refresh it.
+        if (!from.startsWith("origin/")) await run("git", ["-C", clone, "fetch", "--quiet", "origin"], { env: { ...process.env, DESOLATE_MIRROR_FRESH: "1" }, timeoutMs: 120_000 });
         if (!from.startsWith("origin/") && (await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", remote])).code === 0
           && (await run("git", ["-C", clone, "merge-base", "--is-ancestor", from, remote])).code === 0) from = remote;
         // --no-track: from origin/main, git would make origin/main the new branch's upstream,
