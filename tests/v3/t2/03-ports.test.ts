@@ -171,6 +171,9 @@ else {
     assert.ok(others.length > 0, "control: this machine has an address that is not loopback to try");
     for (const address of others) for (const port of [5173, 8080]) assert.equal(await accepts(address, port), false, `port ${port} answers on ${address}: it must be on loopback only`);
     assert.equal(await accepts("127.0.0.1", 80), false, "nothing listens on the host's port 80");
+    // ::1 too, where browsers look first for *.localhost: a forwarded port and the pages'.
+    assert.ok(await accepts("::1", 5173), "a forwarded port is held on ::1 as well");
+    assert.ok(await accepts("::1", Number(stack.env.DESOLATE_EDITOR_PORT)), "the dashboard's, the editors' and the approval page's port is held on ::1 as well");
   });
 
   it("a protocol with no name reaches the first workspace that had the port; the others keep the number taken", async () => {
@@ -195,6 +198,30 @@ else {
     assert.match(taken.stdout, /EADDRINUSE/, "a server in the other workspace finds 5432 taken");
     assert.equal(bind(5433).code, 0, "control: the next number is free there");
     assert.match(stack.desolate("ports", "web/two").stdout, /port 5432 is kept taken here: no name in its protocol, and one had it first/);
+    // An HTTP request on that raw port, too long to read whole, naming another workspace (a
+    // page can make a browser send one, with that workspace's cookies): never the raw owner.
+    const viaRaw = await new Promise<string>((resolve) => {
+      const socket = net.connect(5432, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => socket.write(`GET /${"x".repeat(17_000)} HTTP/1.1\r\nHost: ${hostOf(urlOf("web/two", 5173)!).replace(":5173", ":5432")}\r\n\r\n`));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 5000);
+    });
+    assert.doesNotMatch(viaRaw, /raw:one/, "the long request did not reach the raw port's owner");
+    // A method no list knows, from a page (PURGE): routed by its name, and teaches nothing.
+    serve("web/one", "one 5190");
+    assert.ok(await until(() => urlOf("web/one", 5190) !== undefined));
+    assert.match(await new Promise<string>((resolve) => {
+      const socket = net.connect(5190, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => socket.write(`PURGE / HTTP/1.1\r\nHost: ${hostOf(urlOf("web/one", 5190)!)}\r\nConnection: close\r\n\r\n`));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+    }), /workspace:one/);
+    await sleep(2000);
+    assert.ok(!ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5190), "5190 did not become raw");
   });
 
   it("silence is not a protocol: a socket that waits before its request still reaches the workspace it names, and the port stays HTTP", async () => {
@@ -261,6 +288,17 @@ else {
     assert.ok(await until(() => ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180 && /not forwarded/.test(r.why))), "its server has 5180, reported as not forwarded");
     const inside = stack.inVm(vmOf("web/two"), ["bash", "-c", "curl -s -m 5 http://127.0.0.1:5180/"]);
     assert.match(inside.stdout, /workspace:two/, "and answers inside its workspace");
+    // Held on ::1 only (another user's program, on a shared Mac): not forwarded either, since
+    // a browser would go there first.
+    const v6Holder = spawn(process.execPath, ["-e", `require("net").createServer((s) => s.end("v6")).listen({ port: 5183, host: "::1", ipv6Only: true })`], { stdio: "ignore" });
+    try {
+      await sleep(500);
+      serve("web/one", "one 5183");
+      assert.ok(await until(() => ports().find((w) => w.workspace === "web/one")!.reserved.some((r) => r.port === 5183 && /not forwarded/.test(r.why)), 20_000), "a port held on ::1 is reported as not forwarded");
+      assert.equal(urlOf("web/one", 5183), undefined);
+    } finally {
+      v6Holder.kill();
+    }
   });
 
   it("stopping a workspace takes its ports down", async () => {

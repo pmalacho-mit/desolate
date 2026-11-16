@@ -96,15 +96,16 @@ export const sniff = (data: Buffer): Sniffed => {
 /** Read from a socket until its first bytes are classified, or the wait or the size runs
  *  out. A client that says nothing within `quietMs` is a raw one (a protocol where the
  *  server speaks first). */
-export const sniffSocket = (socket: import("node:net").Socket, quietMs: number): Promise<{ sniffed: Sniffed; head: Buffer }> =>
+/** `undecided`: it ended (the wait, or the client) before its bytes said what they were. */
+export const sniffSocket = (socket: import("node:net").Socket, quietMs: number): Promise<{ sniffed: Sniffed; head: Buffer; undecided?: boolean }> =>
   new Promise((resolve) => {
     let head = Buffer.alloc(0);
-    const finish = (sniffed: Sniffed) => {
+    const finish = (sniffed: Sniffed, undecided = false) => {
       clearTimeout(timer);
       socket.off("data", onData);
       socket.off("close", onClose);
       socket.pause();
-      resolve({ sniffed, head });
+      resolve({ sniffed, head, ...(undecided ? { undecided } : {}) });
     };
     const onData = (chunk: Buffer) => {
       head = Buffer.concat([head, chunk]);
@@ -112,8 +113,8 @@ export const sniffSocket = (socket: import("node:net").Socket, quietMs: number):
       if (sniffed.kind !== "more") finish(sniffed);
       else if (head.length >= LIMIT) finish({ kind: "raw" });
     };
-    const onClose = () => finish({ kind: "raw" });
-    const timer = setTimeout(() => finish({ kind: "raw" }), quietMs);
+    const onClose = () => finish({ kind: "raw" }, true);
+    const timer = setTimeout(() => finish({ kind: "raw" }, true), quietMs);
     socket.on("data", onData);
     socket.on("close", onClose);
   });

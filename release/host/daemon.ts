@@ -39,7 +39,7 @@ import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
-import { sniffSocket } from "../shared/sniff.ts";
+import { LIMIT, sniffSocket } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
@@ -157,8 +157,7 @@ const serve = async () => {
   // comma list, for a server that speaks first on another port), and ones learned from bytes
   // that were not HTTP or TLS, forgotten when no workspace listens there any more.
   const knownRaw = new Set([...RAW_PORTS, ...(process.env.DESOLATE_RAW_PORTS ?? "").split(",").map(Number).filter((p) => Number.isInteger(p) && p >= 1024 && p <= 65535)]);
-  const learnedRaw = new Set<number>();
-  let sniffing = 0;
+  const waiting = new Set<Socket>();
   const log = (line: string) => fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
 
   const byName = (name: string): { entry: Entry; surface: "dev" | "editor" } | null => {
@@ -211,20 +210,29 @@ const serve = async () => {
     // where the browser's request, sent on that socket later, arrived whatever its Host,
     // with the cookies of the workspace it named: found by the audit of 2026-11-16.)
     const raw = knownRaw.has(port);
-    if (sniffing >= 512) return void client.destroy();
-    sniffing++;
-    let sniffedHead: { sniffed: Sniffed; head: Buffer };
+    // At most 512 waiting at once, and when full the longest-waiting goes, not the newest: a
+    // program of another user's opening silent sockets could otherwise lock the person out.
+    if (waiting.size >= 512) {
+      const oldest = waiting.values().next().value;
+      if (oldest) (waiting.delete(oldest), oldest.destroy());
+    }
+    waiting.add(client);
+    let sniffedHead: { sniffed: Sniffed; head: Buffer; undecided?: boolean };
     try {
-      sniffedHead = await sniffSocket(client, raw ? 400 : 120_000);
+      sniffedHead = await sniffSocket(client, raw ? 400 : 60_000);
     } finally {
-      sniffing--;
+      waiting.delete(client);
     }
     let { sniffed } = sniffedHead;
-    const { head } = sniffedHead;
-    if (head.length === 0 && !raw) return void client.destroy();
-    // On a port whose protocol has no name, a line that merely looks like HTTP (Redis's
-    // `SET k v`) and names no workspace is that protocol's.
-    if (raw && (sniffed.kind === "http" || sniffed.kind === "tls") && !(sniffed.name && byName(sniffed.name))) sniffed = { kind: "raw" };
+    const { head, undecided } = sniffedHead;
+    // Not known to be raw, and its bytes never said what they were (silence, or half a line,
+    // until the wait ran out): closed. Only a known raw port takes them (a server that speaks
+    // first). Nothing learns a port is raw from traffic: anyone could teach it that.
+    if (undecided && !raw) return void client.destroy();
+    // On a raw port, one short line that merely looks like HTTP (Redis's `SET k v`) is that
+    // protocol's. A real request line, or a head that ran to LIMIT, is HTTP: refused or sent
+    // on below by its name, never to the port's first workspace (audit of the fixes).
+    if (raw && sniffed.kind === "http" && sniffed.name === null && head.length < LIMIT && !/^[A-Z]{1,16} \S+ HTTP\/\d/.test(head.toString("latin1"))) sniffed = { kind: "raw" };
     if (sniffed.kind === "http" || sniffed.kind === "tls") {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
@@ -252,10 +260,9 @@ const serve = async () => {
       }
       return pipe(client, b.dial(target.entry.vm, port), head);
     }
-    // No name in the protocol (bytes that cannot be HTTP or TLS: shared/sniff.ts): this port
-    // reaches one workspace, the first that had it.
-    if (!knownRaw.has(port)) learnedRaw.add(port);
-    knownRaw.add(port);
+    // No name in the protocol (bytes that cannot be HTTP or TLS: shared/sniff.ts): on a port
+    // known to be raw, the first workspace that had it; on any other, nothing.
+    if (!raw) return void client.destroy();
     const owner = rawOwner.get(port);
     const entry = owner ? entries.get(owner) : undefined;
     if (!entry || !entry.listeners.has(port)) return client.destroy();
@@ -283,7 +290,7 @@ const serve = async () => {
     }
   })));
   watchGitOut(log, (fields) => events.publish(events.host(fields.domain ? "git-delivery-handed" : "git-push-handed", fields)));
-  const editors = createServer((client) => {
+  const onPagesClient = (client: Socket) => {
     client.on("error", () => client.destroy());
     void sniffSocket(client, 400).then(({ sniffed, head }) => {
       if (sniffed.kind === "http" && sniffed.name === GIT_HOSTNAME) {
@@ -315,11 +322,25 @@ const serve = async () => {
       }
       pipe(client, b.dial(target.entry.vm, EDITOR.gate), head);
     });
-  });
+  };
+  // On 127.0.0.1 and on ::1, or not at all: browsers try ::1 first for *.localhost (measured
+  // on the M1, Chrome), so a program of another user's on [::1]:<port> would be sent the
+  // dashboard's and the approval page's addresses, their tokens in them, and could approve a
+  // push (audit of the audit's fixes, 2026-11-16). If ::1 is someone else's, nothing is
+  // served, and doctor says so: every address this stack prints would open that program.
+  const editors = createServer(onPagesClient);
+  const editors6 = createServer(onPagesClient);
   editors.on("error", (error: NodeJS.ErrnoException) => {
     editorError = error.code === "EADDRINUSE" ? `a program on this machine holds port ${editorHostPort()}` : error.message;
     log(`editors on port ${editorHostPort()}: ${error.message}`);
   });
+  editors6.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return;   // no IPv6 here: nothing to look at there
+    editorError = error.code === "EADDRINUSE" ? `a program on this machine holds [::1]:${editorHostPort()}, where browsers look first` : `[::1]: ${error.message}`;
+    log(`editors on [::1]:${editorHostPort()}: ${error.message}`);
+    editors.close();
+  });
+  editors.on("listening", () => editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }));
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
 
   const reconcile = () => {
@@ -334,7 +355,6 @@ const serve = async () => {
         rawOwner.delete(port);
       }
     for (const port of hostHeld.keys()) if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
-    for (const port of learnedRaw) if (!wanted.has(port)) (learnedRaw.delete(port), knownRaw.delete(port));
     for (const port of wanted) {
       const holders = [...entries.values()].filter((entry) => entry.listeners.has(port));
       const owner = rawOwner.get(port);
@@ -350,10 +370,12 @@ const serve = async () => {
         if (error.code !== "EADDRINUSE") log(`port ${port}: ${error.message}`);
       });
       server.on("listening", () => {
-        hostHeld.delete(port);
+        // Not held only once ::1 is this daemon's too (or there is no IPv6 here).
         const six = createServer((client) => void onInbound(port, client));
+        six.on("listening", () => hostHeld.delete(port));
         six.on("error", (error: NodeJS.ErrnoException) => {
           if (forwards6.get(port) === six) forwards6.delete(port);
+          if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return void hostHeld.delete(port);
           // Something else answers on [::1]:<port>: a browser may go there with a workspace's
           // name and cookies. Not forwarded at all, then, and said so, as for 127.0.0.1.
           if (error.code === "EADDRINUSE") {
@@ -884,6 +906,7 @@ const serve = async () => {
         } else if (request.op === "stop") {
           connection.end(JSON.stringify({ ok: true }) + "\n");
           editors.close();
+          editors6.close();
           for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
           for (const entry of entries.values()) entry.link?.close();
           fs.rmSync(SOCKET, { force: true });
@@ -1016,6 +1039,10 @@ export const ui = async (): Promise<{ dashboard: string; approvals: string }> =>
     /* not bootstrapped */
   }
   if (!/^[0-9a-f]{48}$/.test(token)) refuse("this stack has no dashboard credential yet", "desolate bootstrap");
+  // An address with a token in it is printed only when this daemon holds its port, on both
+  // loopback addresses: else it would be sent to whatever does.
+  const held = await editorPortError();
+  if (held) refuse(`not printed: ${held}, and this address carries the token`, `stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap`);
   const { approveAddress } = await import("./approve-web.ts");
   return { dashboard: `http://${ROOT_HOSTNAME}:${editorHostPort()}/?tkn=${token}`, approvals: approveAddress() };
 };

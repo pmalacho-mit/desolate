@@ -143,6 +143,12 @@ number, at the workspace's own name: `http://<domain>-<workspace>-<id>.localhost
 (`desolate ports` prints each). The name is what keeps workspaces apart in your browser: each
 workspace's apps have an origin of their own, so their cookies and storage never mix with
 another workspace's, or with the editor's. Two workspaces can both serve 3000.
+- **A protocol with no hostname in it** (a database: 3306, 5432, 6379, 27017, 11211, 5672,
+  9092, 1433, 26257) reaches the one workspace that listened on that port first; the others
+  keep the number taken. Another port's protocol is routed by the name in its first bytes, or
+  not at all: a server that speaks first, on a port not in that list, needs it added on your
+  Mac (`DESOLATE_RAW_PORTS=7000,7001 desolate bootstrap`). Nothing learns a port is raw from
+  traffic.
 - **A port a program on your Mac holds** (yours, or, on a Mac shared with others, another
   user's: desolate cannot take it from them) is not forwarded. The workspace's server still
   has the port inside the workspace (a backend behind its dev server's proxy works), but its
