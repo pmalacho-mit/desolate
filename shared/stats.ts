@@ -15,7 +15,7 @@ export type Stats = {
   title: string;
   repos: string[];
   at: string;
-  spawn: { max: number; used: number };
+  spawn: { max: number | null; used: number };
   mac: { cpus: number; memoryMiB: number } | null;
   running: { workspaces: number; memoryMiB: number };
   workspaces: {
@@ -40,8 +40,9 @@ export const statsLines = (value: unknown): string[] => {
   const lines = [`domain ${p(s.domain, 40)}  "${p(s.title, 80)}"  ${(s.repos ?? []).map((r) => p(r, 100)).join(", ")}`];
   const mac = s.mac && Number.isFinite(s.mac.memoryMiB) ? `this Mac: ${Number(s.mac.cpus)} CPUs, ${gib(Number(s.mac.memoryMiB))}; ` : "";
   lines.push(`  ${mac}running here: ${Number(s.running?.workspaces ?? 0)} workspace(s), ${gib(Number(s.running?.memoryMiB ?? 0))} given to them`);
-  const max = Number(s.spawn?.max ?? 0);
-  lines.push(max > 0 ? `  started by workspaces: ${Number(s.spawn?.used ?? 0)} of at most ${max} (desolate spawn; each counts until removed)` : "  its workspaces cannot start workspaces (the person allows it: desolate domain <d> spawn --max <n>, on the Mac)");
+  const max = s.spawn?.max === null || s.spawn?.max === undefined ? null : Number(s.spawn.max);
+  const used = Number(s.spawn?.used ?? 0);
+  lines.push(max === 0 ? "  its workspaces cannot start workspaces: the person turned it off" : max === null ? `  started by workspaces: ${used}, no limit (desolate spawn; start one only when the work needs it)` : `  started by workspaces: ${used} of at most ${max} (desolate spawn; each counts until removed)`);
   for (const w of s.workspaces ?? []) {
     const size = w.size ? `  ${w.size.cpus} CPU, ${gib(w.size.memoryMiB)}` : "";
     const by = w.startedBy ? `started by ${p(w.startedBy, 40)}${w.outlived ? " (since removed: this one outlived it)" : ""}` : "started by the person";
@@ -55,6 +56,6 @@ export const statsLines = (value: unknown): string[] => {
 declare namespace statsLines {
   /** what is not there is said as such, and a status an agent wrote is printable text */
   export type Empty = Table<typeof statsLines, [
-    [args: [value: null], expected: ["domain   \"\"  ", "  running here: 0 workspace(s), 0 GiB given to them", "  its workspaces cannot start workspaces (the person allows it: desolate domain <d> spawn --max <n>, on the Mac)"]],
+    [args: [value: null], expected: ["domain   \"\"  ", "  running here: 0 workspace(s), 0 GiB given to them", "  started by workspaces: 0, no limit (desolate spawn; start one only when the work needs it)"]],
   ]>;
 }

@@ -249,8 +249,8 @@ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --blockapp "$(realpath "$(c
 ## Workspaces that start workspaces
 
 A workspace can start another in its own domain, with a command as its agent, and close the
-ones it started, when the person allows it: `desolate domain <d> spawn --max <n>` on the Mac
-(0, the default: none). [agents.md](agents.md#workspaces-that-start-workspaces) has the
+ones it started. It is on, with no limit, unless the person sets one on the Mac:
+`desolate domain <d> spawn --max <n>` (0: off; `none`: no limit again). [agents.md](agents.md#workspaces-that-start-workspaces) has the
 person's side; the shipped [AGENTS.md](../AGENTS.md), the agent's.
 
 ```
