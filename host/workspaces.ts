@@ -6,6 +6,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { devHostname, editorHostname, editorHostPort, isBranch, parseRepo } from "../shared/names.ts";
+import { outlived } from "../shared/plan.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
 import { checkSize, defaultsFor, describe as describeSize, LIMITS, merge, parseDisk, parseMemory } from "../shared/size.ts";
@@ -109,6 +110,8 @@ export const startServices = async (plan: WorkspacePlan) => {
   const services = await b.exec(plan.vm, ["bash", `${guest.release}/workspace/start.sh`, String(process.getuid!()), b.link(plan.vm).guest], { root: true, timeoutMs: 300_000 });
   step("its services (start.sh)");
   if (services.code !== 0) throw new Error(`the workspace's services did not start: ${said((services.stderr || services.stdout).trim().slice(-600))}`);
+  // Its key, for what it asks of the host through the root (host/spawn.ts).
+  await (await import("./spawn.ts")).giveIdentity(b, plan.vm);
   // start.sh puts the user in the docker group; what the host runs next must have it.
   await b.refreshSessions?.(plan.vm, services.stdout.includes("desolate: sessions raised"));
   const init = await b.exec(plan.vm, [...NODE, `${guest.release}/workspace/init.ts`, plan.workspace], { timeoutMs: 900_000 });
@@ -162,8 +165,16 @@ export const urlsOf = (plan: { domain: string; workspace: string }) => ({
   dev: `http://${devHostname(INSTANCE, plan.domain, plan.workspace)}`,
 });
 
-export const up = async (domain: string | undefined, options: { name?: string; checkouts: string[]; branch?: string; base?: string; fetch: boolean; size?: Partial<Size> }, out: Out, json: boolean) => {
+export const up = async (domain: string | undefined, options: { name?: string; checkouts: string[]; branch?: string; base?: string; fetch: boolean; size?: Partial<Size>; startedBy?: string; command?: string[]; keep?: { startedBy?: { workspace: string; createdAt: string }; parent?: string | null } }, out: Out, json: boolean) => {
   if (!domain) refuse("which domain?", "desolate up <domain> [--name <workspace>]", EXIT.usage);
+  // --started-by <workspace>: the workspace of this domain that asked for this one (`desolate
+  // spawn` in it, run by the host's daemon once it checked the request: host/spawn.ts).
+  // (`keep`: a workspace made again on its own checkouts keeps who started it.)
+  let startedBy: { workspace: string; createdAt: string } | undefined = options.keep?.startedBy;
+  if (options.startedBy !== undefined) {
+    const parent = await rootctl<Workspace>("workspace.get", { domain, name: options.startedBy }, { quiet: true });
+    startedBy = { workspace: parent.workspace, createdAt: parent.createdAt };
+  }
   const phases: [string, number][] = [];
   let mark = Date.now();
   const phase = (name: string) => {
@@ -205,7 +216,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   // Who commits in it: your own git identity, as on this Mac (as the git VM takes it).
   const mine = (key: string) => spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
   const author = { name: mine("user.name"), email: mine("user.email") };
-  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author }, { quiet: true });
+  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}) }, { quiet: true });
   // (The domain, whether it has a template to make, and the plan, which is two small files:
   // asks of the root, about 0.2 s each. No network: --fetch is its own phase, above.)
   phase("asked the root");
@@ -223,20 +234,26 @@ export const up = async (domain: string | undefined, options: { name?: string; c
     await rootctl("proxy.stop", { vm: plan.vm }, { quiet: true }).catch(() => {});
     await b.destroy(plan.vm).catch(() => {});
     await rootctl("workspace.remove", { domain, name: plan.workspace }, { quiet: true }).catch(() => {});
+    (await import("./spawn.ts")).forget(domain, plan.workspace);
     throw error;
   }
   await rootctl("workspace.state", { domain, name: plan.workspace, state: "up" }, { quiet: true });
+  const parent = options.keep ? options.keep.parent : startedBy?.workspace;
+  if (parent) (await import("./spawn.ts")).recordStarted(domain, plan.workspace, parent);
+  // `-- <command...>`: an agent, started in it once it is up (host/agent.ts).
+  const agent = options.command?.length ? await (await import("./agent.ts")).startIn(plan, options.command) : null;
   const seconds = (ms: number) => (ms / 1000).toFixed(1);
   const breakdown = `the start took ${seconds(Date.now() - started)} s: ${phases.map(([name, ms]) => `${name} ${seconds(ms)} s`).join(", ")}`;
   const opened = editorDown ? { error: editorDown } : await editorUrl(plan);
   const urls = { ...urlsOf(plan), ...("url" in opened ? { editorWithToken: opened.url } : { editorError: opened.error }) };
-  if (json) return out(JSON.stringify({ domain, workspace: plan.workspace, vm: plan.vm, isolated: b.isolated, checkouts: plan.checkouts, size: plan.size ?? size, devcontainer, urls, tookMs: Date.now() - started, phases: Object.fromEntries(phases) }));
-  out(`workspace ${domain}/${plan.workspace} is up${b.isolated ? "" : "  [NOT ISOLATED: fake backend]"}`);
+  if (json) return out(JSON.stringify({ domain, workspace: plan.workspace, vm: plan.vm, isolated: b.isolated, checkouts: plan.checkouts, size: plan.size ?? size, devcontainer, urls, ...(startedBy ? { startedBy } : {}), ...(agent ? { agent } : {}), tookMs: Date.now() - started, phases: Object.fromEntries(phases) }));
+  out(`workspace ${domain}/${plan.workspace} is up${b.isolated ? "" : "  [NOT ISOLATED: fake backend]"}${startedBy ? `, started by ${domain}/${startedBy.workspace}` : ""}`);
   for (const c of plan.checkouts) out(`  ${c.repo}  ${c.kind === "main" ? `main checkout (${c.branch})` : `worktree ${c.branch} from ${c.base}`}  ${c.path}`);
   out(`  size         ${describeSize(plan.size ?? size)}`);
   out(`  devcontainer ${devcontainer}`);
   out("url" in opened ? `  editor       ${opened.url}` : `  editor       NOT AVAILABLE: ${opened.error}`);
   out(`  dev servers  ${urls.dev}:<port>   (the port it listens on inside, nothing to declare)`);
+  if (agent) out(`  agent        ${agent} is running: desolate agent attach ${domain}/${plan.workspace}`);
   out(breakdown);
   out(`next: desolate editor ${domain}/${plan.workspace} --open      its editor, in your browser`);
   out(`      desolate exec ${domain}/${plan.workspace} -- <command>     a command in its devcontainer (bash, for a shell)`);
@@ -250,6 +267,7 @@ export const list = async (out: Out, json: boolean, only?: string) => {
     domain: d.slug, title: d.title, repos: d.repos,
     workspaces: d.workspaces.map((w) => ({
       workspace: w.workspace, vm: w.vm, status: vms.get(w.vm) ?? "missing", isolated: b.isolated, size: w.size ?? null,
+      startedBy: w.startedBy?.workspace ?? null, outlived: outlived(d.workspaces, w),
       // What each checkout has checked out now (its HEAD, read here as data), beside what it
       // started on.
       checkouts: w.checkouts.map((c) => {
@@ -265,7 +283,7 @@ export const list = async (out: Out, json: boolean, only?: string) => {
     out(`${d.domain}  "${d.title}"  ${d.repos.length ? d.repos.join(", ") : "(no repositories: desolate domain " + d.domain + " add --repo <owner>/<repo>)"}`);
     if (d.workspaces.length === 0) out(`  (no workspaces: desolate up ${d.domain})`);
     for (const w of d.workspaces)
-      out(`  ${d.domain}/${w.workspace}  ${w.status}${w.isolated ? "" : "  [not isolated]"}  ${w.checkouts.map((c) => `${c.repo}@${c.now}`).join(", ")}${w.size ? `  (${w.size.cpus} CPU, ${Math.round(w.size.memoryMiB / 1024)} GiB)` : ""}`);
+      out(`  ${d.domain}/${w.workspace}  ${w.status}${w.isolated ? "" : "  [not isolated]"}  ${w.checkouts.map((c) => `${c.repo}@${c.now}`).join(", ")}${w.size ? `  (${w.size.cpus} CPU, ${Math.round(w.size.memoryMiB / 1024)} GiB)` : ""}  ${w.startedBy ? `started by ${w.startedBy}${w.outlived ? " (removed since: this one outlived it)" : ""}` : "started by you"}`);
   }
 };
 
@@ -287,6 +305,8 @@ export const reconnectRunning = async (): Promise<number> => {
       // And its end of the link, which restarts its relay if desolate's code changed (the
       // link's handshake is in it).
       await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/up.sh`, b.link(w.vm).guest], { root: true, timeoutMs: 120_000 });
+      // Its key too: a workspace made before keys were given gets one here, without a restart.
+      await (await import("./spawn.ts")).giveIdentity(b, w.vm);
       count += 1;
     }
   return count;
@@ -320,8 +340,9 @@ export const start = async (target: string | undefined, out: Out) => {
     // the checkouts are in the domain's clones on the host. Made again, on the same ones.
     out(`the VM of ${w.domain}/${w.workspace} is gone; making it again, on the same checkouts (they are on this Mac, and kept)`);
     const checkouts = w.checkouts.map((c) => (c.kind === "main" ? `${c.repo}=main` : `${c.repo}=worktree:${c.branch}`));
+    const parent = (await import("./spawn.ts")).parentOf(w.domain, w.workspace);
     await remove(`${w.domain}/${w.workspace}`, () => {});
-    return up(w.domain, { name: w.workspace, checkouts, fetch: false, size: w.size ?? undefined }, out, false);
+    return up(w.domain, { name: w.workspace, checkouts, fetch: false, size: w.size ?? undefined, keep: { startedBy: w.startedBy, parent } }, out, false);
   }
   if (info.status === "suspended") await b.resume(w.vm);
   else if (info.status !== "running") await b.start(w.vm);
@@ -333,7 +354,25 @@ export const start = async (target: string | undefined, out: Out) => {
   if (editorDown) out(`  editor       NOT AVAILABLE: ${editorDown}`);
 };
 
-export const remove = async (target: string | undefined, out: Out) => {
+/** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
+ *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
+ *  its branches are written out for the root. What the VM says is its word about itself. */
+const unsaved = async (w: Workspace): Promise<string[]> => {
+  const b = backend();
+  if ((await b.info(w.vm)).status !== "running") return ["it is not running, so what it holds cannot be looked at (a person removes it: desolate rm)"];
+  const script = `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"
+for p in "$@"; do
+  s=$(git -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
+  [ -z "$s" ] || echo "UNCOMMITTED $p"
+  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
+done`;
+  const looked = await b.exec(w.vm, ["bash", "-c", script, "_", ...w.checkouts.map((c) => c.path)], { timeoutMs: 120_000 });
+  if (looked.code !== 0) return [`it could not be looked at: ${said(looked.stderr.trim().slice(-200))}`];
+  const say: Record<string, string> = { UNSYNCED: "its branches could not be written out for the root", UNCOMMITTED: "uncommitted changes or untracked files in", STASHED: "stashed changes in", UNREADABLE: "a checkout git could not read:" };
+  return looked.stdout.split("\n").map((line) => /^(UNSYNCED|UNCOMMITTED|STASHED|UNREADABLE)(?: (\/workspaces\/\S{1,300}))?$/.exec(line.trim())).filter((m) => m !== null).map((m) => `${say[m![1]!]}${m![2] ? ` ${m![2]}` : ""}`);
+};
+
+export const remove = async (target: string | undefined, out: Out, options: { ifClean?: boolean } = {}) => {
   if (target && !target.includes("/")) {
     const result = await rootctl<{ domain: string; kept: string }>("domain.remove", { slug: target }, { quiet: true });
     // Its template is its own and goes with it.
@@ -342,12 +381,18 @@ export const remove = async (target: string | undefined, out: Out) => {
     return out(`removed the domain ${result.domain}; ${result.kept}.`);
   }
   const w = await find(target);
+  // --if-clean (a workspace closing one it started): only if nothing would be lost.
+  if (options.ifClean) {
+    const lost = await unsaved(w);
+    if (lost.length > 0) refuse(`${w.domain}/${w.workspace} was not removed: ${lost.join("; ")}`, `commit or discard it there first (desolate exec ${w.domain}/${w.workspace} -- git status), or remove it yourself: desolate rm ${w.domain}/${w.workspace}`, EXIT.busy);
+  }
   const { disconnectWorkspace } = await import("./daemon.ts");
   await backend().destroy(w.vm);
   await disconnectWorkspace(w.vm);
   await rootctl("proxy.stop", { vm: w.vm }, { quiet: true }).catch(() => {});
   fs.rmSync(paths.link(w.vm), { recursive: true, force: true });
   await rootctl("workspace.remove", { domain: w.domain, name: w.workspace }, { quiet: true });
+  (await import("./spawn.ts")).forget(w.domain, w.workspace);
   out(`removed ${w.domain}/${w.workspace}. Its branches and worktrees stay in the domain's clones.`);
 };
 

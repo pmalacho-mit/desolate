@@ -276,6 +276,8 @@ const needsYou = () => {
     const says = w.says.status;
     if (says && (says.color === "orange" || says.color === "red"))
       items.push(el("li", {}, el("span", { class: `dot ${says.color}` }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace}`), el("div", { class: "line" }, says.message)), el("div", {})));
+    if (w.outlived)
+      items.push(el("li", { "data-outlived": `${d.slug}/${w.workspace}` }, el("span", { class: "dot orange" }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace} outlived the workspace that started it`), el("div", { class: "line" }, `${w.startedBy} is gone; this one is still here. Look at its branches, then `, el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " when you are done with it.")), el("div", {})));
     if (w.host && w.host.devcontainer && /^FAILED/.test(w.host.devcontainer))
       items.push(el("li", {}, el("span", { class: "dot red" }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace}: its devcontainer did not come up`), el("div", { class: "line" }, w.host.devcontainer)), el("div", {})));
   }
@@ -351,7 +353,12 @@ const workspaceRow = (d, w) => {
   return el("li", { "data-workspace": `${d.slug}/${w.workspace}` },
     el("span", { class: `dot ${running ? (says ? says.color : "gray") : "hollow"}`, title: says ? says.color : running ? "no status set" : "stopped" }),
     el("div", { class: "what" },
-      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub" }, state.hostConnected ? (host.status || w.state) : `${w.state} (as last known)`)),
+      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub" }, state.hostConnected ? (host.status || w.state) : `${w.state} (as last known)`), " ",
+        // Who started it: you, or a workspace of the domain (desolate spawn in it); and a
+        // warning when that one is gone and this one is still here.
+        w.startedBy
+          ? el("span", { class: `chip ${w.outlived ? "warn" : ""}`, "data-started-by": w.startedBy, title: w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)` }, w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`)
+          : el("span", { class: "chip", "data-started-by": "" }, "started by you")),
       w.checkouts.map((c) => el("div", { class: "line", "data-checkout": c.repo }, checkoutLine(c),
         landedOf(d, c) ? [" ", el("span", { class: "chip merged", "data-merged": landedOf(d, c) }, `merged into ${landedOf(d, c)}`)] : null,
         c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)

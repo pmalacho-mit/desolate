@@ -52,6 +52,35 @@ One line, at most 200 characters. Colours: `gray`, `blue`, `green`, `yellow`, `o
 done, gray withdrawn (say why). It is shown to the person and read by scripts. It is never
 acted on: `green` pushes nothing.
 
+## Other workspaces: starting, following and closing them
+
+If the person allows it for this domain, you can start another workspace beside you, for a
+piece of work you want done apart (an issue you found, a check you want run in parallel).
+It is in your domain only, labelled as started by you, and the person sees it.
+
+```bash
+desolate domain stats                  # this domain's workspaces, who started each, its limit, the Mac
+desolate spawn --name fix-docs --branch task/fix-docs -- <command> <args...>
+desolate events --follow               # what happens in this domain, one JSON object per line
+desolate close fix-docs                # remove one you started, once nothing in it would be lost
+```
+
+- `desolate domain stats` first: it says whether you may start any (`spawn --max`, which the
+  person sets on the Mac) and how many are already started. Each one counts until it is
+  removed, and each takes memory on the person's Mac: start one only when the work is
+  really separate, and close it when it is done.
+- The command after `--` runs in the new workspace as its agent, in its first checkout, as
+  the words you give (nothing reads them as a shell line). Without one, the workspace is
+  only made. It has the domain's secrets by name, like you, and not your shell's state.
+- Its work reaches you as any workspace's does: its branch, once committed, is in your clone
+  (`git branch -a`), and `desolate status board` shows what it says.
+- `desolate events` says when it is made (`workspace-made`, with `startedBy`), stopped or
+  removed, what it offered, its status, and how each of your requests ended (`request`, with
+  `ok` and why not). `--all` starts from the beginning of what is kept.
+- `desolate close <name>` works only on one you started, and only if every checkout in it
+  has nothing uncommitted, untracked or stashed: commit there first. Its branches stay. If
+  you are removed first, the ones you started stay, flagged for the person.
+
 ## Network: named HTTP and HTTPS, through a proxy; nothing else
 
 This VM has no route to anything. Its one way out is a proxy that belongs to this workspace.

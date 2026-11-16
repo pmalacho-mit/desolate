@@ -21,6 +21,10 @@ export const ROOT = {
   run: process.env.DESOLATE_ROOT_RUN ?? "/run/desolate",
 } as const;
 
+/** Where the root's ordinary user (rootd) leaves a workspace's signed request for the host:
+ *  the state service hands each to the host's daemon as an action (stated.ts). */
+export const HOST_QUEUE = `${ROOT.state}/host-queue`;
+
 export const mirrorPath = (repo: Repo) => `${ROOT.mirrors}/${repo.owner}/${repo.name}.git`;
 export const clonePath = (repo: Repo) => `${ROOT.clones}/${repo.owner}/${repo.name}`;
 export const domainPath = (domain: string) => `${ROOT.domains}/${domain}`;
