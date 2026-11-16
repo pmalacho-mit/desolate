@@ -365,7 +365,7 @@ done
     "The agent's VM held no key and reached nothing but its own proxy.",
     "The write key lives in the root VM; only the pusher uses it, for the one push you approved.",
     "The approval is a click on a page your Mac serves; nothing in a VM can make it.",
-  ], "desolate · github.com/pmalacho-mit/isolated-devcontainers-suede (v3)", 5500);
+  ], "desolate · github.com/pmalacho-mit/desolate", 5500);
 } finally {
   // The events listener, whatever happened: it is a process group of its own.
   if (listenerPid)

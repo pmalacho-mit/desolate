@@ -29,7 +29,7 @@ You do **not** need Docker on your Mac: the projects' devcontainers run inside t
 ## 1. Install
 
 ```bash
-git clone --branch release https://github.com/pmalacho-mit/isolated-devcontainers-suede ~/desolate
+git clone --branch release https://github.com/pmalacho-mit/desolate ~/desolate
 mkdir -p ~/.local/bin && ln -sf ~/desolate/cli.sh ~/.local/bin/desolate
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
 desolate help

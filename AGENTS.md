@@ -7,17 +7,17 @@ into every workspace.)
 ## You are probably inside the thing you are changing
 
 desolate is developed from a desolate workspace. Expect to be in one: a VM of the domain
-`desolate`, with this repository at `/workspaces/pmalacho-mit/isolated-devcontainers-suede`,
+`desolate`, with this repository at `/workspaces/pmalacho-mit/desolate`,
 in its own devcontainer, with `DESOLATE_WORKSPACE=1` in the environment. That means:
 
 - **You have no keys and cannot push.** Commit freely: every commit on every branch reaches
-  the root within seconds. When a branch is ready, `desolate offer --base v3`. A person
+  the root within seconds. When a branch is ready, `git push` (or `desolate offer`). A person
   reviews it on the dashboard and pushes it, approving the exact commit on the Mac. Do not
   look for a way around that. It is the product working (principle P2), not an obstacle.
-- **Branches:** start from `origin/v3` and offer with `desolate offer --base v3`. (A plain
-  `git push` offers too, but for the default branch, `main`, which is not where this work goes.) The person names pushed
-  branches `mac/<topic>` and merges them into `v3` by pull request. Never aim at `main` or
-  `release`: `release` is what v2's users install from.
+- **Branches:** start from `origin/main`. A push or an offer is for `main`, the default branch.
+  The person names pushed branches `mac/<topic>` and merges them into `main` by pull request.
+  Never aim at `release`: it is what people install from, and the `subrepo-push-release`
+  workflow publishes it from `main`'s `release/` folder (see "Publishing" below).
 - **The network is the domain's proxy.** Hosts you need and do not have are the person's to
   allow (`desolate domain desolate net ...` on the Mac). Say which and why.
 - **`/desolate/scratch`** is the workspace VM's own disk, at the same path for you and for the
@@ -162,7 +162,7 @@ table, feature by feature.
 - **A real push of this repository through desolate.** The person approving it never happened
   in testing. The Mac's GitHub account (`mitdesolate`) has push but not admin, and cannot be
   made admin, so its deploy keys must be added by the owner by hand
-  (`desolate clone pmalacho-mit/isolated-devcontainers-suede --domain desolate --keys-by-hand`).
+  (`desolate clone pmalacho-mit/desolate --domain desolate --keys-by-hand`).
 - **The pull-request link opened on github.com.** The stand-in forge gets no link.
 - **The merged mark in real use:**
   - the root's fetch every 15 minutes, of a repository with a push waiting to land, has not
