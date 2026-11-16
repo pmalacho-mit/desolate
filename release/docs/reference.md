@@ -165,6 +165,15 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
   (T2 `06` asks it at the paths web editors forward ports at). Open dev servers by their own
   address, not through the editor's Ports view.
 
+**A domain's repositories by their GitHub addresses.** Inside a workspace, git sends
+`git@github.com:o/r.git`, `ssh://git@github.com/o/r.git` and `https://github.com/o/r.git` of
+every repository the domain holds to the domain's mirror (refreshed first, as `origin` is),
+and a push to them becomes an offer (`url.<helper>.insteadOf` in git's global config, in the
+VM and the devcontainer: `workspace/git-urls.ts`). So suede's install and sync of a
+dependency the domain holds, a git dependency in a lockfile, and `git clone` of a sibling
+work with no credential, private repositories included. Only the `.git` spellings:
+`insteadOf` matches a prefix. T2 `04`.
+
 **What a workspace can reach.** A workspace's only way out is its own proxy, in the root.
 - **Ports 80 and 443 only.** Every connection to those, from the VM, its devcontainer, or a
   container building an image, is taken to the proxy without any proxy settings. Nothing
