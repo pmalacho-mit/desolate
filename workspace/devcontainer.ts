@@ -47,6 +47,7 @@ import { parse as parseJsonc } from "../shared/jsonc.ts";
 import { devHostname } from "../shared/names.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
+import { urlRules } from "./git-urls.ts";
 
 export const STATE = "/run/desolate/devcontainer.json";
 export type State =
@@ -270,6 +271,8 @@ const main = async () => {
   // desolate's own (`...desolate.invalid`) is replaced, as in the VM (init.ts).
   const identity = [plan.author?.name ?? `${plan.domain}/${plan.workspace}`, plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`];
   await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "sh", "-c", 'case "$(git config --global user.email 2>/dev/null)" in ""|*.desolate.invalid) git config --global user.name "$1" && git config --global user.email "$2" ;; esac', "_", ...identity]);
+  // And the domain's repositories by their GitHub addresses, as in the VM (git-urls.ts).
+  for (const args of urlRules(plan.checkouts.map((c) => c.repo))) await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "git", "config", "--global", ...args]);
   // A compose service's own network, reached from the VM (bridge.ts): its listeners, its
   // `service:port` forwards, and the editor's server when it runs there.
   const compose = spec.dockerComposeFile !== undefined;
