@@ -13,6 +13,7 @@ import { checkSize, defaultsFor, describe as describeSize, LIMITS, merge, parseD
 import type { Size } from "../shared/size.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
+import { retiredAt, stale } from "./retired.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
 
@@ -125,7 +126,8 @@ export const startServices = async (plan: WorkspacePlan) => {
   const dev = await b.exec(plan.vm, [...NODE, `${guest.release}/workspace/devcontainer.ts`, plan.workspace], { timeoutMs: 3_700_000 });
   step("the devcontainer"); 
   const devcontainer = said(/^devcontainer: (.*)$/m.exec(dev.stdout)?.[1]?.trim().slice(0, 500) ?? `FAILED: ${(dev.stderr || dev.stdout).trim().slice(-300) || "it said nothing"}`);
-  const editor = await b.exec(plan.vm, ["bash", "-lc", `bash ${guest.release}/workspace/editor.sh ${editorHostname(INSTANCE, plan.domain, plan.workspace)}`], { timeoutMs: 300_000 });
+  // (With the time the host last retired the tokens: a token older than that is made again.)
+  const editor = await b.exec(plan.vm, ["bash", "-lc", `bash ${guest.release}/workspace/editor.sh ${editorHostname(INSTANCE, plan.domain, plan.workspace)} ${retiredAt()}`], { timeoutMs: 300_000 });
   step("the editor");
   return { editorDown: editor.code === 0 ? null : said((editor.stderr || editor.stdout).trim().split("\n").slice(-2).join(" ").slice(0, 300)) || "the editor did not start", devcontainer };
 };
@@ -135,6 +137,7 @@ export const startServices = async (plan: WorkspacePlan) => {
 export const editorUrl = async (w: Workspace): Promise<{ url: string } | { error: string }> => {
   const token = await backend().exec(w.vm, ["bash", "-lc", "cat ~/.desolate-editor/token"], { timeoutMs: 60_000 });
   if (token.code !== 0 || !/^[0-9a-f]{48}$/.test(token.stdout.trim())) return { error: "the editor is not running in this workspace (its image may have none: desolate doctor)" };
+  if (await editorTokenStale(w.vm)) return { error: "its token was retired (another program held [::1] on the editors' port), and has not been made again: desolate bootstrap, or restart the workspace" };
   const { editorPort } = await import("./daemon.ts");
   const { port, error } = await editorPort();
   if (error) return { error: `the editor's port is not available on this machine: ${error}. Free it, or set DESOLATE_EDITOR_PORT, then: desolate bootstrap` };
@@ -308,6 +311,16 @@ export const list = async (out: Out, json: boolean, only?: string) => {
  *  the root VM, so a root VM that was restarted left each running workspace with no way out
  *  at all, while `list` still said "running" (found on the M1). Bootstrap calls this.
  *  Returns how many were reconnected. */
+/** Whether a VM's editor token was made before the host last retired the tokens (retired.ts).
+ *  A token whose age cannot be read is stale then: it is made again. */
+const editorTokenStale = async (vm: string) => {
+  const at = retiredAt();
+  if (at === 0) return false;
+  const made = await backend().exec(vm, ["bash", "-lc", "stat -c %Y ~/.desolate-editor/token"], { timeoutMs: 60_000 });
+  const seconds = Number(made.stdout.trim());
+  return made.code !== 0 || !Number.isFinite(seconds) || stale(seconds * 1000, at);
+};
+
 export const reconnectRunning = async (): Promise<number> => {
   const b = backend();
   const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
@@ -326,6 +339,8 @@ export const reconnectRunning = async (): Promise<number> => {
       await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/up.sh`, b.link(w.vm).guest], { root: true, timeoutMs: 120_000 });
       // Its key too: a workspace made before keys were given gets one here, without a restart.
       await (await import("./spawn.ts")).giveIdentity(b, w.vm);
+      // And its editor's token, made again if the host retired the tokens since it was made.
+      if (await editorTokenStale(w.vm)) await b.exec(w.vm, ["bash", "-lc", `bash ${guest.release}/workspace/editor.sh ${editorHostname(INSTANCE, w.domain, w.workspace)} ${retiredAt()}`], { timeoutMs: 300_000 });
       count += 1;
     }
   return count;

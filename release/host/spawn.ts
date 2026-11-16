@@ -28,7 +28,11 @@ const ledger = (): Ledger => {
   const value = readJson<Partial<Ledger>>(LEDGER(), {});
   // (Signatures an older desolate kept in spawn.json still count, once: a request run just
   // before an upgrade is not run again after it.)
-  return { max: value.max ?? {}, started: value.started ?? {}, used: { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) } };
+  const used = { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) };
+  // Moved to their own file at once: the next write of spawn.json, by the CLI too, leaves
+  // them out (final review).
+  if (value.used && Object.keys(value.used).length > 0) saveUsed(used);
+  return { max: value.max ?? {}, started: value.started ?? {}, used };
 };
 /** The requests run, in a file of their own that only the daemon writes: spawn.json is also
  *  written by the CLI (a started record, a limit), and one whole-file write must not undo

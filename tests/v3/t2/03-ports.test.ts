@@ -27,9 +27,9 @@ const vmOf = (target: string) => {
 const serve = (target: string, args: string, root = false) =>
   stack.inVm(vmOf(target), ["bash", "-c", `setsid nohup node /workspaces/serve.mjs ${args} >/tmp/serve-$$.log 2>&1 </dev/null & sleep 0.3`], { root });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const until = async (probe: () => boolean, ms = 8000) => {
+const until = async (probe: () => boolean | Promise<boolean>, ms = 8000) => {
   for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
-    if (probe()) return true;
+    if (await probe()) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return probe();
@@ -84,6 +84,9 @@ describe("T2 section 4.4: ports, forwarded by name", () => {
 import http from "node:http"; import net from "node:net";
 const [, , name, portArg, mode] = process.argv; let port = Number(portArg);
 if (mode === "raw") net.createServer((s) => { s.write("raw:" + name + "\\n"); s.on("data", (d) => s.write(d)); s.on("error", () => {}); }).listen(port, "0.0.0.0");
+// A server on a raw port whose greeting is an HTTP response, sent in two pieces: a browser's
+// preconnected socket would take it as the answer to its request.
+else if (mode === "greets-http") net.createServer((s) => { s.on("error", () => {}); s.write("H"); setTimeout(() => s.write("TTP/1.1 200 OK\\r\\nContent-Type: text/html\\r\\nContent-Length: 13\\r\\n\\r\\n<b>owned</b>\\n"), 100); }).listen(port, "0.0.0.0");
 else {
   const server = http.createServer((req, res) => res.end("workspace:" + name + " host:" + req.headers.host + "\\n"));
   server.on("upgrade", (req, socket) => { socket.write("HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\nhmr:" + name); socket.on("data", (d) => socket.write(d)); });
@@ -224,6 +227,19 @@ else {
       setTimeout(() => socket.destroy(), 8000);
     });
     assert.doesNotMatch(preconnected, /GET \//, "the request on a preconnected socket did not reach the raw port's owner");
+    // A raw port's server whose greeting is an HTTP response: never sent to a client that has
+    // said nothing yet (final review, 2026-11-16). The control is 5432's greeting, above.
+    serve("web/one", "one 3306 greets-http");
+    assert.ok(await until(() => urlOf("web/one", 3306) !== undefined));
+    const greeted = await new Promise<string>((resolve) => {
+      const socket = net.connect(3306, "127.0.0.1");
+      let data = "";
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 3000);
+    });
+    assert.doesNotMatch(greeted, /200 OK|owned/, "a greeting shaped as an HTTP response was not sent on");
     // A method no list knows, from a page (PURGE): routed by its name, and teaches nothing.
     serve("web/one", "one 5190");
     assert.ok(await until(() => urlOf("web/one", 5190) !== undefined));
@@ -313,6 +329,46 @@ else {
     } finally {
       v6Holder.kill();
     }
+  });
+
+  it("another program on [::1] of the pages' port: their tokens are retired, and the dashboard and the editors are not served on them again", async () => {
+    stack.step("the pages' port held on ::1");
+    const pagesPort = Number(stack.env.DESOLATE_EDITOR_PORT);
+    const hostAt = (url: string) => new URL(url).host;
+    const dashboard = hostAt(stack.quiet("ui").stdout.match(/http:\/\/\S+/)![0]);
+    const editorBefore = JSON.parse(stack.quiet("editor", "web/one", "--json").stdout) as { url: string };
+    // Control: both served now.
+    assert.doesNotMatch(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 /);
+    assert.doesNotMatch(await request(pagesPort, hostAt(editorBefore.url)), /^HTTP\/1\.1 503 /);
+    // The daemon goes (a reboot, an upgrade), and another program takes [::1] of its port.
+    const pidFile = path.join(stack.home, "state/daemon.pid");
+    process.kill(Number(fs.readFileSync(pidFile, "utf8")));
+    assert.ok(await until(async () => !(await accepts("127.0.0.1", pagesPort))), "the daemon is gone");
+    const squatter = spawn(process.execPath, ["-e", `require("net").createServer((s) => s.end("squatter")).listen({ port: ${pagesPort}, host: "::1", ipv6Only: true })`], { stdio: "ignore" });
+    try {
+      await sleep(500);
+      const refused = stack.quiet("ui");
+      assert.notEqual(refused.code, 0, "no address with a token is printed");
+      assert.ok(fs.existsSync(path.join(stack.home, "state/tokens-retired")), "the tokens are retired");
+      for (const name of ["approve-token", "git-token", "ui-token"]) assert.ok(!fs.existsSync(path.join(stack.home, "state", name)), `${name} is gone`);
+    } finally {
+      squatter.kill();
+    }
+    // The program goes, and a daemon comes back (before any bootstrap): the dashboard and the
+    // editor are not served on their old tokens, which the root and the VM still take.
+    process.kill(Number(fs.readFileSync(pidFile, "utf8")));
+    await sleep(1000);
+    assert.equal(stack.quiet("ports").code, 0);
+    assert.ok(await until(() => accepts("127.0.0.1", pagesPort)));
+    assert.match(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 [\s\S]*the dashboard's token was retired/);
+    assert.match(await request(pagesPort, hostAt(editorBefore.url)), /^HTTP\/1\.1 503 [\s\S]*this editor's token was retired/);
+    // bootstrap makes them again: both are served, the editor on a new token.
+    assert.equal(bootstrap(stack).code, 0);
+    const editorAfter = JSON.parse(stack.quiet("editor", "web/one", "--json").stdout) as { url: string };
+    assert.notEqual(new URL(editorAfter.url).searchParams.get("tkn"), new URL(editorBefore.url).searchParams.get("tkn"), "the editor's token was made again");
+    assert.ok(await until(async () => !/^HTTP\/1\.1 503 /.test(await request(pagesPort, hostAt(editorAfter.url))), 20_000), "the editor is served again");
+    assert.doesNotMatch(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 /, "and the dashboard");
+    assert.equal(stack.quiet("ui").code, 0);
   });
 
   it("stopping a workspace takes its ports down", async () => {

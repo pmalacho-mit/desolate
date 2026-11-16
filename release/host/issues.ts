@@ -47,6 +47,12 @@ export const publish = async (issue: Issue): Promise<string> => {
     } catch {
       throw new Error("not published: another issue is being published right now: try again in a moment");
     }
+    // What was renamed may be a fresh lock, made by another that took the stale one a moment
+    // before (final review): put back, and this one waits.
+    if (Date.now() - fs.statSync(aside).mtimeMs < 10 * 60_000) {
+      fs.renameSync(aside, lock);
+      throw new Error("not published: another issue is being published right now: try again in a moment");
+    }
     fs.rmSync(aside, { recursive: true, force: true });
     fs.mkdirSync(lock);
   }

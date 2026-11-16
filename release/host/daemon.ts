@@ -42,6 +42,7 @@ import { sleep, waitFor } from "../shared/run.ts";
 import { LIMIT, sniffSocket } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
+import { dashboardStale, retire, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
@@ -53,7 +54,7 @@ const RAW_PORTS = new Set([3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 262
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Checkouts = { repo: string; kind: string; name: string; path?: string }[];
-type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
+type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; editorTokenAt: number; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
 export type PortView = {
   workspace: string;
   forwarded: { port: number; url: string }[];
@@ -204,9 +205,10 @@ const serve = async () => {
     client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
   };
 
+  const REQUEST_LINE = /^[A-Z]{1,16} \S+ HTTP\/\d/;
   /** A short line that merely looks like HTTP (Redis's `SET k v`), not a request line, and not
    *  a head that ran to LIMIT: on a raw port, that protocol's. */
-  const nameless = (head: Buffer) => head.length < LIMIT && !/^[A-Z]{1,16} \S+ HTTP\/\d/.test(head.toString("latin1"));
+  const nameless = (head: Buffer) => head.length < LIMIT && !REQUEST_LINE.test(head.toString("latin1"));
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
     // Routed by the name in the first bytes, and only by it. On a port not known to speak a
@@ -273,7 +275,13 @@ const serve = async () => {
     const owner = rawOwner.get(port);
     const entry = owner ? entries.get(owner) : undefined;
     if (!entry || !entry.listeners.has(port)) return client.destroy();
+    // A head that is the start of a request or of TLS, cut off when the wait ran out, is a
+    // browser's (final review): never the port's first workspace's.
+    if (head.length > 0 && (head[0] === 0x16 || REQUEST_LINE.test(head.toString("latin1")) || (/^[A-Z]{1,16}( |$)/.test(head.toString("latin1")) && !head.includes(0x0a)))) return void client.destroy();
     if (head.length > 0) return pipe(client, b.dial(entry.vm, port), head);
+    // A client that already went gets no connection to the owner (final review: each one
+    // held the owner's server until it hung up).
+    if (client.destroyed) return;
     // Silent so far, on a raw port: a server that speaks first gets its client, and its
     // greeting goes out now; but what the client says first is read before any of it goes on.
     // If it is HTTP or TLS (a browser's preconnected socket, used later for a request naming
@@ -282,13 +290,33 @@ const serve = async () => {
     const close = () => (client.destroy(), upstream.destroy());
     upstream.on("error", close);
     upstream.on("close", close);
-    upstream.pipe(client);
+    // And the greeting is looked at before it goes: one that starts like an HTTP response
+    // would be read as the answer to the request a browser later sends on its preconnected
+    // socket, a page at another workspace's origin (final review). Chrome looks for "HTTP"
+    // within the first 4 bytes and refuses anything else (HTTP/0.9) on these ports; no
+    // database's greeting starts so.
+    let greeting = Buffer.alloc(0);
+    const onGreeting = (chunk: Buffer) => {
+      greeting = Buffer.concat([greeting, chunk]);
+      if (/^[\s\S]{0,4}http/i.test(greeting.toString("latin1"))) return close();
+      if (greeting.length < 8) return;
+      upstream.off("data", onGreeting);
+      client.write(greeting);
+      upstream.pipe(client);
+    };
+    upstream.on("data", onGreeting);
     client.resume();
     const first = await sniffSocket(client, 600_000);
     if (client.destroyed) return void upstream.destroy();
-    if (first.sniffed.kind === "tls" || /^[A-Z]{1,16} \S+ HTTP\/\d/.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head))) return close();
+    if (first.sniffed.kind === "tls" || REQUEST_LINE.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head))) return close();
     client.on("error", close);
     client.on("close", close);
+    // The client spoke, and not as a browser: a short greeting held back goes now.
+    if (upstream.listeners("data").includes(onGreeting)) {
+      upstream.off("data", onGreeting);
+      if (greeting.length > 0) client.write(greeting);
+      upstream.pipe(client);
+    }
     if (first.head.length > 0) upstream.write(first.head);
     client.pipe(upstream);
     client.resume();
@@ -336,6 +364,9 @@ const serve = async () => {
       // The root's one surface: the dashboard. The state service checks the name and the
       // origin of every request itself.
       if (sniffed.kind === "http" && sniffed.name === ROOT_HOSTNAME) {
+        // Its token was retired (retired.ts): the cookie a tab still has may be another
+        // program's now, and the root still takes it until bootstrap gives it a new one.
+        if (dashboardStale()) return refuseHttp(client, "503 Service Unavailable", "desolate: the dashboard's token was retired (another program held [::1] on this port). Run `desolate bootstrap`, then `desolate ui` for its new address.\n");
         dashboardUsed = Date.now();
         return pipe(client, toStateService(), head);
       }
@@ -345,6 +376,7 @@ const serve = async () => {
         else client.destroy();
         return;
       }
+      if (stale(target.entry.editorTokenAt)) return refuseHttp(client, "503 Service Unavailable", `desolate: this editor's token was retired (another program held [::1] on this port). Run \`desolate bootstrap\` (or start the workspace), then \`desolate editor ${target.entry.domain}/${target.entry.workspace}\` for its new address.\n`);
       pipe(client, b.dial(target.entry.vm, EDITOR.gate), head);
     });
   };
@@ -365,9 +397,8 @@ const serve = async () => {
     log(`editors on [::1]:${editorHostPort()}: ${error.message}`);
     editors.close();
     // A tab already open on these pages, reloaded, sends its cookie there, and the cookie is
-    // the token: the tokens are retired. The approval page's and the git terminal's are made
-    // again when next asked for; the dashboard's at the next bootstrap (doctor's fix).
-    if (error.code === "EADDRINUSE") for (const name of ["approve-token", "git-token", "ui-token"]) fs.rmSync(path.join(paths.state, name), { force: true });
+    // the token: the tokens are retired (retired.ts says how each is made again).
+    if (error.code === "EADDRINUSE") retire();
   });
   editors.on("listening", () => editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }));
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
@@ -434,10 +465,11 @@ const serve = async () => {
   const sync = async (entry: Entry) => {
     try {
       const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], { input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }), timeoutMs: 15_000 });
-      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; devcontainer?: unknown; folder?: unknown };
+      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; editorTokenAt?: unknown; devcontainer?: unknown; folder?: unknown };
       // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
       // rest is cut to a line.
       entry.editorToken = typeof reply.editorToken === "string" && /^[0-9a-f]{48}$/.test(reply.editorToken) ? reply.editorToken : "";
+      entry.editorTokenAt = typeof reply.editorTokenAt === "number" && Number.isFinite(reply.editorTokenAt) ? reply.editorTokenAt : 0;
       entry.devcontainer = typeof reply.devcontainer === "string" ? printable(reply.devcontainer, 400, " ") : "";
       if (!entry.folder.startsWith("workspace:") && typeof reply.folder === "string" && /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(reply.folder)) entry.folder = reply.folder;
       if (!reply.ok || !Array.isArray(reply.listeners)) throw new Error(reply.error ?? `exit ${result.code}`);
@@ -512,7 +544,7 @@ const serve = async () => {
       existing.proxy = r.proxy;
       return;
     }
-    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", devcontainer: "", folder: "", watchers: [] };
+    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", editorTokenAt: 0, devcontainer: "", folder: "", watchers: [] };
     entries.set(r.vm, entry);
     // A status set in the workspace is a file changing in a share. A VM gets no events for
     // a share, so the host watches (the directory, for a change: it reads nothing) and
@@ -697,7 +729,7 @@ const serve = async () => {
         status: vm.status,
         ...(entry ? {
           devcontainer: entry.devcontainer || undefined,
-          editor: entry.editorToken && !editorError ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
+          editor: entry.editorToken && !editorError && !stale(entry.editorTokenAt) ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
           ports: [...entry.listeners].sort((x, y) => x - y).filter((p) => !hostHeld.has(p)).map((p) => ({ port: p, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}` })),
           // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
           // address on that port reaches the Mac's program (the dashboard says so).

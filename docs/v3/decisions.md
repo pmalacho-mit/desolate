@@ -1314,6 +1314,14 @@ and the threat model, not the author's conclusions. What they found, and what wa
 | Spawns were never counted as ended (a regression of the second round): after three, a domain could start no more | medium | fixed; T2 16 |
 | A domain's limit ignored spawns under way; a `::1` error other than in-use left a port forwarded; status read paths from the root's records; a stale lock could be taken twice | low | each fixed |
 
+**A final review** of the third round found nothing above medium:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| A raw port's server greeting a silent client with an HTTP response: a browser's preconnected socket would read it as the answer to its next request, a page at another workspace's origin (same host, so its cookies) | medium | the greeting's first 8 bytes are looked at before any goes on: one with `HTTP` in its first 5 is closed (Chrome takes no other answer on these ports: HTTP/0.9 is refused off 80 and 443). T2 03, with the greeting in two pieces |
+| Retiring the tokens missed the dashboard's (the root keeps a copy, so a later daemon took the old cookie) and every editor's (made once, kept for good) | medium | `host/retired.ts`: the time of the retiring is kept; the dashboard and each editor are refused (503, with the fix) until their tokens are made again, by bootstrap, or for a stopped workspace by its next start. T1, and T2 03 end to end |
+| A raw client that left at once still got a connection to the owner; a cut-off request line or TLS start went to the owner; a fresh publish lock could be taken as stale; signatures in an older `spawn.json` lost on the CLI's next write | low | each fixed |
+
 **What does not hold, said plainly.** The root's ordinary user, if a domain ever took it
 over, still writes every domain's checkouts and passes on the dashboard's clicks (starting
 and stopping workspaces). What the signing and `vouched()` now guarantee is narrower: it
