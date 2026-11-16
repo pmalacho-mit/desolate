@@ -1,7 +1,7 @@
 // T2 (fake backend). Phase 4 (section 4.3): a domain's secrets. A workspace holds a
 // secret's NAME; the value is put in its place on the way out, by the domain's secrets
 // proxy in the root, only toward the hosts the secret names. The cases are v2's
-// (carryover/proxy/test_addon.py), run here end to end through a workspace's own egress:
+// (tests/unit/proxy/test_addon.py at commit 4f32c77), run here end to end through a workspace's own egress:
 // redirect -> relay -> link -> its proxy -> the domain's secrets proxy -> a stand-in host.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";

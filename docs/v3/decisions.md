@@ -1157,7 +1157,7 @@ hosts are refused, not passed around it.
 
 Not carried over from v2 yet: switching a secret off for a while (`off`, `until`), the
 self-test fixture, TLS passthrough lists, and trusting the CA inside a project's
-devcontainer (`carryover/proxy/install-ca.sh`, `trust-proxy-in-builds.sh`): the devcontainer
+devcontainer (v2's `release/proxy/container/install-ca.sh` and `trust-proxy-in-builds.sh`, at `4f32c77`): the devcontainer
 itself is not started yet.
 
 ## The editor's gate runs in the workspace VM, and that is not a P5 exception
@@ -1262,7 +1262,7 @@ Section 4.8's requirements, and how each came out:
   (opening one costs an exec into the VM), and an answer is taken as complete at its
   Content-Length (the relay that carries a connection into a VM holds it open until the
   caller closes, half a second with socat).
-- **It is a page, not an extension.** See `status-by-section.md`.
+- **It is a page, not an extension.** See `spec-progress.md`.
 - **On the Mac (vz)**, measured on the M1 with five workspaces running: `/state` through the
   forwarder in 1.7 ms (median of 6; one of 92 ms), against the 300 ms budget; a status a
   workspace set reached the event stream 587, 55 and 46 ms after the command that set it
