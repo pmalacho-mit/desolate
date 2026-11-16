@@ -77,6 +77,7 @@ const post = async (what, card) => {
   const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
   const body = await answer.json().catch(() => ({}));
   if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
+  return body;
 };
 
 // The diff, as text: each line a text node in a span classed by its first character.
@@ -224,7 +225,9 @@ const add = (push, issue) => {
     card.busy = true;
     card.button.disabled = true;
     card.hint.textContent = issue ? "publishing..." : "approving...";
-    try { await post("approve", card); card.done = true; card.hint.textContent = issue ? "published: it is on GitHub now (its page is on the dashboard)" : "approved: the push continues in the root"; }
+    // The issue's address, as text: the host took it from gh only if it is this repository's
+    // issue page (shared/issues.ts, issueUrl).
+    try { const answer = await post("approve", card); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : "approved: the push continues in the root"; }
     catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
     finally { card.busy = false; disarm(card); }
   });
