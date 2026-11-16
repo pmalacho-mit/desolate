@@ -209,7 +209,21 @@ else {
       socket.on("error", () => resolve(data));
       setTimeout(() => socket.destroy(), 5000);
     });
-    assert.doesNotMatch(viaRaw, /raw:one/, "the long request did not reach the raw port's owner");
+    // (The raw server echoes what it is sent: its greeting may reach whoever connected, but
+    // the request itself never reaches it.)
+    assert.doesNotMatch(viaRaw, /GET \/x/, "the long request did not reach the raw port's owner");
+    // A preconnected socket on that raw port (silent, so its server's greeting comes), then a
+    // request naming another workspace: closed, never sent on (third review, 2026-11-16).
+    const preconnected = await new Promise<string>((resolve) => {
+      const socket = net.connect(5432, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => setTimeout(() => socket.write(`GET / HTTP/1.1\r\nHost: ${hostOf(urlOf("web/two", 5173)!).replace(":5173", ":5432")}\r\n\r\n`), 1500));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 8000);
+    });
+    assert.doesNotMatch(preconnected, /GET \//, "the request on a preconnected socket did not reach the raw port's owner");
     // A method no list knows, from a page (PURGE): routed by its name, and teaches nothing.
     serve("web/one", "one 5190");
     assert.ok(await until(() => urlOf("web/one", 5190) !== undefined));

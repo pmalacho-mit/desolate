@@ -26,7 +26,9 @@ const LEDGER = () => path.join(paths.state, "spawn.json");
 type Ledger = { max: Record<string, number>; started: Record<string, { parent: string; at: string; parentKey?: string }>; used: Record<string, number> };
 const ledger = (): Ledger => {
   const value = readJson<Partial<Ledger>>(LEDGER(), {});
-  return { max: value.max ?? {}, started: value.started ?? {}, used: readJson<Record<string, number>>(USED(), {}) };
+  // (Signatures an older desolate kept in spawn.json still count, once: a request run just
+  // before an upgrade is not run again after it.)
+  return { max: value.max ?? {}, started: value.started ?? {}, used: { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) } };
 };
 /** The requests run, in a file of their own that only the daemon writes: spawn.json is also
  *  written by the CLI (a started record, a limit), and one whole-file write must not undo
@@ -110,7 +112,9 @@ export const check = (r: Signed & { mac: string }, exists: (vm: string) => boole
     const max = maxFor(r.domain);
     if (max === 0) return `${r.domain} does not let its workspaces start workspaces (on the Mac: desolate domain ${r.domain} spawn --max none)`;
     const live = startedIn(r.domain, exists).length;
-    if (max !== null && live >= max) return `${r.domain} already has ${live} workspace(s) started by its workspaces, its limit (desolate domain ${r.domain} spawn --max <n>)`;
+    // With those under way, which are not recorded until they are up (third review).
+    const counted = live + (running.get(r.domain) ?? 0);
+    if (max !== null && counted >= max) return `${r.domain} already has ${counted} workspace(s) started (or being started) by its workspaces, its limit (desolate domain ${r.domain} spawn --max <n>)`;
   } else {
     const record = value.started[`${r.domain}/${r.name}`];
     if (record?.parent !== r.parent) return `${r.domain}/${r.name} was not started by ${r.parent}${record ? "" : " (a person started it: only a person removes it)"}`;

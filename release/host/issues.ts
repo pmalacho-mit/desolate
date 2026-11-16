@@ -39,7 +39,15 @@ export const publish = async (issue: Issue): Promise<string> => {
     fs.mkdirSync(lock);
   } catch {
     if (Date.now() - fs.statSync(lock).mtimeMs < 10 * 60_000) throw new Error("not published: another issue is being published right now, from another page or terminal: try again in a moment");
-    fs.rmSync(lock, { recursive: true, force: true });
+    // A stale lock is taken by renaming it aside, which only one of two can do (third review:
+    // removing it then making it let both through).
+    const aside = `${lock}.stale-${process.pid}`;
+    try {
+      fs.renameSync(lock, aside);
+    } catch {
+      throw new Error("not published: another issue is being published right now: try again in a moment");
+    }
+    fs.rmSync(aside, { recursive: true, force: true });
     fs.mkdirSync(lock);
   }
   const forget = () => {

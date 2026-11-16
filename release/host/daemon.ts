@@ -14,7 +14,7 @@
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
 import { printable } from "../shared/text.ts";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import type { Size } from "../shared/size.ts";
@@ -142,12 +142,16 @@ const serve = async () => {
   /** What holds such a port, as this user's lsof sees it: said to the person, who otherwise
    *  had to guess (dogfooding: 3000 was another macOS user's, which lsof cannot show). */
   const heldBy = new Map<number, string>();
+  // Asked of lsof in the background: run while the forwarder waited, it held up every timer,
+  // and a 400 ms sniff could end before bytes already sent were read (T2 03, 2026-11-16).
   const holderOf = (port: number) => {
     if (!heldBy.has(port)) {
-      const found = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"], { encoding: "utf8", timeout: 3000 }).stdout ?? "";
-      const pid = /^p(\d+)/m.exec(found)?.[1];
-      const command = /^c(.+)/m.exec(found)?.[1];
-      heldBy.set(port, pid && command ? `${printable(command, 40)}, pid ${pid}` : "not a program of yours: another user's, or the system's");
+      heldBy.set(port, "a program on this Mac");
+      execFile("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"], { encoding: "utf8", timeout: 3000 }, (_error, found) => {
+        const pid = /^p(\d+)/m.exec(found ?? "")?.[1];
+        const command = /^c(.+)/m.exec(found ?? "")?.[1];
+        if (heldBy.has(port)) heldBy.set(port, pid && command ? `${printable(command, 40)}, pid ${pid}` : "not a program of yours: another user's, or the system's");
+      });
     }
     return heldBy.get(port)!;
   };
@@ -200,6 +204,9 @@ const serve = async () => {
     client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
   };
 
+  /** A short line that merely looks like HTTP (Redis's `SET k v`), not a request line, and not
+   *  a head that ran to LIMIT: on a raw port, that protocol's. */
+  const nameless = (head: Buffer) => head.length < LIMIT && !/^[A-Z]{1,16} \S+ HTTP\/\d/.test(head.toString("latin1"));
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
     // Routed by the name in the first bytes, and only by it. On a port not known to speak a
@@ -232,7 +239,7 @@ const serve = async () => {
     // On a raw port, one short line that merely looks like HTTP (Redis's `SET k v`) is that
     // protocol's. A real request line, or a head that ran to LIMIT, is HTTP: refused or sent
     // on below by its name, never to the port's first workspace (audit of the fixes).
-    if (raw && sniffed.kind === "http" && sniffed.name === null && head.length < LIMIT && !/^[A-Z]{1,16} \S+ HTTP\/\d/.test(head.toString("latin1"))) sniffed = { kind: "raw" };
+    if (raw && sniffed.kind === "http" && sniffed.name === null && nameless(head)) sniffed = { kind: "raw" };
     if (sniffed.kind === "http" || sniffed.kind === "tls") {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
@@ -266,7 +273,25 @@ const serve = async () => {
     const owner = rawOwner.get(port);
     const entry = owner ? entries.get(owner) : undefined;
     if (!entry || !entry.listeners.has(port)) return client.destroy();
-    pipe(client, b.dial(entry.vm, port), head);
+    if (head.length > 0) return pipe(client, b.dial(entry.vm, port), head);
+    // Silent so far, on a raw port: a server that speaks first gets its client, and its
+    // greeting goes out now; but what the client says first is read before any of it goes on.
+    // If it is HTTP or TLS (a browser's preconnected socket, used later for a request naming
+    // another workspace, with its cookies: third review), both ends are closed.
+    const upstream = b.dial(entry.vm, port);
+    const close = () => (client.destroy(), upstream.destroy());
+    upstream.on("error", close);
+    upstream.on("close", close);
+    upstream.pipe(client);
+    client.resume();
+    const first = await sniffSocket(client, 600_000);
+    if (client.destroyed) return void upstream.destroy();
+    if (first.sniffed.kind === "tls" || /^[A-Z]{1,16} \S+ HTTP\/\d/.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head))) return close();
+    client.on("error", close);
+    client.on("close", close);
+    if (first.head.length > 0) upstream.write(first.head);
+    client.pipe(upstream);
+    client.resume();
   };
 
   // Every workspace's editor, on one host port, by the editor's own hostname and no other.
@@ -339,6 +364,10 @@ const serve = async () => {
     editorError = error.code === "EADDRINUSE" ? `a program on this machine holds [::1]:${editorHostPort()}, where browsers look first` : `[::1]: ${error.message}`;
     log(`editors on [::1]:${editorHostPort()}: ${error.message}`);
     editors.close();
+    // A tab already open on these pages, reloaded, sends its cookie there, and the cookie is
+    // the token: the tokens are retired. The approval page's and the git terminal's are made
+    // again when next asked for; the dashboard's at the next bootstrap (doctor's fix).
+    if (error.code === "EADDRINUSE") for (const name of ["approve-token", "git-token", "ui-token"]) fs.rmSync(path.join(paths.state, name), { force: true });
   });
   editors.on("listening", () => editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }));
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
@@ -376,13 +405,11 @@ const serve = async () => {
         six.on("error", (error: NodeJS.ErrnoException) => {
           if (forwards6.get(port) === six) forwards6.delete(port);
           if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return void hostHeld.delete(port);
-          // Something else answers on [::1]:<port>: a browser may go there with a workspace's
-          // name and cookies. Not forwarded at all, then, and said so, as for 127.0.0.1.
-          if (error.code === "EADDRINUSE") {
-            if (forwards.get(port) === server) forwards.delete(port);
-            server.close();
-            hostHeld.set(port, Date.now());
-          }
+          // Something else answers on [::1]:<port> (or it could not be held): a browser may go
+          // there with a workspace's name and cookies. Not forwarded at all, then, and said so.
+          if (forwards.get(port) === server) forwards.delete(port);
+          server.close();
+          hostHeld.set(port, Date.now());
         });
         forwards6.set(port, six);
         six.listen({ port, host: "::1", exclusive: true, ipv6Only: true });
@@ -743,8 +770,11 @@ const serve = async () => {
       }
     }
     const ended = () => {
-      if (spawning) void import("./spawn.ts").then((m) => m.end(spawning!));
+      // (Taken before it is cleared: the import resolves later. Reading it there ended
+      // nothing, and after three spawns a domain could start no more: third review.)
+      const domain = spawning;
       spawning = null;
+      if (domain) void import("./spawn.ts").then((m) => m.end(domain));
     };
     log(`dashboard: desolate ${argv.join(" ")}`);
     let child: ReturnType<typeof spawn>;
@@ -888,6 +918,10 @@ const serve = async () => {
           unregister(request.vm!);
           tellRoot().catch(() => {});
           reply = { ok: true };
+        } else if (request.op === "editor") {
+          // Whether this daemon holds its port, on both loopback addresses: cheap, for the
+          // check before an address with a token in it is printed.
+          reply = { ok: true, editor: { port: editorHostPort(), error: editorError } };
         } else if (request.op === "ports") {
           await Promise.all([...entries.values()].map(sync));
           reconcile();
@@ -1028,9 +1062,17 @@ export const disconnectWorkspace = async (vm: string) => {
 
 /** Why the daemon could not take the editors' port ("" when it holds it), or null when the
  *  daemon does not answer. Asked without starting a daemon: doctor reports, it does not fix. */
+/** Refuses unless this daemon says it holds its port on both loopback addresses: an address
+ *  with a token in it is printed only then (else it would be sent to whatever holds it). Not
+ *  known is not held (P6): a daemon that does not answer refuses too. */
+export const tokenAddressesSafe = async () => {
+  const held = await editorPortError();
+  if (held === null) refuse("not printed: the host daemon did not say it holds its port, and this address carries a token", "desolate doctor");
+  if (held) refuse(`not printed: ${held}, and this address carries a token`, "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap");
+};
 export const editorPortError = async (): Promise<string | null> => {
   if (!(await alive())) return null;
-  const reply = await ask({ op: "ports" }).catch(() => null);
+  const reply = await ask({ op: "editor" }, 10_000).catch(() => null);
   const editor = reply?.editor as { error?: unknown } | undefined;
   return reply?.ok === true ? String(editor?.error ?? "") : null;
 };
@@ -1065,8 +1107,7 @@ export const ui = async (): Promise<{ dashboard: string; approvals: string }> =>
   if (!/^[0-9a-f]{48}$/.test(token)) refuse("this stack has no dashboard credential yet", "desolate bootstrap");
   // An address with a token in it is printed only when this daemon holds its port, on both
   // loopback addresses: else it would be sent to whatever does.
-  const held = await editorPortError();
-  if (held) refuse(`not printed: ${held}, and this address carries the token`, `stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap`);
+  await tokenAddressesSafe();
   const { approveAddress } = await import("./approve-web.ts");
   return { dashboard: `http://${ROOT_HOSTNAME}:${editorHostPort()}/?tkn=${token}`, approvals: approveAddress() };
 };

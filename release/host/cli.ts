@@ -283,10 +283,9 @@ const main = async (argv: string[]): Promise<number> => {
     if (values.web === true) {
       // The page's address carries this stack's token: it is the person's to open in a
       // browser on this Mac, and not to paste anywhere else.
-      const { ensureDaemon, editorPortError } = await import("./daemon.ts");
+      const { ensureDaemon, tokenAddressesSafe } = await import("./daemon.ts");
       await ensureDaemon();
-      const held = await editorPortError();
-      if (held) refuse(`not printed: ${held}, and this address carries the token`, "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap");
+      await tokenAddressesSafe();
       const address = (await import("./approve-web.ts")).approveAddress();
       out(`approvals    ${address}`);
       if (values.open === true) openInBrowser(address);
@@ -363,8 +362,9 @@ const main = async (argv: string[]): Promise<number> => {
     const { ensureGitVm, ensureGitClone } = await import("./git-vm.ts");
     await ensureGitVm(err);
     if (repo) await ensureGitClone(parseRepo(repo)!);
-    const { ensureDaemon } = await import("./daemon.ts");
+    const { ensureDaemon, tokenAddressesSafe } = await import("./daemon.ts");
     await ensureDaemon();
+    await tokenAddressesSafe();
     const address = (await import("./git-web.ts")).gitAddress(repo);
     out(`git          ${address}`);
     if (gitValues.open === true) openInBrowser(address);
