@@ -179,11 +179,23 @@ const DesolateMarkdown = (() => {
 
   // ---------------------------------------------------------------- blocks
   const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-  const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/;
+  // No two runs of [ \t]* side by side, here or in TABLE_RULE: on a line of 65,000 spaces they
+  // backtracked for 15 s (audit, 2026-11-16). The closing #s go by hand (headingText).
+  const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+(.*))?$/;
   const RULE = /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/;
   const QUOTE = /^ {0,3}> ?(.*)$/;
   const ITEM = /^( {0,3})([-*+]|\d{1,9}[.)])([ \t]+(.*)|[ \t]*)$/;
-  const TABLE_RULE = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+  const TABLE_RULE_TRIMMED = /^ {0,3}\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?$/;
+  const TABLE_RULE = { test: (line) => TABLE_RULE_TRIMMED.test(line.trimEnd()) };
+  /** A heading's text: without its trailing blanks, and without a closing run of #s that a
+   *  blank (or nothing) comes before. */
+  const headingText = (raw) => {
+    let text = raw.trimEnd();
+    let end = text.length;
+    while (end > 0 && text[end - 1] === "#") end -= 1;
+    if (end < text.length && (end === 0 || text[end - 1] === " " || text[end - 1] === "\t")) text = text.slice(0, end).trimEnd();
+    return text;
+  };
   const cells = (line) => {
     let row = line.trim();
     if (row.startsWith("|")) row = row.slice(1);
@@ -225,7 +237,7 @@ const DesolateMarkdown = (() => {
         continue;
       }
       if ((m = HEADING.exec(line))) {
-        out.push(node(`h${m[1].length}`, {}, inline(m[2] || "")));
+        out.push(node(`h${m[1].length}`, {}, inline(headingText(m[2] || ""))));
         i += 1;
         continue;
       }

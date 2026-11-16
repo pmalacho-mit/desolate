@@ -19,7 +19,7 @@ export const ID = /^[0-9a-z]{6,12}-[0-9a-f]{8}$/;
  *  formatting (what would make the text on the approval page not the text published). */
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
 /** The same for a body, which keeps its newlines and tabs. */
-const HIDDEN_IN_BODY = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
+const HIDDEN_IN_BODY = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
 
 export type Draft = { repo: string; title: string; body: string; labels: string[] };
 
@@ -30,7 +30,7 @@ export const draftOf = (value: unknown): Draft | { error: string } => {
   const title = typeof v.title === "string" ? v.title.trim() : "";
   if (!title || title.length > LIMIT.title) return { error: `an issue needs a title, of at most ${LIMIT.title} characters` };
   if (HIDDEN.test(title)) return { error: "the title holds a control or invisible character" };
-  const body = typeof v.body === "string" ? v.body.replace(/\r\n/g, "\n") : v.body === undefined ? "" : null;
+  const body = typeof v.body === "string" ? v.body.replace(/\r\n?/g, "\n") : v.body === undefined ? "" : null;
   if (body === null || body.length > LIMIT.body) return { error: `the body is text, of at most ${LIMIT.body} characters` };
   if (HIDDEN_IN_BODY.test(body)) return { error: "the body holds a control or invisible character (newlines and tabs are fine)" };
   const raw = v.labels === undefined ? [] : v.labels;
@@ -76,7 +76,9 @@ export type Issue = Draft & {
 /** The issue's page, if it is one GitHub gives for this repository: the only link shown. */
 export const issueUrl = (repo: string, value: unknown): string | null => {
   const r = parseRepo(repo);
-  return r && typeof value === "string" && new RegExp(`^https://github\\.com/${r.owner.replace(/\./g, "\\.")}/${r.name.replace(/\./g, "\\.")}/issues/\\d{1,9}$`).test(value.trim()) ? value.trim() : null;
+  // Case-insensitive: GitHub answers with the repository's own casing, which may not be the
+  // one it was registered with (a publish that worked was reported as failed: audit).
+  return r && typeof value === "string" && new RegExp(`^https://github\\.com/${r.owner.replace(/\./g, "\\.")}/${r.name.replace(/\./g, "\\.")}/issues/\\d{1,9}$`, "i").test(value.trim()) ? value.trim() : null;
 };
 
 declare namespace issueUrl {
