@@ -17,8 +17,8 @@ way, with the same limits. Neither needs anything from the other.
 your repository in a workspace, in under half an hour (most of it the first download). Below:
 the one rule to keep, the shape of the stack, the commands, and the principles; the details
 are in [docs/reference.md](docs/reference.md). The design and its
-reasons are in [`move-to-vms.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/move-to-vms.md); the security decisions and their
-audits in [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/v3/decisions.md).
+reasons are in [`move-to-vms.md`](https://github.com/pmalacho-mit/desolate/blob/main/move-to-vms.md); the security decisions and their
+audits in [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/desolate/blob/main/docs/v3/decisions.md).
 
 ## The one rule you keep
 
@@ -32,7 +32,7 @@ VM, and the root VM holds the keys that write to your remotes. So:
 - in the root you **look and decide**. The root gives you a dashboard, a diff that is plain
   text, and a terminal with ordinary git (`fetch`, `log`, `diff`, `checkout`, `merge`,
   `push`). All of that is safe on a tree from a workspace, and desolate's tests attack it
-  ([`tests/v3/t2/10-hostile-content.test.ts`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/tests/v3/t2/10-hostile-content.test.ts));
+  ([`tests/v3/t2/10-hostile-content.test.ts`](https://github.com/pmalacho-mit/desolate/blob/main/tests/v3/t2/10-hostile-content.test.ts));
 - in the root you do **not** build, install, test or open the tree in a tool that runs
   tasks. `git checkout dev/some-branch` is fine; `npm install` after it is running that
   branch's code beside your keys. There is no editor in the root, on purpose.

@@ -3,8 +3,7 @@
 Each piece here is something v3 still lacks, kept with its v2 tests so that whoever ports it
 has it in front of them rather than in history. Nothing here is shipped, run or type-checked:
 imports point at v2 files that no longer exist, or at their v3 replacements by their old
-names. All of v2 is in history at commit `4f32c77`, and on the `release` branch until v3 is
-published there.
+names. All of v2 is in history at commit `4f32c77`.
 
 What v2 had and v3 has replaced is gone from here: completion (`release/completion.bash`),
 the dispatchers and the suede factory (`release/recipes/`), status (`release/workspace/status`,

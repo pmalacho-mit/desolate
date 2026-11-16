@@ -121,7 +121,7 @@ that names a command, a malformed object: the whole bundle is refused, and you a
 workspace are told why); LFS objects must hash to their names; the small JSON files are
 size-limited and validated; nothing in the outbox is followed if it is a link. The root's
 git is configured so that a checked-out tree cannot make it run anything.
-[`docs/v3/decisions.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/v3/decisions.md) has the audit, and what is left by
+[`docs/v3/decisions.md`](https://github.com/pmalacho-mit/desolate/blob/main/docs/v3/decisions.md) has the audit, and what is left by
 nature.
 
 **What reaches your terminal.** Text a VM, a repository or GitHub wrote (a branch name, a
@@ -268,7 +268,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | P5: forced egress against root in the VM | yes | **T3**; Mac: measured for TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
 | Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T3 | |
 | Secrets: per domain, substituted for the hosts and headers they name, proven by the upstream's certificate, scrubbed from responses, switched off and on (`--ttl`) | yes | T2, T3 | v2's self-test fixture; "learn" as a timed mode |
-| **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T3 | desolate's workspace extension ([`carryover/editor/extension`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/carryover/editor/extension): mapping `localhost` URLs) is not ported |
+| **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T3 | desolate's workspace extension ([`carryover/editor/extension`](https://github.com/pmalacho-mit/desolate/blob/main/carryover/editor/extension): mapping `localhost` URLs) is not ported |
 | The project's devcontainer, from its own `devcontainer.json` (features included), inside the workspace VM; `exec` and the editor enter it | yes | T2 (an image, a Dockerfile, a failing spec, no spec, a changed spec, a compose spec and its ports); on the M1, a public image with a feature, compose with Docker outside and inside | a compose service that is not glibc gets no port relay and no editor |
 | The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T3 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
 | The Mac backend (`vz`) | yes | **T4 on an M1**: read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over a real share, the editor, a secret | |

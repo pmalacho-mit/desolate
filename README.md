@@ -19,7 +19,7 @@ all without giving up the ergonomics key to their workflow.
 
 This repo is a [suede dependency](https://github.com/pmalacho-mit/suede).
 
-To see the installable source code along with the full documentation, please checkout the [release branch](https://github.com/pmalacho-mit/isolated-devcontainers-suede/tree/release).
+To see the installable source code along with the full documentation, please checkout the [release branch](https://github.com/pmalacho-mit/desolate/tree/release).
 
 ## Status: v3 in progress on this branch
 
