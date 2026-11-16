@@ -52,6 +52,57 @@ One line, at most 200 characters. Colours: `gray`, `blue`, `green`, `yellow`, `o
 done, gray withdrawn (say why). It is shown to the person and read by scripts. It is never
 acted on: `green` pushes nothing.
 
+## Other workspaces: starting, following and closing them
+
+You can start another workspace beside you, in your domain only, labelled as started by
+you, and the person sees it. **Do it only when the work needs it:** a separate piece of work
+that should run apart from yours (an issue you found that needs its own branch, a long check
+you want run in parallel). Each one is a VM on the person's Mac, with its own memory, and one
+more thing for them to look at and clean up. For a question you can answer yourself, a
+script, or a second look at your own branch, stay where you are. If a separate piece of work
+can wait for the person, offering it as an issue (`desolate issue offer`, below) is often
+better: they decide when it runs.
+
+```bash
+desolate domain stats                  # this domain's workspaces, who started each, its limit, the Mac
+desolate spawn --name fix-docs --branch task/fix-docs -- <command> <args...>
+desolate events --follow               # what happens in this domain, one JSON object per line
+desolate close fix-docs                # remove one you started, once nothing in it would be lost
+```
+
+- `desolate domain stats` first: it shows how many are already started, and any limit the
+  person set (none, unless they set one; they can also turn it off). Close each one you
+  started once its work is committed and offered: `desolate close <name>`.
+- The command after `--` runs in the new workspace as its agent, in its first checkout, as
+  the words you give (nothing reads them as a shell line). Without one, the workspace is
+  only made. It has the domain's secrets by name, like you, and not your shell's state.
+- Its work reaches you as any workspace's does: its branch, once committed, is in your clone
+  (`git branch -a`), and `desolate status board` shows what it says.
+- `desolate events` says when it is made (`workspace-made`, with `startedBy`), stopped or
+  removed, what it offered, its status, and how each of your requests ended (`request`, with
+  `ok` and why not). `--all` starts from the beginning of what is kept.
+- `desolate close <name>` works only on one you started, and only if every checkout in it
+  has nothing uncommitted, untracked or stashed: commit there first. Its branches stay. If
+  you are removed first, the ones you started stay, flagged for the person.
+
+## GitHub issues: offer them, the person publishes them
+
+When you find work that should be tracked where everyone can see it (a bug beside your task,
+a follow-up), offer it as a GitHub issue. You cannot create one, and need not try: the person
+reads it on their dashboard, may edit it, and publishes it as themselves.
+
+```bash
+desolate issue offer --title "Login loops after a password reset" --body-file notes.md --label bug
+```
+
+- In a checkout, it is for that repository; else name it: `--repo <owner>/<repo>`.
+- The body is GitHub's Markdown. Keep it to what the person needs: what you saw, how to see
+  it again, what you think it needs. At most 64 KiB; no control or invisible characters.
+- Labels must already exist in the repository. A label like `desolate:run` may make a
+  recipe start an agent on the issue once it is published: offer it only when the task says.
+- `desolate events --follow` says when it is published (`issue-published`, with its page) or
+  rejected (`issue-rejected`).
+
 ## Network: named HTTP and HTTPS, through a proxy; nothing else
 
 This VM has no route to anything. Its one way out is a proxy that belongs to this workspace.

@@ -39,7 +39,11 @@ import * as fs from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
-import { hostArgv } from "../shared/actions.ts";
+import { hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
+import { stateEvents } from "../shared/events.ts";
+import { writeJson } from "../shared/json.ts";
+import { outlived } from "../shared/plan.ts";
+import type { Stats } from "../shared/stats.ts";
 import { isBranch, isCommit, isLocalhostSuffix, isSlug, parseRepo, pullRequestUrl, ROOT_HOSTNAME, ROOT_UI } from "../shared/names.ts";
 import { statusView } from "../shared/status.ts";
 import type { Head } from "../shared/status.ts";
@@ -47,7 +51,9 @@ import { refusal, sameSecret } from "../shared/gate.ts";
 import * as domains from "./domains.ts";
 import { branchesOf, refusalsOf } from "./outbox.ts";
 import { forge, safeIn } from "./git.ts";
-import { APPROVALS, clonePath, domainPath, GITCONFIG, ROOT } from "./layout.ts";
+import { APPROVALS, clonePath, domainPath, GITCONFIG, HOST_QUEUE, ROOT } from "./layout.ts";
+import * as issues from "./issues.ts";
+import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
 import * as proxy from "./proxy/manage.ts";
 import { landedFor, pushedList } from "./pushed.ts";
@@ -79,7 +85,7 @@ const cookieName = (token: string) => `desolate_ui_${createHash("sha256").update
 
 // ------------------------------------------------------------------ state
 type HostFacts = {
-  stack?: { instance: string; backend: string; isolated: boolean; editorPort: number; approver: string | null; rootHostname?: string; gitHostname?: string };
+  stack?: { instance: string; backend: string; isolated: boolean; editorPort: number; approver: string | null; rootHostname?: string; gitHostname?: string; mac?: { cpus: number; memoryMiB: number } };
   workspaces?: Record<string, { status: string; devcontainer?: string; editor?: string; ports?: { port: number; url: string }[]; reserved?: number[] }>;
   at?: string;
 };
@@ -114,10 +120,12 @@ const snapshot = () => {
     branches: branchesOf(d.slug, d.repos).map((b) => ({ ...b, landed: landedFor(pushed, b.repo, b.branch, b.commit) })),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
-    workspaces: domains.workspaces(d.slug).map((w) => {
+    workspaces: domains.workspaces(d.slug).map((w, _, all) => {
       const says = statusView(path.join(domainPath(d.slug), "repos"), w);
       return {
         workspace: w.workspace, vm: w.vm, state: w.state, size: w.size ?? null,
+        // Who asked for it (null: the person), and whether that one is gone before it.
+        startedBy: w.startedBy?.workspace ?? null, outlived: outlived(all, w),
         // `branch` is what the checkout started on; `head`, what it has checked out now (its
         // HEAD, read as data: the host's daemon nudges when one changes).
         checkouts: w.checkouts.map((c, i) => ({ repo: c.repo, branch: c.branch, kind: c.kind, head: settled(`${d.slug}/${w.workspace}/${c.repo}`, says.checkouts[i]?.head ?? null) })),
@@ -133,7 +141,15 @@ const snapshot = () => {
     hostConnected: Date.now() - hostSeen < 150_000,
     repos: repos.list().map((r) => ({ repo: r.repo, pushable: r.pushable, defaultBranch: r.defaultBranch })),
     domains: list,
+    spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? null])),
     offers: offers.allOffers(),
+    // Issues workspaces offered: every one still waiting, and the last few done with.
+    issues: (() => {
+      const all = issues.list();
+      // (Done with: their title and page are enough; the body is sent only while it waits.)
+      const done = all.filter((i) => i.state === "published" || i.state === "rejected").slice(-10).map((i) => ({ ...i, body: "" }));
+      return [...all.filter((i) => i.state === "offered" || i.state === "approving"), ...done];
+    })(),
     refused: domains.domains().flatMap((d) => refusalsOf(d.slug)),
     approvals: pendingApprovals(),
     actions: actions.slice(-12),
@@ -145,14 +161,21 @@ let last = "";
 const subscribers = new Set<ServerResponse>();
 const publish = () => {
   let text: string;
+  let state: ReturnType<typeof snapshot>;
   try {
-    text = JSON.stringify(snapshot());
+    state = snapshot();
+    text = JSON.stringify(state);
   } catch (error) {
     console.error(`stated: the state could not be read: ${String(error)}`);
     return;
   }
   if (text === last) return;
   last = text;
+  try {
+    forDomains(state);
+  } catch (error) {
+    console.error(`stated: a domain's stats or events could not be written: ${String(error)}`);
+  }
   for (const subscriber of subscribers) subscriber.write(`data: ${text}\n\n`);
   for (const wake of [...stateWaiters]) wake();
 };
@@ -169,10 +192,122 @@ const changed = () => {
   }, 40);
 };
 
+// ------------------------------------------------------------------ each domain's own view
+// Into each domain's inbox, which its workspaces read and cannot write: its stats
+// (`desolate domain stats` there) and its events (`desolate events`). Only that domain's.
+type Snapshot = ReturnType<typeof snapshot>;
+let before: Snapshot | null = null;
+const written = new Map<string, string>();
+const seq = new Map<string, number>();
+const EVENTS_MAX = 512 * 1024;
+const forDomains = (state: Snapshot) => {
+  for (const d of state.domains) {
+    const inbox = path.join(domainPath(d.slug), "inbox");
+    if (!fs.existsSync(inbox)) continue;
+    const running = d.workspaces.filter((w) => w.host?.status === "running");
+    const stats: Omit<Stats, "at"> = {
+      v: 1, domain: d.slug, title: d.title, repos: d.repos,
+      spawn: { max: state.spawnMax[d.slug] ?? null, used: d.workspaces.filter((w) => w.startedBy).length },
+      mac: state.stack?.mac ?? null,
+      running: { workspaces: running.length, memoryMiB: running.reduce((sum, w) => sum + (w.size?.memoryMiB ?? 0), 0) },
+      workspaces: d.workspaces.map((w) => ({
+        workspace: w.workspace, state: w.state, vm: w.host?.status ?? null, startedBy: w.startedBy, outlived: w.outlived, size: w.size,
+        checkouts: w.checkouts.map((c) => ({ repo: c.repo, branch: c.branch, head: c.head ? (c.head.branch ?? c.head.commit ?? null) : null })),
+        status: w.says.status ? { color: String(w.says.status.color), message: printable(w.says.status.message, 200) } : null,
+      })),
+    };
+    const text = JSON.stringify(stats);
+    if (written.get(d.slug) !== text) {
+      writeJson(path.join(inbox, "domain.json"), { ...stats, at: new Date().toISOString() });
+      written.set(d.slug, text);
+    }
+  }
+  // Events: what changed since the last state, each to the domain it is about. (The first
+  // state is where things stand, not news.)
+  if (before) {
+    const by = new Map<string, unknown[]>();
+    for (const e of stateEvents(before as Parameters<typeof stateEvents>[0], state as Parameters<typeof stateEvents>[1])) {
+      const slug = (e as { domain?: unknown }).domain;
+      if (typeof slug !== "string" || !state.domains.some((d) => d.slug === slug) && !before.domains.some((d) => d.slug === slug)) continue;
+      by.set(slug, [...(by.get(slug) ?? []), e]);
+    }
+    for (const [slug, events] of by) appendEvents(slug, events);
+  }
+  before = state;
+};
+const appendEvents = (slug: string, events: unknown[]) => {
+  const file = path.join(domainPath(slug), "inbox", "events.jsonl");
+  if (events.length === 0 || !fs.existsSync(path.dirname(file))) return;
+  let n = seq.get(slug) ?? lastSeq(file);
+  fs.appendFileSync(file, events.map((e) => `${JSON.stringify({ ...(e as object), seq: (n += 1) })}\n`).join(""), { mode: 0o644 });
+  seq.set(slug, n);
+  // Kept to its last half when it grows past half a MiB: a reader follows by `seq`.
+  if (fs.statSync(file).size > EVENTS_MAX) {
+    const kept = fs.readFileSync(file, "utf8").split("\n").filter(Boolean);
+    fs.writeFileSync(`${file}.new`, `${kept.slice(Math.floor(kept.length / 2)).join("\n")}\n`, { mode: 0o644 });
+    fs.renameSync(`${file}.new`, file);
+  }
+};
+/** How a workspace's spawn or close ended, as the host reported it: an event in that domain,
+ *  so the workspace that asked learns whether it was done, and if not, why. */
+const requestEnded = (action: Action) => {
+  if (!SIGNED_KINDS.has(action.kind) || !isSlug(action.args.domain)) return;
+  appendEvents(action.args.domain, [{
+    v: 1, at: new Date().toISOString(), type: "request", source: "root", request: action.kind === "workspace.spawn" ? "spawn" : "close",
+    domain: action.args.domain, workspace: isSlug(action.args.workspace) ? action.args.workspace : null, parent: isSlug(action.args.parent) ? action.args.parent : null,
+    ok: action.code === 0, said: action.lines.slice(-4).map((line) => printable(line, 300)).join(" / "),
+  }]);
+};
+const lastSeq = (file: string) => {
+  try {
+    const lines = fs.readFileSync(file, "utf8").trimEnd().split("\n");
+    return Number((JSON.parse(lines[lines.length - 1] ?? "{}") as { seq?: unknown }).seq) || 0;
+  } catch {
+    return 0;
+  }
+};
+
+// ------------------------------------------------------------------ a workspace's requests
+// A workspace's signed spawn or close, queued by rootd (rootd.ts): handed to the host as an
+// action, which runs it only once it has checked the signature (host/spawn.ts). Renamed as
+// it is taken, so rootd still counts it against the domain's limit until the workspace
+// exists; swept after half an hour.
+const takeQueue = () => {
+  let names: string[];
+  try {
+    names = fs.readdirSync(HOST_QUEUE);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    const file = path.join(HOST_QUEUE, name);
+    if (name.endsWith(".taken")) {
+      try {
+        if (Date.now() - fs.statSync(file).mtimeMs > 30 * 60_000) fs.rmSync(file, { force: true });
+      } catch {
+        /* gone */
+      }
+      continue;
+    }
+    if (!/^[0-9a-z]+-[0-9a-f]{10}\.json$/.test(name)) continue;
+    try {
+      const item = JSON.parse(fs.readFileSync(file, "utf8")) as { kind?: unknown; args?: Record<string, string> };
+      fs.renameSync(file, file.replace(/\.json$/, ".taken"));
+      if (typeof item.kind === "string" && SIGNED_KINDS.has(item.kind) && item.args) act(item.kind, item.args, { signed: true });
+      changed();
+    } catch (error) {
+      console.error(`stated: a workspace's request could not be taken: ${String(error)}`);
+      fs.rmSync(file, { force: true });
+    }
+  }
+};
+
 // ------------------------------------------------------------------ actions
 const quote = (word: string) => (/^[A-Za-z0-9_./:=@-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`);
 
-const act = (kind: string, args: Record<string, string>): Action | { error: string } => {
+const act = (kind: string, args: Record<string, string>, from: { signed?: boolean } = {}): Action | { error: string } => {
+  // A spawn or a close is a workspace's signed request, never a click on the dashboard.
+  if (SIGNED_KINDS.has(kind) && !from.signed) return { error: `'${kind}' is asked for by a workspace, not from the dashboard` };
   const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const record = (command: string): Action => {
     const action: Action = { id, kind, args, command, state: "queued", lines: [], at: new Date().toISOString() };
@@ -184,7 +319,8 @@ const act = (kind: string, args: Record<string, string>): Action | { error: stri
   const argv = hostArgv(kind, args);
   if (!argv) return { error: `'${kind}' with those arguments is not something the dashboard does` };
   // The command shown is the one the host will run: the dashboard teaches the CLI.
-  const action = record(`desolate ${argv.map(quote).join(" ")}`);
+  const shown = `desolate ${argv.map(quote).join(" ")}`;
+  const action = record(shown.length > 600 ? `${shown.slice(0, 600)} ...` : shown);
   for (const wake of [...waiters]) wake();
   return action;
 };
@@ -262,6 +398,8 @@ const STATIC: Record<string, [string, string]> = {
   // Syntax colour for the diff (shared/ui/highlight.js says how it is kept to colour).
   "/highlight.js": ["../../shared/ui/highlight.js", "text/javascript; charset=utf-8"],
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],
+  // An offered issue's preview: Markdown built as elements, never as HTML.
+  "/markdown.js": ["../../shared/ui/markdown.js", "text/javascript; charset=utf-8"],
 };
 
 const fromHost = (req: IncomingMessage) => {
@@ -292,9 +430,22 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
         if (report.done) action.code = report.code;
         for (const line of report.lines ?? []) action.lines.push(printable(line, 300, " "));
         if (action.lines.length > 60) action.lines.splice(0, action.lines.length - 60);
+        if (report.done) requestEnded(action);
         changed();
       }
       return json(res, 200, { ok: true });
+    }
+    // The issues the person chose to publish, waiting for the approval on the Mac
+    // (host/issues.ts); and what became of each.
+    if (req.method === "GET" && url.pathname === "/host/issues") return json(res, 200, issues.list().filter((i) => i.state === "approving"));
+    if (req.method === "POST" && url.pathname === "/host/issue") {
+      const told = (await body(req)) as { id?: unknown; url?: unknown; refused?: unknown };
+      const issue = issues.get(told.id);
+      if (!issue) return json(res, 404, { error: "no such issue" });
+      const where = told.url === undefined ? null : issueUrl(issue.repo, told.url);
+      const result = where ? issues.published(issue.id, where) : issues.backToDraft(issue.id, typeof told.refused === "string" ? told.refused : "not published");
+      changed();
+      return "error" in result ? json(res, 409, result) : json(res, 200, { ok: true });
     }
     if (req.method === "GET" && url.pathname === "/host/state") {
       // The state, when it is not the one the host has (by its tag): for `desolate events`.
@@ -383,6 +534,23 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 400, { error: (error as Error).message });
     }
   }
+  if (req.method === "POST" && url.pathname === "/issue") {
+    // The person's edit of an offered issue, or their decision on it. Publishing only freezes
+    // it here: the issue is created by the host, once the person approves it on the Mac.
+    if (req.headers["x-desolate-ui"] !== "1" || !String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, 403, { error: "this comes from the dashboard itself" });
+    const asked = (await body(req)) as { id?: unknown; do?: unknown; title?: unknown; body?: unknown; labels?: unknown };
+    const fields = { ...(typeof asked.title === "string" ? { title: asked.title } : {}), ...(typeof asked.body === "string" ? { body: asked.body } : {}), ...(Array.isArray(asked.labels) ? { labels: asked.labels as string[] } : {}) };
+    let result;
+    if (asked.do === "save") result = issues.edit(asked.id, fields);
+    else if (asked.do === "publish") {
+      const saved = issues.edit(asked.id, fields);
+      result = "error" in saved ? saved : issues.toApprove(asked.id);
+    } else if (asked.do === "draft") result = issues.backToDraft(asked.id);
+    else if (asked.do === "reject") result = issues.reject(asked.id);
+    else result = { error: "save, publish, draft or reject" };
+    changed();
+    return "error" in result ? json(res, 400, result) : json(res, 200, { ok: true, state: result.state });
+  }
   if (req.method === "POST" && url.pathname === "/action") {
     // A header a cross-site page cannot add without a preflight this server never grants,
     // on top of the gate: a form or an image cannot press a button here.
@@ -416,7 +584,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // sent work, on real VMs only, where the timing allows it (found by tier T3). So: no
   // recursion, and every watcher has a listener. One that fails is dropped; the look
   // every second remains.
-  for (const dir of [ROOT.state, APPROVALS, path.join(ROOT.state, "refused"), path.join(ROOT.state, "secrets"), ROOT.domains])
+  for (const dir of [ROOT.state, APPROVALS, path.join(ROOT.state, "refused"), path.join(ROOT.state, "secrets"), path.join(ROOT.state, "issues"), ROOT.domains])
     try {
       if (!fs.existsSync(dir)) continue;
       const watcher = fs.watch(dir, changed);
@@ -428,5 +596,6 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       console.error(`stated: cannot watch ${dir}: ${String(error)}`);
     }
   setInterval(publish, 1000);
+  setInterval(takeQueue, 500);
   publish();
 }

@@ -7,19 +7,30 @@
 //
 //   fetch <repo>            refresh the mirror
 //   offer <repo> <branch>   a bundle is waiting in the outbox
+//   spawn <name> ...        start a workspace in this domain, with a command in it
+//   close <name>            remove one this workspace started, if nothing would be lost
+//   issue <repo> ...        a GitHub issue offered, for the person to edit and publish
+//
+// spawn and close are signed by the asking workspace (shared/spawn.ts). The root cannot check
+// the signature (it does not have the key, by design), so it checks what it can, to answer
+// at once, and queues the request for the host, which checks the signature and runs it.
 //
 // And it imports each domain's branches into the root clones as the domain writes them out.
 //
 // virtiofs delivers no file events across VMs, so outboxes are polled.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomBytes } from "node:crypto";
 import { writeJson } from "../shared/json.ts";
+import { parseSigned } from "../shared/spawn.ts";
 import { parseRepo } from "../shared/names.ts";
 import { sleep } from "../shared/run.ts";
-import { domains } from "./domains.ts";
+import { domain as domainOf, domains, workspaces } from "./domains.ts";
+import { HOST_QUEUE } from "./layout.ts";
 import { fetchDomain, take } from "./offers.ts";
 import { drain, inbox, outbox } from "./outbox.ts";
 import { waiting } from "./pushed.ts";
+import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
 
 const RATE = { perMinute: 30 } as const;
@@ -33,7 +44,51 @@ const allowed = (domain: string) => {
   return true;
 };
 
+const queuedFor = (domain: string): { kind: string; args: Record<string, string>; at: number }[] => {
+  try {
+    // Waiting (.json), and handed to the host lately (.taken: the state service renames each
+    // as it hands it over, and sweeps them after half an hour), so a request between the two
+    // is still counted against the limit.
+    return fs.readdirSync(HOST_QUEUE).filter((name) => name.endsWith(".json") || name.endsWith(".taken")).flatMap((name) => {
+      try {
+        const item = JSON.parse(fs.readFileSync(path.join(HOST_QUEUE, name), "utf8")) as { kind: string; args: Record<string, string>; at: number };
+        return item.args?.domain === domain ? [item] : [];
+      } catch {
+        return [];
+      }
+    });
+  } catch {
+    return [];
+  }
+};
+
+const signed = (domain: string, request: Record<string, unknown>): Record<string, unknown> => {
+  // The domain is the outbox's, whatever the request says: a request signed for another
+  // domain then fails the host's check (its signature covers the domain).
+  const r = parseSigned({ ...request, domain });
+  if (!r) return { ok: false, error: "that is not a request desolate makes (desolate spawn --help)" };
+  const all = workspaces(domain);
+  if (!all.some((w) => w.workspace === r.parent)) return { ok: false, error: `${domain} has no workspace '${r.parent}'` };
+  if (r.op === "spawn") {
+    const max = domainOf(domain).spawnMax ?? null;
+    if (max === 0) return { ok: false, error: `${domain}'s workspaces cannot start workspaces: the person turned it off`, fix: `on the Mac: desolate domain ${domain} spawn --max none` };
+    const pending = queuedFor(domain).filter((q) => q.kind === "workspace.spawn" && Date.now() - q.at < 30 * 60_000 && !all.some((w) => w.workspace === q.args.workspace));
+    if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.args.workspace === r.name)) return { ok: false, error: `${domain} already has a workspace '${r.name}'`, fix: "desolate spawn --name <another>" };
+    const live = all.filter((w) => w.startedBy).length + pending.length;
+    if (max !== null && live >= max) return { ok: false, error: `${domain} already has ${live} workspace(s) started by its workspaces, its limit of ${max}`, fix: "close one you started (desolate close <name>), or ask the person to raise the limit" };
+  } else {
+    const child = all.find((w) => w.workspace === r.name);
+    if (!child) return { ok: false, error: `${domain} has no workspace '${r.name}'` };
+    if (child.startedBy?.workspace !== r.parent) return { ok: false, error: `${domain}/${r.name} was not started by ${r.parent}: only the workspace that started it can close it`, fix: "ask the person: desolate rm on the Mac" };
+  }
+  const args: Record<string, string> = { domain, workspace: r.name, parent: r.parent, at: r.at, nonce: r.nonce, mac: r.mac, ...(r.op === "spawn" ? { branch: r.branch, command: JSON.stringify(r.command) } : {}) };
+  fs.mkdirSync(HOST_QUEUE, { recursive: true });
+  writeJson(path.join(HOST_QUEUE, `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}.json`), { kind: r.op === "spawn" ? "workspace.spawn" : "workspace.close", args, at: Date.now() });
+  return { ok: true, workspace: r.name };
+};
+
 const handle = async (domain: string, repoList: string[], request: Record<string, unknown>): Promise<Record<string, unknown>> => {
+  if (request.op === "spawn" || request.op === "close") return signed(domain, request);
   const repo = parseRepo(request.repo);
   // Only its own domain's repositories.
   if (!repo || !repoList.includes(String(request.repo))) return { ok: false, error: "that repository is not in this domain" };
@@ -42,7 +97,8 @@ const handle = async (domain: string, repoList: string[], request: Record<string
     return { ok: true };
   }
   if (request.op === "offer") return take(domain, request);
-  return { ok: false, error: "the root takes 'fetch' and 'offer' from a workspace, and nothing else" };
+  if (request.op === "issue") return issues.offer(domain, repoList, workspaces(domain).map((w) => w.workspace), request);
+  return { ok: false, error: "the root takes 'fetch', 'offer', 'issue', 'spawn' and 'close' from a workspace, and nothing else" };
 };
 
 const log = (line: string) => process.stderr.write(`${new Date().toISOString()} rootd: ${line}\n`);
@@ -111,7 +167,7 @@ for (;;) {
         } catch (error) {
           reply = { ok: false, error: error instanceof Error ? error.message.slice(0, 500) : "the root failed" };
         }
-      log(`${d.slug} ${String(request?.op)} ${String(request?.repo)} -> ${reply.ok === true ? "ok" : `refused: ${String(reply.error)}`}`);
+      log(`${d.slug} ${String(request?.op)} ${String(request?.repo ?? request?.name)} -> ${reply.ok === true ? "ok" : `refused: ${String(reply.error)}`}`);
       writeJson(path.join(inbox(d.slug), "replies", name), reply);
     }
     // Replies are read within moments; old ones are swept.

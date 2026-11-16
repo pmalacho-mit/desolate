@@ -37,6 +37,64 @@ last printed anything; the dashboard shows each workspace's status as the agent 
 (`desolate status set ...` inside), and `desolate notify` turns orange and red into
 notifications.
 
+## Workspaces that start workspaces
+
+An agent working on one thing often finds another: an issue to split off, a check to run
+in parallel. A workspace can start another workspace **in its own domain only**, with a
+command in it as its agent, and close the ones it started. It is on for every domain, with
+no limit; the shipped AGENTS.md tells agents to do it only when the work needs it.
+
+```bash
+desolate domain acme spawn                # on the Mac: whether acme's workspaces may, and any limit
+desolate domain acme spawn --max 2        # up to 2 started by its workspaces at once
+desolate domain acme spawn --max 0        # none: turned off for acme
+desolate domain acme spawn --max none     # no limit again (the default)
+desolate domain acme stats                # its workspaces, who started each, the limit, this Mac
+```
+
+Inside a workspace, `desolate spawn --name <w> [--branch <b>] -- <command...>`, `desolate
+close <w>`, `desolate domain stats` and `desolate events --follow` (the workspace's own
+[AGENTS.md](../AGENTS.md) tells an agent how). What you see:
+
+- **Who started each one.** `desolate list` and the dashboard say "started by you" or
+  "started by <workspace>", and `desolate events` carries `startedBy`.
+- **A workspace that outlived the one that started it** is flagged on the dashboard (under
+  "Needs you") and in `desolate list`. Nothing is removed for it: look at its branches,
+  then `desolate rm` it.
+- **A limit, if you set one, is a number of workspaces at once.** Each counts until it is
+  removed; it is memory on your Mac (`desolate domain <d> size`).
+- **Closing:** a workspace closes only one it started, and only when nothing in it would be
+  lost (no uncommitted, untracked or stashed work in any checkout). Its branches stay.
+  Anything else is yours: `desolate rm`.
+
+What keeps this to the domain: the request carries a signature made with a key that only
+the asking workspace's VM and your Mac have. The root, which passes the request on and
+parses every domain's data, cannot make one: if a domain's data ever took over the root's
+ordinary user, it still could not have your Mac start a workspace, or run a command in one,
+in another domain. On your Mac, the command is an argument list from start to finish, never
+a line a shell reads ([reference](reference.md#workspaces-that-start-workspaces)).
+
+## Issues offered by a workspace
+
+A workspace can offer a GitHub issue (`desolate issue offer --title ... --body-file ...
+--label ...`, inside it): work it found that should be tracked where everyone sees it. It
+never creates one. You:
+
+1. **Read and edit it on the dashboard.** It is under "Needs you": title, labels and body,
+   with a Preview of the body as GitHub's Markdown. Save, Reject, or Publish.
+2. **Publish it on the Mac.** Publish freezes it and waits for you there, as a push does: on
+   the approval page (`desolate approve --web`), or in a terminal,
+   `desolate issues` then `desolate issue publish <id>`, which shows every word of it and asks
+   you to type `publish`. Then **your own `gh`** creates it, as you.
+3. The workspace hears how it ended (`desolate events`): published, with its page, or not.
+
+What keeps it yours: the text you approve on the Mac is the text sent, each field one
+argument of `gh` (the body in a file of the host's), never a line a shell reads. The approval
+is over its exact words: if anything changed it after the page showed it, nothing is
+published. The preview builds the Markdown as elements, never as HTML, and loads no image an
+agent named. With a `desolate:run` label, `recipes/issues.sh` starts an agent on the issue
+once it is published: the observable way to hand a workspace's idea to another agent.
+
 ## Recipes: a whole task in one script
 
 desolate has no agent built in. The steps for handing a task to one (a workspace on its own

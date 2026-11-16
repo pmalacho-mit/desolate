@@ -255,8 +255,87 @@ const openReview = async (offer, against = "origin") => {
   if (reviewing && reviewing.review && !reviewing.review.error) loadDiff();
 };
 
+// ------------------------------------------------------------------ issues
+// A GitHub issue a workspace offered (shared/issues.ts): read and edited here, then published
+// as you, once you approve it on the Mac. Its text is an agent's: the editor's fields are
+// form fields, and the preview is built as elements (shared/ui/markdown.js), never as HTML.
+let editing = null; // { id, element, parts }
+const issueCall = async (id, what, fields) => {
+  const response = await fetch("/issue", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1" }, body: JSON.stringify({ id, do: what, ...fields }) });
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(answer.error || `HTTP ${response.status}`);
+  return answer;
+};
+const labelsOf = (value) => value.split(",").map((label) => label.trim()).filter(Boolean);
+/** Built once when it opens, so what you type is never redrawn away; `syncIssue` keeps its
+ *  status in step with the state. */
+const openIssue = (issue) => {
+  const title = el("input", { name: "title", value: issue.title, maxlength: "256", "aria-label": "title", class: "wide" });
+  const labels = el("input", { name: "labels", value: issue.labels.join(", "), "aria-label": "labels, separated by commas", class: "wide", placeholder: "labels, separated by commas" });
+  const body = el("textarea", { name: "body", rows: "16", "aria-label": "body (Markdown)", class: "wide mono" });
+  body.value = issue.body;
+  const preview = el("div", { class: "markdown", "data-preview": "", hidden: true });
+  const status = el("div", { class: "sub", "data-issue-status": "" });
+  let previewing = false;
+  const toggle = el("button", { class: "quiet small", type: "button", "data-preview-toggle": "", onclick: () => {
+    previewing = !previewing;
+    toggle.textContent = previewing ? "Write" : "Preview";
+    if (previewing) preview.replaceChildren(typeof DesolateMarkdown !== "undefined" ? DesolateMarkdown.render(body.value) : document.createTextNode(body.value));
+    preview.hidden = !previewing;
+    body.hidden = previewing;
+  } }, "Preview");
+  const fields = () => ({ title: title.value, body: body.value, labels: labelsOf(labels.value) });
+  const doing = (what, label) => el("button", { type: "button", "data-issue-do": what, class: what === "publish" ? "" : "quiet", onclick: async () => {
+    try {
+      const answer = await issueCall(issue.id, what, what === "save" || what === "publish" ? fields() : {});
+      if (what === "reject") editing = null;
+      status.textContent = what === "save" ? "saved" : what === "publish" ? "waiting for your approval on the Mac" : answer.state || "";
+    } catch (error) {
+      status.textContent = `not done: ${error.message}`;
+    }
+    render();
+  } }, label);
+  const element = el("div", { class: "card", "data-issue": issue.id },
+    el("div", { class: "top" }, el("h3", {}, `An issue for ${issue.repo}`), el("span", { class: "grow" }), el("button", { class: "quiet", type: "button", onclick: () => { editing = null; render(); } }, "Close")),
+    el("div", { class: "sub" }, `Offered by ${issue.domain}/${issue.workspace}. It is created on GitHub as you, with what is here once you publish it, and only after you approve it on the Mac.`),
+    el("label", { class: "field" }, "Title", title),
+    el("label", { class: "field" }, "Labels", labels),
+    el("div", { class: "field" }, el("span", {}, "Body (Markdown) "), toggle),
+    body, preview, status,
+    el("div", { class: "buttons", "data-issue-buttons": "" }, doing("save", "Save"), doing("publish", "Publish..."), doing("draft", "Back to draft"), doing("reject", "Reject")));
+  editing = { id: issue.id, element, parts: { title, labels, body, status } };
+  render();
+};
+const syncIssue = () => {
+  if (!editing) return null;
+  const issue = (state.issues || []).find((i) => i.id === editing.id);
+  if (!issue) return (editing = null);
+  const frozen = issue.state !== "offered";
+  for (const field of [editing.parts.title, editing.parts.labels, editing.parts.body]) field.disabled = frozen;
+  for (const button of editing.element.querySelectorAll("[data-issue-do]")) {
+    const what = button.dataset.issueDo;
+    button.hidden = issue.state === "offered" ? what === "draft" : issue.state === "approving" ? what !== "draft" && what !== "reject" : true;
+  }
+  const said = {
+    offered: issue.problem ? `Not published: ${issue.problem}` : "",
+    approving: `Waiting for your approval on the Mac: the approval page (desolate approve --web), or desolate issue publish ${issue.id} in a terminal there.`,
+    published: "", rejected: "Rejected: it will not be published.",
+  }[issue.state];
+  if (issue.state === "published") editing.parts.status.replaceChildren("Published: ", issue.url && /^https:\/\/github\.com\//.test(issue.url) ? el("a", { href: issue.url, target: "_blank", rel: "noopener noreferrer" }, issue.url) : "on GitHub");
+  else if (said) editing.parts.status.textContent = said;
+  return editing.element;
+};
+
 const needsYou = () => {
   const items = [];
+  for (const i of state.issues || []) {
+    if (i.state !== "offered" && i.state !== "approving") continue;
+    items.push(el("li", { "data-issue-offer": i.id }, el("span", { class: `dot ${i.state === "approving" ? "orange" : "blue"}` }), el("div", { class: "what" },
+      el("div", { class: "name" }, i.state === "approving" ? `An issue waits for your approval on the Mac: ${i.repo}` : `An issue offered for ${i.repo}`),
+      el("div", { class: "line" }, i.title),
+      el("div", { class: "line sub" }, `from ${i.domain}/${i.workspace}${i.labels.length ? `, labelled ${i.labels.join(", ")}` : ""}${i.problem ? `. Not published: ${i.problem}` : ""}`)),
+      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openIssue(i) }, i.state === "approving" ? "Open" : "Read and edit"))));
+  }
   for (const a of state.approvals) items.push(el("li", {}, el("span", { class: "dot orange" }), el("div", { class: "what" },
     el("div", { class: "name" }, `A push is waiting for your approval: ${a.repo} ${a.branch}`),
     el("div", { class: "line mono" }, `${a.commit}`),
@@ -276,6 +355,8 @@ const needsYou = () => {
     const says = w.says.status;
     if (says && (says.color === "orange" || says.color === "red"))
       items.push(el("li", {}, el("span", { class: `dot ${says.color}` }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace}`), el("div", { class: "line" }, says.message)), el("div", {})));
+    if (w.outlived)
+      items.push(el("li", { "data-outlived": `${d.slug}/${w.workspace}` }, el("span", { class: "dot orange" }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace} outlived the workspace that started it`), el("div", { class: "line" }, `${w.startedBy} is gone; this one is still here. Look at its branches, then `, el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " when you are done with it.")), el("div", {})));
     if (w.host && w.host.devcontainer && /^FAILED/.test(w.host.devcontainer))
       items.push(el("li", {}, el("span", { class: "dot red" }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace}: its devcontainer did not come up`), el("div", { class: "line" }, w.host.devcontainer)), el("div", {})));
   }
@@ -351,7 +432,12 @@ const workspaceRow = (d, w) => {
   return el("li", { "data-workspace": `${d.slug}/${w.workspace}` },
     el("span", { class: `dot ${running ? (says ? says.color : "gray") : "hollow"}`, title: says ? says.color : running ? "no status set" : "stopped" }),
     el("div", { class: "what" },
-      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub" }, state.hostConnected ? (host.status || w.state) : `${w.state} (as last known)`)),
+      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub" }, state.hostConnected ? (host.status || w.state) : `${w.state} (as last known)`), " ",
+        // Who started it: you, or a workspace of the domain (desolate spawn in it); and a
+        // warning when that one is gone and this one is still here.
+        w.startedBy
+          ? el("span", { class: `chip ${w.outlived ? "warn" : ""}`, "data-started-by": w.startedBy, title: w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)` }, w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`)
+          : el("span", { class: "chip", "data-started-by": "" }, "started by you")),
       w.checkouts.map((c) => el("div", { class: "line", "data-checkout": c.repo }, checkoutLine(c),
         landedOf(d, c) ? [" ", el("span", { class: "chip merged", "data-merged": landedOf(d, c) }, `merged into ${landedOf(d, c)}`)] : null,
         c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)
@@ -393,6 +479,8 @@ const domainCard = (d) => {
       d.secrets.map((s) => el("span", { class: `chip ${s.on ? "" : "off"}`, title: s.on ? "a secret this domain's workspaces may use by name" : "switched off" }, s.name))),
     el("div", { class: "sub" }, d.repos.length ? d.repos.join(", ") : "No repositories yet."),
     el("ul", { class: "rows" }, d.workspaces.map((w) => workspaceRow(d, w))),
+    (state.issues || []).some((i) => i.domain === d.slug && i.state === "published") ? el("div", { class: "line sub", "data-published-issues": "" }, "Issues published lately: ",
+      (state.issues || []).filter((i) => i.domain === d.slug && i.state === "published").map((i, n) => [n ? ", " : "", i.url && /^https:\/\/github\.com\//.test(i.url) ? el("a", { href: i.url, target: "_blank", rel: "noopener noreferrer" }, i.title) : i.title])) : null,
     branchList(d),
     el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); } },
       d.repos.length ? [el("input", { name: "name", placeholder: "name (optional)", pattern: "[a-z0-9][a-z0-9-]{0,39}", "aria-label": "workspace name" }), el("button", { disabled: busy.has(key) }, busy.has(key) ? "Starting..." : "New workspace")] : null),
@@ -424,6 +512,9 @@ const render = () => {
   document.getElementById("needs-list").replaceChildren(...needs);
   // (Where the diff was scrolled to, kept: its element is the same one, moved.)
   const scrolled = shownDiff && shownDiff.node.isConnected ? [...shownDiff.node.querySelectorAll("[data-diff]")].map((n) => [n, n.scrollTop, n.scrollLeft]) : [];
+  const issue = syncIssue();
+  document.getElementById("issue").hidden = !issue;
+  if (issue && document.getElementById("issue").firstChild !== issue) document.getElementById("issue").replaceChildren(issue);
   const panel = reviewPanel();
   document.getElementById("review").hidden = !panel;
   document.getElementById("review").replaceChildren(...(panel ? [panel] : []));

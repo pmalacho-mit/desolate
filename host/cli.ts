@@ -20,9 +20,12 @@ Every day: a workspace, your work in it, and its push:
                                                                  (or in the VM itself: when it has none, or --vm)
   desolate ports [<domain>/<workspace>] [--json]                 what is forwarded, at which URL; what is reserved
   desolate stop | start | rm <domain>/<workspace>
+  desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open] [--json]                                  the dashboard's address, for your browser
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
+  desolate issues [--json]                                       GitHub issues workspaces offered: edit them on the dashboard
+  desolate issue publish | refuse <id>                           create one on GitHub, as you, once you have read it (or not)
   desolate review <domain> <owner/repo> <branch> [--diff] [--against origin|domain] [--json]
                                                                  what a push would send; --diff: the diff itself
   desolate push <domain> <owner/repo> <branch> --expect <commit> [--allow-default]
@@ -47,6 +50,8 @@ Your repositories and domains:
   desolate domain <slug> add --repo <owner/repo>                 give the domain a repository
   desolate domain <slug> size [--cpus <n>] [--memory <8g>] [--disk <60g>] [--clear]
                                                                  what its new workspaces get (shown: the effective size)
+  desolate domain <slug> spawn [--max <n>|none]                  limit the workspaces its workspaces start (none: no limit, the default; 0: off)
+  desolate domain <slug> stats [--json]                          its workspaces, who started each, its limit, this Mac
   desolate domain <slug> env [--from <owner/repo>]               whose devcontainer.json its workspaces run
   desolate domain <slug> net [open | enforce | allow <host>... | deny <host>...]
                                                                  the domain's network rules, at its proxies
@@ -164,7 +169,7 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "domain") {
-    const { values, positionals } = flags(rest, { title: { type: "string" }, repo: { type: "string", multiple: true }, cpus: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, clear: { type: "boolean" }, hosts: { type: "string" }, headers: { type: "string" }, ttl: { type: "string" }, secret: { type: "string" }, from: { type: "string" } });
+    const { values, positionals } = flags(rest, { title: { type: "string" }, repo: { type: "string", multiple: true }, max: { type: "string" }, cpus: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, clear: { type: "boolean" }, hosts: { type: "string" }, headers: { type: "string" }, ttl: { type: "string" }, secret: { type: "string" }, from: { type: "string" } });
     const { domainCommand } = await import("./domains.ts");
     await domainCommand(positionals, values, out);
     return EXIT.ok;
@@ -178,9 +183,14 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "up") {
-    const { values, positionals } = flags(rest, { name: { type: "string" }, checkout: { type: "string", multiple: true }, branch: { type: "string" }, base: { type: "string" }, fetch: { type: "boolean" }, cpus: { type: "string" }, memory: { type: "string" }, disk: { type: "string" } });
+    // `--` ends desolate's own flags: everything after it is an agent's command, started in
+    // the workspace once it is up.
+    const dash = rest.indexOf("--");
+    const own = dash >= 0 ? rest.slice(0, dash) : rest;
+    const command = dash >= 0 ? rest.slice(dash + 1) : [];
+    const { values, positionals } = flags(own, { name: { type: "string" }, checkout: { type: "string", multiple: true }, branch: { type: "string" }, base: { type: "string" }, fetch: { type: "boolean" }, cpus: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, "started-by": { type: "string" } });
     const { up, sizeFlags } = await import("./workspaces.ts");
-    await up(positionals[0], { name: values.name as string | undefined, checkouts: (values.checkout as string[] | undefined) ?? [], branch: values.branch as string | undefined, base: values.base as string | undefined, fetch: values.fetch === true, size: sizeFlags(values) }, out, values.json === true);
+    await up(positionals[0], { name: values.name as string | undefined, checkouts: (values.checkout as string[] | undefined) ?? [], branch: values.branch as string | undefined, base: values.base as string | undefined, fetch: values.fetch === true, size: sizeFlags(values), startedBy: values["started-by"] as string | undefined, command }, out, values.json === true);
     return EXIT.ok;
   }
   if ((verb === "status" || verb === "board") && rest.some((arg) => !arg.startsWith("-"))) {
@@ -196,9 +206,10 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "stop" || verb === "start" || verb === "rm") {
-    const { positionals } = flags(rest, {});
+    const { values, positionals } = flags(rest, verb === "rm" ? { "if-clean": { type: "boolean" } } : {});
     const workspaces = await import("./workspaces.ts");
-    await (verb === "stop" ? workspaces.stop : verb === "start" ? workspaces.start : workspaces.remove)(positionals[0], out);
+    if (verb === "rm") await workspaces.remove(positionals[0], out, { ifClean: values["if-clean"] === true });
+    else await (verb === "stop" ? workspaces.stop : workspaces.start)(positionals[0], out);
     return EXIT.ok;
   }
   if (verb === "offers") {
@@ -284,6 +295,14 @@ const main = async (argv: string[]): Promise<number> => {
     // process does not pile lines up either, it stops when stdout does.)
     process.stdout.on("error", () => process.exit(0));
     await followEvents(replay, (line) => process.stdout.write(`${forTerminal(line)}\n`), (resume) => process.stdout.once("drain", resume));
+  }
+  if (verb === "issues" || verb === "issue") {
+    const { values, positionals } = flags(rest, {});
+    const issues = await import("./issues.ts");
+    if (verb === "issues") await issues.list(out, values.json === true);
+    else if (positionals[0] === "publish" || positionals[0] === "refuse") await issues.decide(positionals[0], positionals[1], out);
+    else refuse("desolate issue what?", "desolate issues | desolate issue publish <id> | desolate issue refuse <id>", EXIT.usage);
+    return EXIT.ok;
   }
   if (verb === "agent") {
     // `--` ends desolate's own flags: everything after it is the agent's command.

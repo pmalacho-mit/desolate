@@ -52,6 +52,17 @@ export const start = async (where: string | undefined, options: { name?: string;
   out(`  attach: desolate agent attach ${w.domain}/${w.workspace}${name === "agent" ? "" : ` --name ${name}`}   (Ctrl-] detaches; it keeps running)`);
 };
 
+/** An agent in a workspace that was just made (`desolate up ... -- <command...>`, and what a
+ *  workspace's `desolate spawn` runs): named "agent", in its first checkout. The command is
+ *  argv, to the holder in the VM; nothing on the host reads it. Returns the agent's name. */
+export const startIn = async (w: Workspace, command: string[]): Promise<string> => {
+  const checkout = w.checkouts[0];
+  if (!checkout) refuse(`${w.domain}/${w.workspace} has no checkout to run it in`, `desolate list ${w.domain}`);
+  const started = await backend().exec(w.vm, [...HOLDER(), "start", "agent", checkout!.path, "--", ...command], { timeoutMs: 60_000 });
+  if (started.code !== 0) refuse(`the workspace is up, but its agent did not start: ${printable((started.stderr || started.stdout).trim().slice(-600), 300)}`, `desolate agent start ${w.domain}/${w.workspace} -- <command...>`);
+  return "agent";
+};
+
 export const list = async (only: string | undefined, out: Out, json: boolean) => {
   const [domain, workspace] = String(only ?? "").split("/");
   const all = await rootctl<{ slug: string; workspaces: Workspace[] }[]>("domain.list", {}, { quiet: true });

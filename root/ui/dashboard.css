@@ -18,6 +18,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 22px 24px 60px; display: grid
 .chip.bad { color: #fff; background: var(--red); border-color: var(--red); }
 .chip.off { text-decoration: line-through; opacity: 0.6; }
 .chip.merged { color: var(--green); border-color: currentColor; }
+.chip.warn { color: var(--orange, #c26a00); border-color: currentColor; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-bottom: 14px; }
 .card > .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
 .sub { color: var(--soft); font-size: 13px; }
@@ -76,3 +77,13 @@ details.branches > summary { cursor: pointer; color: var(--soft); font-size: 13p
 .hl { color: var(--hl-light, inherit); }
 pre.diff span.hl { display: inline; min-width: 0; }
 @media (prefers-color-scheme: dark) { .hl { color: var(--hl-dark, inherit); } }
+/* An offered issue: its editor, and the Markdown preview (built as elements: markdown.js). */
+.field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 4px; font-size: 13px; color: var(--soft); }
+.wide { width: 100%; box-sizing: border-box; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; }
+textarea.wide { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.markdown { border: 1px solid var(--line); border-radius: 6px; padding: 8px 14px; overflow-wrap: anywhere; }
+.markdown pre { overflow: auto; padding: 8px; border-radius: 6px; background: color-mix(in srgb, var(--line) 40%, transparent); }
+.markdown code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.markdown table { border-collapse: collapse; } .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; }
+.markdown blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--soft); }
+.markdown li.task { list-style: none; }
