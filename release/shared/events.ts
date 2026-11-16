@@ -22,6 +22,7 @@ type State = {
   offers?: { domain?: unknown; workspace?: unknown; repo?: unknown; branch?: unknown; commit?: unknown }[];
   refused?: { domain?: unknown; repo?: unknown; why?: unknown }[];
   approvals?: { repo?: unknown; branch?: unknown; commit?: unknown }[];
+  issues?: { id?: unknown; domain?: unknown; workspace?: unknown; repo?: unknown; title?: unknown; state?: unknown; url?: unknown }[];
   domains?: { slug?: unknown; workspaces?: { workspace?: unknown; state?: unknown; startedBy?: unknown; checkouts?: { repo?: unknown; head?: { branch?: unknown; commit?: unknown } | null }[]; says?: { status?: { color?: unknown; message?: unknown; updated?: unknown } | null } }[] }[];
 };
 
@@ -50,6 +51,16 @@ export const stateEvents = (before: State | null, after: State): Event[] => {
     const old = saidBefore.get(k);
     if (!old || old.updated !== s.updated || old.color !== s.color || old.message !== s.message)
       out.push(event("status", "root", { domain: slugOrNull(s.domain), workspace: slugOrNull(s.workspace), color: /^(gray|blue|green|yellow|orange|red)$/.test(String(s.color)) ? s.color : null, message: printable(s.message, 200) }));
+  }
+  // Issues offered, published (with their page) and rejected.
+  const issuesBefore = new Map((before?.issues ?? []).map((i) => [String(i.id), i]));
+  for (const i of after.issues ?? []) {
+    const old = issuesBefore.get(String(i.id));
+    if (old && old.state === i.state) continue;
+    const fields = { domain: slugOrNull(i.domain), workspace: slugOrNull(i.workspace), repo: repoOrNull(i.repo), id: /^[0-9a-z-]{1,40}$/.test(String(i.id)) ? i.id : null, title: printable(i.title, 256) };
+    if (!old && i.state === "offered") out.push(event("issue-offered", "root", fields));
+    else if (i.state === "published") out.push(event("issue-published", "root", { ...fields, url: typeof i.url === "string" && /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+$/.test(i.url) ? i.url : null }));
+    else if (i.state === "rejected") out.push(event("issue-rejected", "root", fields));
   }
   // Workspaces made, started, stopped and removed, with who started each: so a workspace can
   // follow the ones it asked for (desolate spawn), and the person every one.

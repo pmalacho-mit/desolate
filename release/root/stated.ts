@@ -52,6 +52,8 @@ import * as domains from "./domains.ts";
 import { branchesOf, refusalsOf } from "./outbox.ts";
 import { forge, safeIn } from "./git.ts";
 import { APPROVALS, clonePath, domainPath, GITCONFIG, HOST_QUEUE, ROOT } from "./layout.ts";
+import * as issues from "./issues.ts";
+import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
 import * as proxy from "./proxy/manage.ts";
 import { landedFor, pushedList } from "./pushed.ts";
@@ -141,6 +143,13 @@ const snapshot = () => {
     domains: list,
     spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? 0])),
     offers: offers.allOffers(),
+    // Issues workspaces offered: every one still waiting, and the last few done with.
+    issues: (() => {
+      const all = issues.list();
+      // (Done with: their title and page are enough; the body is sent only while it waits.)
+      const done = all.filter((i) => i.state === "published" || i.state === "rejected").slice(-10).map((i) => ({ ...i, body: "" }));
+      return [...all.filter((i) => i.state === "offered" || i.state === "approving"), ...done];
+    })(),
     refused: domains.domains().flatMap((d) => refusalsOf(d.slug)),
     approvals: pendingApprovals(),
     actions: actions.slice(-12),
@@ -389,6 +398,8 @@ const STATIC: Record<string, [string, string]> = {
   // Syntax colour for the diff (shared/ui/highlight.js says how it is kept to colour).
   "/highlight.js": ["../../shared/ui/highlight.js", "text/javascript; charset=utf-8"],
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],
+  // An offered issue's preview: Markdown built as elements, never as HTML.
+  "/markdown.js": ["../../shared/ui/markdown.js", "text/javascript; charset=utf-8"],
 };
 
 const fromHost = (req: IncomingMessage) => {
@@ -423,6 +434,18 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
         changed();
       }
       return json(res, 200, { ok: true });
+    }
+    // The issues the person chose to publish, waiting for the approval on the Mac
+    // (host/issues.ts); and what became of each.
+    if (req.method === "GET" && url.pathname === "/host/issues") return json(res, 200, issues.list().filter((i) => i.state === "approving"));
+    if (req.method === "POST" && url.pathname === "/host/issue") {
+      const told = (await body(req)) as { id?: unknown; url?: unknown; refused?: unknown };
+      const issue = issues.get(told.id);
+      if (!issue) return json(res, 404, { error: "no such issue" });
+      const where = told.url === undefined ? null : issueUrl(issue.repo, told.url);
+      const result = where ? issues.published(issue.id, where) : issues.backToDraft(issue.id, typeof told.refused === "string" ? told.refused : "not published");
+      changed();
+      return "error" in result ? json(res, 409, result) : json(res, 200, { ok: true });
     }
     if (req.method === "GET" && url.pathname === "/host/state") {
       // The state, when it is not the one the host has (by its tag): for `desolate events`.
@@ -511,6 +534,23 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 400, { error: (error as Error).message });
     }
   }
+  if (req.method === "POST" && url.pathname === "/issue") {
+    // The person's edit of an offered issue, or their decision on it. Publishing only freezes
+    // it here: the issue is created by the host, once the person approves it on the Mac.
+    if (req.headers["x-desolate-ui"] !== "1" || !String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, 403, { error: "this comes from the dashboard itself" });
+    const asked = (await body(req)) as { id?: unknown; do?: unknown; title?: unknown; body?: unknown; labels?: unknown };
+    const fields = { ...(typeof asked.title === "string" ? { title: asked.title } : {}), ...(typeof asked.body === "string" ? { body: asked.body } : {}), ...(Array.isArray(asked.labels) ? { labels: asked.labels as string[] } : {}) };
+    let result;
+    if (asked.do === "save") result = issues.edit(asked.id, fields);
+    else if (asked.do === "publish") {
+      const saved = issues.edit(asked.id, fields);
+      result = "error" in saved ? saved : issues.toApprove(asked.id);
+    } else if (asked.do === "draft") result = issues.backToDraft(asked.id);
+    else if (asked.do === "reject") result = issues.reject(asked.id);
+    else result = { error: "save, publish, draft or reject" };
+    changed();
+    return "error" in result ? json(res, 400, result) : json(res, 200, { ok: true, state: result.state });
+  }
   if (req.method === "POST" && url.pathname === "/action") {
     // A header a cross-site page cannot add without a preflight this server never grants,
     // on top of the gate: a form or an image cannot press a button here.
@@ -544,7 +584,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // sent work, on real VMs only, where the timing allows it (found by tier T3). So: no
   // recursion, and every watcher has a listener. One that fails is dropped; the look
   // every second remains.
-  for (const dir of [ROOT.state, APPROVALS, path.join(ROOT.state, "refused"), path.join(ROOT.state, "secrets"), ROOT.domains])
+  for (const dir of [ROOT.state, APPROVALS, path.join(ROOT.state, "refused"), path.join(ROOT.state, "secrets"), path.join(ROOT.state, "issues"), ROOT.domains])
     try {
       if (!fs.existsSync(dir)) continue;
       const watcher = fs.watch(dir, changed);

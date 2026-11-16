@@ -73,7 +73,8 @@ const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 setInterval(() => { for (const card of cards.values()) if (!card.armedAt && !card.done) disarm(card); }, 250);
 
 const post = async (what, card) => {
-  const answer = await fetch(`/${what}`, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify({ nonce: card.push.nonce, token: card.push.token, commit: card.push.commit }), credentials: sendCookie });
+  const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, commit: card.push.commit } };
+  const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
   const body = await answer.json().catch(() => ({}));
   if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
 };
@@ -183,14 +184,29 @@ const summaryOf = (summary, card) => {
   return box;
 };
 
-const add = (push) => {
-  const element = template.content.firstElementChild.cloneNode(true);
-  element.querySelector(".repo").textContent = push.repo;
-  element.querySelector(".branch").textContent = push.branch;
-  element.querySelector(".commit").textContent = push.commit;
-  element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
+/** An issue to publish: every field as text, the body as the very Markdown sent. */
+const issueElement = (issue) => {
+  const element = document.getElementById("issue-card").content.firstElementChild.cloneNode(true);
+  element.querySelector(".repo").textContent = issue.repo;
+  element.querySelector(".title").textContent = unhidden(issue.title);
+  const labels = element.querySelector(".labels");
+  if (issue.labels.length) for (const label of issue.labels) labels.append(el("code", label));
+  else labels.textContent = "none";
+  element.querySelector(".from").textContent = `Offered by ${issue.domain}/${issue.workspace}${issue.edited ? ", then edited by you on the dashboard" : ""}.${issue.labels.some((l) => /^desolate:/.test(l)) ? " A desolate: label may start an agent on it (recipes/issues.sh)." : ""}`;
+  element.querySelector(".body").textContent = issue.body ? unhidden(issue.body) : "(no body)";
+  return element;
+};
+
+const add = (push, issue) => {
+  const element = issue ? issueElement(issue) : template.content.firstElementChild.cloneNode(true);
+  if (!issue) {
+    element.querySelector(".repo").textContent = push.repo;
+    element.querySelector(".branch").textContent = push.branch;
+    element.querySelector(".commit").textContent = push.commit;
+    element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
+  }
   const wrap = element.querySelector(".arm");
-  const card = { element, push, wrap, visible: VISIBILITY ? false : undefined, button: element.querySelector(".approve"), hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), armedAt: 0, done: false, busy: false, shown: "" };
+  const card = { element, push, issue, wrap, visible: VISIBILITY ? false : undefined, button: element.querySelector(".approve"), hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), armedAt: 0, done: false, busy: false, shown: "" };
   if (watcher) watcher.observe(wrap);
   // (A disabled button gets no pointer events in every browser: these are on its wrapper,
   // and the button lets them through while disabled: approve.css.)
@@ -207,15 +223,15 @@ const add = (push) => {
     if (!event.isTrusted || event.detail === 0 || !card.armedAt || performance.now() - card.armedAt < DWELL_MS || card.busy || card.done) return;
     card.busy = true;
     card.button.disabled = true;
-    card.hint.textContent = "approving...";
-    try { await post("approve", card); card.done = true; card.hint.textContent = "approved: the push continues in the root"; }
+    card.hint.textContent = issue ? "publishing..." : "approving...";
+    try { await post("approve", card); card.done = true; card.hint.textContent = issue ? "published: it is on GitHub now (its page is on the dashboard)" : "approved: the push continues in the root"; }
     catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
     finally { card.busy = false; disarm(card); }
   });
   element.querySelector(".refuse").addEventListener("click", async (event) => {
     if (!event.isTrusted || card.busy || card.done) return;
     card.busy = true;
-    try { await post("refuse", card); card.done = true; card.button.disabled = true; card.hint.textContent = "refused: the push that asked gives up"; }
+    try { await post("refuse", card); card.done = true; card.button.disabled = true; card.hint.textContent = issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"; }
     catch (error) { card.hint.textContent = error.message; }
     finally { card.busy = false; }
   });
@@ -223,9 +239,17 @@ const add = (push) => {
   return card;
 };
 
-const render = (pending) => {
+const render = (pending, issues) => {
   let changed = false;
   const seen = new Set();
+  for (const issue of issues) {
+    seen.add(issue.token);
+    if (cards.has(issue.token)) continue;
+    const card = add(null, issue);
+    cards.set(issue.token, card);
+    list.append(card.element);
+    changed = true;
+  }
   for (const push of pending) {
     seen.add(push.token);
     let card = cards.get(push.token);
@@ -245,7 +269,7 @@ const render = (pending) => {
   }
   // A push no longer waiting keeps its place (nothing shifts under the pointer), marked.
   for (const card of cards.values())
-    if (!seen.has(card.push.token) && !card.gone) {
+    if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
       if (!card.done) { card.done = true; card.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or its two minutes ran out)"; }
       card.element.classList.add("gone");
@@ -253,7 +277,7 @@ const render = (pending) => {
     }
   if (changed) disarmAll();
   const waiting = [...cards.values()].filter((card) => !card.gone).length;
-  document.title = waiting ? `(${waiting}) desolate: pushes waiting` : "desolate: no pushes waiting";
+  document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
   // (A number, to that one origin.)
   if (EMBED && window.parent !== window) window.parent.postMessage({ desolatePending: waiting }, location.origin.replace("//desolate-approve.", "//desolate-git."));
@@ -264,8 +288,10 @@ const poll = async () => {
   try {
     const answer = await fetch("/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
+    const asked = await fetch("/issues", { credentials: sendCookie, headers: credential });
+    const issues = asked.ok ? (await asked.json()).issues : [];
     if (!answer.ok) say(body.error || `HTTP ${answer.status}`);
-    else render(body.pending);
+    else render(body.pending, issues);
   } catch (error) { say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(poll, 1000);
 };

@@ -114,6 +114,13 @@ const approvalBackend = (): ApprovalBackend => {
       const push = parseApproval(message);
       if (push) events.publish(events.host("refused", { repo: push.repo, branch: push.branch, commit: push.commit }));
     },
+    issues: async () => (await rootctl<unknown[]>("issue.list", {}, { quiet: true, timeoutMs: 30_000 })).filter((i) => (i as { state?: unknown }).state === "approving"),
+    publishIssue: async (issue) => {
+      const url = await (await import("./issues.ts")).publish(issue);
+      events.publish(events.host("issue-published", { repo: issue.repo, id: issue.id, url }));
+      return url;
+    },
+    refuseIssue: async (issue) => (await import("./issues.ts")).refuseIssue(issue),
   };
 };
 

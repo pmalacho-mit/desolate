@@ -81,6 +81,24 @@ desolate close fix-docs                # remove one you started, once nothing in
   has nothing uncommitted, untracked or stashed: commit there first. Its branches stay. If
   you are removed first, the ones you started stay, flagged for the person.
 
+## GitHub issues: offer them, the person publishes them
+
+When you find work that should be tracked where everyone can see it (a bug beside your task,
+a follow-up), offer it as a GitHub issue. You cannot create one, and need not try: the person
+reads it on their dashboard, may edit it, and publishes it as themselves.
+
+```bash
+desolate issue offer --title "Login loops after a password reset" --body-file notes.md --label bug
+```
+
+- In a checkout, it is for that repository; else name it: `--repo <owner>/<repo>`.
+- The body is GitHub's Markdown. Keep it to what the person needs: what you saw, how to see
+  it again, what you think it needs. At most 64 KiB; no control or invisible characters.
+- Labels must already exist in the repository. A label like `desolate:run` may make a
+  recipe start an agent on the issue once it is published: offer it only when the task says.
+- `desolate events --follow` says when it is published (`issue-published`, with its page) or
+  rejected (`issue-rejected`).
+
 ## Network: named HTTP and HTTPS, through a proxy; nothing else
 
 This VM has no route to anything. Its one way out is a proxy that belongs to this workspace.
