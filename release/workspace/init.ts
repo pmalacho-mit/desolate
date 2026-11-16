@@ -83,9 +83,20 @@ for (const checkout of plan.checkouts) {
     if (checkout.kind === "worktree" && !fs.existsSync(path.join(checkout.path, ".git"))) {
       const exists = await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", `refs/heads/${checkout.branch}`]);
       if (exists.code === 0) await git(clone, ["worktree", "add", "--quiet", checkout.path, checkout.branch]);
-      // --no-track: from origin/main, git would make origin/main the new branch's upstream,
-      // and a plain `git push` on it would then refuse (its upstream's name is not its own).
-      else await git(clone, ["worktree", "add", "--quiet", "--no-track", "-b", checkout.branch, checkout.path, checkout.base]);
+      else {
+        // A local branch that is only behind the remote's (nothing of its own: an ancestor of
+        // origin/<it>) is stale, not a choice: nothing moves the main checkout's branch, so
+        // every branch started from it lacked what was merged since (dogfooding: a branch made
+        // right after a merge, with --fetch, did not have the merge). Start from the remote's
+        // then. A local branch with commits of its own is the person's work: start from it.
+        let from = checkout.base;
+        const remote = `refs/remotes/origin/${from}`;
+        if (!from.startsWith("origin/") && (await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", remote])).code === 0
+          && (await run("git", ["-C", clone, "merge-base", "--is-ancestor", from, remote])).code === 0) from = remote;
+        // --no-track: from origin/main, git would make origin/main the new branch's upstream,
+        // and a plain `git push` on it would then refuse (its upstream's name is not its own).
+        await git(clone, ["worktree", "add", "--quiet", "--no-track", "-b", checkout.branch, checkout.path, from]);
+      }
       // Locked against pruning by another VM that cannot see this worktree's files as live.
       await git(clone, ["worktree", "lock", "--reason", `workspace ${plan.workspace}`, checkout.path]).catch(() => "");
       made.push(`worktree ${checkout.repo} ${checkout.branch}`);

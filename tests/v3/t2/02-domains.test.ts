@@ -137,6 +137,20 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     assert.equal(head.stdout.split("\n")[0], pushed, "the worktree starts at the commit the remote just published");
   });
 
+  it("without --base: a local main that is only behind the remote's is not where a branch starts", () => {
+    // A pull request merged on the forge: the remote's main moves; the domain clone's own main
+    // (nothing of its own) is now only behind. A new branch starts from what was merged.
+    // (Test 7 is the other case: a local main with work of its own is where branches start.)
+    const merged = stack.forge("commit", "acme/consumer", "main", "MERGED.md", "merged on the forge\n").trim();
+    const up = stack.quiet("up", "nests-dev", "--name", "after-merge", "--fetch", "--checkout", "acme/consumer=worktree:after-merge");
+    assert.equal(up.code, 0, up.stderr);
+    const head = inWs("nests-dev/after-merge", "cd /workspaces/acme/consumer/.worktrees/after-merge && git rev-parse HEAD && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>&1 | head -1");
+    const [at, upstream] = head.stdout.trim().split("\n");
+    assert.equal(at, merged, "it has the merge");
+    assert.doesNotMatch(upstream ?? "", /^origin\//, "and no upstream of another name, so a plain git push still offers it");
+    assert.equal(stack.quiet("rm", "nests-dev/after-merge").code, 0);
+  });
+
   it("two domains, one repository: separate clones, one mirror, neither sees the other's work", () => {
     stack.step("a second domain with the same repository");
     assert.equal(stack.desolate("domain", "create", "other", "--title", "another boundary").code, 0);
