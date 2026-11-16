@@ -1273,3 +1273,38 @@ Section 4.8's requirements, and how each came out:
 Tier T2 (52 tests, the fake backend): 3 minutes 15 seconds. Tier T3 under software emulation:
 about 3 minutes to boot each VM, about 20 minutes for the tier. These say nothing about a
 Mac, where a VM boots in under 10 seconds.
+
+## The audit of 2026-11-16: spawn, issues, the forwarder, the root's word (audited; fixed)
+
+After a night of dogfooding, four reviewers read everything changed since `863ec4b`
+(workspaces starting workspaces, issues offered and published, the port forwarder, git in
+workspaces, the dashboard's new routes, events and stats, the recipes), each given the code
+and the threat model, not the author's conclusions. What they found, and what was done:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| A silent socket piped to a port's only listener before any name was read: a later request naming another workspace reached it, with that workspace's cookies | high (new that night) | nothing is piped before its first bytes name a workspace; silence is closed after two minutes (T2 03) |
+| An HTTP request whose line never ended within 16 KB sniffed as raw and routed with no name check | high (old) | what starts like HTTP is HTTP; unparseable names no one and is refused (T1 sniff, T2 03) |
+| VM names: a 40-bit hash; a colliding name made `up` destroy another domain's VM | high | `up` refuses an existing VM name before creating anything; the root refuses one any domain uses |
+| The host acted on the root's plans and records as given (domain, VM) | high | `vouched()`: domain, workspace and the host's own VM name, in up, stop/start/rm/close, agent, reconnect (T1) |
+| `desolate issue publish` wrote root-supplied fields to the tty | high | shows the checked draft; provenance must be two names, and is called the root's account |
+| No limit on spawns: one domain could start ~30 VMs a minute | medium | no fixed limit (the person's choice), but the Mac's memory: 85% at most; three in flight per domain (T1) |
+| Two Markdown regexes: 15 s and 7 s on a line of blanks | medium | rewritten: 7 ms and 2 ms (T1) |
+| A publish reported failed after GitHub made it invited a second | medium | URL matched case-insensitively; a digest record and a lock on the host; the root marks published only the approved text |
+| Replay after a daemon restart; close authority by name; `--name template` | low | used signatures on disk; the parent's key fingerprint in the record; the name reserved (T1) |
+| Events capped across domains; queued actions evicted; `tkn=` could reach a domain's events; gh's token for another host; reviewer output echoed as desolate's words; `::1` not held | low | each fixed |
+
+**What does not hold, said plainly.** The root's ordinary user, if a domain ever took it
+over, still writes every domain's checkouts and passes on the dashboard's clicks (starting
+and stopping workspaces). What the signing and `vouched()` now guarantee is narrower: it
+cannot forge a workspace's spawn or close, and cannot point the host at another domain's VM.
+The docs said more than that; they say this now.
+
+**Checked and found sound** by the reviewers: the v2 signature (unambiguous bytes, HMAC with
+`timingSafeEqual`, freshness), every argument reaching the host as an argv element (no `--`
+or leading `-` gets through the validators), keys on tmpfs in the VM only, the approval
+page's issue token over the exact digest with no TOCTOU, the Markdown preview building DOM
+nodes only, the dashboard's POST routes behind the cookie, Host, Sec-Fetch-Site and custom
+header checks, per-domain stats and events (each domain sees only its own), and
+`git-urls.ts` reaching only the domain's own mirrors.
+
