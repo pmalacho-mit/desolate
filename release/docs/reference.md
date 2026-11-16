@@ -143,6 +143,15 @@ number, at the workspace's own name: `http://<domain>-<workspace>-<id>.localhost
 (`desolate ports` prints each). The name is what keeps workspaces apart in your browser: each
 workspace's apps have an origin of their own, so their cookies and storage never mix with
 another workspace's, or with the editor's. Two workspaces can both serve 3000.
+- **A port a program on your Mac holds** (yours, or, on a Mac shared with others, another
+  user's: desolate cannot take it from them) is not forwarded. The workspace's server still
+  has the port inside the workspace (a backend behind its dev server's proxy works), but its
+  address on that port reaches the Mac's program instead, cookies and all. `desolate ports`
+  and the dashboard say so, naming the program when it is yours; serve what you open on
+  another port. `desolate doctor` notes which common dev ports this Mac holds (on macOS, 5000
+  is often the AirPlay Receiver: System Settings, General, AirDrop & Handoff). (Until
+  2026-11-16 desolate kept such a port taken inside every workspace,
+  which made a server there move on, and stopped a backend that needed it.)
 - **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
   clicked) is sent on to the workspace serving that port, at its own name, the path kept;
   with several serving it, the page lists them. Nothing is ever served at bare `localhost`.

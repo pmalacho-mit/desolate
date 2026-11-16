@@ -379,22 +379,11 @@ const main = async (argv: string[]): Promise<number> => {
     const view = (await ports()).filter((w) => !positionals[0] || w.workspace === positionals[0]);
     if (values.json === true) out(JSON.stringify(view));
     else if (view.length === 0) out("no workspace is running.");
-    else {
-      // A port a program on this Mac holds is said once, below, not under every workspace
-      // (dogfooding: '3000 is kept taken here' under each one, though only one used it).
-      const heldHere = (why: string) => why.startsWith("a program on this machine holds it");
-      const held = new Map<number, string>();
-      for (const w of view) {
-        out(w.workspace);
-        if (w.forwarded.length === 0) out("  nothing is listening yet: start a dev server in it and its URL appears here");
-        for (const f of w.forwarded) out(`  ${f.url}`);
-        for (const r of w.reserved) {
-          if (heldHere(r.why)) held.set(r.port, r.why.replace(/^a program on this machine holds it ?/, ""));
-          else out(`  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`);
-        }
-      }
-      for (const [port, who] of held)
-        out(`port ${port} is held on this Mac ${who}: no workspace's server is forwarded on it, and an address on port ${port} reaches that program, not a workspace. Run dev servers on another port (they move to the next one by themselves).`);
+    else for (const w of view) {
+      out(w.workspace);
+      if (w.forwarded.length === 0) out("  nothing is listening yet: start a dev server in it and its URL appears here");
+      for (const f of w.forwarded) out(`  ${f.url}`);
+      for (const r of w.reserved) out(`  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`);
     }
     return EXIT.ok;
   }

@@ -218,17 +218,22 @@ else {
     assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/, "control: each name still reaches its own workspace");
   });
 
-  it("a port the host itself holds is not published; workspaces keep it taken, and a server moves to the next number", async () => {
+  it("a port the host itself holds is not published, and not taken from the workspaces: their servers use it inside", async () => {
     stack.step("a port a program on the host holds");
     hostHolder = spawn(process.execPath, ["-e", `require("http").createServer((q, s) => s.end("the-host-program")).listen(5180, "127.0.0.1")`], { stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 500));
     serve("web/one", "one 5180");
     assert.ok(await until(() => ports().find((w) => w.workspace === "web/one")!.reserved.some((r) => r.port === 5180 && /not forwarded/.test(r.why))), "the workspace's 5180 is reported as not forwarded");
     assert.match(await request(5180, hostOf(urlOf("web/one", 5173)!).replace(":5173", ":5180")), /the-host-program/, "the host's own program still answers on its port: nothing was taken from it");
-    assert.ok(await until(() => ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180)), "the other workspace keeps 5180 taken");
-    serve("web/two", "two 5180 move");
-    assert.ok(await until(() => urlOf("web/two", 5181) !== undefined), "a server that tries the next number lands on 5181, and that is forwarded");
-    assert.match(await request(5181, hostOf(urlOf("web/two", 5181)!)), /workspace:two/);
+    // The other workspace is not made to keep 5180 taken (it once was: an API meant only for
+    // its own workspace could then not have the port at all): its server takes 5180, and
+    // answers inside the workspace.
+    await sleep(3000);
+    assert.ok(!ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180 && /kept taken/.test(r.why)), "web/two is not asked to keep 5180 taken");
+    serve("web/two", "two 5180");
+    assert.ok(await until(() => ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180 && /not forwarded/.test(r.why))), "its server has 5180, reported as not forwarded");
+    const inside = stack.inVm(vmOf("web/two"), ["bash", "-c", "curl -s -m 5 http://127.0.0.1:5180/"]);
+    assert.match(inside.stdout, /workspace:two/, "and answers inside its workspace");
   });
 
   it("stopping a workspace takes its ports down", async () => {

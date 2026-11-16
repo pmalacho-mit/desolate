@@ -140,8 +140,10 @@ The exact URL is what the person's `desolate ports` shows; tell them the port. D
 that check the Host header (Vite, webpack) accept these names as they are: they end in
 `.localhost`. Vite's `server.host` must be `0.0.0.0` (its default, `localhost`, can mean
 `::1` only), and its HMR websocket works through the same address. If a port you
-wanted is already taken here, something else needs that number on their machine: let your
-server move to the next one.
+wanted is already taken here, another workspace of the person's speaks a protocol with no
+hostname on it (a database): let your server move to the next one. If the person says your
+port does not open, a program on their Mac holds that number (their `desolate ports` and
+dashboard say so): it still works inside this workspace, but give what they open another port.
 
 ## Secrets: you hold names, not values
 

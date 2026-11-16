@@ -334,7 +334,11 @@ const serve = async () => {
     }
     for (const entry of entries.values()) {
       const reserve = new Set<number>();
-      for (const port of hostHeld.keys()) if (!entry.listeners.has(port)) reserve.add(port);
+      // Not a port the Mac holds: kept taken in the VM, it stopped a program there from using
+      // it at all, though only forwarding was impossible (dogfooding: an API meant only for
+      // its own workspace's Vite proxy could not have 3000, which another macOS user held;
+      // Express 5 said "listening" while every request was reset, depending on which started
+      // first). Such a port is reported as not forwarded instead (view, facts, the dashboard).
       for (const port of forwards.keys())
         if (!entry.listeners.has(port) && knownRaw.has(port) && rawOwner.get(port) !== entry.vm) reserve.add(port);
       entry.reserved = reserve;
@@ -488,7 +492,7 @@ const serve = async () => {
       forwarded: [...entry.listeners].sort((a, b) => a - b).filter((port) => !hostHeld.has(port)).map((port) => ({ port, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}` })),
       reserved: [
         ...[...entry.reserved].sort((a, b) => a - b).map((port) => ({ port, why: hostHeld.has(port) ? `a program on this machine holds it (${holderOf(port)})` : `no name in its protocol, and ${entries.get(rawOwner.get(port) ?? "")?.workspace ?? "another workspace"} had it first` })),
-        ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: `listening in the workspace, but a program on this machine holds that port (${holderOf(port)}): not forwarded` })),
+        ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: `listening in the workspace, but a program on this Mac holds port ${port} (${holderOf(port)}): not forwarded, and the workspace's address on port ${port} reaches that program instead. Run it on another port` })),
       ],
     })).sort((a, b) => a.workspace.localeCompare(b.workspace));
 
@@ -609,6 +613,9 @@ const serve = async () => {
           devcontainer: entry.devcontainer || undefined,
           editor: entry.editorToken && !editorError ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
           ports: [...entry.listeners].sort((x, y) => x - y).filter((p) => !hostHeld.has(p)).map((p) => ({ port: p, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}` })),
+          // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
+          // address on that port reaches the Mac's program (the dashboard says so).
+          heldOnMac: [...entry.listeners].sort((x, y) => x - y).filter((p) => hostHeld.has(p)).map((p) => ({ port: p, by: holderOf(p) })),
         } : {}),
       };
     }
