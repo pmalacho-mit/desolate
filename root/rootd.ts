@@ -69,18 +69,33 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
   if (!r) return { ok: false, error: "that is not a request desolate makes (desolate spawn --help)" };
   const all = workspaces(domain);
   if (!all.some((w) => w.workspace === r.parent)) return { ok: false, error: `${domain} has no workspace '${r.parent}'` };
+  if (r.op === "spawn" && r.name === "template") return { ok: false, error: "'template' is the name of the domain's template build", fix: "desolate spawn --name <another>" };
   if (r.op === "spawn") {
     const max = domainOf(domain).spawnMax ?? null;
     if (max === 0) return { ok: false, error: `${domain}'s workspaces cannot start workspaces: the person turned it off`, fix: `on the Mac: desolate domain ${domain} spawn --max none` };
     const pending = queuedFor(domain).filter((q) => q.kind === "workspace.spawn" && Date.now() - q.at < 30 * 60_000 && !all.some((w) => w.workspace === q.args.workspace));
     if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.args.workspace === r.name)) return { ok: false, error: `${domain} already has a workspace '${r.name}'`, fix: "desolate spawn --name <another>" };
-    // A branch is checked out in one workspace at a time, in every repository of the domain:
-    // said here, to the workspace that asked, and in its terms. (From the host it came back
-    // later, with a fix for the person: remove the workspace holding it, the asker itself.)
-    const branch = r.branch || r.name;
-    const dir = branch.replace(/\//g, "-");
-    const holder = all.find((w) => w.checkouts.some((c) => c.kind === "worktree" && c.name === dir));
-    if (holder) return { ok: false, error: `the branch '${branch}' is checked out in ${holder.workspace === r.parent ? "this workspace" : `${domain}/${holder.workspace}`} (a workspace you start gets that branch in each of the domain's repositories)`, fix: `desolate spawn --name ${r.name} --branch <a branch of its own>` };
+    // A branch is checked out in one workspace at a time, and a main checkout too: said here,
+    // to the workspace that asked, and in its terms. (From the host it came back later, with a
+    // fix for the person: remove the workspace holding it, the asker itself.) What it would
+    // take: each --checkout as named; with --branch, that branch in the others; with neither,
+    // a worktree named for it where the main checkout is held (domains.ts, plan).
+    const repos = domainOf(domain).repos;
+    const named = new Map(r.checkouts.map((c) => [c.slice(0, c.indexOf("=")), c.slice(c.indexOf("=") + 1)] as const));
+    const where = (w: string) => (w === r.parent ? "this workspace" : `${domain}/${w}`);
+    for (const [repo, how] of named) {
+      if (!repos.includes(repo)) return { ok: false, error: `${repo} is not in the domain ${domain}`, fix: `desolate spawn --checkout <one of: ${repos.join(", ")}>=worktree:<branch>` };
+      const holder = how === "main"
+        ? all.find((w) => w.checkouts.some((c) => c.repo === repo && c.kind === "main"))
+        : all.find((w) => w.checkouts.some((c) => c.repo === repo && c.kind === "worktree" && c.name === how.slice("worktree:".length).replace(/\//g, "-")));
+      if (holder) return { ok: false, error: `${how === "main" ? `the main checkout of ${repo}` : `the branch '${how.slice("worktree:".length)}' of ${repo}`} is checked out in ${where(holder.workspace)}`, fix: `desolate spawn --name ${r.name} --checkout ${repo}=worktree:<a branch of its own>` };
+    }
+    if (named.size === 0 || r.branch) {
+      const branch = r.branch || r.name;
+      const dir = branch.replace(/\//g, "-");
+      const holder = all.find((w) => w.checkouts.some((c) => c.kind === "worktree" && c.name === dir && !named.has(c.repo)));
+      if (holder) return { ok: false, error: `the branch '${branch}' is checked out in ${where(holder.workspace)} (a workspace you start gets that branch in each repository you do not name with --checkout)`, fix: `desolate spawn --name ${r.name} --checkout <owner/repo>=worktree:<a branch of its own>   (or --branch <a branch of its own>)` };
+    }
     const live = all.filter((w) => w.startedBy).length + pending.length;
     if (max !== null && live >= max) return { ok: false, error: `${domain} already has ${live} workspace(s) started by its workspaces, its limit of ${max}`, fix: "close one you started (desolate close <name>), or ask the person to raise the limit" };
   } else {
@@ -88,7 +103,7 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
     if (!child) return { ok: false, error: `${domain} has no workspace '${r.name}'` };
     if (child.startedBy?.workspace !== r.parent) return { ok: false, error: `${domain}/${r.name} was not started by ${r.parent}: only the workspace that started it can close it`, fix: "ask the person: desolate rm on the Mac" };
   }
-  const args: Record<string, string> = { domain, workspace: r.name, parent: r.parent, at: r.at, nonce: r.nonce, mac: r.mac, ...(r.op === "spawn" ? { branch: r.branch, command: JSON.stringify(r.command) } : {}) };
+  const args: Record<string, string> = { domain, workspace: r.name, parent: r.parent, at: r.at, nonce: r.nonce, mac: r.mac, ...(r.op === "spawn" ? { branch: r.branch, checkouts: JSON.stringify(r.checkouts), command: JSON.stringify(r.command) } : {}) };
   fs.mkdirSync(HOST_QUEUE, { recursive: true });
   writeJson(path.join(HOST_QUEUE, `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}.json`), { kind: r.op === "spawn" ? "workspace.spawn" : "workspace.close", args, at: Date.now() });
   return { ok: true, workspace: r.name };

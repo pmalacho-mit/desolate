@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
-import { draftOf, ID, LIMIT } from "../shared/issues.ts";
+import { digestOf, draftOf, ID, LIMIT } from "../shared/issues.ts";
 import type { Draft, Issue } from "../shared/issues.ts";
 import { isSlug } from "../shared/names.ts";
 import { printable } from "../shared/text.ts";
@@ -71,8 +71,12 @@ export const reject = (id: unknown): Issue | { error: string } => {
   return save({ ...issue, state: "rejected" });
 };
 /** Where the host published it (its URL checked by the host, shared/issues.ts issueUrl). */
-export const published = (id: unknown, url: string): Issue | { error: string } => {
+export const published = (id: unknown, url: string, digest?: unknown): Issue | { error: string } => {
   const issue = get(id);
   if (!issue || issue.state !== "approving") return { error: "that issue was not waiting for approval" };
+  // Only the text that was approved: a draft sent back and edited while gh ran is not what
+  // GitHub has (audit, 2026-11-16).
+  const draft = draftOf(issue);
+  if (digest !== undefined && ("error" in draft || digestOf(draft) !== digest)) return { error: "that issue's text changed after it was approved" };
   return save({ ...issue, state: "published", url, problem: undefined });
 };

@@ -14,9 +14,10 @@
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
 import { printable } from "../shared/text.ts";
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
+import type { Size } from "../shared/size.ts";
 import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Server, Socket } from "node:net";
@@ -38,8 +39,10 @@ import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
-import { sniffSocket } from "../shared/sniff.ts";
+import { greetingIs, LIMIT, sniffSocket } from "../shared/sniff.ts";
+import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
+import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
@@ -51,7 +54,7 @@ const RAW_PORTS = new Set([3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 262
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Checkouts = { repo: string; kind: string; name: string; path?: string }[];
-type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
+type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; editorTokenEpoch: number; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
 export type PortView = {
   workspace: string;
   forwarded: { port: number; url: string }[];
@@ -94,7 +97,9 @@ export const reviewerSummary = async (push: { repo: string; branch: string; comm
   try {
     return JSON.parse(result.stdout.trim().split("\n").pop() ?? "") as Summary;
   } catch {
-    return { ok: false, error: `the reviewer could not be asked: ${(result.stderr || result.stdout).trim().slice(-200)}` };
+    // Its own words only (stderr), never what it was printing: that is the push's content,
+    // the domain's, and was once shown here as if desolate had said it (lockfile text).
+    return { ok: false, error: `the reviewer's answer could not be read${result.code !== 0 ? ` (it ended with ${result.code}: ${printable(result.stderr.trim().slice(-200), 200)})` : ""}; what a push carries can cause this` };
   }
 };
 
@@ -114,7 +119,7 @@ const approvalBackend = (): ApprovalBackend => {
       const push = parseApproval(message);
       if (push) events.publish(events.host("refused", { repo: push.repo, branch: push.branch, commit: push.commit }));
     },
-    issues: async () => (await rootctl<unknown[]>("issue.list", {}, { quiet: true, timeoutMs: 30_000 })).filter((i) => (i as { state?: unknown }).state === "approving"),
+    issues: async () => (await rootctl<unknown[]>("issue.list", { waiting: true }, { quiet: true, timeoutMs: 30_000 })).filter((i) => (i as { state?: unknown }).state === "approving"),
     publishIssue: async (issue) => {
       const url = await (await import("./issues.ts")).publish(issue);
       events.publish(events.host("issue-published", { repo: issue.repo, id: issue.id, url }));
@@ -129,24 +134,35 @@ const serve = async () => {
   const entries = new Map<string, Entry>();
   /** A host listener per forwarded port. */
   const forwards = new Map<number, Server>();
+  /** The same ports on ::1: browsers resolve *.localhost to it as well, and on a Mac other
+   *  people use, another user's program there would get a workspace's requests (audit). */
+  const forwards6 = new Map<number, Server>();
   /** Ports a workspace listens on that a program on the host already holds: they cannot be
    *  published. Tried again now and then, in case the program has gone. */
   const hostHeld = new Map<number, number>();
   /** What holds such a port, as this user's lsof sees it: said to the person, who otherwise
    *  had to guess (dogfooding: 3000 was another macOS user's, which lsof cannot show). */
   const heldBy = new Map<number, string>();
+  // Asked of lsof in the background: run while the forwarder waited, it held up every timer,
+  // and a 400 ms sniff could end before bytes already sent were read (T2 03, 2026-11-16).
   const holderOf = (port: number) => {
     if (!heldBy.has(port)) {
-      const found = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"], { encoding: "utf8", timeout: 3000 }).stdout ?? "";
-      const pid = /^p(\d+)/m.exec(found)?.[1];
-      const command = /^c(.+)/m.exec(found)?.[1];
-      heldBy.set(port, pid && command ? `${printable(command, 40)}, pid ${pid}` : "not a program of yours: another user's, or the system's");
+      heldBy.set(port, "a program on this Mac");
+      execFile("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"], { encoding: "utf8", timeout: 3000 }, (_error, found) => {
+        const pid = /^p(\d+)/m.exec(found ?? "")?.[1];
+        const command = /^c(.+)/m.exec(found ?? "")?.[1];
+        if (heldBy.has(port)) heldBy.set(port, pid && command ? `${printable(command, 40)}, pid ${pid}` : "not a program of yours: another user's, or the system's");
+      });
     }
     return heldBy.get(port)!;
   };
   /** For a port spoken without a name: the one workspace it reaches. */
   const rawOwner = new Map<number, string>();
-  const knownRaw = new Set(RAW_PORTS);
+  // Ports whose protocol carries no name: the known ones, the person's (DESOLATE_RAW_PORTS, a
+  // comma list, for a server that speaks first on another port), and ones learned from bytes
+  // that were not HTTP or TLS, forgotten when no workspace listens there any more.
+  const knownRaw = new Set([...RAW_PORTS, ...(process.env.DESOLATE_RAW_PORTS ?? "").split(",").map(Number).filter((p) => Number.isInteger(p) && p >= 1024 && p <= 65535)]);
+  const waiting = new Set<Socket>();
   const log = (line: string) => fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
 
   const byName = (name: string): { entry: Entry; surface: "dev" | "editor" } | null => {
@@ -189,25 +205,45 @@ const serve = async () => {
     client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
   };
 
+  const REQUEST_LINE = /^[A-Z]{1,16} \S+ HTTP\/\d/;
+  /** The start of TLS or of an HTTP request, cut off before its line ended. */
+  const cutOff = (head: Buffer) => head.length > 0 && (head[0] === 0x16 || REQUEST_LINE.test(head.toString("latin1")) || (/^[A-Z]{1,16}( |$)/.test(head.toString("latin1")) && !head.includes(0x0a)));
+  /** A short line that merely looks like HTTP (Redis's `SET k v`), not a request line, and not
+   *  a head that ran to LIMIT: on a raw port, that protocol's. */
+  const nameless = (head: Buffer) => head.length < LIMIT && !REQUEST_LINE.test(head.toString("latin1"));
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
-    let { sniffed, head } = await sniffSocket(client, 400);
-    // Silence is not a protocol. A client that has said nothing yet (a browser's
-    // preconnected socket, `nc -z`, a health check) on a port not known to be raw was taken
-    // for a nameless protocol: the port was then raw for good, kept taken in every other
-    // workspace, and the browser's request, sent on that socket a moment later, went to
-    // whichever workspace had the port first, whatever name it carried (dogfooding: Vite's
-    // 5173 in one domain pushed another domain's Vite to 5174, as "no name in its protocol").
-    // Only bytes that are not HTTP or TLS make a port raw. With one workspace on the port
-    // there is no choice to make, and a server-first protocol works as before.
-    if (sniffed.kind === "raw" && head.length === 0 && !knownRaw.has(port)) {
-      if (client.destroyed) return;
-      const listening = [...entries.values()].filter((e) => e.listeners.has(port));
-      if (listening.length === 1) return pipe(client, b.dial(listening[0]!.vm, port), head);
-      client.resume();
-      ({ sniffed, head } = await sniffSocket(client, 120_000));
-      if (sniffed.kind === "raw" && head.length === 0) return void client.destroy();
+    // Routed by the name in the first bytes, and only by it. On a port not known to speak a
+    // protocol with no name, a client that has said nothing yet (a browser's preconnected
+    // socket, `nc -z`) is waited for, up to two minutes, and closed if it stays silent: it is
+    // never piped anywhere before it names a workspace. (It once was: first taken for a
+    // nameless protocol, then, briefly, sent to the one workspace listening on the port,
+    // where the browser's request, sent on that socket later, arrived whatever its Host,
+    // with the cookies of the workspace it named: found by the audit of 2026-11-16.)
+    const raw = knownRaw.has(port);
+    // At most 512 waiting at once, and when full the longest-waiting goes, not the newest: a
+    // program of another user's opening silent sockets could otherwise lock the person out.
+    if (waiting.size >= 512) {
+      const oldest = waiting.values().next().value;
+      if (oldest) (waiting.delete(oldest), oldest.destroy());
     }
+    waiting.add(client);
+    let sniffedHead: { sniffed: Sniffed; head: Buffer; undecided?: boolean };
+    try {
+      sniffedHead = await sniffSocket(client, raw ? 400 : 60_000);
+    } finally {
+      waiting.delete(client);
+    }
+    let { sniffed } = sniffedHead;
+    const { head, undecided } = sniffedHead;
+    // Not known to be raw, and its bytes never said what they were (silence, or half a line,
+    // until the wait ran out): closed. Only a known raw port takes them (a server that speaks
+    // first). Nothing learns a port is raw from traffic: anyone could teach it that.
+    if (undecided && !raw) return void client.destroy();
+    // On a raw port, one short line that merely looks like HTTP (Redis's `SET k v`) is that
+    // protocol's. A real request line, or a head that ran to LIMIT, is HTTP: refused or sent
+    // on below by its name, never to the port's first workspace (audit of the fixes).
+    if (raw && sniffed.kind === "http" && sniffed.name === null && nameless(head)) sniffed = { kind: "raw" };
     if (sniffed.kind === "http" || sniffed.kind === "tls") {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
@@ -235,12 +271,59 @@ const serve = async () => {
       }
       return pipe(client, b.dial(target.entry.vm, port), head);
     }
-    // No name in the protocol: this port reaches one workspace, the first that had it.
-    knownRaw.add(port);
+    // No name in the protocol (bytes that cannot be HTTP or TLS: shared/sniff.ts): on a port
+    // known to be raw, the first workspace that had it; on any other, nothing.
+    if (!raw) return void client.destroy();
     const owner = rawOwner.get(port);
     const entry = owner ? entries.get(owner) : undefined;
     if (!entry || !entry.listeners.has(port)) return client.destroy();
-    pipe(client, b.dial(entry.vm, port), head);
+    // A head that is the start of a request or of TLS, cut off when the wait ran out, is a
+    // browser's (final review): never the port's first workspace's. (Only then: a decided
+    // head was raw already, and a MongoDB hello's first byte may be 0x16.)
+    if (undecided && cutOff(head)) return void client.destroy();
+    if (head.length > 0) return pipe(client, b.dial(entry.vm, port), head);
+    // A client that already went gets no connection to the owner (final review: each one
+    // held the owner's server until it hung up).
+    if (client.destroyed) return;
+    // Silent so far, on a raw port: a server that speaks first gets its client, and its
+    // greeting goes out now; but what the client says first is read before any of it goes on.
+    // If it is HTTP or TLS (a browser's preconnected socket, used later for a request naming
+    // another workspace, with its cookies: third review), both ends are closed.
+    const upstream = b.dial(entry.vm, port);
+    const close = () => (client.destroy(), upstream.destroy());
+    upstream.on("error", close);
+    upstream.on("close", close);
+    // And the greeting is looked at before it goes: one that starts like an HTTP response
+    // would be read as the answer to the request a browser later sends on its preconnected
+    // socket, a page at another workspace's origin (final review; shared/sniff.ts,
+    // greetingIs). Nothing of it goes on until it can no longer become one. No database's
+    // greeting starts so.
+    let greeting = Buffer.alloc(0);
+    const onGreeting = (chunk: Buffer) => {
+      greeting = Buffer.concat([greeting, chunk]);
+      const verdict = greetingIs(greeting.toString("latin1"));
+      if (verdict === "answer") return close();
+      if (verdict === "more") return;
+      upstream.off("data", onGreeting);
+      client.write(greeting);
+      upstream.pipe(client);
+    };
+    upstream.on("data", onGreeting);
+    client.resume();
+    const first = await sniffSocket(client, 600_000);
+    if (client.destroyed) return void upstream.destroy();
+    if (first.sniffed.kind === "tls" || REQUEST_LINE.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head)) || (first.undecided && cutOff(first.head))) return close();
+    client.on("error", close);
+    client.on("close", close);
+    // The client spoke, and not as a browser: a short greeting held back goes now.
+    if (upstream.listeners("data").includes(onGreeting)) {
+      upstream.off("data", onGreeting);
+      if (greeting.length > 0) client.write(greeting);
+      upstream.pipe(client);
+    }
+    if (first.head.length > 0) upstream.write(first.head);
+    client.pipe(upstream);
+    client.resume();
   };
 
   // Every workspace's editor, on one host port, by the editor's own hostname and no other.
@@ -264,7 +347,7 @@ const serve = async () => {
     }
   })));
   watchGitOut(log, (fields) => events.publish(events.host(fields.domain ? "git-delivery-handed" : "git-push-handed", fields)));
-  const editors = createServer((client) => {
+  const onPagesClient = (client: Socket) => {
     client.on("error", () => client.destroy());
     void sniffSocket(client, 400).then(({ sniffed, head }) => {
       if (sniffed.kind === "http" && sniffed.name === GIT_HOSTNAME) {
@@ -285,6 +368,9 @@ const serve = async () => {
       // The root's one surface: the dashboard. The state service checks the name and the
       // origin of every request itself.
       if (sniffed.kind === "http" && sniffed.name === ROOT_HOSTNAME) {
+        // Its token was retired (retired.ts): the cookie a tab still has may be another
+        // program's now, and the root still takes it until bootstrap gives it a new one.
+        if (dashboardStale()) return refuseHttp(client, "503 Service Unavailable", "desolate: the dashboard's token was retired (another program held [::1] on this port). Run `desolate bootstrap`, then `desolate ui` for its new address.\n");
         dashboardUsed = Date.now();
         return pipe(client, toStateService(), head);
       }
@@ -294,13 +380,31 @@ const serve = async () => {
         else client.destroy();
         return;
       }
+      if (stale(target.entry.editorTokenEpoch)) return refuseHttp(client, "503 Service Unavailable", `desolate: this editor's token was retired (another program held [::1] on this port). Run \`desolate bootstrap\` (or start the workspace), then \`desolate editor ${target.entry.domain}/${target.entry.workspace}\` for its new address.\n`);
       pipe(client, b.dial(target.entry.vm, EDITOR.gate), head);
     });
-  });
+  };
+  // On 127.0.0.1 and on ::1, or not at all: browsers try ::1 first for *.localhost (measured
+  // on the M1, Chrome), so a program of another user's on [::1]:<port> would be sent the
+  // dashboard's and the approval page's addresses, their tokens in them, and could approve a
+  // push (audit of the audit's fixes, 2026-11-16). If ::1 is someone else's, nothing is
+  // served, and doctor says so: every address this stack prints would open that program.
+  const editors = createServer(onPagesClient);
+  const editors6 = createServer(onPagesClient);
   editors.on("error", (error: NodeJS.ErrnoException) => {
     editorError = error.code === "EADDRINUSE" ? `a program on this machine holds port ${editorHostPort()}` : error.message;
     log(`editors on port ${editorHostPort()}: ${error.message}`);
   });
+  editors6.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return;   // no IPv6 here: nothing to look at there
+    editorError = error.code === "EADDRINUSE" ? `a program on this machine holds [::1]:${editorHostPort()}, where browsers look first` : `[::1]: ${error.message}`;
+    log(`editors on [::1]:${editorHostPort()}: ${error.message}`);
+    editors.close();
+    // A tab already open on these pages, reloaded, sends its cookie there, and the cookie is
+    // the token: the tokens are retired (retired.ts says how each is made again).
+    if (error.code === "EADDRINUSE") retire();
+  });
+  editors.on("listening", () => editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }));
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
 
   const reconcile = () => {
@@ -310,6 +414,8 @@ const serve = async () => {
       if (!wanted.has(port)) {
         server.close();
         forwards.delete(port);
+        forwards6.get(port)?.close();
+        forwards6.delete(port);
         rawOwner.delete(port);
       }
     for (const port of hostHeld.keys()) if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
@@ -327,14 +433,33 @@ const serve = async () => {
         hostHeld.set(port, Date.now());
         if (error.code !== "EADDRINUSE") log(`port ${port}: ${error.message}`);
       });
-      server.on("listening", () => hostHeld.delete(port));
+      server.on("listening", () => {
+        // Not held only once ::1 is this daemon's too (or there is no IPv6 here).
+        const six = createServer((client) => void onInbound(port, client));
+        six.on("listening", () => hostHeld.delete(port));
+        six.on("error", (error: NodeJS.ErrnoException) => {
+          if (forwards6.get(port) === six) forwards6.delete(port);
+          if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return void hostHeld.delete(port);
+          // Something else answers on [::1]:<port> (or it could not be held): a browser may go
+          // there with a workspace's name and cookies. Not forwarded at all, then, and said so.
+          if (forwards.get(port) === server) forwards.delete(port);
+          server.close();
+          hostHeld.set(port, Date.now());
+        });
+        forwards6.set(port, six);
+        six.listen({ port, host: "::1", exclusive: true, ipv6Only: true });
+      });
       forwards.set(port, server);
       // 127.0.0.1 only, never a wildcard: nothing on the LAN reaches a workspace.
       server.listen({ port, host: "127.0.0.1", exclusive: true });
     }
     for (const entry of entries.values()) {
       const reserve = new Set<number>();
-      for (const port of hostHeld.keys()) if (!entry.listeners.has(port)) reserve.add(port);
+      // Not a port the Mac holds: kept taken in the VM, it stopped a program there from using
+      // it at all, though only forwarding was impossible (dogfooding: an API meant only for
+      // its own workspace's Vite proxy could not have 3000, which another macOS user held;
+      // Express 5 said "listening" while every request was reset, depending on which started
+      // first). Such a port is reported as not forwarded instead (view, facts, the dashboard).
       for (const port of forwards.keys())
         if (!entry.listeners.has(port) && knownRaw.has(port) && rawOwner.get(port) !== entry.vm) reserve.add(port);
       entry.reserved = reserve;
@@ -344,10 +469,14 @@ const serve = async () => {
   const sync = async (entry: Entry) => {
     try {
       const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], { input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }), timeoutMs: 15_000 });
-      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; devcontainer?: unknown; folder?: unknown };
+      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; editorTokenEpoch?: unknown; devcontainer?: unknown; folder?: unknown };
       // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
       // rest is cut to a line.
       entry.editorToken = typeof reply.editorToken === "string" && /^[0-9a-f]{48}$/.test(reply.editorToken) ? reply.editorToken : "";
+      entry.editorTokenEpoch = typeof reply.editorTokenEpoch === "number" && Number.isSafeInteger(reply.editorTokenEpoch) ? reply.editorTokenEpoch : 0;
+      // A VM still running an older wsd says nothing of it (it is restarted only with the VM):
+      // asked directly, and only once tokens have been retired (review of the final fixes).
+      if (reply.editorTokenEpoch === undefined && retiredAt() > 0) entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
       entry.devcontainer = typeof reply.devcontainer === "string" ? printable(reply.devcontainer, 400, " ") : "";
       if (!entry.folder.startsWith("workspace:") && typeof reply.folder === "string" && /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(reply.folder)) entry.folder = reply.folder;
       if (!reply.ok || !Array.isArray(reply.listeners)) throw new Error(reply.error ?? `exit ${result.code}`);
@@ -422,7 +551,7 @@ const serve = async () => {
       existing.proxy = r.proxy;
       return;
     }
-    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", devcontainer: "", folder: "", watchers: [] };
+    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", editorTokenEpoch: 0, devcontainer: "", folder: "", watchers: [] };
     entries.set(r.vm, entry);
     // A status set in the workspace is a file changing in a share. A VM gets no events for
     // a share, so the host watches (the directory, for a change: it reads nothing) and
@@ -488,7 +617,7 @@ const serve = async () => {
       forwarded: [...entry.listeners].sort((a, b) => a - b).filter((port) => !hostHeld.has(port)).map((port) => ({ port, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}` })),
       reserved: [
         ...[...entry.reserved].sort((a, b) => a - b).map((port) => ({ port, why: hostHeld.has(port) ? `a program on this machine holds it (${holderOf(port)})` : `no name in its protocol, and ${entries.get(rawOwner.get(port) ?? "")?.workspace ?? "another workspace"} had it first` })),
-        ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: `listening in the workspace, but a program on this machine holds that port (${holderOf(port)}): not forwarded` })),
+        ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: `listening in the workspace, but a program on this Mac holds port ${port} (${holderOf(port)}): not forwarded, and the workspace's address on port ${port} reaches that program instead. Run it on another port` })),
       ],
     })).sort((a, b) => a.workspace.localeCompare(b.workspace));
 
@@ -607,8 +736,11 @@ const serve = async () => {
         status: vm.status,
         ...(entry ? {
           devcontainer: entry.devcontainer || undefined,
-          editor: entry.editorToken && !editorError ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
+          editor: entry.editorToken && !editorError && !stale(entry.editorTokenEpoch) ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
           ports: [...entry.listeners].sort((x, y) => x - y).filter((p) => !hostHeld.has(p)).map((p) => ({ port: p, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}` })),
+          // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
+          // address on that port reaches the Mac's program (the dashboard says so).
+          heldOnMac: [...entry.listeners].sort((x, y) => x - y).filter((p) => hostHeld.has(p)).map((p) => ({ port: p, by: holderOf(p) })),
         } : {}),
       };
     }
@@ -625,7 +757,30 @@ const serve = async () => {
     sentAt = Date.now();
   };
 
+  /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
+   *  running workspaces, with the new one's (its domain's size, else the stack's), within
+   *  85% of this Mac's (no fixed number of workspaces, but not past what the Mac has). */
+  const roomFor = async (domain: string): Promise<string | null> => {
+    try {
+      const { stackDefaults } = await import("./workspaces.ts");
+      const { merge } = await import("../shared/size.ts");
+      const all = await rootctl<{ slug: string; size?: Partial<Size>; workspaces: { vm: string; size?: Partial<Size> }[] }[]>("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
+      const up = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+      let given = 0;
+      for (const d of all) for (const w of d.workspaces) if (up.has(w.vm)) given += Number(w.size?.memoryMiB ?? stackDefaults().memoryMiB) || 0;
+      const next = merge(all.find((d) => d.slug === domain)?.size, stackDefaults()).memoryMiB;
+      // Every spawn under way (this one among them) counts as a VM of that size: they are not
+      // running yet, and a burst of them all found the same room (review of the fixes).
+      const coming = (await import("./spawn.ts")).underWay() * next;
+      const mac = Math.floor(os.totalmem() / 1048576);
+      return given + coming > mac * 0.85 ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)` : null;
+    } catch (error) {
+      // Not known is not room (P6).
+      return `the room on this Mac could not be worked out: ${printable((error as Error).message, 200)}`;
+    }
+  };
   const runAction = async (action: { id: string; kind: unknown; args: unknown }) => {
+    let spawning: string | null = null;
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
     const report = (lines: string[], done?: number) => rootHttp("POST", "/host/progress", { id: action.id, lines, ...(done === undefined ? {} : { done: true, code: done }) }).catch(() => {});
@@ -641,9 +796,37 @@ const serve = async () => {
         log(`refused a workspace's request (${String(action.kind)}): ${why}`);
         return void report([`refused: ${why}`], 77);
       }
+      if (signed!.op === "spawn") {
+        // Counted as under way by check(); ended however this ends. Room on this Mac: the
+        // memory given to running workspaces and to those under way, within most of the Mac's
+        // (no fixed number of workspaces; but not past what it has).
+        spawning = signed!.domain;
+        const room = await roomFor(signed!.domain);
+        if (room) {
+          (await import("./spawn.ts")).end(spawning);
+          return void report([`refused: ${room}`], 75);
+        }
+      }
     }
+    const ended = () => {
+      // (Taken before it is cleared: the import resolves later. Reading it there ended
+      // nothing, and after three spawns a domain could start no more: third review.)
+      const domain = spawning;
+      spawning = null;
+      if (domain) void import("./spawn.ts").then((m) => m.end(domain));
+    };
     log(`dashboard: desolate ${argv.join(" ")}`);
-    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", path.join(RELEASE_DIR, "host", "cli.ts"), ...argv], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" } });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", path.join(RELEASE_DIR, "host", "cli.ts"), ...argv], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" } });
+    } catch (error) {
+      ended();
+      return void report([`could not run: ${printable((error as Error).message, 200)}`], 1);
+    }
+    child.on("error", (error) => {
+      ended();
+      void report([`could not run: ${printable(error.message, 200)}`], 1);
+    });
     let pending: string[] = [];
     let flushing: NodeJS.Timeout | null = null;
     const take = (chunk: Buffer) => {
@@ -657,6 +840,7 @@ const serve = async () => {
     child.stderr!.on("data", take);
     void report([]);
     child.on("close", (code) => {
+      ended();
       if (flushing) clearTimeout(flushing);
       void report(pending.splice(0), code ?? 1).then(() => tellRoot().catch(() => {}));
     });
@@ -773,6 +957,10 @@ const serve = async () => {
           unregister(request.vm!);
           tellRoot().catch(() => {});
           reply = { ok: true };
+        } else if (request.op === "editor") {
+          // Whether this daemon holds its port, on both loopback addresses: cheap, for the
+          // check before an address with a token in it is printed.
+          reply = { ok: true, editor: { port: editorHostPort(), error: editorError } };
         } else if (request.op === "ports") {
           await Promise.all([...entries.values()].map(sync));
           reconcile();
@@ -812,7 +1000,8 @@ const serve = async () => {
         } else if (request.op === "stop") {
           connection.end(JSON.stringify({ ok: true }) + "\n");
           editors.close();
-          for (const server of forwards.values()) server.close();
+          editors6.close();
+          for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
           for (const entry of entries.values()) entry.link?.close();
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });
@@ -831,9 +1020,12 @@ const serve = async () => {
   try {
     const domains = await rootctl<{ slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]>("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
     const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+    const { isOwnVm } = await import("./workspaces.ts");
     for (const d of domains)
       for (const w of d.workspaces)
-        if (running.has(w.vm)) {
+        // The root's word, checked: a record naming another domain's VM gets no link and no
+        // proxy (it would give that VM this domain's names and rules: review of the fixes).
+        if (running.has(w.vm) && w.domain === d.slug && isOwnVm(d.slug, w)) {
           const proxy = await rootctl<{ socket: string }>("proxy.start", { vm: w.vm, domain: w.domain, workspace: w.workspace }, { quiet: true, timeoutMs: 60_000 });
           register({ vm: w.vm, domain: w.domain, workspace: w.workspace, proxy: proxy.socket, checkouts: w.checkouts } as Registered);
         }
@@ -909,9 +1101,17 @@ export const disconnectWorkspace = async (vm: string) => {
 
 /** Why the daemon could not take the editors' port ("" when it holds it), or null when the
  *  daemon does not answer. Asked without starting a daemon: doctor reports, it does not fix. */
+/** Refuses unless this daemon says it holds its port on both loopback addresses: an address
+ *  with a token in it is printed only then (else it would be sent to whatever holds it). Not
+ *  known is not held (P6): a daemon that does not answer refuses too. */
+export const tokenAddressesSafe = async () => {
+  const held = await editorPortError();
+  if (held === null) refuse("not printed: the host daemon did not say it holds its port, and this address carries a token", "desolate doctor");
+  if (held) refuse(`not printed: ${held}, and this address carries a token`, "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap");
+};
 export const editorPortError = async (): Promise<string | null> => {
   if (!(await alive())) return null;
-  const reply = await ask({ op: "ports" }).catch(() => null);
+  const reply = await ask({ op: "editor" }, 10_000).catch(() => null);
   const editor = reply?.editor as { error?: unknown } | undefined;
   return reply?.ok === true ? String(editor?.error ?? "") : null;
 };
@@ -944,6 +1144,9 @@ export const ui = async (): Promise<{ dashboard: string; approvals: string }> =>
     /* not bootstrapped */
   }
   if (!/^[0-9a-f]{48}$/.test(token)) refuse("this stack has no dashboard credential yet", "desolate bootstrap");
+  // An address with a token in it is printed only when this daemon holds its port, on both
+  // loopback addresses: else it would be sent to whatever does.
+  await tokenAddressesSafe();
   const { approveAddress } = await import("./approve-web.ts");
   return { dashboard: `http://${ROOT_HOSTNAME}:${editorHostPort()}/?tkn=${token}`, approvals: approveAddress() };
 };

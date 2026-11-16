@@ -193,7 +193,7 @@ const issueElement = (issue) => {
   const labels = element.querySelector(".labels");
   if (issue.labels.length) for (const label of issue.labels) labels.append(el("code", label));
   else labels.textContent = "none";
-  element.querySelector(".from").textContent = `Offered by ${issue.domain}/${issue.workspace}${issue.edited ? ", then edited by you on the dashboard" : ""}.${issue.labels.some((l) => /^desolate:/.test(l)) ? " A desolate: label may start an agent on it (recipes/issues.sh)." : ""}`;
+  element.querySelector(".from").textContent = `The root says: offered by ${issue.domain}/${issue.workspace}${issue.edited ? ", then edited on the dashboard" : ""}. What is sent is exactly what is shown here.${issue.labels.some((l) => /^desolate:/.test(l)) ? " A desolate: label may start an agent on it (recipes/issues.sh)." : ""}`;
   element.querySelector(".body").textContent = issue.body ? unhidden(issue.body) : "(no body)";
   return element;
 };

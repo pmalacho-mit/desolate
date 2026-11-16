@@ -79,8 +79,11 @@ export const ops: Record<string, Op> = {
   },
   // The issues waiting for the person's approval on the Mac, for its terminal
   // (`desolate issue publish`); and what became of one.
-  async "issue.list"() {
-    return issues.list();
+  // `waiting`: only those still to be decided (offered, approving): the approval page asks
+  // once a second, and need not carry every issue ever kept.
+  async "issue.list"(args) {
+    const all = issues.list();
+    return args.waiting === true ? all.filter((i) => i.state === "offered" || i.state === "approving") : all;
   },
   async "issue.freeze"(args) {
     const result = issues.toApprove(args.id);
@@ -90,7 +93,7 @@ export const ops: Record<string, Op> = {
   async "issue.done"(args) {
     const issue = issues.get(args.id) ?? refuse("there is no such issue", "desolate issues");
     const where = args.url === undefined ? null : issueUrl(issue.repo, args.url);
-    const result = where ? issues.published(issue.id, where) : issues.backToDraft(issue.id, typeof args.refused === "string" ? args.refused : "not published");
+    const result = where ? issues.published(issue.id, where, args.digest) : issues.backToDraft(issue.id, typeof args.refused === "string" ? args.refused : "not published");
     if ("error" in result) refuse(result.error, "desolate issues");
     return result;
   },
@@ -98,7 +101,7 @@ export const ops: Record<string, Op> = {
     return domains.setSpawn(args.slug, args.max);
   },
   async "domain.env-key"(args) {
-    return domains.envKey(args.slug);
+    return domains.envKey(args.slug, args.repo);
   },
   async "domain.list"() {
     return domains.domains().map((d) => ({ ...d, workspaces: domains.workspaces(d.slug) }));

@@ -59,7 +59,7 @@ export const templateVm = (domain: string, key: string) => `dsl-${INSTANCE}-t${h
 const SCRUB = `set -e
 docker ps -aq 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
 for home in /home/*; do
-  rm -f "$home/.desolate-editor/token" "$home/.desolate-editor/gate.host" "$home/.desolate-editor/gate.pid" "$home/.desolate-editor/server.pid" "$home/.desolate/workspace.json"
+  rm -f "$home/.desolate-editor/token" "$home/.desolate-editor/token.epoch" "$home/.desolate-editor/gate.host" "$home/.desolate-editor/gate.pid" "$home/.desolate-editor/server.pid" "$home/.desolate/workspace.json"
 done
 rm -f /var/lib/desolate/*.log
 sync`;
@@ -67,34 +67,37 @@ sync`;
 /** The domain's template for its environment as published now: present, or built now.
  *  null when the domain has no spec, or the build did not come up (the workspace is then made
  *  from desolate's base, as before, and `say` says why). */
-export const ensure = async (domain: string, repos: string[], build: Builder, say: (line: string) => void): Promise<string | null> => {
+export const ensure = async (domain: string, repos: string[], build: Builder, say: (line: string) => void, envRepo?: string): Promise<string | null> => {
   // A template only makes a start faster: nothing about one may stop a workspace being made
   // (two `up`s at once in a domain: the second finds the first's build under way).
   try {
-    return await ensureOrThrow(domain, repos, build, say);
+    return await ensureOrThrow(domain, repos, build, say, envRepo);
   } catch (error) {
     say(`  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`);
     return null;
   }
 };
 
-const ensureOrThrow = async (domain: string, repos: string[], build: Builder, say: (line: string) => void): Promise<string | null> => {
+const ensureOrThrow = async (domain: string, repos: string[], build: Builder, say: (line: string) => void, envRepo?: string): Promise<string | null> => {
   const b = backend();
-  const env = await rootctl<EnvKey | null>("domain.env-key", { slug: domain }, { quiet: true });
+  const env = await rootctl<EnvKey | null>("domain.env-key", { slug: domain, ...(envRepo ? { repo: envRepo } : {}) }, { quiet: true });
   if (!env) return null;
   const key = keyOf(env);
   const name = templateVm(domain, key);
   const info = await b.info(name);
   if (info.status === "stopped" && info.labels.template === key && info.labels.domain === domain) return name;
-  // A template of this domain for another environment is stale; one half made is no use.
+  // A template of this domain for this environment, made from an older spec, is stale; one
+  // half made is no use. Another environment's is not: a domain with a python repository and a
+  // node one keeps a template for each (one made before templates were labelled with their
+  // environment counts as stale).
   for (const vm of await b.list())
-    if (vm.labels.domain === domain && vm.labels.template && vm.name !== name) await b.destroy(vm.name);
+    if (vm.labels.domain === domain && vm.labels.template && vm.name !== name && (vm.labels.env ?? env.repo) === env.repo) await b.destroy(vm.name);
   if (info.status !== "missing") await b.destroy(name);
 
   say(`  building ${domain}'s environment once (${env.repo}, ${env.spec} ${env.id.slice(0, 12)}): later workspaces start from it`);
-  const plan = await rootctl<WorkspacePlan>("workspace.plan", { instance: INSTANCE, domain, name: "template", checkouts: [], base: null, fetch: false }, { quiet: true });
+  const plan = await rootctl<WorkspacePlan>("workspace.plan", { instance: INSTANCE, domain, name: "template", checkouts: [], base: null, fetch: false, env: env.repo }, { quiet: true });
   const builder: WorkspacePlan = { ...plan, vm: name };
-  const spec: VmSpec = { ...build.specOf(builder, repos), labels: { title: `${domain} template`, domain, template: key } };
+  const spec: VmSpec = { ...build.specOf(builder, repos), labels: { title: `${domain} template`, domain, template: key, env: env.repo } };
   const { disconnectWorkspace } = await import("./daemon.ts");
   let made = false;
   // A line per phase, with its time: a first `up` sat on the line above for 200 s on the M1,

@@ -44,7 +44,7 @@ export const statsLines = (value: unknown): string[] => {
   const used = Number(s.spawn?.used ?? 0);
   lines.push(max === 0 ? "  its workspaces cannot start workspaces: the person turned it off" : max === null ? `  started by workspaces: ${used}, no limit (desolate spawn; start one only when the work needs it)` : `  started by workspaces: ${used} of at most ${max} (desolate spawn; each counts until removed)`);
   for (const w of s.workspaces ?? []) {
-    const size = w.size ? `  ${w.size.cpus} CPU, ${gib(w.size.memoryMiB)}` : "";
+    const size = w.size ? `  ${Number(w.size.cpus)} CPU, ${gib(Number(w.size.memoryMiB))}` : "";
     const by = w.startedBy ? `started by ${p(w.startedBy, 40)}${w.outlived ? " (since removed: this one outlived it)" : ""}` : "started by the person";
     lines.push(`  ${p(w.workspace, 40)}  ${p(w.vm ?? w.state, 20)}${size}  ${by}`);
     for (const c of w.checkouts ?? []) lines.push(`      ${p(c.repo, 100)}  ${p(c.head ?? c.branch, 120)}`);

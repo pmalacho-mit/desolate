@@ -272,7 +272,7 @@ const main = async () => {
   const identity = [plan.author?.name ?? `${plan.domain}/${plan.workspace}`, plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`];
   await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "sh", "-c", 'case "$(git config --global user.email 2>/dev/null)" in ""|*.desolate.invalid) git config --global user.name "$1" && git config --global user.email "$2" ;; esac', "_", ...identity]);
   // And the domain's repositories by their GitHub addresses, as in the VM (git-urls.ts).
-  for (const args of urlRules(plan.checkouts.map((c) => c.repo))) await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "git", "config", "--global", ...args]);
+  for (const args of urlRules(plan.repos ?? plan.checkouts.map((c) => c.repo))) await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "git", "config", "--global", ...args]);
   // A compose service's own network, reached from the VM (bridge.ts): its listeners, its
   // `service:port` forwards, and the editor's server when it runs there.
   const compose = spec.dockerComposeFile !== undefined;

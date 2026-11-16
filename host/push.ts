@@ -30,7 +30,7 @@ export const offers = async (domain: string | undefined, out: Out, json: boolean
   const refused = await rootctl<{ domain: string; repo: string; at: string; why: string }[]>("offers.refused", { domain }, { quiet: true }).catch(() => []);
   for (const r of refused) out(`Refused from ${r.domain} (${r.repo}, ${r.at}): ${plain(r.why)}\n  Nothing new from ${r.domain} is taken while one of its branches holds what git refused. Delete that branch in the workspace, then \`desolate sync\` there.`);
   // Issues a workspace offered need you too (the dashboard puts them under "Needs you").
-  const issues = (await rootctl<Issue[]>("issue.list", {}, { quiet: true }).catch(() => [] as Issue[])).filter((i) => (i.state === "offered" || i.state === "approving") && (!domain || i.domain === domain));
+  const issues = (await rootctl<Issue[]>("issue.list", { waiting: true }, { quiet: true }).catch(() => [] as Issue[])).filter((i) => (i.state === "offered" || i.state === "approving") && (!domain || i.domain === domain));
   if (list.length === 0 && issues.length === 0) return out("no offers. In a workspace, `desolate offer` marks a branch ready for you.");
   out("Needs you:");
   for (const o of list) out(`  ${o.domain}  ${o.repo}  ${plain(o.branch)}  ${o.commit.slice(0, 12)}  from ${plain(o.workspace) || "(a workspace of the domain)"}${o.base ? `  for ${plain(o.base)}` : ""}${o.lfs ? `  ${o.lfs} LFS object(s)` : ""}\n    review: desolate review ${o.domain} ${o.repo} ${o.branch}`);

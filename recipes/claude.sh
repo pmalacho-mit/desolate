@@ -66,7 +66,12 @@ fi
 w=$domain/$name
 if [ -z "$existing" ]; then
   branch=${branch:-task/$name}
-  desolate up "$domain" --name "$name" --branch "$branch"
+  # With --checkout: the branch in that repository only, whose devcontainer is the environment.
+  if [ ${#at[@]} -gt 0 ]; then
+    desolate up "$domain" --name "$name" --checkout "${at[1]}=worktree:$branch"
+  else
+    desolate up "$domain" --name "$name" --branch "$branch"
+  fi
 fi
 
 # 3. Claude itself. The project's devcontainer may carry it (the feature

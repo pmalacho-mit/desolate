@@ -63,11 +63,23 @@ const listeners = async () => {
 
 /** What the host shows about this workspace without asking again: the editor's token (the
  *  host builds the address) and one line about the devcontainer. */
-const surfaces = (): { editorToken?: string; devcontainer?: string; folder?: string } => {
-  const out: { editorToken?: string; devcontainer?: string; folder?: string } = {};
+const epochOf = (file: string) => {
   try {
-    const token = fs.readFileSync(`${os.homedir()}/.desolate-editor/token`, "utf8").trim();
+    const value = Number(fs.readFileSync(file, "utf8").trim());
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+  } catch {
+    return 0;
+  }
+};
+const surfaces = (): { editorToken?: string; editorTokenEpoch?: number; devcontainer?: string; folder?: string } => {
+  const out: { editorToken?: string; editorTokenEpoch?: number; devcontainer?: string; folder?: string } = {};
+  try {
+    const file = `${os.homedir()}/.desolate-editor/token`;
+    const token = fs.readFileSync(file, "utf8").trim();
     if (/^[0-9a-f]{48}$/.test(token)) out.editorToken = token;
+    // The host's last retiring of the tokens that it was made after (editor.sh): the host
+    // serves no editor whose token was not made since (host/retired.ts).
+    out.editorTokenEpoch = epochOf(`${file}.epoch`);
   } catch {
     /* no editor yet */
   }

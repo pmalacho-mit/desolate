@@ -452,7 +452,10 @@ const workspaceRow = (d, w) => {
       allLanded(d, w) ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. ", running ? "Stop frees its memory; " : "", el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " removes it, with anything uncommitted in it.") : null,
       host.devcontainer ? el("div", { class: "line" }, `devcontainer: ${host.devcontainer}`) : null,
       w.size ? el("div", { class: "line" }, `${w.size.cpus} CPUs, ${Math.round(w.size.memoryMiB / 1024)} GiB memory, ${w.size.diskGiB} GiB disk`) : null,
-      (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? ", " : "", el("a", { href: p.url, target: "_blank", rel: "noopener" }, `:${p.port}`)])) : null),
+      (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? ", " : "", el("a", { href: p.url, target: "_blank", rel: "noopener" }, `:${p.port}`)])) : null,
+      // A port this Mac holds (another user's program, often, on a shared Mac): the
+      // workspace's server on it is not forwarded, and its address reaches that program.
+      ...(host.heldOnMac || []).map((h) => el("div", { class: "line warn", "data-held-on-mac": String(h.port) }, `not forwarded: :${h.port}. This Mac's port ${h.port} is held (${h.by}), so the workspace's address on it reaches that program, not this workspace. Run it on another port.`))),
     el("div", { class: "buttons" },
       running && host.editor ? el("a", { class: "button", href: host.editor, target: "_blank", rel: "noopener", "data-editor": "" }, "Open editor") : null,
       running ? button("Stop", key, "workspace.stop", target, true) : button("Start", key, "workspace.start", target)));

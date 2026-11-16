@@ -109,7 +109,9 @@ next: desolate editor you--app/greet --open      its editor, in your browser
 A workspace is a VM with a worktree of each repository, on the branch you named. Each
 repository can have its own branch: `--checkout you/lib=worktree:fix/token` for that one
 (repeat it per repository), `--branch` for the rest, `--checkout you/lib=main` for a
-repository's main checkout.
+repository's main checkout. A repository you name in neither gets its main checkout if no
+other workspace holds it, else none. The first repository you name with `--checkout`
+chooses the environment: its `devcontainer.json`, if it has one.
 
 **Its size.** By default a workspace gets half your Mac's cores (2 to 4), a quarter of its
 memory (3 to 8 GiB) and 30 GiB of disk; `desolate bootstrap` says what that comes to on your
@@ -124,7 +126,8 @@ What it costs: CPUs are shares of your Mac's time (an idle VM uses almost none);
 ceiling the VM fills as it uses it (and macOS is slow to take back); disk grows as it is
 written. `desolate list` shows each workspace's size. A workspace keeps the size it was made
 with. If the
-first repository has a `devcontainer.json`, it runs inside the VM, as written. The first
+first repository (or the first you name with `--checkout`) has a `devcontainer.json`, it
+runs inside the VM, as written. The first
 workspace of a domain builds the domain's environment once (the "template" above); the
 next ones start from it in about 20 seconds.
 

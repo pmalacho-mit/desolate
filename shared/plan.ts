@@ -19,8 +19,11 @@ export type WorkspacePlan = {
   vm: string;
   title: string;
   checkouts: Checkout[];
-  /** The repository whose devcontainer.json is the environment, if the domain names one. */
+  /** The repository whose devcontainer.json is the environment: the first checkout the person
+   *  named, else the one the domain names, else (unset) the first that has a spec. */
   env?: string;
+  /** Every repository of the domain, checked out here or not (git-urls.ts maps them all). */
+  repos?: string[];
   /** The VM's size, as it was made (shared/size.ts). Absent for one made before sizes were
    *  recorded: it got the defaults of its day. */
   size?: { cpus: number; memoryMiB: number; diskGiB: number };

@@ -283,8 +283,9 @@ const main = async (argv: string[]): Promise<number> => {
     if (values.web === true) {
       // The page's address carries this stack's token: it is the person's to open in a
       // browser on this Mac, and not to paste anywhere else.
-      const { ensureDaemon } = await import("./daemon.ts");
+      const { ensureDaemon, tokenAddressesSafe } = await import("./daemon.ts");
       await ensureDaemon();
+      await tokenAddressesSafe();
       const address = (await import("./approve-web.ts")).approveAddress();
       out(`approvals    ${address}`);
       if (values.open === true) openInBrowser(address);
@@ -361,8 +362,9 @@ const main = async (argv: string[]): Promise<number> => {
     const { ensureGitVm, ensureGitClone } = await import("./git-vm.ts");
     await ensureGitVm(err);
     if (repo) await ensureGitClone(parseRepo(repo)!);
-    const { ensureDaemon } = await import("./daemon.ts");
+    const { ensureDaemon, tokenAddressesSafe } = await import("./daemon.ts");
     await ensureDaemon();
+    await tokenAddressesSafe();
     const address = (await import("./git-web.ts")).gitAddress(repo);
     out(`git          ${address}`);
     if (gitValues.open === true) openInBrowser(address);
@@ -379,22 +381,11 @@ const main = async (argv: string[]): Promise<number> => {
     const view = (await ports()).filter((w) => !positionals[0] || w.workspace === positionals[0]);
     if (values.json === true) out(JSON.stringify(view));
     else if (view.length === 0) out("no workspace is running.");
-    else {
-      // A port a program on this Mac holds is said once, below, not under every workspace
-      // (dogfooding: '3000 is kept taken here' under each one, though only one used it).
-      const heldHere = (why: string) => why.startsWith("a program on this machine holds it");
-      const held = new Map<number, string>();
-      for (const w of view) {
-        out(w.workspace);
-        if (w.forwarded.length === 0) out("  nothing is listening yet: start a dev server in it and its URL appears here");
-        for (const f of w.forwarded) out(`  ${f.url}`);
-        for (const r of w.reserved) {
-          if (heldHere(r.why)) held.set(r.port, r.why.replace(/^a program on this machine holds it ?/, ""));
-          else out(`  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`);
-        }
-      }
-      for (const [port, who] of held)
-        out(`port ${port} is held on this Mac ${who}: no workspace's server is forwarded on it, and an address on port ${port} reaches that program, not a workspace. Run dev servers on another port (they move to the next one by themselves).`);
+    else for (const w of view) {
+      out(w.workspace);
+      if (w.forwarded.length === 0) out("  nothing is listening yet: start a dev server in it and its URL appears here");
+      for (const f of w.forwarded) out(`  ${f.url}`);
+      for (const r of w.reserved) out(`  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`);
     }
     return EXIT.ok;
   }

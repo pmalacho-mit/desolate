@@ -18,7 +18,7 @@ export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
   // workspace's key (host/spawn.ts). The command is argv after `--`, never read by a shell.
   "workspace.spawn": (a) => {
     const r = signedOf("spawn", a);
-    return r && r.op === "spawn" ? ["up", r.domain, "--name", r.name, "--started-by", r.parent, ...(r.branch ? ["--branch", r.branch] : []), "--", ...r.command] : null;
+    return r && r.op === "spawn" ? ["up", r.domain, "--name", r.name, "--started-by", r.parent, ...r.checkouts.flatMap((c) => ["--checkout", c]), ...(r.branch ? ["--branch", r.branch] : []), "--", ...r.command] : null;
   },
   "workspace.close": (a) => {
     const r = signedOf("close", a);
@@ -30,19 +30,21 @@ export const SIGNED_KINDS = new Set(["workspace.spawn", "workspace.close"]);
 /** A signed request carried as an action's arguments (strings; the command as JSON). */
 export const signedOf = (op: "spawn" | "close", a: Args) => {
   let command: unknown = [];
+  let checkouts: unknown = [];
   if (op === "spawn") {
     try {
       command = JSON.parse(a.command ?? "[]");
+      checkouts = JSON.parse(a.checkouts ?? "[]");
     } catch {
       return null;
     }
   }
-  return parseSigned({ op, domain: a.domain, parent: a.parent, name: a.workspace, branch: a.branch, command, at: a.at, nonce: a.nonce, mac: a.mac });
+  return parseSigned({ op, domain: a.domain, parent: a.parent, name: a.workspace, branch: a.branch, checkouts, command, at: a.at, nonce: a.nonce, mac: a.mac });
 };
 export const hostArgv = (kind: unknown, args: unknown): string[] | null => {
   if (typeof kind !== "string" || !Object.hasOwn(HOST_ACTIONS, kind) || typeof args !== "object" || args === null) return null;
   const clean: Args = {};
-  // (A spawn's command is the one long argument: JSON, bounded by shared/spawn.ts.)
-  for (const [key, value] of Object.entries(args as Record<string, unknown>)) if (typeof value === "string" && value.length <= (key === "command" ? 200_000 : 200)) clean[key] = value;
+  // (A spawn's command and checkouts are the long arguments: JSON, bounded by shared/spawn.ts.)
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) if (typeof value === "string" && value.length <= (key === "command" ? 200_000 : key === "checkouts" ? 8_000 : 200)) clean[key] = value;
   return HOST_ACTIONS[kind]!(clean);
 };

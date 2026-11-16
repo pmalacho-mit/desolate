@@ -7,7 +7,7 @@
 //                         started which, as this host started them
 // The root has a copy of each limit, to answer a workspace early and to show it; this one is
 // the one that holds.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
@@ -19,12 +19,31 @@ import type { Backend } from "./vm/types.ts";
 
 const KEYS = () => path.join(paths.state, "workspace-keys");
 const LEDGER = () => path.join(paths.state, "spawn.json");
-type Ledger = { max: Record<string, number>; started: Record<string, { parent: string; at: string }> };
+/** `used`: each request run, by its signature, until it could no longer be fresh: kept on
+ *  disk, so a restart of the daemon is not a way to run one twice (audit, 2026-11-16).
+ *  `started[...].parentKey`: a fingerprint of the parent's key when it asked, so a later
+ *  workspace that only shares its name cannot close what the first one started. */
+type Ledger = { max: Record<string, number>; started: Record<string, { parent: string; at: string; parentKey?: string }>; used: Record<string, number> };
 const ledger = (): Ledger => {
   const value = readJson<Partial<Ledger>>(LEDGER(), {});
-  return { max: value.max ?? {}, started: value.started ?? {} };
+  // (Signatures an older desolate kept in spawn.json still count, once: a request run just
+  // before an upgrade is not run again after it.)
+  const used = { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) };
+  // Moved to their own file at once: the next write of spawn.json, by the CLI too, leaves
+  // them out (final review).
+  if (value.used && Object.keys(value.used).length > 0) {
+    saveUsed(used);
+    save({ max: value.max ?? {}, started: value.started ?? {}, used });
+  }
+  return { max: value.max ?? {}, started: value.started ?? {}, used };
 };
-const save = (value: Ledger) => writeJson(LEDGER(), value, 0o600);
+/** The requests run, in a file of their own that only the daemon writes: spawn.json is also
+ *  written by the CLI (a started record, a limit), and one whole-file write must not undo
+ *  another's (review of the fixes). */
+const USED = () => path.join(paths.state, "spawn-used.json");
+const saveUsed = (used: Record<string, number>) => writeJson(USED(), used, 0o600);
+const fingerprint = (key: string | null) => (key ? createHash("sha256").update(key).digest("hex").slice(0, 16) : null);
+const save = (value: Ledger) => writeJson(LEDGER(), { max: value.max, started: value.started }, 0o600);
 
 export const keyOf = (vm: string): string | null => {
   try {
@@ -69,32 +88,50 @@ export const setMax = (domain: string, max: number | null) => {
 };
 export const recordStarted = (domain: string, workspace: string, parent: string) => {
   const value = ledger();
-  value.started[`${domain}/${workspace}`] = { parent, at: new Date().toISOString() };
+  const parentKey = fingerprint(keyOf(workspaceVmName(INSTANCE, domain, parent)));
+  value.started[`${domain}/${workspace}`] = { parent, at: new Date().toISOString(), ...(parentKey ? { parentKey } : {}) };
   save(value);
 };
+/** Spawns run now, per domain: at most three at once, whatever the limit (a flood of signed
+ *  requests started thirty VMs a minute: audit). Counted from the check to the end of up. */
+const running = new Map<string, number>();
+export const MOST_AT_ONCE = 3;
+export const begin = (domain: string) => running.set(domain, (running.get(domain) ?? 0) + 1);
+/** Spawns under way now, every domain's. */
+export const underWay = () => [...running.values()].reduce((a, b) => a + b, 0);
+export const end = (domain: string) => running.set(domain, Math.max(0, (running.get(domain) ?? 1) - 1));
 export const parentOf = (domain: string, workspace: string): string | null => ledger().started[`${domain}/${workspace}`]?.parent ?? null;
 /** The workspaces of a domain a workspace started that still exist (as VMs this host has). */
 export const startedIn = (domain: string, exists: (vm: string) => boolean) =>
   Object.keys(ledger().started).filter((key) => key.startsWith(`${domain}/`) && exists(workspaceVmName(INSTANCE, domain, key.slice(domain.length + 1))));
 
-const used = new Map<string, number>();
 /** Whether the host runs this request: the signature, freshness and once only, then the
  *  domain's limit (spawn) or the parent (close). Returns why not, or null. */
 export const check = (r: Signed & { mac: string }, exists: (vm: string) => boolean, now = Date.now()): string | null => {
   if (!isSlug(r.domain) || !isSlug(r.parent) || !isSlug(r.name)) return "not a request desolate makes";
   const why = verify(keyOf(workspaceVmName(INSTANCE, r.domain, r.parent)), r, now);
   if (why) return why;
-  if (used.has(r.mac)) return "that request was already run";
-  for (const [mac, at] of used) if (now - at > 30 * 60_000) used.delete(mac);
+  const value = ledger();
+  if (value.used[r.mac] !== undefined) return "that request was already run";
+  for (const [mac, at] of Object.entries(value.used)) if (now - at > 30 * 60_000) delete value.used[mac];
   if (r.op === "spawn") {
+    if ((running.get(r.domain) ?? 0) >= MOST_AT_ONCE) return `${r.domain} already has ${MOST_AT_ONCE} workspaces being started by its workspaces: ask again once one is up`;
     const max = maxFor(r.domain);
     if (max === 0) return `${r.domain} does not let its workspaces start workspaces (on the Mac: desolate domain ${r.domain} spawn --max none)`;
     const live = startedIn(r.domain, exists).length;
-    if (max !== null && live >= max) return `${r.domain} already has ${live} workspace(s) started by its workspaces, its limit (desolate domain ${r.domain} spawn --max <n>)`;
+    // With those under way, which are not recorded until they are up (third review).
+    const counted = live + (running.get(r.domain) ?? 0);
+    if (max !== null && counted >= max) return `${r.domain} already has ${counted} workspace(s) started (or being started) by its workspaces, its limit (desolate domain ${r.domain} spawn --max <n>)`;
   } else {
-    const parent = parentOf(r.domain, r.name);
-    if (parent !== r.parent) return `${r.domain}/${r.name} was not started by ${r.parent}${parent ? "" : " (a person started it: only a person removes it)"}`;
+    const record = value.started[`${r.domain}/${r.name}`];
+    if (record?.parent !== r.parent) return `${r.domain}/${r.name} was not started by ${r.parent}${record ? "" : " (a person started it: only a person removes it)"}`;
+    if (record.parentKey && record.parentKey !== fingerprint(keyOf(workspaceVmName(INSTANCE, r.domain, r.parent)))) return `${r.domain}/${r.name} was started by an earlier workspace named ${r.parent}, since removed: only a person removes it now`;
   }
-  used.set(r.mac, now);
+  value.used[r.mac] = now;
+  saveUsed(value.used);
+  // Counted as under way in the same step as the check: a burst of requests, each awaiting
+  // something before it was counted, all saw none under way (review of the fixes). The
+  // caller ends it (end()) however the spawn ends.
+  if (r.op === "spawn") begin(r.domain);
   return null;
 };

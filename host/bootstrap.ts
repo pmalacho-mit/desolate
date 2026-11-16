@@ -60,6 +60,8 @@ const installApprover = async (): Promise<boolean> => {
   const tok = await backend().exec(ROOT_VM, ["bash", "-c", `${put}put /etc/desolate/host-token 0640 ${group}`], { root: true, input: token, timeoutMs: 60_000 });
   const ui = await backend().exec(ROOT_VM, ["bash", "-c", `${put}put /etc/desolate/ui-token 0640 ${group}`], { root: true, input: uiToken, timeoutMs: 60_000 });
   for (const result of [key, tok, ui]) if (result.code !== 0) throw new Error(`the host's keys were not installed in the root: ${(result.stderr || result.stdout).trim().slice(-300)}`);
+  // Only now, with the root holding it, is a dashboard token made after a retiring served.
+  (await import("./retired.ts")).dashboardMade();
   return [key, tok, ui].some((result) => result.stdout.trim() === "changed");
 };
 
@@ -268,10 +270,15 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
   }
 
   const failed = checks.filter((check) => !check.ok);
-  if (json) out(JSON.stringify({ ok: failed.length === 0, backend: kind, isolated: b.isolated, checks }, null, 2));
+  // Not a check (nothing of desolate's is wrong): ports a dev server often uses that a program
+  // on this Mac holds, where a workspace's server would not be forwarded (held-ports.ts).
+  const { heldPorts, portsToCheck } = await import("./held-ports.ts");
+  const held = await heldPorts(portsToCheck(process.env.DESOLATE_DOCTOR_PORTS), path.join(paths.state, "daemon.pid"));
+  if (json) out(JSON.stringify({ ok: failed.length === 0, backend: kind, isolated: b.isolated, checks, heldOnMac: held }, null, 2));
   else {
     for (const check of checks) out(`  ${check.ok ? "ok  " : "FAIL"} ${check.name}: ${check.detail}${check.ok || !check.fix ? "" : `\n         fix: ${check.fix}`}`);
     out(failed.length === 0 ? "doctor: all checks passed." : `doctor: ${failed.length} of ${checks.length} checks FAILED.`);
+    for (const h of held) out(`note: port ${h.port} on this Mac is held (${h.by}): a workspace's server on ${h.port} is not forwarded, and its address on ${h.port} reaches that program. Serve what you open on another port.`);
   }
   return failed.length;
 };

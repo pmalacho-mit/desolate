@@ -143,6 +143,21 @@ number, at the workspace's own name: `http://<domain>-<workspace>-<id>.localhost
 (`desolate ports` prints each). The name is what keeps workspaces apart in your browser: each
 workspace's apps have an origin of their own, so their cookies and storage never mix with
 another workspace's, or with the editor's. Two workspaces can both serve 3000.
+- **A protocol with no hostname in it** (a database: 3306, 5432, 6379, 27017, 11211, 5672,
+  9092, 1433, 26257) reaches the one workspace that listened on that port first; the others
+  keep the number taken. Another port's protocol is routed by the name in its first bytes, or
+  not at all: a server that speaks first, on a port not in that list, needs it added on your
+  Mac (`DESOLATE_RAW_PORTS=7000,7001 desolate bootstrap`). Nothing learns a port is raw from
+  traffic.
+- **A port a program on your Mac holds** (yours, or, on a Mac shared with others, another
+  user's: desolate cannot take it from them) is not forwarded. The workspace's server still
+  has the port inside the workspace (a backend behind its dev server's proxy works), but its
+  address on that port reaches the Mac's program instead, cookies and all. `desolate ports`
+  and the dashboard say so, naming the program when it is yours; serve what you open on
+  another port. `desolate doctor` notes which common dev ports this Mac holds (on macOS, 5000
+  is often the AirPlay Receiver: System Settings, General, AirDrop & Handoff). (Until
+  2026-11-16 desolate kept such a port taken inside every workspace,
+  which made a server there move on, and stopped a backend that needed it.)
 - **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
   clicked) is sent on to the workspace serving that port, at its own name, the path kept;
   with several serving it, the page lists them. Nothing is ever served at bare `localhost`.
@@ -288,8 +303,14 @@ host:       the daemon checks the signature against w1's key, its age, that it w
   devcontainer binds). The root does not have it, and no other workspace does.
 - **Why the host checks, not the root.** The root's ordinary user parses what every domain
   sends. If the host ran what it queued, a flaw there found by one domain would be a way to
-  start workspaces, and run commands, in another. It cannot sign: a request it makes is
-  refused (T2 `16-spawn` tries it, beside a signed one that is run).
+  run commands in another domain's workspaces. It cannot sign: a request it makes is
+  refused (T2 `16-spawn` tries it, beside a signed one that is run). And the host checks that
+  every answer of the root's about a workspace (its plan, its record) names that workspace's
+  own VM name, which the host computes itself; and it never takes over, or destroys, a VM
+  that already exists under a new workspace's name. What this does not claim: that user is
+  trusted with much else (it writes every domain's checkouts, and passes on the dashboard's
+  clicks, starting and stopping workspaces among them). The audit of 2026-11-16 is in
+  `docs/v3/decisions.md`.
 - **The command** is an argument list all the way: JSON in the request, an argv element
   after `--` on the host, passed to `limactl shell` (which quotes each argument for the VM),
   then to the agent holder in the VM. No shell on the Mac reads it.
