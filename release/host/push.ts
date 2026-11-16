@@ -14,6 +14,7 @@ import { sign } from "./approver.ts";
 import { parseApproval } from "../shared/approval.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
+import type { Issue } from "../shared/issues.ts";
 
 type Out = (line: string) => void;
 type Offer = { domain: string; repo: string; branch: string; commit: string; workspace: string; lfs: number; at: string; base?: string };
@@ -28,9 +29,12 @@ export const offers = async (domain: string | undefined, out: Out, json: boolean
   if (json) return out(JSON.stringify(list));
   const refused = await rootctl<{ domain: string; repo: string; at: string; why: string }[]>("offers.refused", { domain }, { quiet: true }).catch(() => []);
   for (const r of refused) out(`Refused from ${r.domain} (${r.repo}, ${r.at}): ${plain(r.why)}\n  Nothing new from ${r.domain} is taken while one of its branches holds what git refused. Delete that branch in the workspace, then \`desolate sync\` there.`);
-  if (list.length === 0) return out("no offers. In a workspace, `desolate offer` marks a branch ready for you.");
+  // Issues a workspace offered need you too (the dashboard puts them under "Needs you").
+  const issues = (await rootctl<Issue[]>("issue.list", {}, { quiet: true }).catch(() => [] as Issue[])).filter((i) => (i.state === "offered" || i.state === "approving") && (!domain || i.domain === domain));
+  if (list.length === 0 && issues.length === 0) return out("no offers. In a workspace, `desolate offer` marks a branch ready for you.");
   out("Needs you:");
   for (const o of list) out(`  ${o.domain}  ${o.repo}  ${plain(o.branch)}  ${o.commit.slice(0, 12)}  from ${plain(o.workspace) || "(a workspace of the domain)"}${o.base ? `  for ${plain(o.base)}` : ""}${o.lfs ? `  ${o.lfs} LFS object(s)` : ""}\n    review: desolate review ${o.domain} ${o.repo} ${o.branch}`);
+  for (const i of issues) out(`  ${i.domain}  ${i.repo}  issue "${printable(i.title, 100)}"  from ${plain(i.workspace)}${i.state === "approving" ? "  waiting for you to publish it" : ""}\n    ${i.state === "approving" ? `publish: desolate issue publish ${i.id}` : `edit it on the dashboard (desolate ui), or publish: desolate issue publish ${i.id}`}`);
 };
 
 /** `desolate branches [<domain>]`: every branch each domain has, not only what was offered.

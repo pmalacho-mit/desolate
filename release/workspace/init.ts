@@ -83,7 +83,20 @@ for (const checkout of plan.checkouts) {
     if (checkout.kind === "worktree" && !fs.existsSync(path.join(checkout.path, ".git"))) {
       const exists = await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", `refs/heads/${checkout.branch}`]);
       if (exists.code === 0) await git(clone, ["worktree", "add", "--quiet", checkout.path, checkout.branch]);
-      else await git(clone, ["worktree", "add", "--quiet", "-b", checkout.branch, checkout.path, checkout.base]);
+      else {
+        // A local branch that is only behind the remote's (nothing of its own: an ancestor of
+        // origin/<it>) is stale, not a choice: nothing moves the main checkout's branch, so
+        // every branch started from it lacked what was merged since (dogfooding: a branch made
+        // right after a merge, with --fetch, did not have the merge). Start from the remote's
+        // then. A local branch with commits of its own is the person's work: start from it.
+        let from = checkout.base;
+        const remote = `refs/remotes/origin/${from}`;
+        if (!from.startsWith("origin/") && (await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", remote])).code === 0
+          && (await run("git", ["-C", clone, "merge-base", "--is-ancestor", from, remote])).code === 0) from = remote;
+        // --no-track: from origin/main, git would make origin/main the new branch's upstream,
+        // and a plain `git push` on it would then refuse (its upstream's name is not its own).
+        await git(clone, ["worktree", "add", "--quiet", "--no-track", "-b", checkout.branch, checkout.path, from]);
+      }
       // Locked against pruning by another VM that cannot see this worktree's files as live.
       await git(clone, ["worktree", "lock", "--reason", `workspace ${plan.workspace}`, checkout.path]).catch(() => "");
       made.push(`worktree ${checkout.repo} ${checkout.branch}`);
@@ -94,8 +107,13 @@ for (const checkout of plan.checkouts) {
 // An identity for commits, if the workspace has none: the person's (their git identity on
 // the Mac, in the plan), else the workspace's own name. The devcontainer gets the same
 // (devcontainer.ts). Changed with `git config --global user.name ...` as anywhere.
+// Also when the one there is a fallback of desolate's own (`...desolate.invalid`): a workspace
+// made from its domain's template inherits the template's, `<domain>/template`, and one made
+// before the person set theirs on the Mac would keep the workspace's name for good
+// (dogfooding: every VM commit of a templated workspace was `standup/template`). One the
+// person set in the workspace is theirs, and kept.
 const who = await run("git", ["config", "--global", "user.email"]);
-if (who.code !== 0) {
+if (who.code !== 0 || who.stdout.trim().endsWith(".desolate.invalid")) {
   await git(null, ["config", "--global", "user.name", plan.author?.name ?? `${plan.domain}/${plan.workspace}`]);
   await git(null, ["config", "--global", "user.email", plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`]);
 }

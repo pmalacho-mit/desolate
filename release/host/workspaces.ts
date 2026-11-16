@@ -250,6 +250,8 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   out(`workspace ${domain}/${plan.workspace} is up${b.isolated ? "" : "  [NOT ISOLATED: fake backend]"}${startedBy ? `, started by ${domain}/${startedBy.workspace}` : ""}`);
   for (const c of plan.checkouts) out(`  ${c.repo}  ${c.kind === "main" ? `main checkout (${c.branch})` : `worktree ${c.branch} from ${c.base}`}  ${c.path}`);
   out(`  size         ${describeSize(plan.size ?? size)}`);
+  if (!author.name || !author.email)
+    out(`  commits as   ${author.name || `${domain}/${plan.workspace}`} <${author.email || `${plan.workspace}@${domain}.desolate.invalid`}>: this Mac's git has no ${!author.name && !author.email ? "user.name or user.email" : !author.name ? "user.name" : "user.email"} (git config --global user.name "Your Name"; git config --global user.email you@example.com, then the next up uses them)`);
   out(`  devcontainer ${devcontainer}`);
   out("url" in opened ? `  editor       ${opened.url}` : `  editor       NOT AVAILABLE: ${opened.error}`);
   out(`  dev servers  ${urls.dev}:<port>   (the port it listens on inside, nothing to declare)`);

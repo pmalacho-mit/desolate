@@ -150,6 +150,17 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
 - **Inside the devcontainer, `DESOLATE_DEV_HOSTNAME`** is the workspace's own name, so the
   address of a server on port 5173 is `http://$DESOLATE_DEV_HOSTNAME:5173`. Give it to what
   builds absolute URLs: a framework's public origin, an OAuth callback, a CORS allowlist.
+- **Vite, webpack and other dev servers that check the Host header** accept these names
+  unchanged: they end in `.localhost`, which those servers allow. Bind to `0.0.0.0` (Vite:
+  `server.host: "0.0.0.0"`; its default `localhost` can mean `::1` only). HMR's websocket
+  goes through the same address; nothing to configure for it. A front end that calls an API
+  in the same workspace: proxy it from the dev server (Vite's `server.proxy`), so the page
+  needs one address. (Tried with Vite 8 and Express, on the M1.)
+- **A file watcher sees only changes made in its own VM.** `/workspaces` is a share: a file
+  written from the Mac (under `~/.desolate/domains/...`) or by another workspace of the
+  domain wakes no watcher, so a dev server keeps serving the old file. Edit in the
+  workspace (its editor, its terminal, an agent there), `touch` the file there, or have the
+  watcher poll (Vite: `server.watch.usePolling: true`).
 - **The editor's own origin never serves a dev server**: no port is forwarded under its name
   (T2 `06` asks it at the paths web editors forward ports at). Open dev servers by their own
   address, not through the editor's Ports view.

@@ -90,6 +90,16 @@ export const take = async (domain: string, request: Record<string, unknown>): Pr
 export const withdraw = (domain: string, repo: string, branch: string) => {
   writeJson(file(domain), offersOf(domain).filter((o) => !(o.repo === repo && o.branch === branch)));
 };
+/** The person's "not this one": the offer leaves "Needs you"; the branch stays in the domain
+ *  (`desolate branches`), and offering it again brings it back. Before, an offer left only by
+ *  being pushed: one from a removed workspace, or a stand-in agent's, stayed there for good. */
+export const dismiss = (domainArg: unknown, repoArg: unknown, branchArg: unknown): { ok: true } | { error: string } => {
+  const domain = typeof domainArg === "string" && isSlug(domainArg) ? domainArg : null;
+  if (!domain || typeof repoArg !== "string" || typeof branchArg !== "string") return { error: "an offer is named by its domain, repository and branch" };
+  if (!offersOf(domain).some((o) => o.repo === repoArg && o.branch === branchArg)) return { error: `${domain} has offered no ${repoArg} ${branchArg}` };
+  withdraw(domain, repoArg, branchArg);
+  return { ok: true };
+};
 
 const POINTER = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
 

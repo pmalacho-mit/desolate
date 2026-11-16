@@ -14,7 +14,7 @@
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
 import { printable } from "../shared/text.ts";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
 import * as fs from "node:fs";
@@ -132,6 +132,18 @@ const serve = async () => {
   /** Ports a workspace listens on that a program on the host already holds: they cannot be
    *  published. Tried again now and then, in case the program has gone. */
   const hostHeld = new Map<number, number>();
+  /** What holds such a port, as this user's lsof sees it: said to the person, who otherwise
+   *  had to guess (dogfooding: 3000 was another macOS user's, which lsof cannot show). */
+  const heldBy = new Map<number, string>();
+  const holderOf = (port: number) => {
+    if (!heldBy.has(port)) {
+      const found = spawnSync("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"], { encoding: "utf8", timeout: 3000 }).stdout ?? "";
+      const pid = /^p(\d+)/m.exec(found)?.[1];
+      const command = /^c(.+)/m.exec(found)?.[1];
+      heldBy.set(port, pid && command ? `${printable(command, 40)}, pid ${pid}` : "not a program of yours: another user's, or the system's");
+    }
+    return heldBy.get(port)!;
+  };
   /** For a port spoken without a name: the one workspace it reaches. */
   const rawOwner = new Map<number, string>();
   const knownRaw = new Set(RAW_PORTS);
@@ -179,7 +191,23 @@ const serve = async () => {
 
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
-    const { sniffed, head } = await sniffSocket(client, 400);
+    let { sniffed, head } = await sniffSocket(client, 400);
+    // Silence is not a protocol. A client that has said nothing yet (a browser's
+    // preconnected socket, `nc -z`, a health check) on a port not known to be raw was taken
+    // for a nameless protocol: the port was then raw for good, kept taken in every other
+    // workspace, and the browser's request, sent on that socket a moment later, went to
+    // whichever workspace had the port first, whatever name it carried (dogfooding: Vite's
+    // 5173 in one domain pushed another domain's Vite to 5174, as "no name in its protocol").
+    // Only bytes that are not HTTP or TLS make a port raw. With one workspace on the port
+    // there is no choice to make, and a server-first protocol works as before.
+    if (sniffed.kind === "raw" && head.length === 0 && !knownRaw.has(port)) {
+      if (client.destroyed) return;
+      const listening = [...entries.values()].filter((e) => e.listeners.has(port));
+      if (listening.length === 1) return pipe(client, b.dial(listening[0]!.vm, port), head);
+      client.resume();
+      ({ sniffed, head } = await sniffSocket(client, 120_000));
+      if (sniffed.kind === "raw" && head.length === 0) return void client.destroy();
+    }
     if (sniffed.kind === "http" || sniffed.kind === "tls") {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
@@ -284,7 +312,7 @@ const serve = async () => {
         forwards.delete(port);
         rawOwner.delete(port);
       }
-    for (const port of hostHeld.keys()) if (!wanted.has(port)) hostHeld.delete(port);
+    for (const port of hostHeld.keys()) if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
     for (const port of wanted) {
       const holders = [...entries.values()].filter((entry) => entry.listeners.has(port));
       const owner = rawOwner.get(port);
@@ -459,8 +487,8 @@ const serve = async () => {
       workspace: `${entry.domain}/${entry.workspace}`,
       forwarded: [...entry.listeners].sort((a, b) => a - b).filter((port) => !hostHeld.has(port)).map((port) => ({ port, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}` })),
       reserved: [
-        ...[...entry.reserved].sort((a, b) => a - b).map((port) => ({ port, why: hostHeld.has(port) ? "a program on this machine holds it" : `no name in its protocol, and ${entries.get(rawOwner.get(port) ?? "")?.workspace ?? "another workspace"} had it first` })),
-        ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: "listening in the workspace, but a program on this machine holds that port: not forwarded" })),
+        ...[...entry.reserved].sort((a, b) => a - b).map((port) => ({ port, why: hostHeld.has(port) ? `a program on this machine holds it (${holderOf(port)})` : `no name in its protocol, and ${entries.get(rawOwner.get(port) ?? "")?.workspace ?? "another workspace"} had it first` })),
+        ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: `listening in the workspace, but a program on this machine holds that port (${holderOf(port)}): not forwarded` })),
       ],
     })).sort((a, b) => a.workspace.localeCompare(b.workspace));
 

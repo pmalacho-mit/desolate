@@ -251,6 +251,14 @@ const appendEvents = (slug: string, events: unknown[]) => {
 /** How a workspace's spawn or close ended, as the host reported it: an event in that domain,
  *  so the workspace that asked learns whether it was done, and if not, why. */
 const requestEnded = (action: Action) => {
+  // Ended either way: it no longer holds its name or a place against the limit (rootd counts
+  // the queue). A spawn that failed held its name for half an hour, though no workspace had
+  // it (dogfooding: a retry under another branch was refused, "already has a workspace").
+  const queued = fromQueue.get(action.id);
+  if (queued) {
+    fs.rmSync(queued, { force: true });
+    fromQueue.delete(action.id);
+  }
   if (!SIGNED_KINDS.has(action.kind) || !isSlug(action.args.domain)) return;
   appendEvents(action.args.domain, [{
     v: 1, at: new Date().toISOString(), type: "request", source: "root", request: action.kind === "workspace.spawn" ? "spawn" : "close",
@@ -272,6 +280,8 @@ const lastSeq = (file: string) => {
 // action, which runs it only once it has checked the signature (host/spawn.ts). Renamed as
 // it is taken, so rootd still counts it against the domain's limit until the workspace
 // exists; swept after half an hour.
+/** Which queue file each action came from, to remove it when the action ends. */
+const fromQueue = new Map<string, string>();
 const takeQueue = () => {
   let names: string[];
   try {
@@ -292,8 +302,12 @@ const takeQueue = () => {
     if (!/^[0-9a-z]+-[0-9a-f]{10}\.json$/.test(name)) continue;
     try {
       const item = JSON.parse(fs.readFileSync(file, "utf8")) as { kind?: unknown; args?: Record<string, string> };
-      fs.renameSync(file, file.replace(/\.json$/, ".taken"));
-      if (typeof item.kind === "string" && SIGNED_KINDS.has(item.kind) && item.args) act(item.kind, item.args, { signed: true });
+      const taken = file.replace(/\.json$/, ".taken");
+      fs.renameSync(file, taken);
+      if (typeof item.kind === "string" && SIGNED_KINDS.has(item.kind) && item.args) {
+        const action = act(item.kind, item.args, { signed: true });
+        if ("id" in action) fromQueue.set(action.id, taken);
+      }
       changed();
     } catch (error) {
       console.error(`stated: a workspace's request could not be taken: ${String(error)}`);
@@ -533,6 +547,14 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     } catch (error) {
       return json(res, 400, { error: (error as Error).message });
     }
+  }
+  if (req.method === "POST" && url.pathname === "/offer") {
+    // The person dismisses an offer: it leaves "Needs you", the branch stays (offers.ts).
+    if (req.headers["x-desolate-ui"] !== "1" || !String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, 403, { error: "this comes from the dashboard itself" });
+    const asked = (await body(req)) as { domain?: unknown; repo?: unknown; branch?: unknown; do?: unknown };
+    const result = asked.do === "dismiss" ? offers.dismiss(asked.domain, asked.repo, asked.branch) : { error: "dismiss" };
+    changed();
+    return "error" in result ? json(res, 400, result) : json(res, 200, result);
   }
   if (req.method === "POST" && url.pathname === "/issue") {
     // The person's edit of an offered issue, or their decision on it. Publishing only freezes

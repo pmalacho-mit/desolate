@@ -352,6 +352,18 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     }
     assert.ok(gaveUp, inRootClone("cat /tmp/web-refused.log").stdout);
     assert.equal(forgeRefs("acme/widgets")["web-refused"], undefined);
+
+    // A large text diff (as a first push with a lockfile is): the reviewer's account is far
+    // bigger than a pipe's buffer, and still reaches the page whole. (It once ended at
+    // 146,175 bytes, cut by process.exit, and the page said the reviewer could not be asked.)
+    const big = inRootClone(`git checkout -q --detach ${commit} && seq 1 40000 | sed 's/^/a line of a large generated file, number /' > large.txt && git add large.txt && git -c user.name=t -c user.email=t@example.invalid commit -qm "a large file" && git rev-parse HEAD && git checkout -q -`);
+    const bigCommit = big.stdout.trim().split("\n").pop()!;
+    inRootClone(`setsid nohup git push origin ${bigCommit}:refs/heads/web-large >/tmp/web-large.log 2>&1 </dev/null & sleep 0.2`);
+    const large = await waitingFor("web-large");
+    assert.ok(large, inRootClone("cat /tmp/web-large.log").stdout);
+    assert.equal(large!.summary.ok, true, String(large!.summary.error).slice(0, 300));
+    assert.deepEqual(large!.summary.commits!.map((c) => c.subject), ["a large file"]);
+    assert.equal((await act("refuse", large!)).status, 200);
   });
 
   it("a repository cloned --no-push is never written: there is no key to write it with", () => {
@@ -464,6 +476,15 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const offers = JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as { branch: string; commit: string }[];
     assert.ok(offers.some((o) => o.branch === "pushed-here" && o.commit === tip), JSON.stringify(offers));
     assert.equal(forgeRefs("acme/widgets")["pushed-here"], undefined, "and the remote has nothing of it");
+    // The person dismisses it: off "Needs you", the branch kept; offering it again brings it back.
+    const dismissed = stack.quiet("offers", "dismiss", "dev", "acme/widgets", "pushed-here");
+    assert.equal(dismissed.code, 0, dismissed.stderr);
+    assert.match(dismissed.stdout, /no longer under "Needs you"/);
+    assert.ok(!(JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as { branch: string }[]).some((o) => o.branch === "pushed-here"), "gone from the offers");
+    assert.match(stack.quiet("branches", "dev").stdout, /pushed-here/, "the branch stays in the domain");
+    assert.notEqual(stack.quiet("offers", "dismiss", "dev", "acme/widgets", "pushed-here").code, 0, "a second dismissal says there is nothing to dismiss");
+    inWs("dev/w1", `cd ${WT} && git push origin pushed-here 2>&1`);
+    assert.ok((JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as { branch: string }[]).some((o) => o.branch === "pushed-here"), "offered again: back");
     // A delete of a branch the remote has is refused, saying where branches are deleted.
     assert.match(inWs("dev/w1", `cd ${WT} && git push origin :elsewhere 2>&1`).stdout, /deleting a branch is not something a workspace does/);
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");

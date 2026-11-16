@@ -85,6 +85,11 @@ export const newStack = (label: string): Stack => {
     spawnSync("sleep", ["0.1"]);
   }
   const admin = path.join(work, "forge-admin");
+  const gitIdentity = (dir: string) => {
+    const file = path.join(dir, "gitconfig");
+    fs.writeFileSync(file, "[user]\n\tname = A Person\n\temail = person@example.invalid\n");
+    return file;
+  };
   fs.writeFileSync(admin, `#!/bin/sh\nexec docker exec -e FORGE_STATE=/forge-state ${forgeName} node --disable-warning=ExperimentalWarning /forge/admin.ts "$@"\n`, { mode: 0o755 });
 
   // A free port, asked of the system (it hands out one nobody holds), unless one is given.
@@ -106,6 +111,9 @@ export const newStack = (label: string): Stack => {
     DESOLATE_FORGE_KNOWN_HOSTS: path.join(forgeState, "known_hosts"),
     LIMA_HOME: path.join(home, "lima"),
     NO_COLOR: "1",
+    // The person's git identity, as `up` reads it from the Mac: the same on every machine
+    // that runs the tests, so what `up` says about it does not depend on whose Mac it is.
+    GIT_CONFIG_GLOBAL: gitIdentity(work),
   };
   const transcript: string[] = [];
   const timings: { step: string; ms: number }[] = [];

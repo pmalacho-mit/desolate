@@ -170,6 +170,8 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   const checkouts: Checkout[] = d.repos.map((repo) => {
     const want = wanted.get(repo);
     const defaultBranch = registry().repos[repo]?.defaultBranch ?? "main";
+    // The domain clone's own branch: what its main checkout holds, unpushed work included.
+    // (When that is only behind the remote's, the worktree starts from the remote's: init.ts.)
     const base = baseArg ?? defaultBranch;
     const worktree = (branch: string): Checkout => {
       const dir = branch.replace(/\//g, "-");

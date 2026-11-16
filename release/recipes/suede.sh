@@ -47,7 +47,9 @@ if [ -n "$pushed_to" ]; then
 fi
 
 # 1. What the push changed, dependency by dependency (the root reads its own clone).
-changed=$(desolate suede changed "$project" "$commit" ${from:+--from "$from"} --json | jq -c '.[] | select(.files | length > 0)')
+# A dependency's own nested subrepos (suede's machinery: <dep>/.suede/core, <dep>/.github/workflows)
+# ship inside it, as part of it: a change there is the dependency's, not a dependency of its own.
+changed=$(desolate suede changed "$project" "$commit" ${from:+--from "$from"} --json | jq -c '[.[] | select(.files | length > 0)] | . as $all | .[] | select(.dir as $d | $all | map(.dir) | any(. as $o | $o != $d and ($d | startswith($o + "/"))) | not)')
 [ -n "$changed" ] || { say "$project ${commit:0:12}: no vendored suede dependency changed"; exit 0; }
 
 # The domain must already hold both repositories: which repositories share a domain is yours

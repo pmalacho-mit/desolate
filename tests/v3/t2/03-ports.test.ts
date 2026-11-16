@@ -26,6 +26,7 @@ const vmOf = (target: string) => {
 /** Start a server in a workspace, detached. */
 const serve = (target: string, args: string, root = false) =>
   stack.inVm(vmOf(target), ["bash", "-c", `setsid nohup node /workspaces/serve.mjs ${args} >/tmp/serve-$$.log 2>&1 </dev/null & sleep 0.3`], { root });
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const until = async (probe: () => boolean, ms = 8000) => {
   for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
     if (probe()) return true;
@@ -194,6 +195,27 @@ else {
     assert.match(taken.stdout, /EADDRINUSE/, "a server in the other workspace finds 5432 taken");
     assert.equal(bind(5433).code, 0, "control: the next number is free there");
     assert.match(stack.desolate("ports", "web/two").stdout, /port 5432 is kept taken here: no name in its protocol, and one had it first/);
+  });
+
+  it("silence is not a protocol: a socket that waits before its request still reaches the workspace it names, and the port stays HTTP", async () => {
+    // A browser preconnects: a socket opened now, its request sent on it a moment later. Both
+    // workspaces serve 5173 here. (It once made 5173 'raw' for good: kept taken everywhere,
+    // and the request went to the workspace that had the port first.)
+    const two = hostOf(urlOf("web/two", 5173)!);
+    const late = await new Promise<string>((resolve) => {
+      const socket = net.connect(5173, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => setTimeout(() => socket.write(`GET / HTTP/1.1\r\nHost: ${two}\r\nConnection: close\r\n\r\n`), 1500));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      setTimeout(() => socket.destroy(), 10_000);
+    });
+    assert.match(late, /workspace:two/, late);
+    // A probe that connects and closes without a word (`nc -z`, a health check).
+    await new Promise<void>((resolve) => net.connect(5173, "127.0.0.1").on("connect", function (this: net.Socket) { this.end(); resolve(); }));
+    await sleep(3000);
+    for (const w of ["web/one", "web/two"]) assert.ok(!ports().find((p) => p.workspace === w)!.reserved.some((r) => r.port === 5173), `${w} is not asked to keep 5173 taken`);
+    assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/, "control: each name still reaches its own workspace");
   });
 
   it("a port the host itself holds is not published; workspaces keep it taken, and a server moves to the next number", async () => {
