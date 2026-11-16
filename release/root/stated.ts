@@ -263,7 +263,7 @@ const requestEnded = (action: Action) => {
   appendEvents(action.args.domain, [{
     v: 1, at: new Date().toISOString(), type: "request", source: "root", request: action.kind === "workspace.spawn" ? "spawn" : "close",
     domain: action.args.domain, workspace: isSlug(action.args.workspace) ? action.args.workspace : null, parent: isSlug(action.args.parent) ? action.args.parent : null,
-    ok: action.code === 0, said: action.lines.slice(-4).map((line) => printable(line, 300)).join(" / "),
+    ok: action.code === 0, said: action.lines.filter((line) => !/tkn=/.test(line)).slice(-4).map((line) => printable(line, 300)).join(" / "),
   }]);
 };
 const lastSeq = (file: string) => {
@@ -326,7 +326,13 @@ const act = (kind: string, args: Record<string, string>, from: { signed?: boolea
   const record = (command: string): Action => {
     const action: Action = { id, kind, args, command, state: "queued", lines: [], at: new Date().toISOString() };
     actions.push(action);
-    if (actions.length > 50) actions.shift();
+    // The oldest finished one goes: never one still waiting for the host (a flood of a
+    // domain's requests pushed others', and the person's clicks, out before they ran: audit).
+    if (actions.length > 50) {
+      const done = actions.findIndex((a) => a.state !== "queued");
+      if (done >= 0) actions.splice(done, 1);
+      else if (actions.length > 1000) actions.shift();
+    }
     return action;
   };
   if (kind === "offer.push") return push(args, record);

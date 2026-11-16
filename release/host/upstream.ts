@@ -31,7 +31,7 @@ export const waitForPull = async (dependency: Repo, branch: string, out: Out): P
   // A private dependency's pull request is invisible to the API without a token: GH_TOKEN,
   // else the token of this Mac's own gh, which desolate uses already (clone, issues).
   // (Only to GitHub's own API: never to another address SUEDE_GITHUB_API names.)
-  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? (api === "https://api.github.com" ? spawnSync("gh", ["auth", "token"], { encoding: "utf8", timeout: 10_000 }).stdout?.trim() || undefined : undefined);
+  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? (api === "https://api.github.com" ? spawnSync("gh", ["auth", "token", "--hostname", "github.com"], { encoding: "utf8", timeout: 10_000 }).stdout?.trim() || undefined : undefined);
   const ask = async (route: string): Promise<unknown> => {
     try {
       const answer = await fetch(`${api}/${route}`, { headers: { accept: "application/vnd.github+json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(20_000) });

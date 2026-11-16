@@ -263,7 +263,12 @@ const summary = async (repo: Repo, branch: string, commit: string, onto: string 
     diffCut = text.length > DIFF_MOST.bytes;
     diff = diffCut ? text.slice(0, DIFF_MOST.bytes) : text;
   }
-  const cut = Math.max(LIMIT.files, files.filter((f) => f.sensitive).length);
+  // Every file that changes what runs on the forge is listed, up to 2000, and their number is
+  // said either way: a push of 80,000 of them made an answer too large to carry, and the page
+  // lost the warning (audit, 2026-11-16).
+  const sensitive = files.filter((f) => f.sensitive).length;
+  if (sensitive > 2000) warnings.push(`${sensitive} files that change what runs on the forge (under .github/, or the like): the first 2000 are listed`);
+  const cut = Math.max(LIMIT.files, Math.min(sensitive, 2000));
   const fastForward = onto ? (await gitIn(dir, ["merge-base", "--is-ancestor", onto, commit])).code === 0 : null;
   return {
     ok: true, ...(warnings.length ? { warnings } : {}), commits, more: Math.max(0, counted - commits.length),

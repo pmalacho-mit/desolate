@@ -96,7 +96,9 @@ export const reviewerSummary = async (push: { repo: string; branch: string; comm
   try {
     return JSON.parse(result.stdout.trim().split("\n").pop() ?? "") as Summary;
   } catch {
-    return { ok: false, error: `the reviewer could not be asked: ${(result.stderr || result.stdout).trim().slice(-200)}` };
+    // Its own words only (stderr), never what it was printing: that is the push's content,
+    // the domain's, and was once shown here as if desolate had said it (lockfile text).
+    return { ok: false, error: `the reviewer's answer could not be read${result.code !== 0 ? ` (it ended with ${result.code}: ${printable(result.stderr.trim().slice(-200), 200)})` : ""}; what a push carries can cause this` };
   }
 };
 
@@ -131,6 +133,9 @@ const serve = async () => {
   const entries = new Map<string, Entry>();
   /** A host listener per forwarded port. */
   const forwards = new Map<number, Server>();
+  /** The same ports on ::1: browsers resolve *.localhost to it as well, and on a Mac other
+   *  people use, another user's program there would get a workspace's requests (audit). */
+  const forwards6 = new Map<number, Server>();
   /** Ports a workspace listens on that a program on the host already holds: they cannot be
    *  published. Tried again now and then, in case the program has gone. */
   const hostHeld = new Map<number, number>();
@@ -324,6 +329,8 @@ const serve = async () => {
       if (!wanted.has(port)) {
         server.close();
         forwards.delete(port);
+        forwards6.get(port)?.close();
+        forwards6.delete(port);
         rawOwner.delete(port);
       }
     for (const port of hostHeld.keys()) if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
@@ -342,7 +349,22 @@ const serve = async () => {
         hostHeld.set(port, Date.now());
         if (error.code !== "EADDRINUSE") log(`port ${port}: ${error.message}`);
       });
-      server.on("listening", () => hostHeld.delete(port));
+      server.on("listening", () => {
+        hostHeld.delete(port);
+        const six = createServer((client) => void onInbound(port, client));
+        six.on("error", (error: NodeJS.ErrnoException) => {
+          if (forwards6.get(port) === six) forwards6.delete(port);
+          // Something else answers on [::1]:<port>: a browser may go there with a workspace's
+          // name and cookies. Not forwarded at all, then, and said so, as for 127.0.0.1.
+          if (error.code === "EADDRINUSE") {
+            if (forwards.get(port) === server) forwards.delete(port);
+            server.close();
+            hostHeld.set(port, Date.now());
+          }
+        });
+        forwards6.set(port, six);
+        six.listen({ port, host: "::1", exclusive: true, ipv6Only: true });
+      });
       forwards.set(port, server);
       // 127.0.0.1 only, never a wildcard: nothing on the LAN reaches a workspace.
       server.listen({ port, host: "127.0.0.1", exclusive: true });
@@ -862,7 +884,7 @@ const serve = async () => {
         } else if (request.op === "stop") {
           connection.end(JSON.stringify({ ok: true }) + "\n");
           editors.close();
-          for (const server of forwards.values()) server.close();
+          for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
           for (const entry of entries.values()) entry.link?.close();
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });

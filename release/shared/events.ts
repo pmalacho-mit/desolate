@@ -91,6 +91,14 @@ export const stateEvents = (before: State | null, after: State): Event[] => {
     if (!old || old.branch !== h.branch || old.commit !== h.commit)
       out.push(event("head", "root", { domain: slugOrNull(h.domain), workspace: slugOrNull(h.workspace), repo: repoOrNull(h.repo), branch: branchOrNull(h.branch), commit: commitOrNull(h.commit), was: old ? { branch: branchOrNull(old.branch), commit: commitOrNull(old.commit) } : null }));
   }
-  return out.slice(0, PER_CHANGE);
+  // At most PER_CHANGE per domain: one domain's busy change must not push the others' events
+  // out (audit, 2026-11-16: the cap was across all domains, before they were split).
+  const per = new Map<string, number>();
+  return out.filter((e) => {
+    const k = String((e as { domain?: unknown }).domain ?? "");
+    const n = (per.get(k) ?? 0) + 1;
+    per.set(k, n);
+    return n <= PER_CHANGE;
+  });
 };
 

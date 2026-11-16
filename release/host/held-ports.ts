@@ -28,12 +28,14 @@ declare namespace portsToCheck {
   ]>;
 }
 
-const refused = (port: number) =>
+const refusedOn = (port: number, host: string) =>
   new Promise<boolean>((resolve) => {
     const server = createServer();
     server.once("error", (error: NodeJS.ErrnoException) => resolve(error.code === "EADDRINUSE"));
-    server.listen({ port, host: "127.0.0.1", exclusive: true }, () => server.close(() => resolve(false)));
+    server.listen({ port, host, exclusive: true, ...(host === "::1" ? { ipv6Only: true } : {}) }, () => server.close(() => resolve(false)));
   });
+/** As the forwarder meets it: on 127.0.0.1, or on ::1 (where browsers also look). */
+const refused = async (port: number) => (await refusedOn(port, "127.0.0.1")) || (await refusedOn(port, "::1"));
 
 /** Each port of `ports` that a program other than desolate's daemon holds, and what holds it. */
 export const heldPorts = async (ports: number[], daemonPidFile: string): Promise<{ port: number; by: string }[]> => {
