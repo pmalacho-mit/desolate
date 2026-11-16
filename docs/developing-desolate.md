@@ -31,12 +31,12 @@ The six that fail inside:
 ## Once: a workspace for desolate
 
 ```bash
-desolate clone pmalacho-mit/isolated-devcontainers-suede --domain desolate
+desolate clone pmalacho-mit/desolate --domain desolate
 desolate domain desolate size --cpus 6 --memory 16g --disk 60g     # T2 runs a stack inside it
 ```
 
-- **`--domain desolate`**: the default name would be `pmalacho-mit--isolated-devcontain-<hex>`
-  (owner--repo, cut to 40 characters).
+- **`--domain desolate`**: the name this guide and the repository's `AGENTS.md` use. The
+  default would be `pmalacho-mit--desolate` (owner--repo).
 - **Deploy keys need an admin of the repository.** If the `gh` on this Mac is not one (it is
   `mitdesolate`, with push but not admin), add `--keys-by-hand`. It prints the two public keys;
   the owner adds them under Settings, then Deploy keys (the write one with "Allow write
@@ -68,46 +68,47 @@ desolate up desolate --name push-label --branch mac/push-label
 desolate editor desolate/push-label --open     # change it, `make test`, commit
 ```
 
-then `git push` in the workspace (or `desolate offer --base v3`), which offers the branch for
-v3. Or hand it to an agent:
+then `git push` in the workspace (or `desolate offer`), which offers the branch for `main`.
+Or hand it to an agent:
 
 ```bash
 recipes/claude.sh desolate "Make the dashboard's Push button say which commit it pushes" --branch mac/push-label
 ```
 
 It works on the branch, runs `make test` and `tests/v3/run.sh t2` inside, commits, and offers
-it for v3 (the repository's [`AGENTS.md`](../../AGENTS.md), which agents working on desolate
+it for `main` (the repository's [`AGENTS.md`](../../AGENTS.md), which agents working on desolate
 read, says to). Then, on the Mac:
 
 ```bash
 desolate ui --open      # Review the offer, then Push, and approve the exact commit
 ```
 
-or `desolate push desolate pmalacho-mit/isolated-devcontainers-suede mac/push-label --expect <commit>`
+or `desolate push desolate pmalacho-mit/desolate mac/push-label --expect <commit>`
 in a terminal. desolate refuses a push to the default branch (`main` here). It does not know
 your rule about `release`, so the approval, which names the branch, is where that is kept.
 Then the pull request. Once the push lands, desolate gives GitHub's page for opening it, filled
 in with the branch and its base: "Open pull request" on the dashboard, or the line `open a pull
-request into v3, in your browser, as yourself: https://github.com/...` after `desolate push`.
+request into main, in your browser, as yourself: https://github.com/...` after `desolate push`.
 You create it there, signed in as yourself: desolate holds no token that could. Or with your
 own `gh`:
 
 ```bash
-gh pr create --repo pmalacho-mit/isolated-devcontainers-suede --base v3 --head mac/push-label
+gh pr create --repo pmalacho-mit/desolate --head mac/push-label
 ```
 
 Once the pull request is merged (by a merge, a squash or a rebase), the root notices within 15
 minutes, or at the next `desolate fetch`: the dashboard marks the workspace's checkout "merged
-into v3", and the workspace "Its work is merged", with how to stop or remove it.
+into main", and the workspace "Its work is merged", with how to stop or remove it.
 
-**2. Pull it on the Mac,** into the checkout desolate runs from (the one `which desolate` leads to):
+**2. Pull it on the Mac,** in the checkout desolate runs from (the one `which desolate` leads to),
+on `main`:
 
 ```bash
-git -C ~/isolated-devcontainers-suede pull        # once the PR is merged into v3
+git pull        # once the PR is merged into main
 ```
 
 To try a branch before it is merged: `git fetch origin mac/push-label && git checkout mac/push-label`
-there, and back with `git checkout v3`.
+there, and back with `git checkout main`.
 
 **3. Run the new code.** Whether that means a quick restart or taking everything down depends
 on what changed:
@@ -130,7 +131,7 @@ desolate start desolate/<w>       # each workspace you want
 **If the new code is broken,** go back to the commit that worked and run it:
 
 ```bash
-git -C ~/isolated-devcontainers-suede checkout <the commit before>
+git checkout <the commit before>     # in that same checkout
 desolate bootstrap
 ```
 
@@ -143,7 +144,7 @@ stand-in forge).
 A second checkout runs a second stack, with its own home, VM names and port:
 
 ```bash
-git clone https://github.com/pmalacho-mit/isolated-devcontainers-suede ~/desolate-next
+git clone https://github.com/pmalacho-mit/desolate ~/desolate-next
 cd ~/desolate-next && git checkout mac/push-label
 DESOLATE_INSTANCE=next DESOLATE_HOME=~/.desolate-next DESOLATE_EDITOR_PORT=31681 release/cli.sh bootstrap
 ```

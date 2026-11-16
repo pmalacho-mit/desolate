@@ -106,5 +106,5 @@ and the recipe itself, [`recipes/suede.sh`](../recipes/suede.sh).
 `release/git/upstream.ts` (the command, in the git VM), `release/host/upstream.ts` (on the Mac,
 and the wait), `release/shared/suede.ts` (suede's names; the `.github/` rule the root applies
 to every `downstream/...` push), `release/git/suede-upstream.sh` (suede's, pinned). The
-reasons are in [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/isolated-devcontainers-suede/blob/main/docs/v3/decisions.md),
+reasons are in [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/desolate/blob/main/docs/v3/decisions.md),
 "`desolate upstream`".
