@@ -59,7 +59,7 @@ export const templateVm = (domain: string, key: string) => `dsl-${INSTANCE}-t${h
 const SCRUB = `set -e
 docker ps -aq 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1 || true
 for home in /home/*; do
-  rm -f "$home/.desolate-editor/token" "$home/.desolate-editor/gate.host" "$home/.desolate-editor/gate.pid" "$home/.desolate-editor/server.pid" "$home/.desolate/workspace.json"
+  rm -f "$home/.desolate-editor/token" "$home/.desolate-editor/token.epoch" "$home/.desolate-editor/gate.host" "$home/.desolate-editor/gate.pid" "$home/.desolate-editor/server.pid" "$home/.desolate/workspace.json"
 done
 rm -f /var/lib/desolate/*.log
 sync`;

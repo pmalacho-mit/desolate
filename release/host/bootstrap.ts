@@ -60,6 +60,8 @@ const installApprover = async (): Promise<boolean> => {
   const tok = await backend().exec(ROOT_VM, ["bash", "-c", `${put}put /etc/desolate/host-token 0640 ${group}`], { root: true, input: token, timeoutMs: 60_000 });
   const ui = await backend().exec(ROOT_VM, ["bash", "-c", `${put}put /etc/desolate/ui-token 0640 ${group}`], { root: true, input: uiToken, timeoutMs: 60_000 });
   for (const result of [key, tok, ui]) if (result.code !== 0) throw new Error(`the host's keys were not installed in the root: ${(result.stderr || result.stdout).trim().slice(-300)}`);
+  // Only now, with the root holding it, is a dashboard token made after a retiring served.
+  (await import("./retired.ts")).dashboardMade();
   return [key, tok, ui].some((result) => result.stdout.trim() === "changed");
 };
 

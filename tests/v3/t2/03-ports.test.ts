@@ -87,6 +87,7 @@ if (mode === "raw") net.createServer((s) => { s.write("raw:" + name + "\\n"); s.
 // A server on a raw port whose greeting is an HTTP response, sent in two pieces: a browser's
 // preconnected socket would take it as the answer to its request.
 else if (mode === "greets-http") net.createServer((s) => { s.on("error", () => {}); s.write("H"); setTimeout(() => s.write("TTP/1.1 200 OK\\r\\nContent-Type: text/html\\r\\nContent-Length: 13\\r\\n\\r\\n<b>owned</b>\\n"), 100); }).listen(port, "0.0.0.0");
+else if (mode === "greets-icy") net.createServer((s) => { s.on("error", () => {}); s.write("  ICY 200 OK\\r\\nContent-Type: text/html\\r\\n\\r\\n<b>owned</b>\\n"); }).listen(port, "0.0.0.0");
 else {
   const server = http.createServer((req, res) => res.end("workspace:" + name + " host:" + req.headers.host + "\\n"));
   server.on("upgrade", (req, socket) => { socket.write("HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\nhmr:" + name); socket.on("data", (d) => socket.write(d)); });
@@ -240,6 +241,18 @@ else {
       setTimeout(() => socket.destroy(), 3000);
     });
     assert.doesNotMatch(greeted, /200 OK|owned/, "a greeting shaped as an HTTP response was not sent on");
+    // And Firefox's other way of reading an answer: "ICY", after white space.
+    serve("web/one", "one 11211 greets-icy");
+    assert.ok(await until(() => urlOf("web/one", 11211) !== undefined));
+    const icy = await new Promise<string>((resolve) => {
+      const socket = net.connect(11211, "127.0.0.1");
+      let data = "";
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 3000);
+    });
+    assert.doesNotMatch(icy, /ICY|owned/, "a greeting shaped as an ICY answer was not sent on");
     // A method no list knows, from a page (PURGE): routed by its name, and teaches nothing.
     serve("web/one", "one 5190");
     assert.ok(await until(() => urlOf("web/one", 5190) !== undefined));
@@ -361,7 +374,10 @@ else {
     assert.equal(stack.quiet("ports").code, 0);
     assert.ok(await until(() => accepts("127.0.0.1", pagesPort)));
     assert.match(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 [\s\S]*the dashboard's token was retired/);
-    assert.match(await request(pagesPort, hostAt(editorBefore.url)), /^HTTP\/1\.1 503 [\s\S]*this editor's token was retired/);
+    // (Once the new daemon has the workspace again: before, its name is no one's, a 421.)
+    let editorReply = "";
+    assert.ok(await until(async () => !/^HTTP\/1\.1 421 /.test((editorReply = await request(pagesPort, hostAt(editorBefore.url)))), 30_000), "the new daemon has the workspace");
+    assert.match(editorReply, /^HTTP\/1\.1 503 [\s\S]*this editor's token was retired/);
     // bootstrap makes them again: both are served, the editor on a new token.
     assert.equal(bootstrap(stack).code, 0);
     const editorAfter = JSON.parse(stack.quiet("editor", "web/one", "--json").stdout) as { url: string };

@@ -311,15 +311,15 @@ export const list = async (out: Out, json: boolean, only?: string) => {
  *  the root VM, so a root VM that was restarted left each running workspace with no way out
  *  at all, while `list` still said "running" (found on the M1). Bootstrap calls this.
  *  Returns how many were reconnected. */
-/** Whether a VM's editor token was made before the host last retired the tokens (retired.ts).
- *  A token whose age cannot be read is stale then: it is made again. */
-const editorTokenStale = async (vm: string) => {
-  const at = retiredAt();
-  if (at === 0) return false;
-  const made = await backend().exec(vm, ["bash", "-lc", "stat -c %Y ~/.desolate-editor/token"], { timeoutMs: 60_000 });
-  const seconds = Number(made.stdout.trim());
-  return made.code !== 0 || !Number.isFinite(seconds) || stale(seconds * 1000, at);
+/** The host's retiring a VM's editor token was made after (editor.sh writes it), or 0. */
+export const editorTokenEpoch = async (vm: string) => {
+  const made = await backend().exec(vm, ["bash", "-lc", "cat ~/.desolate-editor/token.epoch 2>/dev/null || echo 0"], { timeoutMs: 60_000 });
+  const epoch = Number(made.stdout.trim());
+  return made.code === 0 && Number.isSafeInteger(epoch) && epoch > 0 ? epoch : 0;
 };
+/** Whether a VM's editor token was made before the host last retired the tokens (retired.ts).
+ *  One whose mark cannot be read is stale then: it is made again. */
+const editorTokenStale = async (vm: string) => retiredAt() > 0 && stale(await editorTokenEpoch(vm));
 
 export const reconnectRunning = async (): Promise<number> => {
   const b = backend();

@@ -6,6 +6,11 @@
 // copy of) and each editor's (made once, in its VM) are not served again until they have been
 // made again: the dashboard's by `desolate bootstrap`, an editor's by bootstrap for a running
 // workspace and by its next start for a stopped one (workspace/editor.sh's second argument).
+//
+// The time is used as a number only, never compared with a clock: each token made again is
+// marked with the number of the retiring it was made after (here for the dashboard's, beside
+// the token in the VM for an editor's), since a VM's clock, or the Mac's, may have moved
+// (review of the final fixes: a resumed VM's clock behind the Mac's kept its editor refused).
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { paths } from "./paths.ts";
@@ -23,19 +28,28 @@ export const retiredAt = (): number => {
 };
 
 export const retire = () => {
-  fs.writeFileSync(file(), `${Date.now()}\n`, { mode: 0o600 });
+  // Always a larger number than the last one, whatever the clock did.
+  fs.writeFileSync(file(), `${Math.max(Date.now(), retiredAt() + 1)}\n`, { mode: 0o600 });
   for (const name of ["approve-token", "git-token", "ui-token"]) fs.rmSync(path.join(paths.state, name), { force: true });
 };
 
-/** Whether a token made at `madeAt` (ms; 0 if not known) was made before the last retiring. */
-export const stale = (madeAt: number, at = retiredAt()) => at > 0 && madeAt <= at;
+/** Whether a token marked with `epoch` (the retiring it was made after; 0 if none, or not
+ *  known) was made before the last retiring. */
+export const stale = (epoch: number, at = retiredAt()) => at > 0 && epoch < at;
 
-/** The dashboard's token, made again since? (bootstrap makes it, and gives the root its copy) */
+const dashboardEpoch = () => path.join(paths.state, "ui-token.epoch");
+/** The dashboard's token, made again since, and the root given its copy? */
 export const dashboardStale = (at = retiredAt()) => {
   if (at === 0) return false;
+  if (!fs.existsSync(path.join(paths.state, "ui-token"))) return true;
   try {
-    return stale(fs.statSync(path.join(paths.state, "ui-token")).mtimeMs, at);
+    return stale(Number(fs.readFileSync(dashboardEpoch(), "utf8").trim()) || 0, at);
   } catch {
     return true;
   }
+};
+/** Bootstrap, once the root has the dashboard's token: it is served again. */
+export const dashboardMade = () => {
+  const at = retiredAt();
+  if (at > 0) fs.writeFileSync(dashboardEpoch(), `${at}\n`, { mode: 0o600 });
 };

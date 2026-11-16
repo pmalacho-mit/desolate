@@ -3,9 +3,10 @@
 # workspace's user, by start.sh, on every start. Idempotent.
 #   editor.sh <this workspace's editor hostname> [<ms since the epoch>]
 #
-# With a time: a token made before it is made again, and the server restarted to take it.
-# That is the host retiring the tokens (host/retired.ts): a reloaded tab may have sent the
-# old one's cookie to another program.
+# With a time: the host's last retiring of the tokens (host/retired.ts; a reloaded tab may
+# have sent the old one's cookie to another program). A token not made since is made again,
+# and the server restarted to take it. "Since" is the host's own number, kept beside the
+# token (token.epoch), never this VM's clock: a resumed VM's clock may be behind the Mac's.
 #
 # Two processes, both on this VM's loopback:
 #   codium-server   the pinned VSCodium server baked into the image (pins.env), port 31580.
@@ -29,12 +30,15 @@ fi
 umask 077
 mkdir -p "$DATA/extensions" "$DATA/data/Machine"
 # The connection token: made here once, read by the host when it prints the editor's URL.
+EPOCH=$(cat "$DATA/token.epoch" 2>/dev/null || true)
+case "$EPOCH" in ''|*[!0-9]*) EPOCH=0 ;; esac
 RENEW=0
-if [ -s "$DATA/token" ] && [ "$RETIRED" -gt 0 ] && [ "$(( $(stat -c %Y "$DATA/token") * 1000 ))" -le "$RETIRED" ]; then
+if [ -s "$DATA/token" ] && [ "$EPOCH" -lt "$RETIRED" ]; then
   rm -f "$DATA/token"
   RENEW=1
 fi
 [ -s "$DATA/token" ] || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$DATA/token"
+[ "$RETIRED" -gt "$EPOCH" ] && printf '%s\n' "$RETIRED" >"$DATA/token.epoch"
 
 listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 

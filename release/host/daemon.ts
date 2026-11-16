@@ -42,7 +42,7 @@ import { sleep, waitFor } from "../shared/run.ts";
 import { LIMIT, sniffSocket } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
-import { dashboardStale, retire, stale } from "./retired.ts";
+import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
@@ -54,7 +54,7 @@ const RAW_PORTS = new Set([3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 262
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Checkouts = { repo: string; kind: string; name: string; path?: string }[];
-type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; editorTokenAt: number; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
+type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; editorTokenEpoch: number; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
 export type PortView = {
   workspace: string;
   forwarded: { port: number; url: string }[];
@@ -206,6 +206,8 @@ const serve = async () => {
   };
 
   const REQUEST_LINE = /^[A-Z]{1,16} \S+ HTTP\/\d/;
+  /** The start of TLS or of an HTTP request, cut off before its line ended. */
+  const cutOff = (head: Buffer) => head.length > 0 && (head[0] === 0x16 || REQUEST_LINE.test(head.toString("latin1")) || (/^[A-Z]{1,16}( |$)/.test(head.toString("latin1")) && !head.includes(0x0a)));
   /** A short line that merely looks like HTTP (Redis's `SET k v`), not a request line, and not
    *  a head that ran to LIMIT: on a raw port, that protocol's. */
   const nameless = (head: Buffer) => head.length < LIMIT && !REQUEST_LINE.test(head.toString("latin1"));
@@ -276,8 +278,9 @@ const serve = async () => {
     const entry = owner ? entries.get(owner) : undefined;
     if (!entry || !entry.listeners.has(port)) return client.destroy();
     // A head that is the start of a request or of TLS, cut off when the wait ran out, is a
-    // browser's (final review): never the port's first workspace's.
-    if (head.length > 0 && (head[0] === 0x16 || REQUEST_LINE.test(head.toString("latin1")) || (/^[A-Z]{1,16}( |$)/.test(head.toString("latin1")) && !head.includes(0x0a)))) return void client.destroy();
+    // browser's (final review): never the port's first workspace's. (Only then: a decided
+    // head was raw already, and a MongoDB hello's first byte may be 0x16.)
+    if (undecided && cutOff(head)) return void client.destroy();
     if (head.length > 0) return pipe(client, b.dial(entry.vm, port), head);
     // A client that already went gets no connection to the owner (final review: each one
     // held the owner's server until it hung up).
@@ -293,13 +296,15 @@ const serve = async () => {
     // And the greeting is looked at before it goes: one that starts like an HTTP response
     // would be read as the answer to the request a browser later sends on its preconnected
     // socket, a page at another workspace's origin (final review). Chrome looks for "HTTP"
-    // within the first 4 bytes and refuses anything else (HTTP/0.9) on these ports; no
-    // database's greeting starts so.
+    // within the first 4 bytes and refuses anything else (HTTP/0.9) on these ports; Firefox
+    // also takes "ICY " after up to 7 bytes of white space (as read in its source, not
+    // tried). Safari was not looked at. No database's greeting starts so.
     let greeting = Buffer.alloc(0);
     const onGreeting = (chunk: Buffer) => {
       greeting = Buffer.concat([greeting, chunk]);
-      if (/^[\s\S]{0,4}http/i.test(greeting.toString("latin1"))) return close();
-      if (greeting.length < 8) return;
+      const text = greeting.toString("latin1");
+      if (/^[\s\S]{0,4}http/i.test(text) || /^\s{0,7}icy /i.test(text)) return close();
+      if (greeting.length < 12) return;
       upstream.off("data", onGreeting);
       client.write(greeting);
       upstream.pipe(client);
@@ -308,7 +313,7 @@ const serve = async () => {
     client.resume();
     const first = await sniffSocket(client, 600_000);
     if (client.destroyed) return void upstream.destroy();
-    if (first.sniffed.kind === "tls" || REQUEST_LINE.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head))) return close();
+    if (first.sniffed.kind === "tls" || REQUEST_LINE.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head)) || (first.undecided && cutOff(first.head))) return close();
     client.on("error", close);
     client.on("close", close);
     // The client spoke, and not as a browser: a short greeting held back goes now.
@@ -376,7 +381,7 @@ const serve = async () => {
         else client.destroy();
         return;
       }
-      if (stale(target.entry.editorTokenAt)) return refuseHttp(client, "503 Service Unavailable", `desolate: this editor's token was retired (another program held [::1] on this port). Run \`desolate bootstrap\` (or start the workspace), then \`desolate editor ${target.entry.domain}/${target.entry.workspace}\` for its new address.\n`);
+      if (stale(target.entry.editorTokenEpoch)) return refuseHttp(client, "503 Service Unavailable", `desolate: this editor's token was retired (another program held [::1] on this port). Run \`desolate bootstrap\` (or start the workspace), then \`desolate editor ${target.entry.domain}/${target.entry.workspace}\` for its new address.\n`);
       pipe(client, b.dial(target.entry.vm, EDITOR.gate), head);
     });
   };
@@ -465,11 +470,14 @@ const serve = async () => {
   const sync = async (entry: Entry) => {
     try {
       const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], { input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }), timeoutMs: 15_000 });
-      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; editorTokenAt?: unknown; devcontainer?: unknown; folder?: unknown };
+      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; editorTokenEpoch?: unknown; devcontainer?: unknown; folder?: unknown };
       // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
       // rest is cut to a line.
       entry.editorToken = typeof reply.editorToken === "string" && /^[0-9a-f]{48}$/.test(reply.editorToken) ? reply.editorToken : "";
-      entry.editorTokenAt = typeof reply.editorTokenAt === "number" && Number.isFinite(reply.editorTokenAt) ? reply.editorTokenAt : 0;
+      entry.editorTokenEpoch = typeof reply.editorTokenEpoch === "number" && Number.isSafeInteger(reply.editorTokenEpoch) ? reply.editorTokenEpoch : 0;
+      // A VM still running an older wsd says nothing of it (it is restarted only with the VM):
+      // asked directly, and only once tokens have been retired (review of the final fixes).
+      if (reply.editorTokenEpoch === undefined && retiredAt() > 0) entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
       entry.devcontainer = typeof reply.devcontainer === "string" ? printable(reply.devcontainer, 400, " ") : "";
       if (!entry.folder.startsWith("workspace:") && typeof reply.folder === "string" && /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(reply.folder)) entry.folder = reply.folder;
       if (!reply.ok || !Array.isArray(reply.listeners)) throw new Error(reply.error ?? `exit ${result.code}`);
@@ -544,7 +552,7 @@ const serve = async () => {
       existing.proxy = r.proxy;
       return;
     }
-    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", editorTokenAt: 0, devcontainer: "", folder: "", watchers: [] };
+    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", editorTokenEpoch: 0, devcontainer: "", folder: "", watchers: [] };
     entries.set(r.vm, entry);
     // A status set in the workspace is a file changing in a share. A VM gets no events for
     // a share, so the host watches (the directory, for a change: it reads nothing) and
@@ -729,7 +737,7 @@ const serve = async () => {
         status: vm.status,
         ...(entry ? {
           devcontainer: entry.devcontainer || undefined,
-          editor: entry.editorToken && !editorError && !stale(entry.editorTokenAt) ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
+          editor: entry.editorToken && !editorError && !stale(entry.editorTokenEpoch) ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined,
           ports: [...entry.listeners].sort((x, y) => x - y).filter((p) => !hostHeld.has(p)).map((p) => ({ port: p, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}` })),
           // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
           // address on that port reaches the Mac's program (the dashboard says so).

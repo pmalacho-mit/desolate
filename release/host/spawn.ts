@@ -31,7 +31,10 @@ const ledger = (): Ledger => {
   const used = { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) };
   // Moved to their own file at once: the next write of spawn.json, by the CLI too, leaves
   // them out (final review).
-  if (value.used && Object.keys(value.used).length > 0) saveUsed(used);
+  if (value.used && Object.keys(value.used).length > 0) {
+    saveUsed(used);
+    save({ max: value.max ?? {}, started: value.started ?? {}, used });
+  }
   return { max: value.max ?? {}, started: value.started ?? {}, used };
 };
 /** The requests run, in a file of their own that only the daemon writes: spawn.json is also
