@@ -96,8 +96,13 @@ for (const checkout of plan.checkouts) {
 // An identity for commits, if the workspace has none: the person's (their git identity on
 // the Mac, in the plan), else the workspace's own name. The devcontainer gets the same
 // (devcontainer.ts). Changed with `git config --global user.name ...` as anywhere.
+// Also when the one there is a fallback of desolate's own (`...desolate.invalid`): a workspace
+// made from its domain's template inherits the template's, `<domain>/template`, and one made
+// before the person set theirs on the Mac would keep the workspace's name for good
+// (dogfooding: every VM commit of a templated workspace was `standup/template`). One the
+// person set in the workspace is theirs, and kept.
 const who = await run("git", ["config", "--global", "user.email"]);
-if (who.code !== 0) {
+if (who.code !== 0 || who.stdout.trim().endsWith(".desolate.invalid")) {
   await git(null, ["config", "--global", "user.name", plan.author?.name ?? `${plan.domain}/${plan.workspace}`]);
   await git(null, ["config", "--global", "user.email", plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`]);
 }

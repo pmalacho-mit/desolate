@@ -156,6 +156,11 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
   goes through the same address; nothing to configure for it. A front end that calls an API
   in the same workspace: proxy it from the dev server (Vite's `server.proxy`), so the page
   needs one address. (Tried with Vite 8 and Express, on the M1.)
+- **A file watcher sees only changes made in its own VM.** `/workspaces` is a share: a file
+  written from the Mac (under `~/.desolate/domains/...`) or by another workspace of the
+  domain wakes no watcher, so a dev server keeps serving the old file. Edit in the
+  workspace (its editor, its terminal, an agent there), `touch` the file there, or have the
+  watcher poll (Vite: `server.watch.usePolling: true`).
 - **The editor's own origin never serves a dev server**: no port is forwarded under its name
   (T2 `06` asks it at the paths web editors forward ports at). Open dev servers by their own
   address, not through the editor's Ports view.

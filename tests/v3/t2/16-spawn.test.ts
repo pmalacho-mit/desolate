@@ -56,6 +56,14 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     assert.match(limited.stdout, /may have up to 1 workspace\(s\) they started at once/);
   });
 
+  it("a branch already checked out is refused at once, to the workspace that asked, in its terms", () => {
+    const held = inside("w1", "desolate spawn --name dup --branch task/one");
+    assert.equal(held.code, 1);
+    assert.match(held.stderr, /the branch 'task\/one' is checked out in this workspace/);
+    assert.match(held.stderr, /desolate spawn --name dup --branch <a branch of its own>/);
+    assert.doesNotMatch(held.stderr, /desolate rm/, "never told to remove a workspace, least of all itself");
+  });
+
   it("a workspace starts one, with its command as the agent; it is labelled, in the stats and the events", async () => {
     // The task's words reach the agent as words: quotes, `$(...)` and a leading dash included.
     const asked = inside("w1", `desolate spawn --name helper --branch task/helper -- bash -c 'echo "task: $1"; sleep 600' _ 'tidy up; $(id) --help'`);
@@ -94,6 +102,9 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     const said = events().find((e) => e.type === "request" && e.workspace === "forged")!;
     assert.equal(said.ok, false);
     assert.match(String(said.said), /not signed by dev\/w1/);
+    // Ended, it holds nothing: its queue entry (which reserved its name and counted against
+    // the limit, for half an hour) is gone.
+    assert.ok(await until(() => !/zz1-0123456789/.test(stack.inRoot(["bash", "-c", "ls /var/lib/desolate/host-queue"]).stdout), 10_000), "the refused request's queue entry is removed");
     await sleep(3000);
     assert.ok(!listed().some((w) => w.workspace === "forged"), "nothing was made");
     stack.desolate("domain", "dev", "spawn", "--max", "1");

@@ -261,9 +261,10 @@ const main = async () => {
   const lfsMissing = usesLfs && (await run("docker", ["exec", id, "sh", "-c", "git lfs version"])).code !== 0;
   // Who commits from the editor and its terminals: the workspace's identity (init.ts: the
   // person's, from the Mac), unless the container's user has one of its own. Without it a
-  // first `git commit` in the editor failed with "Please tell me who you are".
+  // first `git commit` in the editor failed with "Please tell me who you are". A fallback of
+  // desolate's own (`...desolate.invalid`) is replaced, as in the VM (init.ts).
   const identity = [plan.author?.name ?? `${plan.domain}/${plan.workspace}`, plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`];
-  await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "sh", "-c", 'git config --global user.email >/dev/null 2>&1 || { git config --global user.name "$1" && git config --global user.email "$2"; }', "_", ...identity]);
+  await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "sh", "-c", 'case "$(git config --global user.email 2>/dev/null)" in ""|*.desolate.invalid) git config --global user.name "$1" && git config --global user.email "$2" ;; esac', "_", ...identity]);
   // A compose service's own network, reached from the VM (bridge.ts): its listeners, its
   // `service:port` forwards, and the editor's server when it runs there.
   const compose = spec.dockerComposeFile !== undefined;

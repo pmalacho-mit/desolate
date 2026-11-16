@@ -191,7 +191,23 @@ const serve = async () => {
 
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
-    const { sniffed, head } = await sniffSocket(client, 400);
+    let { sniffed, head } = await sniffSocket(client, 400);
+    // Silence is not a protocol. A client that has said nothing yet (a browser's
+    // preconnected socket, `nc -z`, a health check) on a port not known to be raw was taken
+    // for a nameless protocol: the port was then raw for good, kept taken in every other
+    // workspace, and the browser's request, sent on that socket a moment later, went to
+    // whichever workspace had the port first, whatever name it carried (dogfooding: Vite's
+    // 5173 in one domain pushed another domain's Vite to 5174, as "no name in its protocol").
+    // Only bytes that are not HTTP or TLS make a port raw. With one workspace on the port
+    // there is no choice to make, and a server-first protocol works as before.
+    if (sniffed.kind === "raw" && head.length === 0 && !knownRaw.has(port)) {
+      if (client.destroyed) return;
+      const listening = [...entries.values()].filter((e) => e.listeners.has(port));
+      if (listening.length === 1) return pipe(client, b.dial(listening[0]!.vm, port), head);
+      client.resume();
+      ({ sniffed, head } = await sniffSocket(client, 120_000));
+      if (sniffed.kind === "raw" && head.length === 0) return void client.destroy();
+    }
     if (sniffed.kind === "http" || sniffed.kind === "tls") {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
