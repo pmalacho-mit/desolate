@@ -80,14 +80,17 @@ if (verb === "fetch") {
   const branch = named ?? current;
   if (!isBranch(branch)) fail(`'${branch}' is not a branch desolate will carry`, "check out the branch to offer, or name it: desolate offer <owner>/<repo> <branch>");
   const commit = (await branches(repo))[branch] ?? fail(`${repo} has no branch '${branch}' in this domain`, "git branch --list");
-  const dirty = await run("git", ["-C", `/workspaces/${repo}`, "status", "--porcelain", "--untracked-files=no"]);
+  // Uncommitted changes in the checkout you are offering from (only commits are offered).
+  // Its own: under `git push` git exports GIT_DIR, the checkout's, which `-C` on another
+  // checkout would compare against that one's files and call everything changed.
+  const dirty = branch === current ? await run("git", ["status", "--porcelain", "--untracked-files=no"]) : { stdout: "" };
   const lfs = await stageLfs(repo, branch).catch((error: Error) => fail(error.message, "git lfs fsck"));
   await syncRepo(repo);
   const reply = await request({ op: "offer", repo, branch, commit, workspace: workspace.workspace, lfs, ...(base ? { base } : {}) });
   if (reply.ok !== true) fail(`the root did not take the offer: ${String(reply.error)}`, String(reply.fix ?? "on the host: desolate doctor"));
   process.stdout.write(`offered ${repo} ${branch} at ${commit.slice(0, 12)}${base ? `, for ${base}` : ""}${lfs.length ? `, with ${lfs.length} LFS object(s)` : ""}.\n`);
   process.stdout.write("It is under \"Needs you\" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.\n");
-  if (dirty.stdout.trim()) process.stdout.write("note: the main checkout has uncommitted changes; only commits are offered.\n");
+  if (dirty.stdout.trim()) process.stdout.write("note: this checkout has uncommitted changes; only commits are offered.\n");
 } else if (verb === "spawn" || verb === "close") {
   // Signed with this workspace's own key, which only this VM and the host have: the host runs
   // it only if the signature is this workspace's (shared/spawn.ts says why).

@@ -74,6 +74,13 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
     if (max === 0) return { ok: false, error: `${domain}'s workspaces cannot start workspaces: the person turned it off`, fix: `on the Mac: desolate domain ${domain} spawn --max none` };
     const pending = queuedFor(domain).filter((q) => q.kind === "workspace.spawn" && Date.now() - q.at < 30 * 60_000 && !all.some((w) => w.workspace === q.args.workspace));
     if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.args.workspace === r.name)) return { ok: false, error: `${domain} already has a workspace '${r.name}'`, fix: "desolate spawn --name <another>" };
+    // A branch is checked out in one workspace at a time, in every repository of the domain:
+    // said here, to the workspace that asked, and in its terms. (From the host it came back
+    // later, with a fix for the person: remove the workspace holding it, the asker itself.)
+    const branch = r.branch || r.name;
+    const dir = branch.replace(/\//g, "-");
+    const holder = all.find((w) => w.checkouts.some((c) => c.kind === "worktree" && c.name === dir));
+    if (holder) return { ok: false, error: `the branch '${branch}' is checked out in ${holder.workspace === r.parent ? "this workspace" : `${domain}/${holder.workspace}`} (a workspace you start gets that branch in each of the domain's repositories)`, fix: `desolate spawn --name ${r.name} --branch <a branch of its own>` };
     const live = all.filter((w) => w.startedBy).length + pending.length;
     if (max !== null && live >= max) return { ok: false, error: `${domain} already has ${live} workspace(s) started by its workspaces, its limit of ${max}`, fix: "close one you started (desolate close <name>), or ask the person to raise the limit" };
   } else {

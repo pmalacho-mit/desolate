@@ -7,6 +7,7 @@
 //
 // The host runs no git on desolate's repositories: the split, the checks and the push are
 // the git VM's, and the push waits for your approval on the approval page like any other.
+import { spawnSync } from "node:child_process";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo, repoId } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
@@ -27,7 +28,10 @@ export const waitForPull = async (dependency: Repo, branch: string, out: Out): P
   const api = process.env.SUEDE_GITHUB_API ?? "https://api.github.com";
   const waitS = Number(process.env.SUEDE_UPSTREAM_WAIT) || 180;
   const everyS = Number(process.env.SUEDE_UPSTREAM_INTERVAL) || 5;
-  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN;
+  // A private dependency's pull request is invisible to the API without a token: GH_TOKEN,
+  // else the token of this Mac's own gh, which desolate uses already (clone, issues).
+  // (Only to GitHub's own API: never to another address SUEDE_GITHUB_API names.)
+  const token = process.env.GH_TOKEN ?? process.env.GITHUB_TOKEN ?? (api === "https://api.github.com" ? spawnSync("gh", ["auth", "token"], { encoding: "utf8", timeout: 10_000 }).stdout?.trim() || undefined : undefined);
   const ask = async (route: string): Promise<unknown> => {
     try {
       const answer = await fetch(`${api}/${route}`, { headers: { accept: "application/vnd.github+json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, signal: AbortSignal.timeout(20_000) });

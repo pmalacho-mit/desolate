@@ -175,6 +175,11 @@ export const ops: Record<string, Op> = {
       }));
     });
   },
+  async "offers.dismiss"(args) {
+    const result = offers.dismiss(args.domain, args.repo, args.branch);
+    if ("error" in result) refuse(result.error, "desolate offers   (what is offered, by domain, repository and branch)");
+    return result;
+  },
   async "offers.refused"(args) {
     return domains.domains().filter((d) => typeof args.domain !== "string" || d.slug === args.domain).flatMap((d) => refusalsOf(d.slug));
   },

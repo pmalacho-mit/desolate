@@ -126,10 +126,14 @@ the listener and publishes it. **The person opens it at this workspace's own hos
 same port number**, not at `localhost`:
 
 ```bash
-jq -r '"http://\(.domain)-\(.workspace)"' ~/.desolate/workspace.json   # the name's start
+echo "http://$DESOLATE_DEV_HOSTNAME:5173"     # in a devcontainer: the whole address, for port 5173
+jq -r '"http://\(.domain)-\(.workspace)-"' ~/.desolate/workspace.json   # no devcontainer: the name's start
 ```
 
-The exact URL is what the person's `desolate ports` shows; tell them the port. If a port you
+The exact URL is what the person's `desolate ports` shows; tell them the port. Dev servers
+that check the Host header (Vite, webpack) accept these names as they are: they end in
+`.localhost`. Vite's `server.host` must be `0.0.0.0` (its default, `localhost`, can mean
+`::1` only), and its HMR websocket works through the same address. If a port you
 wanted is already taken here, something else needs that number on their machine: let your
 server move to the next one.
 

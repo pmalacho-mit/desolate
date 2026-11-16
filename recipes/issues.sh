@@ -41,6 +41,9 @@ number() { [[ $1 =~ ^[0-9]+$ ]]; }   # issue numbers, as GitHub and the workspac
 # What there is: the labelled open issues, and the domain's workspaces for issues.
 open=$(gh issue list --repo "$repo" --label "$label" --state open --limit 100 --json number --jq '.[].number')
 have=$(desolate list "$domain" --json | jq -r '.[].workspaces[].workspace | select(startswith("issue-")) | ltrimstr("issue-")')
+# Said, not silent: a pass that finds nothing printed nothing at all, which looked like a failure.
+# (GitHub lists a just-labelled issue a few seconds later.)
+[ -n "$open" ] || echo "no open issue of $repo is labelled $label (yet: GitHub lists a new one a few seconds later)"
 
 # Closed since: stop the agent, keep the workspace.
 for n in $have; do

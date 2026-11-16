@@ -127,10 +127,12 @@ declare namespace isCommit {
 /** GitHub's page for opening a pull request of `branch` into `base`, filled in: the person
  *  opens it in their own browser, signed in as themselves, and creates the pull request
  *  there. desolate holds no token that could. Null for anything that is not a repository and
- *  two branches. */
+ *  two branches, and for suede's `downstream/...` branches: the dependency's own Action
+ *  opens that pull request, and a second one made from this link would be a duplicate
+ *  (dogfooding: `desolate upstream` printed it beside "the Action opens the pull request"). */
 export const pullRequestUrl = (repo: string, branch: string, base: string | null): string | null => {
   const r = parseRepo(repo);
-  if (!r || !isBranch(branch) || !base || !isBranch(base) || base === branch) return null;
+  if (!r || !isBranch(branch) || !base || !isBranch(base) || base === branch || branch.startsWith("downstream/")) return null;
   const part = (b: string) => b.split("/").map(encodeURIComponent).join("/");
   return `https://github.com/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.name)}/compare/${part(base)}...${part(branch)}?expand=1`;
 };
@@ -144,6 +146,7 @@ declare namespace pullRequestUrl {
     [args: [repo: "acme/widgets", branch: "a..b", base: "main"], expected: null],
     [args: [repo: "acme/widgets", branch: "x", base: null], expected: null],
     [args: [repo: "not a repo", branch: "x", base: "main"], expected: null],
+    [args: [repo: "acme/lib", branch: "downstream/acme/app-0123456789abcdef0123456789abcdef01234567", base: "main"], expected: null],
   ]>;
 }
 
