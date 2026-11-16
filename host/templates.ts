@@ -97,11 +97,17 @@ const ensureOrThrow = async (domain: string, repos: string[], build: Builder, sa
   const spec: VmSpec = { ...build.specOf(builder, repos), labels: { title: `${domain} template`, domain, template: key } };
   const { disconnectWorkspace } = await import("./daemon.ts");
   let made = false;
+  // A line per phase, with its time: a first `up` sat on the line above for 200 s on the M1,
+  // and looked hung (dogfooding).
+  const began = Date.now();
+  const took = () => `${Math.round((Date.now() - began) / 1000)} s`;
   try {
     await b.create(spec);
     await b.start(name);
+    say(`  its VM is up (${took()}); now the project's devcontainer: its image, features and setup commands, usually the longest part`);
     const { devcontainer } = await build.startServices(builder);
     if (!devcontainer.startsWith("up")) throw new Error(`its devcontainer did not come up: ${devcontainer}`);
+    say(`  devcontainer up (${took()}); keeping it as ${domain}'s template`);
     const scrubbed = await b.exec(name, ["bash", "-c", SCRUB], { root: true, timeoutMs: 120_000 });
     if (scrubbed.code !== 0) throw new Error(`it could not be emptied of what was the builder's: ${scrubbed.stderr.trim().slice(-200)}`);
     made = true;

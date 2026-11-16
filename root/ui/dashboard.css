@@ -87,3 +87,5 @@ textarea.wide { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; 
 .markdown table { border-collapse: collapse; } .markdown th, .markdown td { border: 1px solid var(--line); padding: 4px 8px; }
 .markdown blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--soft); }
 .markdown li.task { list-style: none; }
+/* The Write/Preview toggle: a button its own size, not the editor's width (it stretched in the column). */
+[data-preview-toggle] { justify-self: start; align-self: flex-start; width: auto; }
