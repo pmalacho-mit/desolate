@@ -1305,6 +1305,15 @@ and the threat model, not the author's conclusions. What they found, and what wa
 | Anyone could teach the forwarder a port was raw (and so reserved everywhere); silent sockets capped at 512 newest-refused | medium | no learning from traffic (`DESOLATE_RAW_PORTS` instead); undecided bytes closed; the oldest waiting is dropped |
 | A gh killed by its timeout forgot the attempt; a recorded page refused instead of re-sent; ledger writes racing | low | kept as not known; re-sent; one lock; `spawn-used.json` written by the daemon only; `up` destroys only what it made |
 
+**A third review** found the second round's own gaps:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| `desolate git` printed its token address unchecked; `ui` and `approve --web` passed when the daemon did not answer; tokens outlived a squatted `::1` | high | one fail-closed check (`tokenAddressesSafe`, on a cheap `editor` op); page tokens retired when `::1` is found held |
+| A silent socket on a known raw port still went to its owner, and a browser's request sent on it later with it (a T2 run caught it: an `lsof` blocking the loop ended a 400 ms sniff before bytes already sent were read) | medium | the owner gets its client, but the client's first bytes are read first: HTTP or TLS closes both ends; `lsof` runs in the background |
+| Spawns were never counted as ended (a regression of the second round): after three, a domain could start no more | medium | fixed; T2 16 |
+| A domain's limit ignored spawns under way; a `::1` error other than in-use left a port forwarded; status read paths from the root's records; a stale lock could be taken twice | low | each fixed |
+
 **What does not hold, said plainly.** The root's ordinary user, if a domain ever took it
 over, still writes every domain's checkouts and passes on the dashboard's clicks (starting
 and stopping workspaces). What the signing and `vouched()` now guarantee is narrower: it
