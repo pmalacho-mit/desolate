@@ -70,12 +70,12 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
   const all = workspaces(domain);
   if (!all.some((w) => w.workspace === r.parent)) return { ok: false, error: `${domain} has no workspace '${r.parent}'` };
   if (r.op === "spawn") {
-    const max = domainOf(domain).spawnMax ?? 0;
-    if (max === 0) return { ok: false, error: `${domain}'s workspaces cannot start workspaces`, fix: `on the Mac: desolate domain ${domain} spawn --max <n>` };
+    const max = domainOf(domain).spawnMax ?? null;
+    if (max === 0) return { ok: false, error: `${domain}'s workspaces cannot start workspaces: the person turned it off`, fix: `on the Mac: desolate domain ${domain} spawn --max none` };
     const pending = queuedFor(domain).filter((q) => q.kind === "workspace.spawn" && Date.now() - q.at < 30 * 60_000 && !all.some((w) => w.workspace === q.args.workspace));
     if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.args.workspace === r.name)) return { ok: false, error: `${domain} already has a workspace '${r.name}'`, fix: "desolate spawn --name <another>" };
     const live = all.filter((w) => w.startedBy).length + pending.length;
-    if (live >= max) return { ok: false, error: `${domain} already has ${live} workspace(s) started by its workspaces, its limit of ${max}`, fix: "close one you started (desolate close <name>), or ask the person to raise the limit" };
+    if (max !== null && live >= max) return { ok: false, error: `${domain} already has ${live} workspace(s) started by its workspaces, its limit of ${max}`, fix: "close one you started (desolate close <name>), or ask the person to raise the limit" };
   } else {
     const child = all.find((w) => w.workspace === r.name);
     if (!child) return { ok: false, error: `${domain} has no workspace '${r.name}'` };

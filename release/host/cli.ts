@@ -50,7 +50,7 @@ Your repositories and domains:
   desolate domain <slug> add --repo <owner/repo>                 give the domain a repository
   desolate domain <slug> size [--cpus <n>] [--memory <8g>] [--disk <60g>] [--clear]
                                                                  what its new workspaces get (shown: the effective size)
-  desolate domain <slug> spawn [--max <n>]                       how many workspaces its workspaces may start (0: none)
+  desolate domain <slug> spawn [--max <n>|none]                  limit the workspaces its workspaces start (none: no limit, the default; 0: off)
   desolate domain <slug> stats [--json]                          its workspaces, who started each, its limit, this Mac
   desolate domain <slug> env [--from <owner/repo>]               whose devcontainer.json its workspaces run
   desolate domain <slug> net [open | enforce | allow <host>... | deny <host>...]

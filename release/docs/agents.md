@@ -40,11 +40,15 @@ notifications.
 ## Workspaces that start workspaces
 
 An agent working on one thing often finds another: an issue to split off, a check to run
-in parallel. With your leave, a workspace can start another workspace **in its own domain
-only**, with a command in it as its agent, and close the ones it started.
+in parallel. A workspace can start another workspace **in its own domain only**, with a
+command in it as its agent, and close the ones it started. It is on for every domain, with
+no limit; the shipped AGENTS.md tells agents to do it only when the work needs it.
 
 ```bash
-desolate domain acme spawn --max 2        # on the Mac: up to 2 at once, started by acme's workspaces (0: none, the default)
+desolate domain acme spawn                # on the Mac: whether acme's workspaces may, and any limit
+desolate domain acme spawn --max 2        # up to 2 started by its workspaces at once
+desolate domain acme spawn --max 0        # none: turned off for acme
+desolate domain acme spawn --max none     # no limit again (the default)
 desolate domain acme stats                # its workspaces, who started each, the limit, this Mac
 ```
 
@@ -57,8 +61,8 @@ close <w>`, `desolate domain stats` and `desolate events --follow` (the workspac
 - **A workspace that outlived the one that started it** is flagged on the dashboard (under
   "Needs you") and in `desolate list`. Nothing is removed for it: look at its branches,
   then `desolate rm` it.
-- **The limit is a number of workspaces at once.** Each counts until it is removed; it is
-  memory on your Mac (`desolate domain <d> size`).
+- **A limit, if you set one, is a number of workspaces at once.** Each counts until it is
+  removed; it is memory on your Mac (`desolate domain <d> size`).
 - **Closing:** a workspace closes only one it started, and only when nothing in it would be
   lost (no uncommitted, untracked or stashed work in any checkout). Its branches stay.
   Anything else is yours: `desolate rm`.

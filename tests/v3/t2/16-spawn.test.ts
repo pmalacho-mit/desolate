@@ -42,15 +42,18 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
   });
   after(() => stack.destroy());
 
-  it("until the person allows it, a workspace starts none", () => {
+  it("on by default, with no limit; the person can turn it off, and set a limit", () => {
+    assert.match(stack.desolate("domain", "dev", "spawn").stdout, /may start workspaces, in dev only, .* with no limit/);
+    assert.match(inside("w1", "desolate domain stats").stdout, /started by workspaces: 0, no limit/);
+    assert.equal(stack.desolate("domain", "dev", "spawn", "--max", "0").code, 0);
     const asked = inside("w1", "desolate spawn --name helper");
     assert.equal(asked.code, 1);
-    assert.match(asked.stderr, /cannot start workspaces/);
-    assert.match(asked.stderr, /desolate domain dev spawn --max <n>/);
-    assert.match(inside("w1", "desolate domain stats").stdout, /its workspaces cannot start workspaces/);
-    const allowed = stack.desolate("domain", "dev", "spawn", "--max", "1");
-    assert.equal(allowed.code, 0, allowed.stderr);
-    assert.match(allowed.stdout, /may start up to 1 workspace/);
+    assert.match(asked.stderr, /cannot start workspaces: the person turned it off/);
+    assert.match(asked.stderr, /desolate domain dev spawn --max none/);
+    assert.match(inside("w1", "desolate domain stats").stdout, /its workspaces cannot start workspaces: the person turned it off/);
+    const limited = stack.desolate("domain", "dev", "spawn", "--max", "1");
+    assert.equal(limited.code, 0, limited.stderr);
+    assert.match(limited.stdout, /may have up to 1 workspace\(s\) they started at once/);
   });
 
   it("a workspace starts one, with its command as the agent; it is labelled, in the stats and the events", async () => {
@@ -83,7 +86,7 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
   it("the root's ordinary user cannot make one: a request without the workspace's key is refused by the host", async () => {
     // As the root's ordinary user would, if a domain's data had taken it over: straight into
     // the queue the host is handed, for a workspace of the domain, with a signature of its own.
-    stack.desolate("domain", "dev", "spawn", "--max", "3");
+    stack.desolate("domain", "dev", "spawn", "--max", "none");
     const forged = { kind: "workspace.spawn", at: Date.now(), args: { domain: "dev", workspace: "forged", parent: "w1", branch: "", command: JSON.stringify(["bash", "-c", "echo pwned"]), at: new Date().toISOString(), nonce: "0f".repeat(16), mac: "ab".repeat(32) } };
     const put = stack.inRoot(["bash", "-c", 'mkdir -p /var/lib/desolate/host-queue && cat > /var/lib/desolate/host-queue/zz1-0123456789.json'], { input: JSON.stringify(forged) });
     assert.equal(put.code, 0, put.stderr);

@@ -74,16 +74,21 @@ describe("T1 the host's checks before it runs one", () => {
   fs.mkdirSync(path.join(home, "state", "workspace-keys"), { recursive: true });
   fs.writeFileSync(path.join(home, "state", "workspace-keys", vm), `${KEY}\n`);
   const exists = (name: string) => name === vm || name === workspaceVmName("t1", "acme", "helper");
-  it("refuses a domain with no limit, then runs it once its limit allows, and only once", () => {
+  it("runs one with no limit by default, only once; refuses when turned off, and past a limit", () => {
     const r = spawnRequest({ nonce: "01".repeat(16) });
     const signed = signedOf("spawn", asArgs(r, sign(KEY, r)))!;
-    assert.match(String(host.check(signed, exists, now)), /does not let its workspaces start workspaces/);
-    host.setMax("acme", 1);
-    assert.equal(host.check(signed, exists, now), null, "the control: allowed");
+    assert.equal(host.check(signed, exists, now), null, "allowed: no limit unless the person set one");
     assert.match(String(host.check(signed, exists, now)), /already run/, "a replay");
+    const off = spawnRequest({ name: "third", nonce: "06".repeat(16) });
+    const offSigned = signedOf("spawn", asArgs(off, sign(KEY, off)))!;
+    host.setMax("acme", 0);
+    assert.match(String(host.check(offSigned, exists, now)), /does not let its workspaces start workspaces/);
+    host.setMax("acme", 1);
     host.recordStarted("acme", "helper", "w1");
     const next = spawnRequest({ name: "second", nonce: "02".repeat(16) });
     assert.match(String(host.check(signedOf("spawn", asArgs(next, sign(KEY, next)))!, exists, now)), /its limit/);
+    host.setMax("acme", null);
+    assert.equal(host.check(offSigned, exists, now), null, "the control: the same request, with the limit gone");
   });
   it("closes only what the asking workspace started", () => {
     const close = { op: "close" as const, domain: "acme", parent: "w1", name: "helper", at, nonce: "03".repeat(16) };
