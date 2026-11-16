@@ -8,7 +8,7 @@ end-to-end TLS and never comes here.
 A workspace never holds a secret's value. It holds the secret's NAME, a placeholder
 (MYAPP-OPENAI-KEY), and sends that. This swaps the name for the value on the way out, when
 and only when the request is provably going where the secret is allowed to go. The rules
-are v2's (carryover/proxy/addon.py, which this is cut down from; its tests' cases are
+are v2's (release/proxy/vm/addon.py at commit 4f32c77, which this is cut down from; its tests' cases are
 tests/v3/t2/07-secrets.test.ts here):
 
   PROVEN DESTINATION  the TLS SNI, and only the SNI: it is the name mitmproxy validates the
