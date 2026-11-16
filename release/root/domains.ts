@@ -138,7 +138,7 @@ const authorOf = (value: unknown): { name: string; email: string } | undefined =
   return name && /^[^\s@]+@[^\s@]+$/.test(email) ? { name, email } : undefined;
 };
 
-export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown; author?: unknown; startedBy?: unknown }): Workspace => {
+export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown; author?: unknown; startedBy?: unknown; env?: unknown }): Workspace => {
   const d = domain(slugOf(args.domain, "domain"));
   if (d.repos.length === 0) refuse(`the domain '${d.slug}' has no repositories yet`, `desolate domain ${d.slug} add --repo <owner>/<repo>`);
   const existing = workspaces(d.slug);
@@ -167,7 +167,7 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
 
   const held = (repo: string, kind: "main" | "worktree", worktree: string) =>
     existing.find((w) => w.checkouts.some((c) => c.repo === repo && c.kind === kind && (kind === "main" || c.name === worktree)));
-  const checkouts: Checkout[] = d.repos.map((repo) => {
+  const checkouts: Checkout[] = d.repos.flatMap((repo): Checkout[] => {
     const want = wanted.get(repo);
     const defaultBranch = registry().repos[repo]?.defaultBranch ?? "main";
     // The domain clone's own branch: what its main checkout holds, unpushed work included.
@@ -179,15 +179,18 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
       if (holder) refuse(`the worktree '${dir}' of ${repo} is held by the workspace '${d.slug}/${holder.workspace}'`, `use another branch, or desolate rm ${d.slug}/${holder.workspace}`, EXIT.busy);
       return { repo, kind: "worktree", name: dir, branch, base, path: checkoutPath(repo, "worktree", dir) };
     };
-    if (want?.kind === "worktree") return worktree(want.branch!);
+    if (want?.kind === "worktree") return [worktree(want.branch!)];
     const holder = held(repo, "main", "");
     if (want?.kind === "main") {
       if (holder) refuse(`the main checkout of ${repo} is held by the workspace '${d.slug}/${holder.workspace}'. Two editors and two agents in one working tree is a corruption, not a feature`, `take a worktree instead: --checkout ${repo}=worktree:<branch>`, EXIT.busy);
-      return { repo, kind: "main", name: "", branch: defaultBranch, base: defaultBranch, path: checkoutPath(repo, "main", "") };
+      return [{ repo, kind: "main", name: "", branch: defaultBranch, base: defaultBranch, path: checkoutPath(repo, "main", "") }];
     }
-    // Not named: the main checkout if it is free, else a fresh worktree named for the workspace.
-    if (!holder) return { repo, kind: "main", name: "", branch: defaultBranch, base: defaultBranch, path: checkoutPath(repo, "main", "") };
-    return worktree(workspaceName);
+    // Not named: the main checkout if it is free. Else, when nothing was named, a fresh worktree
+    // named for the workspace; when the person named others, none: a worktree there made an
+    // empty branch in every repository the work was not about (dogfooding: spawn and the
+    // issues recipe left one in each).
+    if (!holder) return [{ repo, kind: "main", name: "", branch: defaultBranch, base: defaultBranch, path: checkoutPath(repo, "main", "") }];
+    return wanted.size > 0 ? [] : [worktree(workspaceName)];
   });
 
   // The size the host worked out (flags, this domain's, the stack's defaults), checked here too.
@@ -197,8 +200,13 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   // host says, in its shape only. (A parent removed and remade keeps a new createdAt.)
   const by = args.startedBy as { workspace?: unknown; createdAt?: unknown } | undefined;
   const startedBy = by && isSlug(by.workspace) && typeof by.createdAt === "string" && /^\d{4}-\d\d-\d\dT[\d:.]{8,12}Z$/.test(by.createdAt) ? { workspace: by.workspace, createdAt: by.createdAt } : undefined;
+  // Its environment: the host's word (the first checkout the person named with --checkout,
+  // or the one a template is built for), else the domain's; devcontainer.ts falls back to the
+  // first checkout that has a spec.
+  const envRepo = (typeof args.env === "string" && d.repos.includes(args.env) ? args.env : undefined) ?? d.env;
   const value: Workspace = {
-    ...(d.env ? { env: d.env } : {}),
+    ...(envRepo ? { env: envRepo } : {}),
+    repos: [...d.repos],
     ...(startedBy ? { startedBy } : {}),
     ...(size ? { size: { cpus: size.cpus, memoryMiB: size.memoryMiB, diskGiB: size.diskGiB } } : {}),
     ...(authorOf(args.author) ? { author: authorOf(args.author)! } : {}),
@@ -242,9 +250,12 @@ export const remove = async (slugArg: unknown) => {
  *  the blob of `.devcontainer.json`. Two specs with the same id are the same files. Read in
  *  the MIRROR, which holds only what the remote published (P4: never a domain's clone).
  *  null: no repository of the domain has a spec. */
-export const envKey = async (slugArg: unknown): Promise<{ repo: string; spec: string; id: string } | null> => {
+export const envKey = async (slugArg: unknown, preferred?: unknown): Promise<{ repo: string; spec: string; id: string } | null> => {
   const d = domain(slugOf(slugArg, "domain"));
-  const candidates = d.env ? [d.env] : d.repos;
+  // A workspace whose first named checkout has a spec is that repository's environment (a
+  // domain with a python API and a node front end: the front end's workspace gets node).
+  const first = typeof preferred === "string" && d.repos.includes(preferred) ? [preferred] : [];
+  const candidates = [...first, ...(d.env ? [d.env] : d.repos)];
   for (const id of candidates) {
     const repo = parseRepo(id);
     if (!repo) continue;

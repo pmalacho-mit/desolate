@@ -192,6 +192,9 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   let editorDown: string | null = null;
   let devcontainer = "";
   const view = await rootctl<DomainView>("domain.show", { slug: domain }, { quiet: true });
+  // The environment: the first repository the person named with --checkout (its devcontainer,
+  // if it has one), else the domain's. Before --branch adds the rest.
+  const envRepo = options.checkouts[0]?.split("=")[0];
   // --branch <b>: a worktree on <b> in every repository of the domain (a --checkout names one
   // differently), so a task that spans repositories is one branch name in each.
   if (options.branch !== undefined) {
@@ -208,7 +211,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   if (b.kind !== "fake" && process.env.DESOLATE_TEMPLATES !== "0") {
     const { ensure } = await import("./templates.ts");
     const say = (line: string) => (json ? process.stderr.write(`${forTerminal(line)}\n`) : out(line));
-    template = await ensure(domain, view.repos, { specOf, startServices }, say);
+    template = await ensure(domain, view.repos, { specOf, startServices }, say, envRepo);
     if (template) phase("template");
   }
   // Its size: the flags, then the domain's, then the stack's defaults (each part on its own).
@@ -216,7 +219,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   // Who commits in it: your own git identity, as on this Mac (as the git VM takes it).
   const mine = (key: string) => spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
   const author = { name: mine("user.name"), email: mine("user.email") };
-  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}) }, { quiet: true });
+  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}), ...(envRepo ? { env: envRepo } : {}) }, { quiet: true });
   // (The domain, whether it has a template to make, and the plan, which is two small files:
   // asks of the root, about 0.2 s each. No network: --fetch is its own phase, above.)
   phase("asked the root");

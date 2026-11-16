@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isBranch, parseRepo, repoId } from "../shared/names.ts";
 import { run, sleep } from "../shared/run.ts";
-import { IDENTITY_FILE, KEY, sign } from "../shared/spawn.ts";
+import { checkoutsOf, IDENTITY_FILE, KEY, sign } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
 import { statsLines } from "../shared/stats.ts";
 import { branches, domainRepos, importDeliveries, INBOX, request, stageLfs, syncRepo } from "./sync.ts";
@@ -115,17 +115,20 @@ if (verb === "fetch") {
       const i = own.indexOf(flag);
       return i >= 0 ? own[i + 1] : undefined;
     };
-    const usage = "desolate spawn [--name <workspace>] [--branch <branch>] [-- <command...>]";
-    const unknown = own.find((a, i) => a.startsWith("-") && a !== "--name" && a !== "--branch" && own[i - 1] !== "--name" && own[i - 1] !== "--branch");
+    const usage = "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
+    const takes = ["--name", "--branch", "--checkout"];
+    const unknown = own.find((a, i) => a.startsWith("-") && !takes.includes(a) && !takes.includes(own[i - 1] ?? ""));
     if (unknown === "--help" || unknown === "-h") {
-      process.stdout.write(`${usage}\n  --name    its name (else one made from this workspace's)\n  --branch  the branch it works on, in each of the domain's repositories (else one named after it); one no other workspace has checked out\n  -- ...    a command it runs as its agent, as words (no shell); without one it is only made\nThen: desolate domain stats, desolate events --follow, desolate close <name>. /desolate/release/AGENTS.md, "Other workspaces".\n`);
+      process.stdout.write(`${usage}\n  --name      its name (else one made from this workspace's)\n  --checkout  a repository it works in, on a branch of its own (repeat for more); the first one's devcontainer is its environment; a repository not named gets its main checkout if that is free, else none\n  --branch    instead: that branch in each of the domain's repositories\n  -- ...      a command it runs as its agent, as words (no shell); without one it is only made\nA branch no other workspace has checked out. Then: desolate domain stats, desolate events --follow --all, desolate close <name>. /desolate/release/AGENTS.md, "Other workspaces".\n`);
       process.exit(0);
     }
-    if (unknown) fail(`spawn does not take '${unknown}': it takes --name and --branch, then -- and a command (the branch goes to each of the domain's repositories; there is no --checkout)`, usage);
+    if (unknown) fail(`spawn does not take '${unknown}': it takes --name, --branch and --checkout, then -- and a command`, usage);
+    const checkouts = own.flatMap((a, i) => (a === "--checkout" && own[i + 1] !== undefined ? [own[i + 1]!] : []));
+    if (checkoutsOf(checkouts) === null) fail(`a --checkout is not one desolate takes: ${checkouts.join(" ")}`, "--checkout <owner/repo>=worktree:<branch>   (or <owner/repo>=main)");
     const name = value("--name") ?? `${workspace.workspace}-${randomBytes(2).toString("hex")}`.slice(0, 40);
     const branch = value("--branch") ?? "";
     if (branch && !isBranch(branch)) fail(`'${branch}' is not a branch desolate will carry`, "letters, digits, '.', '_', '-' and '/', not starting with a dash");
-    r = { op: "spawn", domain: workspace.domain, parent: workspace.workspace, name, branch, command, at, nonce };
+    r = { op: "spawn", domain: workspace.domain, parent: workspace.workspace, name, branch, checkouts, command, at, nonce };
   }
   const reply = await request({ ...r, mac: sign(key, r) });
   if (reply.ok !== true) fail(`the root did not take it: ${String(reply.error)}`, String(reply.fix ?? "desolate domain stats"));

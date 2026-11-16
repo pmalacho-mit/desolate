@@ -60,7 +60,7 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     const held = inside("w1", "desolate spawn --name dup --branch task/one");
     assert.equal(held.code, 1);
     assert.match(held.stderr, /the branch 'task\/one' is checked out in this workspace/);
-    assert.match(held.stderr, /desolate spawn --name dup --branch <a branch of its own>/);
+    assert.match(held.stderr, /desolate spawn --name dup --checkout <owner\/repo>=worktree:<a branch of its own>/);
     assert.doesNotMatch(held.stderr, /desolate rm/, "never told to remove a workspace, least of all itself");
   });
 
@@ -127,5 +127,28 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     assert.ok(await until(() => !listed().some((w) => w.workspace === "helper"), 120_000), JSON.stringify(listed()));
     assert.ok(events().some((e) => e.type === "workspace-removed" && e.workspace === "helper" && e.startedBy === "w1"));
     assert.match(stack.desolate("branches", "dev").stdout, /task\/helper/, "its branch is the domain's still");
+  });
+
+  it("--checkout: a workspace for one repository, on a branch of its own; no empty branch in the others", async () => {
+    stack.seed("acme/notes", (dir) => {
+      fs.writeFileSync(path.join(dir, "NOTES.md"), "# notes\n");
+      git(dir, "add", "-A");
+      git(dir, "commit", "--quiet", "-m", "seed");
+    });
+    assert.equal(stack.quiet("clone", "acme/notes", "--no-domain").code, 0);
+    assert.equal(stack.quiet("domain", "dev", "add", "--repo", "acme/notes").code, 0);
+    // Held: refused at once, naming the repository.
+    const held = inside("w1", "desolate spawn --name notes --checkout acme/widgets=worktree:task/one");
+    assert.equal(held.code, 1);
+    assert.match(held.stderr, /the branch 'task\/one' of acme\/widgets is checked out in this workspace/);
+    const asked = inside("w1", "desolate spawn --name notes --checkout acme/notes=worktree:notes/one");
+    assert.equal(asked.code, 0, asked.stderr);
+    assert.ok(await until(() => listed().some((w) => w.workspace === "notes" && w.status === "running"), 240_000), JSON.stringify(listed()));
+    const plan = (JSON.parse(stack.desolate("list", "dev", "--json").stdout) as { workspaces: { workspace: string; checkouts: { repo: string; branch: string; kind: string }[] }[] }[])[0]!.workspaces.find((w) => w.workspace === "notes")!;
+    assert.deepEqual(plan.checkouts.find((c) => c.repo === "acme/notes"), { ...plan.checkouts.find((c) => c.repo === "acme/notes"), kind: "worktree", branch: "notes/one" });
+    // acme/widgets was not named: its main checkout if free, never a branch named for "notes".
+    assert.ok(plan.checkouts.every((c) => c.repo !== "acme/widgets" || c.kind === "main"), JSON.stringify(plan.checkouts));
+    assert.doesNotMatch(stack.desolate("branches", "dev").stdout, /acme\/widgets {2}notes /, "no empty branch for it in acme/widgets");
+    assert.ok(await until(() => events().some((e) => e.type === "request" && e.request === "spawn" && e.ok === true && e.workspace === "notes"), 60_000));
   });
 });

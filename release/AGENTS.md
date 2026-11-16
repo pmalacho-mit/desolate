@@ -69,7 +69,7 @@ better: they decide when it runs.
 
 ```bash
 desolate domain stats                  # this domain's workspaces, who started each, its limit, the Mac
-desolate spawn --name fix-docs --branch task/fix-docs -- <command> <args...>
+desolate spawn --name fix-docs --checkout <owner/repo>=worktree:task/fix-docs -- <command> <args...>
 desolate events --follow               # what happens in this domain, one JSON object per line
 desolate close fix-docs                # remove one you started, once nothing in it would be lost
 ```
@@ -77,6 +77,11 @@ desolate close fix-docs                # remove one you started, once nothing in
 - `desolate domain stats` first: it shows how many are already started, and any limit the
   person set (none, unless they set one; they can also turn it off). Close each one you
   started once its work is committed and offered: `desolate close <name>`.
+- `--checkout <owner/repo>=worktree:<branch>` (repeat it per repository) is what it works on:
+  a branch of its own, one no workspace has checked out. The first one's devcontainer is its
+  environment (a node front end gets node, though the domain's first repository is python).
+  Repositories you do not name get their main checkout if it is free, else none.
+  `--branch <b>` instead puts one branch in each of the domain's repositories.
 - The command after `--` runs in the new workspace as its agent, in its first checkout, as
   the words you give (nothing reads them as a shell line). Without one, the workspace is
   only made. It has the domain's secrets by name, like you, and not your shell's state.

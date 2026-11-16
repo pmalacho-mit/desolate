@@ -24,9 +24,9 @@ type Spawn = import("../../../release/shared/spawn.ts").Spawn;
 const KEY = "ab".repeat(32);
 const at = "2026-11-16T00:00:00.000Z";
 const now = Date.parse(at) + 1000;
-const spawnRequest = (over: Partial<Spawn> = {}): Spawn => ({ op: "spawn", domain: "acme", parent: "w1", name: "helper", branch: "issue/9", command: ["claude", "-p", "fix it; $(rm -rf ~) `id` --help"], at, nonce: "0f".repeat(16), ...over });
+const spawnRequest = (over: Partial<Spawn> = {}): Spawn => ({ op: "spawn", domain: "acme", parent: "w1", name: "helper", branch: "issue/9", checkouts: [], command: ["claude", "-p", "fix it; $(rm -rf ~) `id` --help"], at, nonce: "0f".repeat(16), ...over });
 /** The request as the root carries it to the host: an action's string arguments. */
-const asArgs = (r: Spawn, mac: string): Record<string, string> => ({ domain: r.domain, workspace: r.name, parent: r.parent, branch: r.branch, command: JSON.stringify(r.command), at: r.at, nonce: r.nonce, mac });
+const asArgs = (r: Spawn, mac: string): Record<string, string> => ({ domain: r.domain, workspace: r.name, parent: r.parent, branch: r.branch, checkouts: JSON.stringify(r.checkouts), command: JSON.stringify(r.command), at: r.at, nonce: r.nonce, mac });
 
 describe("T1 a workspace's signed request", () => {
   it("is good only with the parent's key, for exactly what was signed, while fresh", () => {

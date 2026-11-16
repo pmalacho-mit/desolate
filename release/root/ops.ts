@@ -98,7 +98,7 @@ export const ops: Record<string, Op> = {
     return domains.setSpawn(args.slug, args.max);
   },
   async "domain.env-key"(args) {
-    return domains.envKey(args.slug);
+    return domains.envKey(args.slug, args.repo);
   },
   async "domain.list"() {
     return domains.domains().map((d) => ({ ...d, workspaces: domains.workspaces(d.slug) }));

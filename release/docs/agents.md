@@ -52,7 +52,7 @@ desolate domain acme spawn --max none     # no limit again (the default)
 desolate domain acme stats                # its workspaces, who started each, the limit, this Mac
 ```
 
-Inside a workspace, `desolate spawn --name <w> [--branch <b>] -- <command...>`, `desolate
+Inside a workspace, `desolate spawn --name <w> [--checkout <owner/repo>=worktree:<b>]... -- <command...>`, `desolate
 close <w>`, `desolate domain stats` and `desolate events --follow` (the workspace's own
 [AGENTS.md](../AGENTS.md) tells an agent how). What you see:
 

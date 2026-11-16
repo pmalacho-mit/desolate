@@ -16,7 +16,7 @@
 // The command is a list of words, run as an agent in the new workspace (agent-holder.py):
 // never a line for a shell on the Mac. On the host it is only ever an argv element.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { isBranch, isSlug } from "./names.ts";
+import { isBranch, isSlug, parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
 
@@ -54,13 +54,37 @@ declare namespace commandOf {
   ]>;
 }
 
-export type Spawn = { op: "spawn"; domain: string; parent: string; name: string; branch: string; command: string[]; at: string; nonce: string };
+export type Spawn = { op: "spawn"; domain: string; parent: string; name: string; branch: string; checkouts: string[]; command: string[]; at: string; nonce: string };
 export type Close = { op: "close"; domain: string; parent: string; name: string; at: string; nonce: string };
 export type Signed = Spawn | Close;
 
 /** The exact bytes a signature covers: every field, in a fixed order, with its op. */
 export const canonical = (r: Signed): string =>
-  JSON.stringify(r.op === "spawn" ? ["desolate-spawn-v1", r.domain, r.parent, r.name, r.branch, r.command, r.at, r.nonce] : ["desolate-close-v1", r.domain, r.parent, r.name, r.at, r.nonce]);
+  JSON.stringify(r.op === "spawn" ? ["desolate-spawn-v2", r.domain, r.parent, r.name, r.branch, r.checkouts, r.command, r.at, r.nonce] : ["desolate-close-v1", r.domain, r.parent, r.name, r.at, r.nonce]);
+
+/** A spawn's `--checkout`s, as `up` takes them: `<owner/repo>=main` or
+ *  `<owner/repo>=worktree:<branch>`, at most 16; null if any is not one. (v2 of the signed
+ *  form: v1 had no checkouts.) */
+export const checkoutsOf = (value: unknown): string[] | null => {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 16) return null;
+  for (const c of value) {
+    const m = typeof c === "string" ? /^([A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})=(main|worktree:(.+))$/.exec(c) : null;
+    if (!m || !parseRepo(m[1]) || (m[3] !== undefined && !isBranch(m[3]))) return null;
+  }
+  return value as string[];
+};
+
+declare namespace checkoutsOf {
+  /** up's own spellings, and nothing else */
+  export type Cases = Table<typeof checkoutsOf, [
+    [args: [value: ["acme/web=worktree:task/web", "acme/api=main"]], expected: ["acme/web=worktree:task/web", "acme/api=main"]],
+    [args: [value: undefined], expected: []],
+    [args: [value: ["acme/web=worktree:-x"]], expected: null],
+    [args: [value: ["acme/web"]], expected: null],
+    [args: [value: ["../x=main"]], expected: null],
+  ]>;
+}
 
 export const sign = (key: string, r: Signed): string => createHmac("sha256", Buffer.from(key, "hex")).update(canonical(r)).digest("hex");
 
@@ -73,8 +97,9 @@ export const parseSigned = (value: unknown): (Signed & { mac: string }) | null =
   if (v.op !== "spawn") return null;
   const branch = v.branch === undefined || v.branch === "" ? "" : isBranch(v.branch) ? v.branch : null;
   const command = commandOf(v.command ?? []);
-  if (branch === null || command === null) return null;
-  return { op: "spawn", domain: v.domain, parent: v.parent, name: v.name, branch, command, at: v.at, nonce: v.nonce, mac: v.mac };
+  const checkouts = checkoutsOf(v.checkouts);
+  if (branch === null || command === null || checkouts === null) return null;
+  return { op: "spawn", domain: v.domain, parent: v.parent, name: v.name, branch, checkouts, command, at: v.at, nonce: v.nonce, mac: v.mac };
 };
 
 /** The host's check: the signature is the parent workspace's, and the request is fresh.
