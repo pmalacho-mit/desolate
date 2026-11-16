@@ -3,6 +3,7 @@
 // workspace its name belongs to (section 4.4: v2's ingress host check, turned from a filter
 // into a router), and the egress relay learns which host an outbound connection wants.
 // Pure functions over a Buffer, so they are unit-tested without a socket.
+import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Sniffed =
   | { kind: "tls"; name: string | null }
@@ -118,3 +119,33 @@ export const sniffSocket = (socket: import("node:net").Socket, quietMs: number):
     socket.on("data", onData);
     socket.on("close", onClose);
   });
+
+/** A raw port's server's greeting so far, as a browser would read it if it came on the socket
+ *  it preconnected (final review, 2026-11-16): an `answer` (Chrome takes "HTTP" within the first
+ *  5 bytes; Firefox also "ICY " after up to 7 of white space, read in its source, not tried),
+ *  `more` while what came could still become one, or `other`, which can no longer: only then
+ *  does any of it go on. A server whose whole greeting is that short still gets through: its
+ *  bytes stop looking like an answer at once ("raw:one\n" at its first byte). */
+export const greetingIs = (text: string): "answer" | "more" | "other" => {
+  const lower = text.toLowerCase();
+  if (/^[\s\S]{0,4}http/.test(lower) || /^\s{0,7}icy /.test(lower)) return "answer";
+  const could = (word: string, at: number) => word.startsWith(lower.slice(at, at + word.length));
+  for (let at = 0; at <= 4; at++) if (could("http", at)) return "more";
+  const space = /^\s*/.exec(lower)![0].length;
+  return space <= 7 && could("icy ", space) ? "more" : "other";
+};
+
+declare namespace greetingIs {
+  /** an answer, a start that could still be one, or neither */
+  export type Verdict = Table<typeof greetingIs, [
+    [args: [text: "HTTP/1.1 200 OK\r\n"], expected: "answer"],
+    [args: [text: "\r\n\r\nhttp/1.0 200"], expected: "answer"],
+    [args: [text: "  ICY 200 OK"], expected: "answer"],
+    [args: [text: "H"], expected: "more"],
+    [args: [text: "xxxxHT"], expected: "more"],
+    [args: [text: "  IC"], expected: "more"],
+    [args: [text: "raw:one\n"], expected: "other"],
+    [args: [text: "220 mail.example ESMTP\r\n"], expected: "other"],
+    [args: [text: "J\u0000\u0000\u0000\n8.0.36\u0000"], expected: "other"],
+  ]>;
+}

@@ -39,7 +39,7 @@ import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
-import { LIMIT, sniffSocket } from "../shared/sniff.ts";
+import { greetingIs, LIMIT, sniffSocket } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
@@ -295,16 +295,15 @@ const serve = async () => {
     upstream.on("close", close);
     // And the greeting is looked at before it goes: one that starts like an HTTP response
     // would be read as the answer to the request a browser later sends on its preconnected
-    // socket, a page at another workspace's origin (final review). Chrome looks for "HTTP"
-    // within the first 4 bytes and refuses anything else (HTTP/0.9) on these ports; Firefox
-    // also takes "ICY " after up to 7 bytes of white space (as read in its source, not
-    // tried). Safari was not looked at. No database's greeting starts so.
+    // socket, a page at another workspace's origin (final review; shared/sniff.ts,
+    // greetingIs). Nothing of it goes on until it can no longer become one. No database's
+    // greeting starts so.
     let greeting = Buffer.alloc(0);
     const onGreeting = (chunk: Buffer) => {
       greeting = Buffer.concat([greeting, chunk]);
-      const text = greeting.toString("latin1");
-      if (/^[\s\S]{0,4}http/i.test(text) || /^\s{0,7}icy /i.test(text)) return close();
-      if (greeting.length < 12) return;
+      const verdict = greetingIs(greeting.toString("latin1"));
+      if (verdict === "answer") return close();
+      if (verdict === "more") return;
       upstream.off("data", onGreeting);
       client.write(greeting);
       upstream.pipe(client);

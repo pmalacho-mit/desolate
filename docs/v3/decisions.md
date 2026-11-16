@@ -1318,7 +1318,7 @@ and the threat model, not the author's conclusions. What they found, and what wa
 
 | Finding | Severity | Fix |
 |---|---|---|
-| A raw port's server greeting a silent client with an HTTP response: a browser's preconnected socket would read it as the answer to its next request, a page at another workspace's origin (same host, so its cookies) | medium | the greeting's first 8 bytes are looked at before any goes on: one with `HTTP` in its first 5 is closed (Chrome takes no other answer on these ports: HTTP/0.9 is refused off 80 and 443). T2 03, with the greeting in two pieces |
+| A raw port's server greeting a silent client with an HTTP response: a browser's preconnected socket would read it as the answer to its next request, a page at another workspace's origin (same host, so its cookies) | medium | the greeting is looked at before any goes on: one with `HTTP` in its first 5 bytes is closed (Chrome takes no other answer on these ports: HTTP/0.9 is refused off 80 and 443). T2 03, with the greeting in two pieces |
 | Retiring the tokens missed the dashboard's (the root keeps a copy, so a later daemon took the old cookie) and every editor's (made once, kept for good) | medium | `host/retired.ts`: the time of the retiring is kept; the dashboard and each editor are refused (503, with the fix) until their tokens are made again, by bootstrap, or for a stopped workspace by its next start. T1, and T2 03 end to end |
 | A raw client that left at once still got a connection to the owner; a cut-off request line or TLS start went to the owner; a fresh publish lock could be taken as stale; signatures in an older `spawn.json` lost on the CLI's next write | low | each fixed |
 
@@ -1327,9 +1327,9 @@ and the threat model, not the author's conclusions. What they found, and what wa
 | Finding | Severity | Fix |
 |---|---|---|
 | An editor's token was judged by its file's time in the VM against the Mac's clock: a resumed VM's clock behind kept its editor refused through every bootstrap, and one ahead kept a token made before the retiring | medium | the retiring's own number, copied beside each token made after it (`token.epoch`; `ui-token.epoch` for the dashboard's, written only once the root has its copy); each retiring's number larger than the last, whatever the clock did |
-| The greeting check knew Chrome's reading only; Firefox also takes `ICY ` after white space (from its source; not tried) | medium | refused too, on the first 12 bytes. Safari not looked at |
+| The greeting check knew Chrome's reading only; Firefox also takes `ICY ` after white space (from its source; not tried) | medium | refused too. Nothing of a greeting goes on while it could still become either (`greetingIs`, with a table of cases), so a short honest one (`raw:one\n`) goes at its first byte. Safari not looked at |
 | The cut-off check refused a decided raw head starting 0x16 (a MongoDB hello, 1 in 256 lengths); a VM's older wsd reports no mark; a partial bootstrap marked the dashboard served | low | only an undecided head; asked directly; marked after the root's copy |
-| Three publishers at once could still both pass the stale lock; a server-first greeting under 12 bytes waits for its client | low | not fixed: three at once from one person's pages, and no such protocol was found |
+| Three publishers at once could still both pass the stale lock | low | not fixed: three at once, from one person's pages |
 
 **What does not hold, said plainly.** The root's ordinary user, if a domain ever took it
 over, still writes every domain's checkouts and passes on the dashboard's clicks (starting
