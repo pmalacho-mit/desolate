@@ -70,9 +70,14 @@ close <w>`, `desolate domain stats` and `desolate events --follow` (the workspac
 What keeps this to the domain: the request carries a signature made with a key that only
 the asking workspace's VM and your Mac have. The root, which passes the request on and
 parses every domain's data, cannot make one: if a domain's data ever took over the root's
-ordinary user, it still could not have your Mac start a workspace, or run a command in one,
-in another domain. On your Mac, the command is an argument list from start to finish, never
-a line a shell reads ([reference](reference.md#workspaces-that-start-workspaces)).
+ordinary user, it could not forge a workspace's request, and so could not have your Mac run
+a command, as an agent, in a workspace of another domain. Your Mac also checks that what the
+root says about a workspace names that workspace's own VM, so an answer of its cannot point
+your Mac at another domain's. (That user is still trusted with much else: it writes every
+domain's checkouts, and passes on what you click on the dashboard, including starting and
+stopping workspaces. [`docs/v3/decisions.md`](https://github.com/pmalacho-mit/desolate/blob/main/docs/v3/decisions.md) has the
+audit.) On your Mac, the command is an argument list from start to finish, never a line a
+shell reads ([reference](reference.md#workspaces-that-start-workspaces)).
 
 ## Issues offered by a workspace
 

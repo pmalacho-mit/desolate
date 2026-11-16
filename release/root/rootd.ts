@@ -69,6 +69,7 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
   if (!r) return { ok: false, error: "that is not a request desolate makes (desolate spawn --help)" };
   const all = workspaces(domain);
   if (!all.some((w) => w.workspace === r.parent)) return { ok: false, error: `${domain} has no workspace '${r.parent}'` };
+  if (r.op === "spawn" && r.name === "template") return { ok: false, error: "'template' is the name of the domain's template build", fix: "desolate spawn --name <another>" };
   if (r.op === "spawn") {
     const max = domainOf(domain).spawnMax ?? null;
     if (max === 0) return { ok: false, error: `${domain}'s workspaces cannot start workspaces: the person turned it off`, fix: `on the Mac: desolate domain ${domain} spawn --max none` };

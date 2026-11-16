@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
-import { devHostname, editorHostname, editorHostPort, isBranch, parseRepo } from "../shared/names.ts";
+import { devHostname, editorHostname, editorHostPort, isBranch, isSlug, parseRepo, workspaceVmName } from "../shared/names.ts";
 import { outlived } from "../shared/plan.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
@@ -191,6 +191,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   if (stale) refuse(`${stale}: a workspace made now would run the older tools`, "desolate bootstrap (it provisions the base again: minutes, once)");
   let editorDown: string | null = null;
   let devcontainer = "";
+  if (options.name === "template") refuse("'template' is the name of the domain's template build", `desolate up ${domain} --name <another>`, EXIT.usage);
   const view = await rootctl<DomainView>("domain.show", { slug: domain }, { quiet: true });
   // The environment: the first repository the person named with --checkout (its devcontainer,
   // if it has one), else the domain's. Before --branch adds the rest.
@@ -219,7 +220,14 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   // Who commits in it: your own git identity, as on this Mac (as the git VM takes it).
   const mine = (key: string) => spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
   const author = { name: mine("user.name"), email: mine("user.email") };
-  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}), ...(envRepo ? { env: envRepo } : {}) }, { quiet: true });
+  const plan = vouched(await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}), ...(envRepo ? { env: envRepo } : {}) }, { quiet: true }), domain, options.name);
+  // A VM of that name already here is not this workspace's: refused, and never destroyed below.
+  // (Names are a hash of the domain and the workspace; one domain could search for a name of
+  // its own that collides with another domain's VM: audit, 2026-11-16.)
+  if ((await b.info(plan.vm)).status !== "missing") {
+    await rootctl("workspace.remove", { domain, name: plan.workspace }, { quiet: true }).catch(() => {});
+    refuse(`a VM named ${plan.vm} already exists, and it is not ${domain}/${plan.workspace}'s`, `desolate up ${domain} --name <another name>`, EXIT.busy);
+  }
   // (The domain, whether it has a template to make, and the plan, which is two small files:
   // asks of the root, about 0.2 s each. No network: --fetch is its own phase, above.)
   phase("asked the root");
@@ -303,7 +311,9 @@ export const reconnectRunning = async (): Promise<number> => {
   let count = 0;
   for (const d of await rootctl<DomainView[]>("domain.list", {}, { quiet: true }))
     for (const w of d.workspaces) {
-      if (!running.has(w.vm)) continue;
+      // A record naming a VM that is not its own workspace's (the root's word, checked) gets
+      // no proxy and no link: it would give one domain's VM another domain's rules.
+      if (!running.has(w.vm) || w.domain !== d.slug || w.vm !== workspaceVmName(INSTANCE, d.slug, w.workspace)) continue;
       await ensureProxyUser(w.domain);
       const proxy = await rootctl<{ socket: string }>("proxy.start", { vm: w.vm, domain: w.domain, workspace: w.workspace }, { quiet: true });
       await connectWorkspace({ ...w, proxy: proxy.socket });
@@ -317,9 +327,18 @@ export const reconnectRunning = async (): Promise<number> => {
   return count;
 };
 
+/** The root's word about a workspace, checked against what the host computes itself: the root
+ *  is where every domain's data is parsed, and a VM named in its answer is a VM the host
+ *  stops, starts or destroys (audit, 2026-11-16: an answer naming another domain's VM would
+ *  have had it removed). */
+export const vouched = <W extends { domain: string; workspace: string; vm: string }>(w: W, domain: string, workspace?: string): W => {
+  if (w.domain !== domain || (workspace !== undefined && w.workspace !== workspace) || !isSlug(w.workspace) || w.vm !== workspaceVmName(INSTANCE, domain, w.workspace))
+    refuse(`the root's answer about ${domain}/${workspace ?? w.workspace} does not name that workspace's own VM`, "desolate doctor; if it persists, the root VM is not well: desolate bootstrap");
+  return w;
+};
 const find = async (target: string | undefined) => {
   const { domain, workspace } = splitTarget(target);
-  return rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true });
+  return vouched(await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }), domain, workspace);
 };
 
 export const stop = async (target: string | undefined, out: Out) => {

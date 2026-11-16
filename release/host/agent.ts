@@ -28,7 +28,7 @@ const DETACH = 0x1d; // Ctrl-]
 const target = async (value: string | undefined): Promise<Workspace> => {
   const [domain, workspace] = String(value ?? "").split("/");
   if (!domain || !workspace) refuse("which workspace?", "desolate agent <start|attach|log|stop> <domain>/<workspace>", EXIT.usage);
-  const w = await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true });
+  const w = (await import("./workspaces.ts")).vouched(await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }), domain, workspace);
   if ((await backend().info(w.vm)).status !== "running") refuse(`${domain}/${workspace} is not running`, `desolate start ${domain}/${workspace}`);
   return w;
 };

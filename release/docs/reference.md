@@ -297,8 +297,14 @@ host:       the daemon checks the signature against w1's key, its age, that it w
   devcontainer binds). The root does not have it, and no other workspace does.
 - **Why the host checks, not the root.** The root's ordinary user parses what every domain
   sends. If the host ran what it queued, a flaw there found by one domain would be a way to
-  start workspaces, and run commands, in another. It cannot sign: a request it makes is
-  refused (T2 `16-spawn` tries it, beside a signed one that is run).
+  run commands in another domain's workspaces. It cannot sign: a request it makes is
+  refused (T2 `16-spawn` tries it, beside a signed one that is run). And the host checks that
+  every answer of the root's about a workspace (its plan, its record) names that workspace's
+  own VM name, which the host computes itself; and it never takes over, or destroys, a VM
+  that already exists under a new workspace's name. What this does not claim: that user is
+  trusted with much else (it writes every domain's checkouts, and passes on the dashboard's
+  clicks, starting and stopping workspaces among them). The audit of 2026-11-16 is in
+  `docs/v3/decisions.md`.
 - **The command** is an argument list all the way: JSON in the request, an argv element
   after `--` on the host, passed to `limactl shell` (which quotes each argument for the VM),
   then to the agent holder in the VM. No shell on the Mac reads it.

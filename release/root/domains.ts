@@ -204,13 +204,17 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   // or the one a template is built for), else the domain's; devcontainer.ts falls back to the
   // first checkout that has a spec.
   const envRepo = (typeof args.env === "string" && d.repos.includes(args.env) ? args.env : undefined) ?? d.env;
+  // VM names are a hash of the domain and the workspace's name: one already some domain's
+  // (another domain could have searched for a colliding name: audit, 2026-11-16) is refused.
+  const vm = workspaceVmName(args.instance, d.slug, workspaceName);
+  for (const other of domains()) if (workspaces(other.slug).some((w) => w.vm === vm)) refuse(`the VM name ${vm} is already ${other.slug}'s`, `desolate up ${d.slug} --name <another name>`, EXIT.busy);
   const value: Workspace = {
     ...(envRepo ? { env: envRepo } : {}),
     repos: [...d.repos],
     ...(startedBy ? { startedBy } : {}),
     ...(size ? { size: { cpus: size.cpus, memoryMiB: size.memoryMiB, diskGiB: size.diskGiB } } : {}),
     ...(authorOf(args.author) ? { author: authorOf(args.author)! } : {}),
-    domain: d.slug, workspace: workspaceName, vm: workspaceVmName(args.instance, d.slug, workspaceName),
+    domain: d.slug, workspace: workspaceName, vm,
     title: d.title, checkouts, fetch: args.fetch === true, createdAt: new Date().toISOString(), state: "planned",
   };
   writeJson(workspaceFile(d.slug, workspaceName), value);
