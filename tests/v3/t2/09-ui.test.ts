@@ -8,6 +8,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
@@ -108,7 +109,7 @@ describe("T2 section 4.8: the root UI", () => {
     const empty = await state();
     assert.deepEqual([empty.repos, empty.domains, empty.offers], [[], [], []]);
     assert.ok(await until(async () => (await state()).hostConnected), "the host's daemon has told the state service about the host");
-    assert.deepEqual((await state()).stack, { instance: stack.instance, backend: "fake", isolated: false, editorPort: port, approver: "terminal", rootHostname: "desolate.localhost", gitHostname: "desolate-git.localhost" });
+    assert.deepEqual((await state()).stack, { instance: stack.instance, backend: "fake", isolated: false, editorPort: port, approver: "terminal", rootHostname: "desolate.localhost", gitHostname: "desolate-git.localhost", mac: { cpus: os.cpus().length, memoryMiB: Math.floor(os.totalmem() / 1048576) } });
     // The first-run steps, done from the dashboard; each records the command it ran.
     assert.equal(stack.quiet("clone", "acme/app", "--no-domain").code, 0);
     assert.equal((await action("domain.create", { domain: "web", title: "the web app" })).status, 202);
