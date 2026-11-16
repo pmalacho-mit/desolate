@@ -216,6 +216,33 @@ else {
     await sleep(3000);
     for (const w of ["web/one", "web/two"]) assert.ok(!ports().find((p) => p.workspace === w)!.reserved.some((r) => r.port === 5173), `${w} is not asked to keep 5173 taken`);
     assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/, "control: each name still reaches its own workspace");
+    // 8080: only web/one serves it. A silent socket, then a request naming web/two (with what
+    // a browser would send web/two): never web/one's server (audit, 2026-11-16: it once was).
+    const twoOn8080 = hostOf(urlOf("web/two", 5173)!).replace(":5173", ":8080");
+    const misrouted = await new Promise<string>((resolve) => {
+      const socket = net.connect(8080, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => setTimeout(() => socket.write(`GET / HTTP/1.1\r\nHost: ${twoOn8080}\r\nCookie: two-secret=1\r\nConnection: close\r\n\r\n`), 1500));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      setTimeout(() => socket.destroy(), 10_000);
+    });
+    assert.doesNotMatch(misrouted, /workspace:one/, misrouted);
+    assert.match(misrouted, /^HTTP\/1\.1 502 [\s\S]*nothing is listening on port 8080 in web\/two/);
+    assert.match(await request(8080, hostOf(urlOf("web/one", 8080)!)), /workspace:one/, "control: web/one's own name reaches it");
+    // A request line too long to read whole: HTTP that names no one, refused; not a protocol
+    // with no name, routed to the port's first workspace.
+    const long = await new Promise<string>((resolve) => {
+      const socket = net.connect(8080, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => socket.write(`GET /${"x".repeat(20_000)} HTTP/1.1\r\nHost: ${twoOn8080}\r\n\r\n`));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 10_000);
+    });
+    assert.doesNotMatch(long, /workspace:one/, long.slice(0, 200));
+    assert.ok(!ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 8080), "and 8080 did not turn raw");
   });
 
   it("a port the host itself holds is not published, and not taken from the workspaces: their servers use it inside", async () => {

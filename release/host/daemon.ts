@@ -39,6 +39,7 @@ import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
 import { sniffSocket } from "../shared/sniff.ts";
+import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 
@@ -146,7 +147,12 @@ const serve = async () => {
   };
   /** For a port spoken without a name: the one workspace it reaches. */
   const rawOwner = new Map<number, string>();
-  const knownRaw = new Set(RAW_PORTS);
+  // Ports whose protocol carries no name: the known ones, the person's (DESOLATE_RAW_PORTS, a
+  // comma list, for a server that speaks first on another port), and ones learned from bytes
+  // that were not HTTP or TLS, forgotten when no workspace listens there any more.
+  const knownRaw = new Set([...RAW_PORTS, ...(process.env.DESOLATE_RAW_PORTS ?? "").split(",").map(Number).filter((p) => Number.isInteger(p) && p >= 1024 && p <= 65535)]);
+  const learnedRaw = new Set<number>();
+  let sniffing = 0;
   const log = (line: string) => fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
 
   const byName = (name: string): { entry: Entry; surface: "dev" | "editor" } | null => {
@@ -191,23 +197,28 @@ const serve = async () => {
 
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
-    let { sniffed, head } = await sniffSocket(client, 400);
-    // Silence is not a protocol. A client that has said nothing yet (a browser's
-    // preconnected socket, `nc -z`, a health check) on a port not known to be raw was taken
-    // for a nameless protocol: the port was then raw for good, kept taken in every other
-    // workspace, and the browser's request, sent on that socket a moment later, went to
-    // whichever workspace had the port first, whatever name it carried (dogfooding: Vite's
-    // 5173 in one domain pushed another domain's Vite to 5174, as "no name in its protocol").
-    // Only bytes that are not HTTP or TLS make a port raw. With one workspace on the port
-    // there is no choice to make, and a server-first protocol works as before.
-    if (sniffed.kind === "raw" && head.length === 0 && !knownRaw.has(port)) {
-      if (client.destroyed) return;
-      const listening = [...entries.values()].filter((e) => e.listeners.has(port));
-      if (listening.length === 1) return pipe(client, b.dial(listening[0]!.vm, port), head);
-      client.resume();
-      ({ sniffed, head } = await sniffSocket(client, 120_000));
-      if (sniffed.kind === "raw" && head.length === 0) return void client.destroy();
+    // Routed by the name in the first bytes, and only by it. On a port not known to speak a
+    // protocol with no name, a client that has said nothing yet (a browser's preconnected
+    // socket, `nc -z`) is waited for, up to two minutes, and closed if it stays silent: it is
+    // never piped anywhere before it names a workspace. (It once was: first taken for a
+    // nameless protocol, then, briefly, sent to the one workspace listening on the port,
+    // where the browser's request, sent on that socket later, arrived whatever its Host,
+    // with the cookies of the workspace it named: found by the audit of 2026-11-16.)
+    const raw = knownRaw.has(port);
+    if (sniffing >= 512) return void client.destroy();
+    sniffing++;
+    let sniffedHead: { sniffed: Sniffed; head: Buffer };
+    try {
+      sniffedHead = await sniffSocket(client, raw ? 400 : 120_000);
+    } finally {
+      sniffing--;
     }
+    let { sniffed } = sniffedHead;
+    const { head } = sniffedHead;
+    if (head.length === 0 && !raw) return void client.destroy();
+    // On a port whose protocol has no name, a line that merely looks like HTTP (Redis's
+    // `SET k v`) and names no workspace is that protocol's.
+    if (raw && (sniffed.kind === "http" || sniffed.kind === "tls") && !(sniffed.name && byName(sniffed.name))) sniffed = { kind: "raw" };
     if (sniffed.kind === "http" || sniffed.kind === "tls") {
       const target = sniffed.name ? byName(sniffed.name) : null;
       if (!target) {
@@ -235,7 +246,9 @@ const serve = async () => {
       }
       return pipe(client, b.dial(target.entry.vm, port), head);
     }
-    // No name in the protocol: this port reaches one workspace, the first that had it.
+    // No name in the protocol (bytes that cannot be HTTP or TLS: shared/sniff.ts): this port
+    // reaches one workspace, the first that had it.
+    if (!knownRaw.has(port)) learnedRaw.add(port);
     knownRaw.add(port);
     const owner = rawOwner.get(port);
     const entry = owner ? entries.get(owner) : undefined;
@@ -313,6 +326,7 @@ const serve = async () => {
         rawOwner.delete(port);
       }
     for (const port of hostHeld.keys()) if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
+    for (const port of learnedRaw) if (!wanted.has(port)) (learnedRaw.delete(port), knownRaw.delete(port));
     for (const port of wanted) {
       const holders = [...entries.values()].filter((entry) => entry.listeners.has(port));
       const owner = rawOwner.get(port);

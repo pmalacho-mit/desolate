@@ -13,8 +13,7 @@ export type Sniffed =
 
 export const LIMIT = 16 * 1024;
 
-const HTTP_START = /^(GET|HEAD|POST|PUT|DELETE|OPTIONS|PATCH|CONNECT|TRACE) \S+ HTTP\/1\.[01]\r?\n/;
-const HTTP_PREFIX = /^[A-Z]{1,8}( |$)/;
+const HTTP_START = /^[A-Z]{1,16} \S+ HTTP\/1\.[01]\r?\n/;
 
 const hostHeader = (head: string): string | null => {
   for (const line of head.split(/\r?\n/).slice(1)) {
@@ -69,12 +68,19 @@ const sni = (data: Buffer): string | null | undefined => {
   return null;
 };
 
+/** What could be the start of an HTTP request: a method, then a space. Such bytes are HTTP:
+ *  if the request line never parses, or the head runs past LIMIT, they are HTTP that names
+ *  no one (refused), never a protocol with no name. They once were taken for one, and routed
+ *  to whichever workspace had the port first, with no name checked: a page could send the
+ *  person's browser there with a 20 KB path and another site's cookies (audit, 2026-11-16). */
+const HTTP_SHAPED = /^[A-Z]{1,16}( |$)/;
+
 export const sniff = (data: Buffer): Sniffed => {
   if (data.length === 0) return { kind: "more" };
   if (data[0] === 0x16) {
     if (data.length >= 2 && data[1] !== 0x03) return { kind: "raw" };
     const name = sni(data);
-    if (name === undefined) return data.length >= LIMIT ? { kind: "raw" } : { kind: "more" };
+    if (name === undefined) return data.length >= LIMIT ? { kind: "tls", name: null } : { kind: "more" };
     return { kind: "tls", name };
   }
   const text = data.subarray(0, Math.min(data.length, LIMIT)).toString("latin1");
@@ -83,8 +89,7 @@ export const sniff = (data: Buffer): Sniffed => {
     if (end < 0) return data.length >= LIMIT ? { kind: "http", name: hostHeader(text) } : { kind: "more" };
     return { kind: "http", name: hostHeader(text.slice(0, end)) };
   }
-  // The first line may not have arrived whole yet.
-  if (!text.includes("\n") && text.length < 2048 && HTTP_PREFIX.test(text)) return { kind: "more" };
+  if (HTTP_SHAPED.test(text)) return text.includes("\n") || data.length >= LIMIT ? { kind: "http", name: null } : { kind: "more" };
   return { kind: "raw" };
 };
 
