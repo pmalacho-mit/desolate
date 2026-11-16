@@ -1,6 +1,7 @@
 // `desolate domain ...`: create, add, show.
 import { EXIT, refuse } from "../shared/exit.ts";
-import { guest } from "./paths.ts";
+import * as path from "node:path";
+import { guest, paths } from "./paths.ts";
 import { backend, changeSecrets, ensureProxyUser, rootctl } from "./stack.ts";
 
 type Out = (line: string) => void;
@@ -76,6 +77,32 @@ export const domainCommand = async (args: string[], values: Record<string, unkno
     // The spec's spelling for a secret (section 8): `add --secret NAME --hosts ... [--headers ...]`.
     if (typeof values.secret === "string") return domainCommand([first, "secret", "set", values.secret], values, out);
     refuse("add what?", `desolate domain ${first} add --repo <owner>/<repo> | add --secret <NAME> --hosts <host>[,...] [--headers <header>[,...]]`, EXIT.usage);
+  }
+  if (second === "spawn") {
+    // desolate domain <d> spawn [--max N]: how many workspaces its workspaces may start, at
+    // once. Held here, on the Mac (host/spawn.ts); the root is told, to answer early and show it.
+    const spawn = await import("./spawn.ts");
+    if (values.max !== undefined) {
+      const max = Number(values.max);
+      if (!Number.isInteger(max) || max < 0 || max > 32) refuse(`--max '${String(values.max)}' is not a number of workspaces`, `desolate domain ${first} spawn --max 2   (0: its workspaces start none)`, EXIT.usage);
+      await rootctl("domain.spawn", { slug: first, max }, { quiet: true });
+      spawn.setMax(first, max);
+    } else await rootctl("domain.show", { slug: first }, { quiet: true });
+    const max = spawn.maxFor(first);
+    if (json) return out(JSON.stringify({ domain: first, max }));
+    return out(max === 0 ? `${first}: its workspaces cannot start workspaces (desolate domain ${first} spawn --max <n> lets them)` : `${first}: its workspaces may start up to ${max} workspace(s) at once, in ${first} only, each labelled with who started it. Each one counts until it is removed.`);
+  }
+  if (second === "stats") {
+    // What the root last wrote for the domain's workspaces to read (desolate domain stats, in
+    // one): the same view, here. The root's word, and so its text is made printable.
+    const { readJson } = await import("../shared/json.ts");
+    const { statsLines } = await import("../shared/stats.ts");
+    await rootctl("domain.show", { slug: first }, { quiet: true });
+    const stats = readJson<unknown>(path.join(paths.inbox(first), "domain.json"), null);
+    if (stats === null) refuse(`the root has not written ${first}'s stats yet`, "desolate doctor (is the root's state service up?)");
+    if (json) return out(JSON.stringify(stats));
+    for (const line of statsLines(stats)) out(line);
+    return;
   }
   if (second === "size") {
     // desolate domain <d> size [--cpus N] [--memory 8g] [--disk 60g] [--clear]

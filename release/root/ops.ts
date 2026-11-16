@@ -74,6 +74,9 @@ export const ops: Record<string, Op> = {
   async "domain.size"(args) {
     return domains.setSize(args.slug, args.size);
   },
+  async "domain.spawn"(args) {
+    return domains.setSpawn(args.slug, args.max);
+  },
   async "domain.env-key"(args) {
     return domains.envKey(args.slug);
   },

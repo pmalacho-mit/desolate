@@ -15,7 +15,9 @@ import { recordOf, registry } from "./repos.ts";
 
 /** `env`: the repository whose devcontainer.json is the domain's environment (section 4.5,
  *  way 1). Unset: the first checkout that has one. */
-export type Domain = { slug: string; title: string; repos: string[]; createdAt: string; env?: string; size?: Partial<Size> };
+/** `spawnMax`: how many workspaces its workspaces may start, as the host last said (the host
+ *  holds the limit that counts: host/spawn.ts). Unset: none. */
+export type Domain = { slug: string; title: string; repos: string[]; createdAt: string; env?: string; size?: Partial<Size>; spawnMax?: number };
 
 const file = (slug: string) => path.join(domainPath(slug), "domain.json");
 const workspacesDir = (slug: string) => path.join(domainPath(slug), "workspaces");
@@ -67,6 +69,16 @@ export const setSize = (slugArg: unknown, sizeArg: unknown) => {
     writeJson(file(d.slug), d);
   }
   return { domain: d.slug, size: d.size ?? null };
+};
+
+export const setSpawn = (slugArg: unknown, maxArg: unknown) => {
+  const d = domain(slugOf(slugArg, "domain"));
+  const max = Number(maxArg);
+  if (!Number.isInteger(max) || max < 0 || max > 32) refuse(`'${String(maxArg)}' is not a number of workspaces`, `desolate domain ${d.slug} spawn --max 2`, EXIT.usage);
+  if (max === 0) delete d.spawnMax;
+  else d.spawnMax = max;
+  writeJson(file(d.slug), d);
+  return { domain: d.slug, max };
 };
 
 export const setEnv = (slugArg: unknown, repoArg: unknown) => {
@@ -125,7 +137,7 @@ const authorOf = (value: unknown): { name: string; email: string } | undefined =
   return name && /^[^\s@]+@[^\s@]+$/.test(email) ? { name, email } : undefined;
 };
 
-export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown; author?: unknown }): Workspace => {
+export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown; author?: unknown; startedBy?: unknown }): Workspace => {
   const d = domain(slugOf(args.domain, "domain"));
   if (d.repos.length === 0) refuse(`the domain '${d.slug}' has no repositories yet`, `desolate domain ${d.slug} add --repo <owner>/<repo>`);
   const existing = workspaces(d.slug);
@@ -178,8 +190,13 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   // The size the host worked out (flags, this domain's, the stack's defaults), checked here too.
   const size = args.size as Size | undefined;
   if (size !== undefined && (checkSize(size) || [size.cpus, size.memoryMiB, size.diskGiB].some((v) => v === undefined))) refuse(`the size is not one desolate makes: ${checkSize(size) ?? "a part is missing"}`, "desolate up <domain> --cpus <n> --memory <8g> --disk <60g>", EXIT.usage);
+  // Who asked for it (`desolate spawn` in another workspace of the domain): a label, as the
+  // host says, in its shape only. (A parent removed and remade keeps a new createdAt.)
+  const by = args.startedBy as { workspace?: unknown; createdAt?: unknown } | undefined;
+  const startedBy = by && isSlug(by.workspace) && typeof by.createdAt === "string" && /^\d{4}-\d\d-\d\dT[\d:.]{8,12}Z$/.test(by.createdAt) ? { workspace: by.workspace, createdAt: by.createdAt } : undefined;
   const value: Workspace = {
     ...(d.env ? { env: d.env } : {}),
+    ...(startedBy ? { startedBy } : {}),
     ...(size ? { size: { cpus: size.cpus, memoryMiB: size.memoryMiB, diskGiB: size.diskGiB } } : {}),
     ...(authorOf(args.author) ? { author: authorOf(args.author)! } : {}),
     domain: d.slug, workspace: workspaceName, vm: workspaceVmName(args.instance, d.slug, workspaceName),
