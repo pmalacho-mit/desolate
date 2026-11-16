@@ -246,6 +246,46 @@ connections" (or remove it). From a terminal, as an administrator:
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --blockapp "$(realpath "$(command -v limactl)")"
 ```
 
+## Workspaces that start workspaces
+
+A workspace can start another in its own domain, with a command as its agent, and close the
+ones it started. It is on, with no limit, unless the person sets one on the Mac:
+`desolate domain <d> spawn --max <n>` (0: off; `none`: no limit again). [agents.md](agents.md#workspaces-that-start-workspaces) has the
+person's side; the shipped [AGENTS.md](../AGENTS.md), the agent's.
+
+```
+inside w1:  desolate spawn --name helper --branch task/helper -- <command...>
+              signed with w1's key -> the domain's outbox
+root:       rootd checks what it can (the limit, the names) and queues it; the state service
+            hands it to the host as an action
+host:       the daemon checks the signature against w1's key, its age, that it was not
+            run before, and the limit it holds itself; then runs
+              desolate up <d> --name helper --started-by w1 --branch task/helper -- <command...>
+```
+
+- **The key.** Each workspace VM has one, made by the host (`~/.desolate/state/workspace-keys`)
+  and written onto that VM's own disk at every start (`/run/desolate/identity`, which its
+  devcontainer binds). The root does not have it, and no other workspace does.
+- **Why the host checks, not the root.** The root's ordinary user parses what every domain
+  sends. If the host ran what it queued, a flaw there found by one domain would be a way to
+  start workspaces, and run commands, in another. It cannot sign: a request it makes is
+  refused (T2 `16-spawn` tries it, beside a signed one that is run).
+- **The command** is an argument list all the way: JSON in the request, an argv element
+  after `--` on the host, passed to `limactl shell` (which quotes each argument for the VM),
+  then to the agent holder in the VM. No shell on the Mac reads it.
+- **What the host holds itself:** the limit (`~/.desolate/state/spawn.json`; the root has a
+  copy, to answer early and show it), and which workspace started which, as it ran them.
+  `close` is run only for a workspace the host recorded as started by the one asking, and
+  only after the workspace itself reports nothing uncommitted, untracked or stashed in any
+  checkout (git runs there, never on the Mac). A request is good for 15 minutes, once.
+- **What a workspace reads:** `/desolate/inbox/domain.json` (`desolate domain stats`) and
+  `/desolate/inbox/events.jsonl` (`desolate events`), written by the root: its own domain's
+  workspaces, who started each, the limit, this Mac's CPUs and memory and what its running
+  workspaces take of it; and its events, among them how each request ended (`request`, `ok`,
+  and why not). Nothing of another domain, and no editor address (those carry a token).
+- **Outliving.** A workspace whose starter has been removed is flagged (`desolate list`,
+  the dashboard's "Needs you"). It is not removed for it.
+
 ## What works today, and what does not
 
 "T2" is the fake backend: containers standing in for VMs, **not isolated**, good for
@@ -281,6 +321,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T3 inside a workspace |
 | Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
 | Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`agent.sh`); on the M1, `claude.sh` with a stand-in token | `issues.sh` and `suede.sh` not run |
+| Workspaces that start workspaces in their own domain (`desolate spawn`, `close`, `domain stats`, `events` inside one): signed by the workspace, checked by the host | yes | T1; T2 (`16-spawn`: the limit, the labels, stats and events, a forged request refused beside a signed one run, close refused with uncommitted work) | on real VMs (vz) |
 | After a push: the pull request's page on GitHub; "merged into <base>" once the mirror shows it | yes | T1 (the link; a merge, a squash, a rebase), T2 (a squash on the stand-in forge) | the link has not been opened on github.com; the 15-minute fetch not watched in real use |
 
 ## Layout

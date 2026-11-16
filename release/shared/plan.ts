@@ -27,6 +27,10 @@ export type WorkspacePlan = {
   /** Who commits here: the person's own git identity on the Mac, when it has one (their
    *  name and email are not credentials). Without it, the workspace's own name. */
   author?: { name: string; email: string };
+  /** Which workspace of the domain asked for this one (`desolate spawn` inside it), and when
+   *  that one was made (so a later workspace of the same name is not taken for it). Absent:
+   *  the person started it. */
+  startedBy?: { workspace: string; createdAt: string };
   /** Refresh origin/* from the mirror before creating worktrees. */
   fetch: boolean;
   createdAt: string;
@@ -34,3 +38,9 @@ export type WorkspacePlan = {
 
 export const checkoutPath = (repo: string, kind: "main" | "worktree", name: string) =>
   kind === "main" ? `/workspaces/${repo}` : `/workspaces/${repo}/.worktrees/${name}`;
+
+/** A workspace another workspace started, which that one is gone before: flagged, for the
+ *  person to look at (nothing is removed for it). A later workspace of the same name is not
+ *  the one that started it. */
+export const outlived = (all: { workspace: string; createdAt: string }[], w: { startedBy?: { workspace: string; createdAt: string } }) =>
+  w.startedBy !== undefined && !all.some((other) => other.workspace === w.startedBy!.workspace && other.createdAt === w.startedBy!.createdAt);

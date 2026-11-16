@@ -16,6 +16,7 @@
 import { printable } from "../shared/text.ts";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import * as os from "node:os";
 import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Server, Socket } from "node:net";
@@ -24,7 +25,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { refuse } from "../shared/exit.ts";
 import { accept as acceptLink } from "../shared/link.ts";
-import { hostArgv } from "../shared/actions.ts";
+import { hostArgv, SIGNED_KINDS, signedOf } from "../shared/actions.ts";
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseApproval } from "../shared/approval.ts";
@@ -577,7 +578,10 @@ const serve = async () => {
       };
     }
     const { kind } = await import("./approver.ts");
-    const facts = { stack: { instance: INSTANCE, backend: b.kind, isolated: b.isolated, editorPort: port, approver: kind(), rootHostname: ROOT_HOSTNAME, gitHostname: GIT_HOSTNAME }, workspaces };
+    // This Mac's size, for a domain's workspaces to know where they run (desolate domain stats).
+    // (Not its free memory: macOS counts its caches as used, and it changes every second.)
+    const mac = { cpus: os.cpus().length, memoryMiB: Math.floor(os.totalmem() / 1048576) };
+    const facts = { stack: { instance: INSTANCE, backend: b.kind, isolated: b.isolated, editorPort: port, approver: kind(), rootHostname: ROOT_HOSTNAME, gitHostname: GIT_HOSTNAME, mac }, workspaces };
     const text = JSON.stringify(facts);
     // Said when it changes, and now and then regardless, so the service knows the host is there.
     if (text === sentFacts && Date.now() - sentAt < 45_000) return;
@@ -586,11 +590,23 @@ const serve = async () => {
     sentAt = Date.now();
   };
 
-  const runAction = (action: { id: string; kind: unknown; args: unknown }) => {
+  const runAction = async (action: { id: string; kind: unknown; args: unknown }) => {
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
     const report = (lines: string[], done?: number) => rootHttp("POST", "/host/progress", { id: action.id, lines, ...(done === undefined ? {} : { done: true, code: done }) }).catch(() => {});
     if (!argv) return void report(["the host does not do that"], 64);
+    // A workspace's own request (spawn, close): run only if the workspace it names signed it,
+    // with the key only it and this host have (shared/spawn.ts says why not the root's word).
+    if (SIGNED_KINDS.has(String(action.kind))) {
+      const signed = signedOf(action.kind === "workspace.spawn" ? "spawn" : "close", action.args as Record<string, string>);
+      const { check } = await import("./spawn.ts");
+      const vms = new Set((await b.list()).map((vm) => vm.name));
+      const why = signed ? check(signed, (vm) => vms.has(vm)) : "not a request desolate makes";
+      if (why) {
+        log(`refused a workspace's request (${String(action.kind)}): ${why}`);
+        return void report([`refused: ${why}`], 77);
+      }
+    }
     log(`dashboard: desolate ${argv.join(" ")}`);
     const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", path.join(RELEASE_DIR, "host", "cli.ts"), ...argv], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" } });
     let pending: string[] = [];
@@ -621,7 +637,7 @@ const serve = async () => {
         for (const action of JSON.parse(reply.body) as { id: string; kind: unknown; args: unknown }[]) {
           if (typeof action.id !== "string" || taken.has(action.id)) continue;
           taken.add(action.id);
-          runAction(action);
+          void runAction(action).catch((error: Error) => log(`a request failed: ${error.message}`));
         }
         lastFailure = "";
       } catch (error) {

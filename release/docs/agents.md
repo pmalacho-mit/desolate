@@ -37,6 +37,43 @@ last printed anything; the dashboard shows each workspace's status as the agent 
 (`desolate status set ...` inside), and `desolate notify` turns orange and red into
 notifications.
 
+## Workspaces that start workspaces
+
+An agent working on one thing often finds another: an issue to split off, a check to run
+in parallel. A workspace can start another workspace **in its own domain only**, with a
+command in it as its agent, and close the ones it started. It is on for every domain, with
+no limit; the shipped AGENTS.md tells agents to do it only when the work needs it.
+
+```bash
+desolate domain acme spawn                # on the Mac: whether acme's workspaces may, and any limit
+desolate domain acme spawn --max 2        # up to 2 started by its workspaces at once
+desolate domain acme spawn --max 0        # none: turned off for acme
+desolate domain acme spawn --max none     # no limit again (the default)
+desolate domain acme stats                # its workspaces, who started each, the limit, this Mac
+```
+
+Inside a workspace, `desolate spawn --name <w> [--branch <b>] -- <command...>`, `desolate
+close <w>`, `desolate domain stats` and `desolate events --follow` (the workspace's own
+[AGENTS.md](../AGENTS.md) tells an agent how). What you see:
+
+- **Who started each one.** `desolate list` and the dashboard say "started by you" or
+  "started by <workspace>", and `desolate events` carries `startedBy`.
+- **A workspace that outlived the one that started it** is flagged on the dashboard (under
+  "Needs you") and in `desolate list`. Nothing is removed for it: look at its branches,
+  then `desolate rm` it.
+- **A limit, if you set one, is a number of workspaces at once.** Each counts until it is
+  removed; it is memory on your Mac (`desolate domain <d> size`).
+- **Closing:** a workspace closes only one it started, and only when nothing in it would be
+  lost (no uncommitted, untracked or stashed work in any checkout). Its branches stay.
+  Anything else is yours: `desolate rm`.
+
+What keeps this to the domain: the request carries a signature made with a key that only
+the asking workspace's VM and your Mac have. The root, which passes the request on and
+parses every domain's data, cannot make one: if a domain's data ever took over the root's
+ordinary user, it still could not have your Mac start a workspace, or run a command in one,
+in another domain. On your Mac, the command is an argument list from start to finish, never
+a line a shell reads ([reference](reference.md#workspaces-that-start-workspaces)).
+
 ## Recipes: a whole task in one script
 
 desolate has no agent built in. The steps for handing a task to one (a workspace on its own

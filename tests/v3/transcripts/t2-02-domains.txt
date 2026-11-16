@@ -143,11 +143,11 @@ issue/12
 
 $ desolate list
 nests-dev  "suede.nests agentic development"  acme/consumer, acme/widgets
-  nests-dev/fresh  running  [not isolated]  acme/consumer@fresh, acme/widgets@issue/13  (<size>)
-  nests-dev/issue-12  running  [not isolated]  acme/consumer@issue-12, acme/widgets@issue/12  (<size>)
-  nests-dev/w1  running  [not isolated]  acme/consumer@main, acme/widgets@main  (<size>)
+  nests-dev/fresh  running  [not isolated]  acme/consumer@fresh, acme/widgets@issue/13  (<size>)  started by you
+  nests-dev/issue-12  running  [not isolated]  acme/consumer@issue-12, acme/widgets@issue/12  (<size>)  started by you
+  nests-dev/w1  running  [not isolated]  acme/consumer@main, acme/widgets@main  (<size>)  started by you
 other  "another boundary"  acme/private, acme/widgets
-  other/w1  running  [not isolated]  acme/private@main, acme/widgets@main  (<size>)
+  other/w1  running  [not isolated]  acme/private@main, acme/widgets@main  (<size>)  started by you
 [exit 0]
 
 ## stop, start, rm
