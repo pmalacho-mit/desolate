@@ -1294,6 +1294,17 @@ and the threat model, not the author's conclusions. What they found, and what wa
 | Replay after a daemon restart; close authority by name; `--name template` | low | used signatures on disk; the parent's key fingerprint in the record; the name reserved (T1) |
 | Events capped across domains; queued actions evicted; `tkn=` could reach a domain's events; gh's token for another host; reviewer output echoed as desolate's words; `::1` not held | low | each fixed |
 
+**A second review, of the fixes themselves,** found more, one of it older than all of this:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| The dashboard, editors and approval page were held on 127.0.0.1 only; Chrome tries ::1 first for `*.localhost` (measured), so another macOS user on `[::1]:<port>` would get their addresses, tokens in them, and could approve a push | critical (old) | held on both, or served on neither; doctor fails; `ui` and `approve --web` refuse to print a token address. Measured: while both are held, another process can bind neither, and a wildcard listener gets no loopback connection |
+| On a raw port, a long HTTP request naming no one was demoted to raw and reached the port's owner | high (introduced by the first fix) | only a short line that merely looks like HTTP is demoted |
+| A burst of spawns passed the in-flight and room checks together; the room check failed open | medium-high | counted in the check's own step; room counts spawns under way; not known is not room |
+| The root's records still taken as given at three sites (the daemon's register at start, agent list, a domain's CA) | medium | `isOwnVm()` at each |
+| Anyone could teach the forwarder a port was raw (and so reserved everywhere); silent sockets capped at 512 newest-refused | medium | no learning from traffic (`DESOLATE_RAW_PORTS` instead); undecided bytes closed; the oldest waiting is dropped |
+| A gh killed by its timeout forgot the attempt; a recorded page refused instead of re-sent; ledger writes racing | low | kept as not known; re-sent; one lock; `spawn-used.json` written by the daemon only; `up` destroys only what it made |
+
 **What does not hold, said plainly.** The root's ordinary user, if a domain ever took it
 over, still writes every domain's checkouts and passes on the dashboard's clicks (starting
 and stopping workspaces). What the signing and `vouched()` now guarantee is narrower: it
