@@ -1,7 +1,12 @@
 #!/bin/bash
 # Start this workspace's editor (P1: the editor is inside the boundary). Run as the
 # workspace's user, by start.sh, on every start. Idempotent.
-#   editor.sh <this workspace's editor hostname>
+#   editor.sh <this workspace's editor hostname> [<ms since the epoch>]
+#
+# With a time: the host's last retiring of the tokens (host/retired.ts; a reloaded tab may
+# have sent the old one's cookie to another program). A token not made since is made again,
+# and the server restarted to take it. "Since" is the host's own number, kept beside the
+# token (token.epoch), never this VM's clock: a resumed VM's clock may be behind the Mac's.
 #
 # Two processes, both on this VM's loopback:
 #   codium-server   the pinned VSCodium server baked into the image (pins.env), port 31580.
@@ -10,7 +15,9 @@
 #   editor-gate.ts  in front of it, port 31581, always in the VM: the only one the host's
 #                   forwarder reaches
 set -euo pipefail
-NAME=${1:?usage: editor.sh <editor hostname>}
+NAME=${1:?usage: editor.sh <editor hostname> [<ms since the epoch>]}
+RETIRED=${2:-0}
+case "$RETIRED" in *[!0-9]*) echo "editor.sh: not a time: $RETIRED" >&2; exit 2 ;; esac
 HERE=$(cd "$(dirname "$0")" && pwd)
 SRV=/opt/desolate/editor/bin/codium-server
 DATA="$HOME/.desolate-editor"
@@ -23,7 +30,15 @@ fi
 umask 077
 mkdir -p "$DATA/extensions" "$DATA/data/Machine"
 # The connection token: made here once, read by the host when it prints the editor's URL.
+EPOCH=$(cat "$DATA/token.epoch" 2>/dev/null || true)
+case "$EPOCH" in ''|*[!0-9]*) EPOCH=0 ;; esac
+RENEW=0
+if [ -s "$DATA/token" ] && [ "$EPOCH" -lt "$RETIRED" ]; then
+  rm -f "$DATA/token"
+  RENEW=1
+fi
 [ -s "$DATA/token" ] || head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' >"$DATA/token"
+[ "$RETIRED" -gt "$EPOCH" ] && printf '%s\n' "$RETIRED" >"$DATA/token.epoch"
 
 listening() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
 
@@ -41,8 +56,9 @@ if [ "$(jq -r '.state == "up" and .glibc and (.hostNetwork or (.compose and .bri
 fi
 node --disable-warning=ExperimentalWarning "$HERE/editor-settings.ts" "$DATA/data/Machine/settings.json" "$([ "$WHERE" = vm ] && echo enter || echo plain)"
 HAVE=$(cat "$DATA/server.where" 2>/dev/null || true)
-if listening "$SERVER_PORT" && [ "$HAVE" != "$WHERE" ]; then
-  # It is running in the other place (the devcontainer appeared, changed or went): stop it.
+if listening "$SERVER_PORT" && { [ "$HAVE" != "$WHERE" ] || [ "$RENEW" = 1 ]; }; then
+  # It is running in the other place (the devcontainer appeared, changed or went), or with a
+  # retired token: stop it.
   # The process GROUP: codium-server is a launcher whose node child holds the port.
   [ "$HAVE" != vm ] && [ -n "$HAVE" ] && docker exec -u 0 "$HAVE" sh -c 'kill -- -"$(cat /desolate/editor-data/server.pid)"' 2>/dev/null || true
   [ -s "$DATA/server.pid" ] && kill -- -"$(cat "$DATA/server.pid")" 2>/dev/null || true

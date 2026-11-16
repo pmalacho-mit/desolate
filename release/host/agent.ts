@@ -28,7 +28,7 @@ const DETACH = 0x1d; // Ctrl-]
 const target = async (value: string | undefined): Promise<Workspace> => {
   const [domain, workspace] = String(value ?? "").split("/");
   if (!domain || !workspace) refuse("which workspace?", "desolate agent <start|attach|log|stop> <domain>/<workspace>", EXIT.usage);
-  const w = await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true });
+  const w = (await import("./workspaces.ts")).vouched(await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }), domain, workspace);
   if ((await backend().info(w.vm)).status !== "running") refuse(`${domain}/${workspace} is not running`, `desolate start ${domain}/${workspace}`);
   return w;
 };
@@ -69,7 +69,8 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
   const b = backend();
   const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
   const rows: (Agent & { workspace: string })[] = [];
-  await Promise.all(all.filter((d) => !domain || d.slug === domain).flatMap((d) => d.workspaces.filter((w) => (!workspace || w.workspace === workspace) && running.has(w.vm)).map(async (w) => {
+  const { isOwnVm } = await import("./workspaces.ts");
+  await Promise.all(all.filter((d) => !domain || d.slug === domain).flatMap((d) => d.workspaces.filter((w) => (!workspace || w.workspace === workspace) && running.has(w.vm) && isOwnVm(d.slug, w)).map(async (w) => {
     const listed = await b.exec(w.vm, [...HOLDER(), "list"], { timeoutMs: 30_000 });
     try {
       // The VM's account of its agents is the VM's (an agent is root there): only rows of the

@@ -76,11 +76,10 @@ desolate: the main checkout of acme/widgets is held by the workspace 'nests-dev/
 
 $ desolate up nests-dev --name issue-12 --checkout acme/widgets=worktree:issue/12
 workspace nests-dev/issue-12 is up  [NOT ISOLATED: fake backend]
-  acme/consumer  worktree issue-12 from main  /workspaces/acme/consumer/.worktrees/issue-12
   acme/widgets  worktree issue/12 from main  /workspaces/acme/widgets/.worktrees/issue-12
   size         <size>
   devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
-  editor       http://nests-dev-issue-12-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Fissue-12.code-workspace
+  editor       http://nests-dev-issue-12-editor-<hex>.localhost:31591/?tkn=<token>&folder=%2Fworkspaces%2Facme%2Fwidgets%2F.worktrees%2Fissue-12
   dev servers  http://nests-dev-issue-12-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor nests-dev/issue-12 --open      its editor, in your browser
@@ -91,11 +90,10 @@ next: desolate editor nests-dev/issue-12 --open      its editor, in your browser
 
 $ desolate up nests-dev --name fresh --fetch --base origin/main --checkout acme/widgets=worktree:issue/13
 workspace nests-dev/fresh is up  [NOT ISOLATED: fake backend]
-  acme/consumer  worktree fresh from origin/main  /workspaces/acme/consumer/.worktrees/fresh
   acme/widgets  worktree issue/13 from origin/main  /workspaces/acme/widgets/.worktrees/issue-13
   size         <size>
   devcontainer none: no checkout has a devcontainer.json; this workspace is the VM itself
-  editor       http://nests-dev-fresh-editor-<hex>.localhost:31591/?tkn=<token>&workspace=%2Fworkspaces%2F.desolate%2Ffresh.code-workspace
+  editor       http://nests-dev-fresh-editor-<hex>.localhost:31591/?tkn=<token>&folder=%2Fworkspaces%2Facme%2Fwidgets%2F.worktrees%2Fissue-13
   dev servers  http://nests-dev-fresh-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
 the start took <duration>: mirrors refreshed <duration>, asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
 next: desolate editor nests-dev/fresh --open      its editor, in your browser
@@ -143,8 +141,8 @@ issue/12
 
 $ desolate list
 nests-dev  "suede.nests agentic development"  acme/consumer, acme/widgets
-  nests-dev/fresh  running  [not isolated]  acme/consumer@fresh, acme/widgets@issue/13  (<size>)  started by you
-  nests-dev/issue-12  running  [not isolated]  acme/consumer@issue-12, acme/widgets@issue/12  (<size>)  started by you
+  nests-dev/fresh  running  [not isolated]  acme/widgets@issue/13  (<size>)  started by you
+  nests-dev/issue-12  running  [not isolated]  acme/widgets@issue/12  (<size>)  started by you
   nests-dev/w1  running  [not isolated]  acme/consumer@main, acme/widgets@main  (<size>)  started by you
 other  "another boundary"  acme/private, acme/widgets
   other/w1  running  [not isolated]  acme/private@main, acme/widgets@main  (<size>)  started by you

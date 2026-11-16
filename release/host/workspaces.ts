@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
-import { devHostname, editorHostname, editorHostPort, isBranch, parseRepo } from "../shared/names.ts";
+import { devHostname, editorHostname, editorHostPort, isBranch, isSlug, parseRepo, workspaceVmName } from "../shared/names.ts";
 import { outlived } from "../shared/plan.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
@@ -13,6 +13,7 @@ import { checkSize, defaultsFor, describe as describeSize, LIMITS, merge, parseD
 import type { Size } from "../shared/size.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
+import { retiredAt, stale } from "./retired.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
 
@@ -125,7 +126,8 @@ export const startServices = async (plan: WorkspacePlan) => {
   const dev = await b.exec(plan.vm, [...NODE, `${guest.release}/workspace/devcontainer.ts`, plan.workspace], { timeoutMs: 3_700_000 });
   step("the devcontainer"); 
   const devcontainer = said(/^devcontainer: (.*)$/m.exec(dev.stdout)?.[1]?.trim().slice(0, 500) ?? `FAILED: ${(dev.stderr || dev.stdout).trim().slice(-300) || "it said nothing"}`);
-  const editor = await b.exec(plan.vm, ["bash", "-lc", `bash ${guest.release}/workspace/editor.sh ${editorHostname(INSTANCE, plan.domain, plan.workspace)}`], { timeoutMs: 300_000 });
+  // (With the time the host last retired the tokens: a token older than that is made again.)
+  const editor = await b.exec(plan.vm, ["bash", "-lc", `bash ${guest.release}/workspace/editor.sh ${editorHostname(INSTANCE, plan.domain, plan.workspace)} ${retiredAt()}`], { timeoutMs: 300_000 });
   step("the editor");
   return { editorDown: editor.code === 0 ? null : said((editor.stderr || editor.stdout).trim().split("\n").slice(-2).join(" ").slice(0, 300)) || "the editor did not start", devcontainer };
 };
@@ -135,6 +137,7 @@ export const startServices = async (plan: WorkspacePlan) => {
 export const editorUrl = async (w: Workspace): Promise<{ url: string } | { error: string }> => {
   const token = await backend().exec(w.vm, ["bash", "-lc", "cat ~/.desolate-editor/token"], { timeoutMs: 60_000 });
   if (token.code !== 0 || !/^[0-9a-f]{48}$/.test(token.stdout.trim())) return { error: "the editor is not running in this workspace (its image may have none: desolate doctor)" };
+  if (await editorTokenStale(w.vm)) return { error: "its token was retired (another program held [::1] on the editors' port), and has not been made again: desolate bootstrap, or restart the workspace" };
   const { editorPort } = await import("./daemon.ts");
   const { port, error } = await editorPort();
   if (error) return { error: `the editor's port is not available on this machine: ${error}. Free it, or set DESOLATE_EDITOR_PORT, then: desolate bootstrap` };
@@ -191,7 +194,11 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   if (stale) refuse(`${stale}: a workspace made now would run the older tools`, "desolate bootstrap (it provisions the base again: minutes, once)");
   let editorDown: string | null = null;
   let devcontainer = "";
+  if (options.name === "template") refuse("'template' is the name of the domain's template build", `desolate up ${domain} --name <another>`, EXIT.usage);
   const view = await rootctl<DomainView>("domain.show", { slug: domain }, { quiet: true });
+  // The environment: the first repository the person named with --checkout (its devcontainer,
+  // if it has one), else the domain's. Before --branch adds the rest.
+  const envRepo = options.checkouts[0]?.split("=")[0];
   // --branch <b>: a worktree on <b> in every repository of the domain (a --checkout names one
   // differently), so a task that spans repositories is one branch name in each.
   if (options.branch !== undefined) {
@@ -208,7 +215,7 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   if (b.kind !== "fake" && process.env.DESOLATE_TEMPLATES !== "0") {
     const { ensure } = await import("./templates.ts");
     const say = (line: string) => (json ? process.stderr.write(`${forTerminal(line)}\n`) : out(line));
-    template = await ensure(domain, view.repos, { specOf, startServices }, say);
+    template = await ensure(domain, view.repos, { specOf, startServices }, say, envRepo);
     if (template) phase("template");
   }
   // Its size: the flags, then the domain's, then the stack's defaults (each part on its own).
@@ -216,13 +223,22 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   // Who commits in it: your own git identity, as on this Mac (as the git VM takes it).
   const mine = (key: string) => spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
   const author = { name: mine("user.name"), email: mine("user.email") };
-  const plan = await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}) }, { quiet: true });
+  const plan = vouched(await rootctl<Workspace>("workspace.plan", { instance: INSTANCE, domain, name: options.name, checkouts: options.checkouts, base: options.base, fetch: options.fetch, size, author, ...(startedBy ? { startedBy } : {}), ...(envRepo ? { env: envRepo } : {}) }, { quiet: true }), domain, options.name);
+  // A VM of that name already here is not this workspace's: refused, and never destroyed below.
+  // (Names are a hash of the domain and the workspace; one domain could search for a name of
+  // its own that collides with another domain's VM: audit, 2026-11-16.)
+  if ((await b.info(plan.vm)).status !== "missing") {
+    await rootctl("workspace.remove", { domain, name: plan.workspace }, { quiet: true }).catch(() => {});
+    refuse(`a VM named ${plan.vm} already exists, and it is not ${domain}/${plan.workspace}'s`, `desolate up ${domain} --name <another name>`, EXIT.busy);
+  }
   // (The domain, whether it has a template to make, and the plan, which is two small files:
   // asks of the root, about 0.2 s each. No network: --fetch is its own phase, above.)
   phase("asked the root");
+  let made = false;
   try {
     if (template) await b.clone(template, specOf(plan, view.repos));
     else await b.create(specOf(plan, view.repos));
+    made = true;
     await b.start(plan.vm);
     phase("VM booted");
     ({ editorDown, devcontainer } = await startServices(plan));
@@ -232,9 +248,11 @@ export const up = async (domain: string | undefined, options: { name?: string; c
     const { disconnectWorkspace } = await import("./daemon.ts");
     await disconnectWorkspace(plan.vm).catch(() => {});
     await rootctl("proxy.stop", { vm: plan.vm }, { quiet: true }).catch(() => {});
-    await b.destroy(plan.vm).catch(() => {});
+    // Only a VM this run made (one that appeared between the check above and the create is
+    // not this workspace's to destroy).
+    if (made) await b.destroy(plan.vm).catch(() => {});
     await rootctl("workspace.remove", { domain, name: plan.workspace }, { quiet: true }).catch(() => {});
-    (await import("./spawn.ts")).forget(domain, plan.workspace);
+    if (made) (await import("./spawn.ts")).forget(domain, plan.workspace);
     throw error;
   }
   await rootctl("workspace.state", { domain, name: plan.workspace, state: "up" }, { quiet: true });
@@ -293,6 +311,16 @@ export const list = async (out: Out, json: boolean, only?: string) => {
  *  the root VM, so a root VM that was restarted left each running workspace with no way out
  *  at all, while `list` still said "running" (found on the M1). Bootstrap calls this.
  *  Returns how many were reconnected. */
+/** The host's retiring a VM's editor token was made after (editor.sh writes it), or 0. */
+export const editorTokenEpoch = async (vm: string) => {
+  const made = await backend().exec(vm, ["bash", "-lc", "cat ~/.desolate-editor/token.epoch 2>/dev/null || echo 0"], { timeoutMs: 60_000 });
+  const epoch = Number(made.stdout.trim());
+  return made.code === 0 && Number.isSafeInteger(epoch) && epoch > 0 ? epoch : 0;
+};
+/** Whether a VM's editor token was made before the host last retired the tokens (retired.ts).
+ *  One whose mark cannot be read is stale then: it is made again. */
+const editorTokenStale = async (vm: string) => retiredAt() > 0 && stale(await editorTokenEpoch(vm));
+
 export const reconnectRunning = async (): Promise<number> => {
   const b = backend();
   const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
@@ -300,7 +328,9 @@ export const reconnectRunning = async (): Promise<number> => {
   let count = 0;
   for (const d of await rootctl<DomainView[]>("domain.list", {}, { quiet: true }))
     for (const w of d.workspaces) {
-      if (!running.has(w.vm)) continue;
+      // A record naming a VM that is not its own workspace's (the root's word, checked) gets
+      // no proxy and no link: it would give one domain's VM another domain's rules.
+      if (!running.has(w.vm) || w.domain !== d.slug || !isOwnVm(d.slug, w)) continue;
       await ensureProxyUser(w.domain);
       const proxy = await rootctl<{ socket: string }>("proxy.start", { vm: w.vm, domain: w.domain, workspace: w.workspace }, { quiet: true });
       await connectWorkspace({ ...w, proxy: proxy.socket });
@@ -309,14 +339,28 @@ export const reconnectRunning = async (): Promise<number> => {
       await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/up.sh`, b.link(w.vm).guest], { root: true, timeoutMs: 120_000 });
       // Its key too: a workspace made before keys were given gets one here, without a restart.
       await (await import("./spawn.ts")).giveIdentity(b, w.vm);
+      // And its editor's token, made again if the host retired the tokens since it was made.
+      if (await editorTokenStale(w.vm)) await b.exec(w.vm, ["bash", "-lc", `bash ${guest.release}/workspace/editor.sh ${editorHostname(INSTANCE, w.domain, w.workspace)} ${retiredAt()}`], { timeoutMs: 300_000 });
       count += 1;
     }
   return count;
 };
 
+/** The root's word about a workspace, checked against what the host computes itself: the root
+ *  is where every domain's data is parsed, and a VM named in its answer is a VM the host
+ *  stops, starts or destroys (audit, 2026-11-16: an answer naming another domain's VM would
+ *  have had it removed). */
+/** Whether a record of the root's names its own workspace's VM, in that domain. */
+export const isOwnVm = (domain: string, w: { domain?: unknown; workspace: unknown; vm: unknown }) =>
+  (w.domain === undefined || w.domain === domain) && isSlug(w.workspace) && w.vm === workspaceVmName(INSTANCE, domain, w.workspace);
+export const vouched = <W extends { domain: string; workspace: string; vm: string }>(w: W, domain: string, workspace?: string): W => {
+  if (w.domain !== domain || (workspace !== undefined && w.workspace !== workspace) || !isSlug(w.workspace) || w.vm !== workspaceVmName(INSTANCE, domain, w.workspace))
+    refuse(`the root's answer about ${domain}/${workspace ?? w.workspace} does not name that workspace's own VM`, "desolate doctor; if it persists, the root VM is not well: desolate bootstrap");
+  return w;
+};
 const find = async (target: string | undefined) => {
   const { domain, workspace } = splitTarget(target);
-  return rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true });
+  return vouched(await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }), domain, workspace);
 };
 
 export const stop = async (target: string | undefined, out: Out) => {

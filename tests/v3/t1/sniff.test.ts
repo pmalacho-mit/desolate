@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import * as net from "node:net";
 import { describe, it } from "node:test";
 import * as tls from "node:tls";
-import { normalizeName, sniff } from "../../../release/shared/sniff.ts";
+import { LIMIT, normalizeName, sniff } from "../../../release/shared/sniff.ts";
 
 /** A real ClientHello, as node's TLS client sends it. */
 const clientHello = (servername: string | undefined): Promise<Buffer> =>
@@ -58,6 +58,18 @@ describe("T1 sniff", () => {
   it("anything else is raw: a protocol with no name in it", () => {
     for (const bytes of [Buffer.from([0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f]), Buffer.from("*1\r\n$4\r\nPING\r\n"), Buffer.from("SSH-2.0-OpenSSH_9.6\r\n"), Buffer.from([0x16, 0x01, 0x00])])
       assert.deepEqual(sniff(bytes), { kind: "raw" });
+  });
+
+  it("what starts like HTTP is HTTP: a request too long, or malformed, names no one (refused), never raw", () => {
+    // A 20 KB path: the request line never ends within LIMIT. It was raw, and went to the
+    // port's first workspace with no name checked (audit, 2026-11-16).
+    assert.deepEqual(sniff(Buffer.from(`GET /${"x".repeat(20_000)} HTTP/1.1\r\nHost: b.localhost\r\n\r\n`)), { kind: "http", name: null });
+    assert.deepEqual(sniff(Buffer.from(`GET /${"x".repeat(3000)}`)), { kind: "more" }, "a first line still arriving asks for more");
+    assert.deepEqual(sniff(Buffer.from("GET / HTTP/9\r\n\r\n")), { kind: "http", name: null }, "malformed: names no one");
+    assert.deepEqual(sniff(Buffer.from("PURGE /cache HTTP/1.1\r\nHost: a.localhost\r\n\r\n")), { kind: "http", name: "a.localhost" }, "any method is routed by its Host");
+    const partialHello = Buffer.alloc(LIMIT, 0);
+    partialHello.set([0x16, 0x03, 0x01, 0xff, 0xff]);
+    assert.deepEqual(sniff(partialHello), { kind: "tls", name: null }, "a TLS hello that never completes names no one");
   });
 
   it("normalizeName", () => {

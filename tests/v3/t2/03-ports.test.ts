@@ -27,9 +27,9 @@ const vmOf = (target: string) => {
 const serve = (target: string, args: string, root = false) =>
   stack.inVm(vmOf(target), ["bash", "-c", `setsid nohup node /workspaces/serve.mjs ${args} >/tmp/serve-$$.log 2>&1 </dev/null & sleep 0.3`], { root });
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const until = async (probe: () => boolean, ms = 8000) => {
+const until = async (probe: () => boolean | Promise<boolean>, ms = 8000) => {
   for (const deadline = Date.now() + ms; Date.now() < deadline; ) {
-    if (probe()) return true;
+    if (await probe()) return true;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   return probe();
@@ -84,6 +84,10 @@ describe("T2 section 4.4: ports, forwarded by name", () => {
 import http from "node:http"; import net from "node:net";
 const [, , name, portArg, mode] = process.argv; let port = Number(portArg);
 if (mode === "raw") net.createServer((s) => { s.write("raw:" + name + "\\n"); s.on("data", (d) => s.write(d)); s.on("error", () => {}); }).listen(port, "0.0.0.0");
+// A server on a raw port whose greeting is an HTTP response, sent in two pieces: a browser's
+// preconnected socket would take it as the answer to its request.
+else if (mode === "greets-http") net.createServer((s) => { s.on("error", () => {}); s.write("H"); setTimeout(() => s.write("TTP/1.1 200 OK\\r\\nContent-Type: text/html\\r\\nContent-Length: 13\\r\\n\\r\\n<b>owned</b>\\n"), 100); }).listen(port, "0.0.0.0");
+else if (mode === "greets-icy") net.createServer((s) => { s.on("error", () => {}); s.write("  ICY 200 OK\\r\\nContent-Type: text/html\\r\\n\\r\\n<b>owned</b>\\n"); }).listen(port, "0.0.0.0");
 else {
   const server = http.createServer((req, res) => res.end("workspace:" + name + " host:" + req.headers.host + "\\n"));
   server.on("upgrade", (req, socket) => { socket.write("HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\nhmr:" + name); socket.on("data", (d) => socket.write(d)); });
@@ -171,6 +175,9 @@ else {
     assert.ok(others.length > 0, "control: this machine has an address that is not loopback to try");
     for (const address of others) for (const port of [5173, 8080]) assert.equal(await accepts(address, port), false, `port ${port} answers on ${address}: it must be on loopback only`);
     assert.equal(await accepts("127.0.0.1", 80), false, "nothing listens on the host's port 80");
+    // ::1 too, where browsers look first for *.localhost: a forwarded port and the pages'.
+    assert.ok(await accepts("::1", 5173), "a forwarded port is held on ::1 as well");
+    assert.ok(await accepts("::1", Number(stack.env.DESOLATE_EDITOR_PORT)), "the dashboard's, the editors' and the approval page's port is held on ::1 as well");
   });
 
   it("a protocol with no name reaches the first workspace that had the port; the others keep the number taken", async () => {
@@ -195,6 +202,69 @@ else {
     assert.match(taken.stdout, /EADDRINUSE/, "a server in the other workspace finds 5432 taken");
     assert.equal(bind(5433).code, 0, "control: the next number is free there");
     assert.match(stack.desolate("ports", "web/two").stdout, /port 5432 is kept taken here: no name in its protocol, and one had it first/);
+    // An HTTP request on that raw port, too long to read whole, naming another workspace (a
+    // page can make a browser send one, with that workspace's cookies): never the raw owner.
+    const viaRaw = await new Promise<string>((resolve) => {
+      const socket = net.connect(5432, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => socket.write(`GET /${"x".repeat(17_000)} HTTP/1.1\r\nHost: ${hostOf(urlOf("web/two", 5173)!).replace(":5173", ":5432")}\r\n\r\n`));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 5000);
+    });
+    // (The raw server echoes what it is sent: its greeting may reach whoever connected, but
+    // the request itself never reaches it.)
+    assert.doesNotMatch(viaRaw, /GET \/x/, "the long request did not reach the raw port's owner");
+    // A preconnected socket on that raw port (silent, so its server's greeting comes), then a
+    // request naming another workspace: closed, never sent on (third review, 2026-11-16).
+    const preconnected = await new Promise<string>((resolve) => {
+      const socket = net.connect(5432, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => setTimeout(() => socket.write(`GET / HTTP/1.1\r\nHost: ${hostOf(urlOf("web/two", 5173)!).replace(":5173", ":5432")}\r\n\r\n`), 1500));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 8000);
+    });
+    assert.doesNotMatch(preconnected, /GET \//, "the request on a preconnected socket did not reach the raw port's owner");
+    // A raw port's server whose greeting is an HTTP response: never sent to a client that has
+    // said nothing yet (final review, 2026-11-16). The control is 5432's greeting, above.
+    serve("web/one", "one 3306 greets-http");
+    assert.ok(await until(() => urlOf("web/one", 3306) !== undefined));
+    const greeted = await new Promise<string>((resolve) => {
+      const socket = net.connect(3306, "127.0.0.1");
+      let data = "";
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 3000);
+    });
+    assert.doesNotMatch(greeted, /200 OK|owned/, "a greeting shaped as an HTTP response was not sent on");
+    // And Firefox's other way of reading an answer: "ICY", after white space.
+    serve("web/one", "one 11211 greets-icy");
+    assert.ok(await until(() => urlOf("web/one", 11211) !== undefined));
+    const icy = await new Promise<string>((resolve) => {
+      const socket = net.connect(11211, "127.0.0.1");
+      let data = "";
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 3000);
+    });
+    assert.doesNotMatch(icy, /ICY|owned/, "a greeting shaped as an ICY answer was not sent on");
+    // A method no list knows, from a page (PURGE): routed by its name, and teaches nothing.
+    serve("web/one", "one 5190");
+    assert.ok(await until(() => urlOf("web/one", 5190) !== undefined));
+    assert.match(await new Promise<string>((resolve) => {
+      const socket = net.connect(5190, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => socket.write(`PURGE / HTTP/1.1\r\nHost: ${hostOf(urlOf("web/one", 5190)!)}\r\nConnection: close\r\n\r\n`));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+    }), /workspace:one/);
+    await sleep(2000);
+    assert.ok(!ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5190), "5190 did not become raw");
   });
 
   it("silence is not a protocol: a socket that waits before its request still reaches the workspace it names, and the port stays HTTP", async () => {
@@ -216,19 +286,105 @@ else {
     await sleep(3000);
     for (const w of ["web/one", "web/two"]) assert.ok(!ports().find((p) => p.workspace === w)!.reserved.some((r) => r.port === 5173), `${w} is not asked to keep 5173 taken`);
     assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/, "control: each name still reaches its own workspace");
+    // 8080: only web/one serves it. A silent socket, then a request naming web/two (with what
+    // a browser would send web/two): never web/one's server (audit, 2026-11-16: it once was).
+    const twoOn8080 = hostOf(urlOf("web/two", 5173)!).replace(":5173", ":8080");
+    const misrouted = await new Promise<string>((resolve) => {
+      const socket = net.connect(8080, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => setTimeout(() => socket.write(`GET / HTTP/1.1\r\nHost: ${twoOn8080}\r\nCookie: two-secret=1\r\nConnection: close\r\n\r\n`), 1500));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      setTimeout(() => socket.destroy(), 10_000);
+    });
+    assert.doesNotMatch(misrouted, /workspace:one/, misrouted);
+    assert.match(misrouted, /^HTTP\/1\.1 502 [\s\S]*nothing is listening on port 8080 in web\/two/);
+    assert.match(await request(8080, hostOf(urlOf("web/one", 8080)!)), /workspace:one/, "control: web/one's own name reaches it");
+    // A request line too long to read whole: HTTP that names no one, refused; not a protocol
+    // with no name, routed to the port's first workspace.
+    const long = await new Promise<string>((resolve) => {
+      const socket = net.connect(8080, "127.0.0.1");
+      let data = "";
+      socket.on("connect", () => socket.write(`GET /${"x".repeat(20_000)} HTTP/1.1\r\nHost: ${twoOn8080}\r\n\r\n`));
+      socket.on("data", (chunk) => (data += chunk));
+      socket.on("close", () => resolve(data));
+      socket.on("error", () => resolve(data));
+      setTimeout(() => socket.destroy(), 10_000);
+    });
+    assert.doesNotMatch(long, /workspace:one/, long.slice(0, 200));
+    assert.ok(!ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 8080), "and 8080 did not turn raw");
   });
 
-  it("a port the host itself holds is not published; workspaces keep it taken, and a server moves to the next number", async () => {
+  it("a port the host itself holds is not published, and not taken from the workspaces: their servers use it inside", async () => {
     stack.step("a port a program on the host holds");
     hostHolder = spawn(process.execPath, ["-e", `require("http").createServer((q, s) => s.end("the-host-program")).listen(5180, "127.0.0.1")`], { stdio: "ignore" });
     await new Promise((resolve) => setTimeout(resolve, 500));
     serve("web/one", "one 5180");
     assert.ok(await until(() => ports().find((w) => w.workspace === "web/one")!.reserved.some((r) => r.port === 5180 && /not forwarded/.test(r.why))), "the workspace's 5180 is reported as not forwarded");
     assert.match(await request(5180, hostOf(urlOf("web/one", 5173)!).replace(":5173", ":5180")), /the-host-program/, "the host's own program still answers on its port: nothing was taken from it");
-    assert.ok(await until(() => ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180)), "the other workspace keeps 5180 taken");
-    serve("web/two", "two 5180 move");
-    assert.ok(await until(() => urlOf("web/two", 5181) !== undefined), "a server that tries the next number lands on 5181, and that is forwarded");
-    assert.match(await request(5181, hostOf(urlOf("web/two", 5181)!)), /workspace:two/);
+    // The other workspace is not made to keep 5180 taken (it once was: an API meant only for
+    // its own workspace could then not have the port at all): its server takes 5180, and
+    // answers inside the workspace.
+    await sleep(3000);
+    assert.ok(!ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180 && /kept taken/.test(r.why)), "web/two is not asked to keep 5180 taken");
+    serve("web/two", "two 5180");
+    assert.ok(await until(() => ports().find((w) => w.workspace === "web/two")!.reserved.some((r) => r.port === 5180 && /not forwarded/.test(r.why))), "its server has 5180, reported as not forwarded");
+    const inside = stack.inVm(vmOf("web/two"), ["bash", "-c", "curl -s -m 5 http://127.0.0.1:5180/"]);
+    assert.match(inside.stdout, /workspace:two/, "and answers inside its workspace");
+    // Held on ::1 only (another user's program, on a shared Mac): not forwarded either, since
+    // a browser would go there first.
+    const v6Holder = spawn(process.execPath, ["-e", `require("net").createServer((s) => s.end("v6")).listen({ port: 5183, host: "::1", ipv6Only: true })`], { stdio: "ignore" });
+    try {
+      await sleep(500);
+      serve("web/one", "one 5183");
+      assert.ok(await until(() => ports().find((w) => w.workspace === "web/one")!.reserved.some((r) => r.port === 5183 && /not forwarded/.test(r.why)), 20_000), "a port held on ::1 is reported as not forwarded");
+      assert.equal(urlOf("web/one", 5183), undefined);
+    } finally {
+      v6Holder.kill();
+    }
+  });
+
+  it("another program on [::1] of the pages' port: their tokens are retired, and the dashboard and the editors are not served on them again", async () => {
+    stack.step("the pages' port held on ::1");
+    const pagesPort = Number(stack.env.DESOLATE_EDITOR_PORT);
+    const hostAt = (url: string) => new URL(url).host;
+    const dashboard = hostAt(stack.quiet("ui").stdout.match(/http:\/\/\S+/)![0]);
+    const editorBefore = JSON.parse(stack.quiet("editor", "web/one", "--json").stdout) as { url: string };
+    // Control: both served now.
+    assert.doesNotMatch(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 /);
+    assert.doesNotMatch(await request(pagesPort, hostAt(editorBefore.url)), /^HTTP\/1\.1 503 /);
+    // The daemon goes (a reboot, an upgrade), and another program takes [::1] of its port.
+    const pidFile = path.join(stack.home, "state/daemon.pid");
+    process.kill(Number(fs.readFileSync(pidFile, "utf8")));
+    assert.ok(await until(async () => !(await accepts("127.0.0.1", pagesPort))), "the daemon is gone");
+    const squatter = spawn(process.execPath, ["-e", `require("net").createServer((s) => s.end("squatter")).listen({ port: ${pagesPort}, host: "::1", ipv6Only: true })`], { stdio: "ignore" });
+    try {
+      await sleep(500);
+      const refused = stack.quiet("ui");
+      assert.notEqual(refused.code, 0, "no address with a token is printed");
+      assert.ok(fs.existsSync(path.join(stack.home, "state/tokens-retired")), "the tokens are retired");
+      for (const name of ["approve-token", "git-token", "ui-token"]) assert.ok(!fs.existsSync(path.join(stack.home, "state", name)), `${name} is gone`);
+    } finally {
+      squatter.kill();
+    }
+    // The program goes, and a daemon comes back (before any bootstrap): the dashboard and the
+    // editor are not served on their old tokens, which the root and the VM still take.
+    process.kill(Number(fs.readFileSync(pidFile, "utf8")));
+    await sleep(1000);
+    assert.equal(stack.quiet("ports").code, 0);
+    assert.ok(await until(() => accepts("127.0.0.1", pagesPort)));
+    assert.match(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 [\s\S]*the dashboard's token was retired/);
+    // (Once the new daemon has the workspace again: before, its name is no one's, a 421.)
+    let editorReply = "";
+    assert.ok(await until(async () => !/^HTTP\/1\.1 421 /.test((editorReply = await request(pagesPort, hostAt(editorBefore.url)))), 30_000), "the new daemon has the workspace");
+    assert.match(editorReply, /^HTTP\/1\.1 503 [\s\S]*this editor's token was retired/);
+    // bootstrap makes them again: both are served, the editor on a new token.
+    assert.equal(bootstrap(stack).code, 0);
+    const editorAfter = JSON.parse(stack.quiet("editor", "web/one", "--json").stdout) as { url: string };
+    assert.notEqual(new URL(editorAfter.url).searchParams.get("tkn"), new URL(editorBefore.url).searchParams.get("tkn"), "the editor's token was made again");
+    assert.ok(await until(async () => !/^HTTP\/1\.1 503 /.test(await request(pagesPort, hostAt(editorAfter.url))), 20_000), "the editor is served again");
+    assert.doesNotMatch(await request(pagesPort, dashboard), /^HTTP\/1\.1 503 /, "and the dashboard");
+    assert.equal(stack.quiet("ui").code, 0);
   });
 
   it("stopping a workspace takes its ports down", async () => {

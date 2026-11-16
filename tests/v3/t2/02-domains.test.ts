@@ -105,8 +105,10 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     const up = stack.desolate("up", "nests-dev", "--name", "issue-12", "--checkout", "acme/widgets=worktree:issue/12");
     assert.equal(up.code, 0, up.stderr);
     assert.match(up.stdout, /acme\/widgets {2}worktree issue\/12 from main {2}\/workspaces\/acme\/widgets\/\.worktrees\/issue-12/);
-    // Not named, and its main checkout is held: a fresh worktree named for the workspace.
-    assert.match(up.stdout, /acme\/consumer {2}worktree issue-12 from main/);
+    // Not named, and its main checkout is held: none (it was a fresh worktree named for the
+    // workspace: an empty branch in each repository the work was not about).
+    assert.doesNotMatch(up.stdout, /acme\/consumer/);
+    assert.doesNotMatch(stack.quiet("branches", "nests-dev").stdout, /acme\/consumer {2}issue-12 /, "no empty issue-12 branch in acme/consumer");
   });
 
   it("two workspaces commit to one repository at once, in their own worktrees, without corruption", async () => {

@@ -16,7 +16,10 @@ export const status = async (target: string | undefined, out: Out, json: boolean
   const [domain, workspace] = (target ?? "").split("/");
   if (!domain) refuse("status of what?", "desolate status <domain>[/<workspace>] [--json]", EXIT.usage);
   const d = await rootctl<{ workspaces: WorkspacePlan[] }>("domain.show", { slug: domain }, { quiet: true });
-  const views = d.workspaces.filter((w) => !workspace || w.workspace === workspace).map(viewOf);
+  // The root's records, checked: the domain it names is where status files are read on the
+  // Mac (third review: a path the root chose).
+  const { isOwnVm } = await import("./workspaces.ts");
+  const views = d.workspaces.filter((w) => (!workspace || w.workspace === workspace) && w.domain === domain && isOwnVm(domain, w)).map(viewOf);
   if (workspace && views.length === 0) refuse(`there is no workspace '${target}'`, `desolate list ${domain}`);
   if (json) return out(JSON.stringify(workspace ? views[0] : views));
   for (const view of views) {

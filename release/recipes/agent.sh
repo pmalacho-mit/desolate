@@ -46,9 +46,14 @@ if [ -z "$name" ]; then
 fi
 branch=${branch:-task/$name}
 
-# 2. The workspace: a VM with every repository of the domain checked out on the branch, the
-#    project's devcontainer and an editor. The same as for working in it yourself.
-desolate up "$domain" --name "$name" --branch "$branch"
+# 2. The workspace: a VM with the repository checked out on the branch (with --checkout: that
+#    one, whose devcontainer is then the environment; else every repository of the domain),
+#    the project's devcontainer and an editor. The same as for working in it yourself.
+if [ ${#checkout[@]} -gt 0 ]; then
+  desolate up "$domain" --name "$name" --checkout "${checkout[1]}=worktree:$branch"
+else
+  desolate up "$domain" --name "$name" --branch "$branch"
+fi
 
 # 3. The program, in the workspace's devcontainer, kept running whether or not anyone is
 #    watching (`desolate agent`). It is told where it is and how to finish: the workspace's

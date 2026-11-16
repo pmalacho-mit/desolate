@@ -87,8 +87,9 @@ case "${1:-}" in
   board)
     common=$(cd "$(git -c core.hooksPath=/dev/null rev-parse --git-common-dir)" && pwd -P)
     field() { sed -n "s/.*\"$1\":\"\([^\"]*\)\".*/\1/p" "$2" 2>/dev/null | head -n 1; }
-    show_target() { # <name> <its git dir>
+    show_target() { # <name> <its git dir> [what to add]
       mine=""; [ "$(cd "$2" && pwd -P)" = "$(cd "$GIT_DIR_" && pwd -P)" ] && mine="  (you)"
+      mine="$mine${3:-}"
       if [ -f "$2/desolate-status.json" ]; then
         printf '== %s [%s] %s  (%s)%s\n' "$1" "$(field color "$2/desolate-status.json")" \
           "$(field message "$2/desolate-status.json")" "$(field updated "$2/desolate-status.json")" "$mine"
@@ -98,9 +99,18 @@ case "${1:-}" in
       [ ! -f "$2/desolate-note.md" ] || { head -c "$NOTE_MAX" "$2/desolate-note.md"; echo; }
     }
     show_target main "$common"
+    # A worktree whose workspace was removed keeps its last status: said so, rather than shown
+    # as current (dogfooding: a removed workspace's "green, at <its dev URL>" read as live).
+    # Its owner is the name its lock gives (init.ts); the live ones, the root's domain.json.
+    stats=/desolate/inbox/domain.json
     for admin in "$common"/worktrees/*; do
       [ -d "$admin" ] || continue
-      show_target "$(basename "$admin")" "$admin"
+      gone=""
+      owner=$(sed -n 's/^workspace \([A-Za-z0-9_-]\{1,40\}\)$/\1/p' "$admin/locked" 2>/dev/null | head -n 1)
+      if [ -n "$owner" ] && [ -f "$stats" ] && ! grep -Eq "\"workspace\": ?\"$owner\"" "$stats"; then
+        gone="  (its workspace, $owner, was removed: this is its last word)"
+      fi
+      show_target "$(basename "$admin")" "$admin" "$gone"
     done ;;
   *)
     sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'

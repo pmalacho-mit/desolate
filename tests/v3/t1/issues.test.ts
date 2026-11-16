@@ -45,7 +45,9 @@ describe("T1 the Markdown preview", () => {
     assert.match(show(items), /<a href=https:\/\/tracker\.example\/p\.png>image: c<\/a>/);
   });
   it("costs little whatever it is given: unclosed emphasis, code and links", () => {
-    for (const body of ["*".repeat(65_536), "*a ".repeat(21_000), "_a ".repeat(21_000), "**a ".repeat(16_000), "`a ``b ".repeat(9_000), "[a](".repeat(16_000), "> ".repeat(30_000)]) {
+    for (const body of ["*".repeat(65_536), "*a ".repeat(21_000), "_a ".repeat(21_000), "**a ".repeat(16_000), "`a ``b ".repeat(9_000), "[a](".repeat(16_000), "> ".repeat(30_000),
+      // A heading, or a table's rule, with a long run of blanks: 15 s and 7 s before (audit).
+      `# a${" ".repeat(65_000)}b`, `a|b\n-${" ".repeat(65_000)}x`]) {
       const started = performance.now();
       markdown.parse(body);
       assert.ok(performance.now() - started < 500, `${body.slice(0, 8)}...: ${Math.round(performance.now() - started)} ms`);

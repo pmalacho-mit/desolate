@@ -114,6 +114,8 @@ export const newStack = (label: string): Stack => {
     // The person's git identity, as `up` reads it from the Mac: the same on every machine
     // that runs the tests, so what `up` says about it does not depend on whose Mac it is.
     GIT_CONFIG_GLOBAL: gitIdentity(work),
+    // What doctor notes of this Mac's ports depends on the Mac: not in the transcripts.
+    DESOLATE_DOCTOR_PORTS: "none",
   };
   const transcript: string[] = [];
   const timings: { step: string; ms: number }[] = [];

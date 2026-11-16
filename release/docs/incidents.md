@@ -356,6 +356,40 @@ creates the directory and fails loudly when nothing was installed.
 `colima ssh`, which made it invalid jq. It emits TSV with nothing to re-parse
 now, and `tests/static/05-cli-queries.sh` runs it.
 
+## Found dogfooding, and by the audit after it (2026-11-16)
+
+A night of real use on the M1 (five projects, subagents as new colleagues), then four
+independent reviews of everything changed that week.
+
+**The approval page asked for a blind approval.** A first push with a lockfile: "desolate's
+reviewer could not say what this push would send ... Approve only if you know what it is",
+then lockfile text. The reviewer wrote its answer and called `process.exit(0)`; on a pipe the
+write was cut at 146,175 bytes. Every test's answer had fit in a pipe's buffer.
+
+**A fix that made the forwarder worse, found by the audit the same night.** Chrome's
+preconnects made a port "raw" for good (kept taken everywhere, and the request sent later on
+that socket went to the first workspace). The fix piped a silent socket to the port's only
+listener, which a request naming *another* workspace, with that workspace's cookies, then
+reached. Older and worse: a request line over 16 KB was sniffed as raw and routed with no
+name at all. Now nothing is piped before it names a workspace, and what starts like HTTP is
+HTTP.
+
+**New branches built on old code.** A new worktree started from the domain clone's own
+`main`, which nothing moves: after a merge, with `--fetch`, without it, and for every spawn.
+Two agents caught it only by comparing with the mirror by hand.
+
+**The host took the root's word for which VM.** A plan or record naming another domain's VM
+would have had it stopped, removed or given a proxy; VM names are a 40-bit hash a domain
+could search for a collision with. The host now checks every answer against the name it
+computes, and never takes over or destroys a VM that already exists.
+
+**A terminal question the root could repaint.** `desolate issue publish` wrote the root's
+fields to the tty as they were. It shows the checked draft now.
+
+**An upgrade that broke old workspaces quietly.** Workspaces made before the cache share
+existed failed their devcontainer at every start after an upgrade, as red lines under
+"Needs you" for days.
+
 ## The rules these left
 
 - **A negative check needs a positive control.** A probe that failed to run is
@@ -367,6 +401,10 @@ now, and `tests/static/05-cli-queries.sh` runs it.
 - **Measure the claim against the real thing.** The CLI's merge order, the
   server's cookie, Chrome's preconnect -- each was measured before a fix was
   built on it, and two fixes changed shape because of what was measured.
+- **Test with what real use sends.** A pipe's buffer, a browser's preconnect, a merge on the
+  forge an hour ago: each passed every test and failed in the first night of real use.
+- **A fix to a router is a change to a boundary.** It gets the boundary's review and T4
+  before it is believed, however small.
 - **The input a safe command reads is the boundary, not the command.**
   Completion words, a `.gitrepo`, a lockfile beside the spec, a base image's
   label, a content's `.lfsconfig`: each was a file a project could write,

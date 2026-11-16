@@ -24,9 +24,9 @@ type Spawn = import("../../../release/shared/spawn.ts").Spawn;
 const KEY = "ab".repeat(32);
 const at = "2026-11-16T00:00:00.000Z";
 const now = Date.parse(at) + 1000;
-const spawnRequest = (over: Partial<Spawn> = {}): Spawn => ({ op: "spawn", domain: "acme", parent: "w1", name: "helper", branch: "issue/9", command: ["claude", "-p", "fix it; $(rm -rf ~) `id` --help"], at, nonce: "0f".repeat(16), ...over });
+const spawnRequest = (over: Partial<Spawn> = {}): Spawn => ({ op: "spawn", domain: "acme", parent: "w1", name: "helper", branch: "issue/9", checkouts: [], command: ["claude", "-p", "fix it; $(rm -rf ~) `id` --help"], at, nonce: "0f".repeat(16), ...over });
 /** The request as the root carries it to the host: an action's string arguments. */
-const asArgs = (r: Spawn, mac: string): Record<string, string> => ({ domain: r.domain, workspace: r.name, parent: r.parent, branch: r.branch, command: JSON.stringify(r.command), at: r.at, nonce: r.nonce, mac });
+const asArgs = (r: Spawn, mac: string): Record<string, string> => ({ domain: r.domain, workspace: r.name, parent: r.parent, branch: r.branch, checkouts: JSON.stringify(r.checkouts), command: JSON.stringify(r.command), at: r.at, nonce: r.nonce, mac });
 
 describe("T1 a workspace's signed request", () => {
   it("is good only with the parent's key, for exactly what was signed, while fresh", () => {
@@ -78,6 +78,7 @@ describe("T1 the host's checks before it runs one", () => {
     const r = spawnRequest({ nonce: "01".repeat(16) });
     const signed = signedOf("spawn", asArgs(r, sign(KEY, r)))!;
     assert.equal(host.check(signed, exists, now), null, "allowed: no limit unless the person set one");
+    host.end("acme");
     assert.match(String(host.check(signed, exists, now)), /already run/, "a replay");
     const off = spawnRequest({ name: "third", nonce: "06".repeat(16) });
     const offSigned = signedOf("spawn", asArgs(off, sign(KEY, off)))!;
@@ -89,12 +90,46 @@ describe("T1 the host's checks before it runs one", () => {
     assert.match(String(host.check(signedOf("spawn", asArgs(next, sign(KEY, next)))!, exists, now)), /its limit/);
     host.setMax("acme", null);
     assert.equal(host.check(offSigned, exists, now), null, "the control: the same request, with the limit gone");
+    host.end("acme");
   });
   it("closes only what the asking workspace started", () => {
     const close = { op: "close" as const, domain: "acme", parent: "w1", name: "helper", at, nonce: "03".repeat(16) };
     assert.equal(host.check({ ...close, mac: sign(KEY, close) }, exists, now), null);
     const other = { ...close, name: "w9", nonce: "04".repeat(16) };
     assert.match(String(host.check({ ...other, mac: sign(KEY, other) }, exists, now)), /a person started it/);
+  });
+  it("a request run once stays run, on disk: a restart of the daemon does not run it again", () => {
+    const r = spawnRequest({ name: "once", nonce: "07".repeat(16) });
+    const signed = signedOf("spawn", asArgs(r, sign(KEY, r)))!;
+    assert.equal(host.check(signed, exists, now), null, "the control: run");
+    const used = JSON.parse(fs.readFileSync(path.join(home, "state", "spawn-used.json"), "utf8")) as Record<string, number>;
+    assert.ok(used[signed.mac], "its signature is kept on disk");
+    host.end("acme");
+    assert.match(String(host.check(signed, exists, now)), /already run/);
+  });
+  it("at most three spawns of a domain at once", () => {
+    // A burst: each passes the check and is counted as it passes; the fourth is refused.
+    for (let n = 0; n < host.MOST_AT_ONCE; n++) {
+      const each = spawnRequest({ name: `burst${n}`, nonce: `1${n}`.repeat(16) });
+      assert.equal(host.check(signedOf("spawn", asArgs(each, sign(KEY, each)))!, exists, now), null);
+    }
+    const r = spawnRequest({ name: "fourth", nonce: "08".repeat(16) });
+    assert.match(String(host.check(signedOf("spawn", asArgs(r, sign(KEY, r)))!, exists, now)), /already has 3 workspaces being started/);
+    for (let n = 0; n < host.MOST_AT_ONCE; n++) host.end("acme");
+    const again = spawnRequest({ name: "fourth", nonce: "09".repeat(16) });
+    assert.equal(host.check(signedOf("spawn", asArgs(again, sign(KEY, again)))!, exists, now), null, "the control: one ended, the next runs");
+    host.end("acme");
+  });
+  it("a close is the parent's that asked, not a later workspace's of the same name", () => {
+    host.recordStarted("acme", "child", "w1");
+    const close = { op: "close" as const, domain: "acme", parent: "w1", name: "child", at, nonce: "0a".repeat(16) };
+    // w1 is removed and made again: a new key under the same name.
+    const keyFile = path.join(home, "state", "workspace-keys", vm);
+    fs.writeFileSync(keyFile, `${"cd".repeat(32)}\n`);
+    const later = { ...close, nonce: "0b".repeat(16) };
+    assert.match(String(host.check({ ...later, mac: sign("cd".repeat(32), later) }, exists, now)), /started by an earlier workspace named w1/);
+    fs.writeFileSync(keyFile, `${KEY}\n`);
+    assert.equal(host.check({ ...close, mac: sign(KEY, close) }, exists, now), null, "the control: the parent itself closes it");
   });
   it("refuses a request the root signed itself, with no key of the parent's", () => {
     const r = spawnRequest({ parent: "w2", nonce: "05".repeat(16) });

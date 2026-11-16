@@ -1273,3 +1273,75 @@ Section 4.8's requirements, and how each came out:
 Tier T2 (52 tests, the fake backend): 3 minutes 15 seconds. Tier T3 under software emulation:
 about 3 minutes to boot each VM, about 20 minutes for the tier. These say nothing about a
 Mac, where a VM boots in under 10 seconds.
+
+## The audit of 2026-11-16: spawn, issues, the forwarder, the root's word (audited; fixed)
+
+After a night of dogfooding, four reviewers read everything changed since `863ec4b`
+(workspaces starting workspaces, issues offered and published, the port forwarder, git in
+workspaces, the dashboard's new routes, events and stats, the recipes), each given the code
+and the threat model, not the author's conclusions. What they found, and what was done:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| A silent socket piped to a port's only listener before any name was read: a later request naming another workspace reached it, with that workspace's cookies | high (new that night) | nothing is piped before its first bytes name a workspace; silence is closed after two minutes (T2 03) |
+| An HTTP request whose line never ended within 16 KB sniffed as raw and routed with no name check | high (old) | what starts like HTTP is HTTP; unparseable names no one and is refused (T1 sniff, T2 03) |
+| VM names: a 40-bit hash; a colliding name made `up` destroy another domain's VM | high | `up` refuses an existing VM name before creating anything; the root refuses one any domain uses |
+| The host acted on the root's plans and records as given (domain, VM) | high | `vouched()`: domain, workspace and the host's own VM name, in up, stop/start/rm/close, agent, reconnect (T1) |
+| `desolate issue publish` wrote root-supplied fields to the tty | high | shows the checked draft; provenance must be two names, and is called the root's account |
+| No limit on spawns: one domain could start ~30 VMs a minute | medium | no fixed limit (the person's choice), but the Mac's memory: 85% at most; three in flight per domain (T1) |
+| Two Markdown regexes: 15 s and 7 s on a line of blanks | medium | rewritten: 7 ms and 2 ms (T1) |
+| A publish reported failed after GitHub made it invited a second | medium | URL matched case-insensitively; a digest record and a lock on the host; the root marks published only the approved text |
+| Replay after a daemon restart; close authority by name; `--name template` | low | used signatures on disk; the parent's key fingerprint in the record; the name reserved (T1) |
+| Events capped across domains; queued actions evicted; `tkn=` could reach a domain's events; gh's token for another host; reviewer output echoed as desolate's words; `::1` not held | low | each fixed |
+
+**A second review, of the fixes themselves,** found more, one of it older than all of this:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| The dashboard, editors and approval page were held on 127.0.0.1 only; Chrome tries ::1 first for `*.localhost` (measured), so another macOS user on `[::1]:<port>` would get their addresses, tokens in them, and could approve a push | critical (old) | held on both, or served on neither; doctor fails; `ui` and `approve --web` refuse to print a token address. Measured: while both are held, another process can bind neither, and a wildcard listener gets no loopback connection |
+| On a raw port, a long HTTP request naming no one was demoted to raw and reached the port's owner | high (introduced by the first fix) | only a short line that merely looks like HTTP is demoted |
+| A burst of spawns passed the in-flight and room checks together; the room check failed open | medium-high | counted in the check's own step; room counts spawns under way; not known is not room |
+| The root's records still taken as given at three sites (the daemon's register at start, agent list, a domain's CA) | medium | `isOwnVm()` at each |
+| Anyone could teach the forwarder a port was raw (and so reserved everywhere); silent sockets capped at 512 newest-refused | medium | no learning from traffic (`DESOLATE_RAW_PORTS` instead); undecided bytes closed; the oldest waiting is dropped |
+| A gh killed by its timeout forgot the attempt; a recorded page refused instead of re-sent; ledger writes racing | low | kept as not known; re-sent; one lock; `spawn-used.json` written by the daemon only; `up` destroys only what it made |
+
+**A third review** found the second round's own gaps:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| `desolate git` printed its token address unchecked; `ui` and `approve --web` passed when the daemon did not answer; tokens outlived a squatted `::1` | high | one fail-closed check (`tokenAddressesSafe`, on a cheap `editor` op); page tokens retired when `::1` is found held |
+| A silent socket on a known raw port still went to its owner, and a browser's request sent on it later with it (a T2 run caught it: an `lsof` blocking the loop ended a 400 ms sniff before bytes already sent were read) | medium | the owner gets its client, but the client's first bytes are read first: HTTP or TLS closes both ends; `lsof` runs in the background |
+| Spawns were never counted as ended (a regression of the second round): after three, a domain could start no more | medium | fixed; T2 16 |
+| A domain's limit ignored spawns under way; a `::1` error other than in-use left a port forwarded; status read paths from the root's records; a stale lock could be taken twice | low | each fixed |
+
+**A final review** of the third round found nothing above medium:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| A raw port's server greeting a silent client with an HTTP response: a browser's preconnected socket would read it as the answer to its next request, a page at another workspace's origin (same host, so its cookies) | medium | the greeting is looked at before any goes on: one with `HTTP` in its first 5 bytes is closed (Chrome takes no other answer on these ports: HTTP/0.9 is refused off 80 and 443). T2 03, with the greeting in two pieces |
+| Retiring the tokens missed the dashboard's (the root keeps a copy, so a later daemon took the old cookie) and every editor's (made once, kept for good) | medium | `host/retired.ts`: the time of the retiring is kept; the dashboard and each editor are refused (503, with the fix) until their tokens are made again, by bootstrap, or for a stopped workspace by its next start. T1, and T2 03 end to end |
+| A raw client that left at once still got a connection to the owner; a cut-off request line or TLS start went to the owner; a fresh publish lock could be taken as stale; signatures in an older `spawn.json` lost on the CLI's next write | low | each fixed |
+
+**A review of those fixes** found two more, both fixed:
+
+| Finding | Severity | Fix |
+|---|---|---|
+| An editor's token was judged by its file's time in the VM against the Mac's clock: a resumed VM's clock behind kept its editor refused through every bootstrap, and one ahead kept a token made before the retiring | medium | the retiring's own number, copied beside each token made after it (`token.epoch`; `ui-token.epoch` for the dashboard's, written only once the root has its copy); each retiring's number larger than the last, whatever the clock did |
+| The greeting check knew Chrome's reading only; Firefox also takes `ICY ` after white space (from its source; not tried) | medium | refused too. Nothing of a greeting goes on while it could still become either (`greetingIs`, with a table of cases), so a short honest one (`raw:one\n`) goes at its first byte. Safari not looked at |
+| The cut-off check refused a decided raw head starting 0x16 (a MongoDB hello, 1 in 256 lengths); a VM's older wsd reports no mark; a partial bootstrap marked the dashboard served | low | only an undecided head; asked directly; marked after the root's copy |
+| Three publishers at once could still both pass the stale lock | low | not fixed: three at once, from one person's pages |
+
+**What does not hold, said plainly.** The root's ordinary user, if a domain ever took it
+over, still writes every domain's checkouts and passes on the dashboard's clicks (starting
+and stopping workspaces). What the signing and `vouched()` now guarantee is narrower: it
+cannot forge a workspace's spawn or close, and cannot point the host at another domain's VM.
+The docs said more than that; they say this now.
+
+**Checked and found sound** by the reviewers: the v2 signature (unambiguous bytes, HMAC with
+`timingSafeEqual`, freshness), every argument reaching the host as an argv element (no `--`
+or leading `-` gets through the validators), keys on tmpfs in the VM only, the approval
+page's issue token over the exact digest with no TOCTOU, the Markdown preview building DOM
+nodes only, the dashboard's POST routes behind the cookie, Host, Sec-Fetch-Site and custom
+header checks, per-domain stats and events (each domain sees only its own), and
+`git-urls.ts` reaching only the domain's own mirrors.
+
