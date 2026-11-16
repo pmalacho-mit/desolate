@@ -3,7 +3,7 @@
 // workspace its name belongs to (section 4.4: v2's ingress host check, turned from a filter
 // into a router), and the egress relay learns which host an outbound connection wants.
 // Pure functions over a Buffer, so they are unit-tested without a socket.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Sniffed =
   | { kind: "tls"; name: string | null }

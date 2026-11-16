@@ -18,7 +18,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { isBranch, isSlug, parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 /** Where the VM's key is, inside the VM (and its devcontainer, which binds /run/desolate). */
 export const IDENTITY_FILE = "/run/desolate/identity";

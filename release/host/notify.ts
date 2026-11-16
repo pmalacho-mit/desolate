@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process";
 import { printable } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Notice = { title: string; body: string };
 
