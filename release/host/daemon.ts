@@ -17,6 +17,7 @@ import { printable } from "../shared/text.ts";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as os from "node:os";
+import type { Size } from "../shared/size.ts";
 import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Server, Socket } from "node:net";
@@ -646,7 +647,26 @@ const serve = async () => {
     sentAt = Date.now();
   };
 
+  /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
+   *  running workspaces, with the new one's (its domain's size, else the stack's), within
+   *  85% of this Mac's (no fixed number of workspaces, but not past what the Mac has). */
+  const roomFor = async (domain: string): Promise<string | null> => {
+    try {
+      const { stackDefaults } = await import("./workspaces.ts");
+      const { merge } = await import("../shared/size.ts");
+      const all = await rootctl<{ slug: string; size?: Partial<Size>; workspaces: { vm: string; size?: Partial<Size> }[] }[]>("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
+      const up = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+      let given = 0;
+      for (const d of all) for (const w of d.workspaces) if (up.has(w.vm)) given += Number(w.size?.memoryMiB ?? stackDefaults().memoryMiB) || 0;
+      const next = merge(all.find((d) => d.slug === domain)?.size, stackDefaults()).memoryMiB;
+      const mac = Math.floor(os.totalmem() / 1048576);
+      return given + next > mac * 0.85 ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)` : null;
+    } catch {
+      return null;
+    }
+  };
   const runAction = async (action: { id: string; kind: unknown; args: unknown }) => {
+    let spawning: string | null = null;
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
     const report = (lines: string[], done?: number) => rootHttp("POST", "/host/progress", { id: action.id, lines, ...(done === undefined ? {} : { done: true, code: done }) }).catch(() => {});
@@ -661,6 +681,14 @@ const serve = async () => {
       if (why) {
         log(`refused a workspace's request (${String(action.kind)}): ${why}`);
         return void report([`refused: ${why}`], 77);
+      }
+      if (signed!.op === "spawn") {
+        // Room on this Mac: the memory given to running workspaces, and the new one's, within
+        // most of the Mac's (no fixed number of workspaces; but not past what it has).
+        const room = await roomFor(signed!.domain);
+        if (room) return void report([`refused: ${room}`], 75);
+        (await import("./spawn.ts")).begin(signed!.domain);
+        spawning = signed!.domain;
       }
     }
     log(`dashboard: desolate ${argv.join(" ")}`);
@@ -678,6 +706,7 @@ const serve = async () => {
     child.stderr!.on("data", take);
     void report([]);
     child.on("close", (code) => {
+      if (spawning) void import("./spawn.ts").then((m) => m.end(spawning!));
       if (flushing) clearTimeout(flushing);
       void report(pending.splice(0), code ?? 1).then(() => tellRoot().catch(() => {}));
     });

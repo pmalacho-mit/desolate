@@ -96,6 +96,33 @@ describe("T1 the host's checks before it runs one", () => {
     const other = { ...close, name: "w9", nonce: "04".repeat(16) };
     assert.match(String(host.check({ ...other, mac: sign(KEY, other) }, exists, now)), /a person started it/);
   });
+  it("a request run once stays run, on disk: a restart of the daemon does not run it again", () => {
+    const r = spawnRequest({ name: "once", nonce: "07".repeat(16) });
+    const signed = signedOf("spawn", asArgs(r, sign(KEY, r)))!;
+    assert.equal(host.check(signed, exists, now), null, "the control: run");
+    const ledger = JSON.parse(fs.readFileSync(path.join(home, "state", "spawn.json"), "utf8")) as { used: Record<string, number> };
+    assert.ok(ledger.used[signed.mac], "its signature is kept on disk");
+    assert.match(String(host.check(signed, exists, now)), /already run/);
+  });
+  it("at most three spawns of a domain at once", () => {
+    for (let n = 0; n < host.MOST_AT_ONCE; n++) host.begin("acme");
+    const r = spawnRequest({ name: "fourth", nonce: "08".repeat(16) });
+    assert.match(String(host.check(signedOf("spawn", asArgs(r, sign(KEY, r)))!, exists, now)), /already has 3 workspaces being started/);
+    for (let n = 0; n < host.MOST_AT_ONCE; n++) host.end("acme");
+    const again = spawnRequest({ name: "fourth", nonce: "09".repeat(16) });
+    assert.equal(host.check(signedOf("spawn", asArgs(again, sign(KEY, again)))!, exists, now), null, "the control: one ended, the next runs");
+  });
+  it("a close is the parent's that asked, not a later workspace's of the same name", () => {
+    host.recordStarted("acme", "child", "w1");
+    const close = { op: "close" as const, domain: "acme", parent: "w1", name: "child", at, nonce: "0a".repeat(16) };
+    // w1 is removed and made again: a new key under the same name.
+    const keyFile = path.join(home, "state", "workspace-keys", vm);
+    fs.writeFileSync(keyFile, `${"cd".repeat(32)}\n`);
+    const later = { ...close, nonce: "0b".repeat(16) };
+    assert.match(String(host.check({ ...later, mac: sign("cd".repeat(32), later) }, exists, now)), /started by an earlier workspace named w1/);
+    fs.writeFileSync(keyFile, `${KEY}\n`);
+    assert.equal(host.check({ ...close, mac: sign(KEY, close) }, exists, now), null, "the control: the parent itself closes it");
+  });
   it("refuses a request the root signed itself, with no key of the parent's", () => {
     const r = spawnRequest({ parent: "w2", nonce: "05".repeat(16) });
     assert.match(String(host.check({ ...r, mac: sign("ee".repeat(32), r) }, exists, now)), /no key for acme\/w2/);
