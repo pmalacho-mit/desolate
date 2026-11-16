@@ -26,10 +26,15 @@ const LEDGER = () => path.join(paths.state, "spawn.json");
 type Ledger = { max: Record<string, number>; started: Record<string, { parent: string; at: string; parentKey?: string }>; used: Record<string, number> };
 const ledger = (): Ledger => {
   const value = readJson<Partial<Ledger>>(LEDGER(), {});
-  return { max: value.max ?? {}, started: value.started ?? {}, used: value.used ?? {} };
+  return { max: value.max ?? {}, started: value.started ?? {}, used: readJson<Record<string, number>>(USED(), {}) };
 };
+/** The requests run, in a file of their own that only the daemon writes: spawn.json is also
+ *  written by the CLI (a started record, a limit), and one whole-file write must not undo
+ *  another's (review of the fixes). */
+const USED = () => path.join(paths.state, "spawn-used.json");
+const saveUsed = (used: Record<string, number>) => writeJson(USED(), used, 0o600);
 const fingerprint = (key: string | null) => (key ? createHash("sha256").update(key).digest("hex").slice(0, 16) : null);
-const save = (value: Ledger) => writeJson(LEDGER(), value, 0o600);
+const save = (value: Ledger) => writeJson(LEDGER(), { max: value.max, started: value.started }, 0o600);
 
 export const keyOf = (vm: string): string | null => {
   try {
@@ -83,6 +88,8 @@ export const recordStarted = (domain: string, workspace: string, parent: string)
 const running = new Map<string, number>();
 export const MOST_AT_ONCE = 3;
 export const begin = (domain: string) => running.set(domain, (running.get(domain) ?? 0) + 1);
+/** Spawns under way now, every domain's. */
+export const underWay = () => [...running.values()].reduce((a, b) => a + b, 0);
 export const end = (domain: string) => running.set(domain, Math.max(0, (running.get(domain) ?? 1) - 1));
 export const parentOf = (domain: string, workspace: string): string | null => ledger().started[`${domain}/${workspace}`]?.parent ?? null;
 /** The workspaces of a domain a workspace started that still exist (as VMs this host has). */
@@ -110,6 +117,10 @@ export const check = (r: Signed & { mac: string }, exists: (vm: string) => boole
     if (record.parentKey && record.parentKey !== fingerprint(keyOf(workspaceVmName(INSTANCE, r.domain, r.parent)))) return `${r.domain}/${r.name} was started by an earlier workspace named ${r.parent}, since removed: only a person removes it now`;
   }
   value.used[r.mac] = now;
-  save(value);
+  saveUsed(value.used);
+  // Counted as under way in the same step as the check: a burst of requests, each awaiting
+  // something before it was counted, all saw none under way (review of the fixes). The
+  // caller ends it (end()) however the spawn ends.
+  if (r.op === "spawn") begin(r.domain);
   return null;
 };

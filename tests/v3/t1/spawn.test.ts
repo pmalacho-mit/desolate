@@ -78,6 +78,7 @@ describe("T1 the host's checks before it runs one", () => {
     const r = spawnRequest({ nonce: "01".repeat(16) });
     const signed = signedOf("spawn", asArgs(r, sign(KEY, r)))!;
     assert.equal(host.check(signed, exists, now), null, "allowed: no limit unless the person set one");
+    host.end("acme");
     assert.match(String(host.check(signed, exists, now)), /already run/, "a replay");
     const off = spawnRequest({ name: "third", nonce: "06".repeat(16) });
     const offSigned = signedOf("spawn", asArgs(off, sign(KEY, off)))!;
@@ -89,6 +90,7 @@ describe("T1 the host's checks before it runs one", () => {
     assert.match(String(host.check(signedOf("spawn", asArgs(next, sign(KEY, next)))!, exists, now)), /its limit/);
     host.setMax("acme", null);
     assert.equal(host.check(offSigned, exists, now), null, "the control: the same request, with the limit gone");
+    host.end("acme");
   });
   it("closes only what the asking workspace started", () => {
     const close = { op: "close" as const, domain: "acme", parent: "w1", name: "helper", at, nonce: "03".repeat(16) };
@@ -100,17 +102,23 @@ describe("T1 the host's checks before it runs one", () => {
     const r = spawnRequest({ name: "once", nonce: "07".repeat(16) });
     const signed = signedOf("spawn", asArgs(r, sign(KEY, r)))!;
     assert.equal(host.check(signed, exists, now), null, "the control: run");
-    const ledger = JSON.parse(fs.readFileSync(path.join(home, "state", "spawn.json"), "utf8")) as { used: Record<string, number> };
-    assert.ok(ledger.used[signed.mac], "its signature is kept on disk");
+    const used = JSON.parse(fs.readFileSync(path.join(home, "state", "spawn-used.json"), "utf8")) as Record<string, number>;
+    assert.ok(used[signed.mac], "its signature is kept on disk");
+    host.end("acme");
     assert.match(String(host.check(signed, exists, now)), /already run/);
   });
   it("at most three spawns of a domain at once", () => {
-    for (let n = 0; n < host.MOST_AT_ONCE; n++) host.begin("acme");
+    // A burst: each passes the check and is counted as it passes; the fourth is refused.
+    for (let n = 0; n < host.MOST_AT_ONCE; n++) {
+      const each = spawnRequest({ name: `burst${n}`, nonce: `1${n}`.repeat(16) });
+      assert.equal(host.check(signedOf("spawn", asArgs(each, sign(KEY, each)))!, exists, now), null);
+    }
     const r = spawnRequest({ name: "fourth", nonce: "08".repeat(16) });
     assert.match(String(host.check(signedOf("spawn", asArgs(r, sign(KEY, r)))!, exists, now)), /already has 3 workspaces being started/);
     for (let n = 0; n < host.MOST_AT_ONCE; n++) host.end("acme");
     const again = spawnRequest({ name: "fourth", nonce: "09".repeat(16) });
     assert.equal(host.check(signedOf("spawn", asArgs(again, sign(KEY, again)))!, exists, now), null, "the control: one ended, the next runs");
+    host.end("acme");
   });
   it("a close is the parent's that asked, not a later workspace's of the same name", () => {
     host.recordStarted("acme", "child", "w1");

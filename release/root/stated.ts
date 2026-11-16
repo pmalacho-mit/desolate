@@ -329,7 +329,7 @@ const act = (kind: string, args: Record<string, string>, from: { signed?: boolea
     // The oldest finished one goes: never one still waiting for the host (a flood of a
     // domain's requests pushed others', and the person's clicks, out before they ran: audit).
     if (actions.length > 50) {
-      const done = actions.findIndex((a) => a.state !== "queued");
+      const done = actions.findIndex((a) => a.state === "done" || a.state === "failed");
       if (done >= 0) actions.splice(done, 1);
       else if (actions.length > 1000) actions.shift();
     }

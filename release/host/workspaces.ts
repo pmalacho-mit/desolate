@@ -231,9 +231,11 @@ export const up = async (domain: string | undefined, options: { name?: string; c
   // (The domain, whether it has a template to make, and the plan, which is two small files:
   // asks of the root, about 0.2 s each. No network: --fetch is its own phase, above.)
   phase("asked the root");
+  let made = false;
   try {
     if (template) await b.clone(template, specOf(plan, view.repos));
     else await b.create(specOf(plan, view.repos));
+    made = true;
     await b.start(plan.vm);
     phase("VM booted");
     ({ editorDown, devcontainer } = await startServices(plan));
@@ -243,9 +245,11 @@ export const up = async (domain: string | undefined, options: { name?: string; c
     const { disconnectWorkspace } = await import("./daemon.ts");
     await disconnectWorkspace(plan.vm).catch(() => {});
     await rootctl("proxy.stop", { vm: plan.vm }, { quiet: true }).catch(() => {});
-    await b.destroy(plan.vm).catch(() => {});
+    // Only a VM this run made (one that appeared between the check above and the create is
+    // not this workspace's to destroy).
+    if (made) await b.destroy(plan.vm).catch(() => {});
     await rootctl("workspace.remove", { domain, name: plan.workspace }, { quiet: true }).catch(() => {});
-    (await import("./spawn.ts")).forget(domain, plan.workspace);
+    if (made) (await import("./spawn.ts")).forget(domain, plan.workspace);
     throw error;
   }
   await rootctl("workspace.state", { domain, name: plan.workspace, state: "up" }, { quiet: true });
@@ -313,7 +317,7 @@ export const reconnectRunning = async (): Promise<number> => {
     for (const w of d.workspaces) {
       // A record naming a VM that is not its own workspace's (the root's word, checked) gets
       // no proxy and no link: it would give one domain's VM another domain's rules.
-      if (!running.has(w.vm) || w.domain !== d.slug || w.vm !== workspaceVmName(INSTANCE, d.slug, w.workspace)) continue;
+      if (!running.has(w.vm) || w.domain !== d.slug || !isOwnVm(d.slug, w)) continue;
       await ensureProxyUser(w.domain);
       const proxy = await rootctl<{ socket: string }>("proxy.start", { vm: w.vm, domain: w.domain, workspace: w.workspace }, { quiet: true });
       await connectWorkspace({ ...w, proxy: proxy.socket });
@@ -331,6 +335,9 @@ export const reconnectRunning = async (): Promise<number> => {
  *  is where every domain's data is parsed, and a VM named in its answer is a VM the host
  *  stops, starts or destroys (audit, 2026-11-16: an answer naming another domain's VM would
  *  have had it removed). */
+/** Whether a record of the root's names its own workspace's VM, in that domain. */
+export const isOwnVm = (domain: string, w: { domain?: unknown; workspace: unknown; vm: unknown }) =>
+  (w.domain === undefined || w.domain === domain) && isSlug(w.workspace) && w.vm === workspaceVmName(INSTANCE, domain, w.workspace);
 export const vouched = <W extends { domain: string; workspace: string; vm: string }>(w: W, domain: string, workspace?: string): W => {
   if (w.domain !== domain || (workspace !== undefined && w.workspace !== workspace) || !isSlug(w.workspace) || w.vm !== workspaceVmName(INSTANCE, domain, w.workspace))
     refuse(`the root's answer about ${domain}/${workspace ?? w.workspace} does not name that workspace's own VM`, "desolate doctor; if it persists, the root VM is not well: desolate bootstrap");

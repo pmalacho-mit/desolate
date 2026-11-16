@@ -39,10 +39,11 @@ const readSecretLine = (): Promise<string> =>
 /** A domain that has secrets has a CA its workspaces must trust: the running ones take it
  *  now, the others when they start. */
 const trustCa = async (domain: string) => {
-  const d = await rootctl<{ workspaces: { vm: string }[] }>("domain.show", { slug: domain }, { quiet: true });
+  const d = await rootctl<{ workspaces: { vm: string; workspace: string; domain?: string }[] }>("domain.show", { slug: domain }, { quiet: true });
   const b = backend();
   const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
-  for (const w of d.workspaces) if (running.has(w.vm)) await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/trust-ca.sh`], { root: true, timeoutMs: 120_000 });
+  const { isOwnVm } = await import("./workspaces.ts");
+  for (const w of d.workspaces) if (running.has(w.vm) && isOwnVm(domain, w)) await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/trust-ca.sh`], { root: true, timeoutMs: 120_000 });
 };
 
 /** --repo, given once or more. */

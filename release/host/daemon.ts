@@ -703,10 +703,14 @@ const serve = async () => {
       let given = 0;
       for (const d of all) for (const w of d.workspaces) if (up.has(w.vm)) given += Number(w.size?.memoryMiB ?? stackDefaults().memoryMiB) || 0;
       const next = merge(all.find((d) => d.slug === domain)?.size, stackDefaults()).memoryMiB;
+      // Every spawn under way (this one among them) counts as a VM of that size: they are not
+      // running yet, and a burst of them all found the same room (review of the fixes).
+      const coming = (await import("./spawn.ts")).underWay() * next;
       const mac = Math.floor(os.totalmem() / 1048576);
-      return given + next > mac * 0.85 ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)` : null;
-    } catch {
-      return null;
+      return given + coming > mac * 0.85 ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)` : null;
+    } catch (error) {
+      // Not known is not room (P6).
+      return `the room on this Mac could not be worked out: ${printable((error as Error).message, 200)}`;
     }
   };
   const runAction = async (action: { id: string; kind: unknown; args: unknown }) => {
@@ -727,16 +731,33 @@ const serve = async () => {
         return void report([`refused: ${why}`], 77);
       }
       if (signed!.op === "spawn") {
-        // Room on this Mac: the memory given to running workspaces, and the new one's, within
-        // most of the Mac's (no fixed number of workspaces; but not past what it has).
-        const room = await roomFor(signed!.domain);
-        if (room) return void report([`refused: ${room}`], 75);
-        (await import("./spawn.ts")).begin(signed!.domain);
+        // Counted as under way by check(); ended however this ends. Room on this Mac: the
+        // memory given to running workspaces and to those under way, within most of the Mac's
+        // (no fixed number of workspaces; but not past what it has).
         spawning = signed!.domain;
+        const room = await roomFor(signed!.domain);
+        if (room) {
+          (await import("./spawn.ts")).end(spawning);
+          return void report([`refused: ${room}`], 75);
+        }
       }
     }
+    const ended = () => {
+      if (spawning) void import("./spawn.ts").then((m) => m.end(spawning!));
+      spawning = null;
+    };
     log(`dashboard: desolate ${argv.join(" ")}`);
-    const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", path.join(RELEASE_DIR, "host", "cli.ts"), ...argv], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" } });
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", path.join(RELEASE_DIR, "host", "cli.ts"), ...argv], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" } });
+    } catch (error) {
+      ended();
+      return void report([`could not run: ${printable((error as Error).message, 200)}`], 1);
+    }
+    child.on("error", (error) => {
+      ended();
+      void report([`could not run: ${printable(error.message, 200)}`], 1);
+    });
     let pending: string[] = [];
     let flushing: NodeJS.Timeout | null = null;
     const take = (chunk: Buffer) => {
@@ -750,7 +771,7 @@ const serve = async () => {
     child.stderr!.on("data", take);
     void report([]);
     child.on("close", (code) => {
-      if (spawning) void import("./spawn.ts").then((m) => m.end(spawning!));
+      ended();
       if (flushing) clearTimeout(flushing);
       void report(pending.splice(0), code ?? 1).then(() => tellRoot().catch(() => {}));
     });
@@ -926,9 +947,12 @@ const serve = async () => {
   try {
     const domains = await rootctl<{ slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]>("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
     const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+    const { isOwnVm } = await import("./workspaces.ts");
     for (const d of domains)
       for (const w of d.workspaces)
-        if (running.has(w.vm)) {
+        // The root's word, checked: a record naming another domain's VM gets no link and no
+        // proxy (it would give that VM this domain's names and rules: review of the fixes).
+        if (running.has(w.vm) && w.domain === d.slug && isOwnVm(d.slug, w)) {
           const proxy = await rootctl<{ socket: string }>("proxy.start", { vm: w.vm, domain: w.domain, workspace: w.workspace }, { quiet: true, timeoutMs: 60_000 });
           register({ vm: w.vm, domain: w.domain, workspace: w.workspace, proxy: proxy.socket, checkouts: w.checkouts } as Registered);
         }

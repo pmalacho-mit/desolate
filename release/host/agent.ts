@@ -69,7 +69,8 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
   const b = backend();
   const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
   const rows: (Agent & { workspace: string })[] = [];
-  await Promise.all(all.filter((d) => !domain || d.slug === domain).flatMap((d) => d.workspaces.filter((w) => (!workspace || w.workspace === workspace) && running.has(w.vm)).map(async (w) => {
+  const { isOwnVm } = await import("./workspaces.ts");
+  await Promise.all(all.filter((d) => !domain || d.slug === domain).flatMap((d) => d.workspaces.filter((w) => (!workspace || w.workspace === workspace) && running.has(w.vm) && isOwnVm(d.slug, w)).map(async (w) => {
     const listed = await b.exec(w.vm, [...HOLDER(), "list"], { timeoutMs: 30_000 });
     try {
       // The VM's account of its agents is the VM's (an agent is root there): only rows of the
