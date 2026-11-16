@@ -1,6 +1,7 @@
 // Every operation the host can ask of the root. A fixed table: the CLI channel carries an
 // operation's name and JSON arguments, never a command line.
 import { printable } from "../shared/text.ts";
+import { refuse } from "../shared/exit.ts";
 import { pendingIn } from "./approvals.ts";
 import { takeHashed } from "../shared/copy.ts";
 import { spawnSync } from "node:child_process";
@@ -23,6 +24,8 @@ import { proxyUserOf } from "./proxy/as-proxy.ts";
 import { SECRETS_DIR } from "./proxy/secret-store.ts";
 import * as domains from "./domains.ts";
 import { branchesOf, refusalsOf } from "./outbox.ts";
+import * as issues from "./issues.ts";
+import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
 import { landedFor, pushedList } from "./pushed.ts";
 import * as proxy from "./proxy/manage.ts";
@@ -73,6 +76,23 @@ export const ops: Record<string, Op> = {
   },
   async "domain.size"(args) {
     return domains.setSize(args.slug, args.size);
+  },
+  // The issues waiting for the person's approval on the Mac, for its terminal
+  // (`desolate issue publish`); and what became of one.
+  async "issue.list"() {
+    return issues.list();
+  },
+  async "issue.freeze"(args) {
+    const result = issues.toApprove(args.id);
+    if ("error" in result) refuse(result.error, "desolate issues");
+    return result;
+  },
+  async "issue.done"(args) {
+    const issue = issues.get(args.id) ?? refuse("there is no such issue", "desolate issues");
+    const where = args.url === undefined ? null : issueUrl(issue.repo, args.url);
+    const result = where ? issues.published(issue.id, where) : issues.backToDraft(issue.id, typeof args.refused === "string" ? args.refused : "not published");
+    if ("error" in result) refuse(result.error, "desolate issues");
+    return result;
   },
   async "domain.spawn"(args) {
     return domains.setSpawn(args.slug, args.max);

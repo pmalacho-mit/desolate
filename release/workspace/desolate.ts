@@ -10,6 +10,8 @@
 //   desolate close <workspace>             remove one this workspace started (only if it is clean)
 //   desolate domain stats [--json]         this domain's workspaces, who started each, its limit
 //   desolate events [--follow] [--all]     what happens in this domain, as JSON lines
+//   desolate issue offer --title <t> [--body <b> | --body-file <f>] [--label <l>]... [--repo <owner/repo>]
+//                                          a GitHub issue, for the person to edit and publish
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -121,6 +123,30 @@ if (verb === "fetch") {
   process.stdout.write(verb === "spawn"
     ? `asked for ${workspace.domain}/${r.name}: the host starts it once it has checked that this workspace asked${r.op === "spawn" && r.command.length ? ", then runs the command in it as its agent" : ""}. It takes a minute or so.\nIt is labelled as started by ${workspace.workspace}. Follow it: desolate events --follow; see it: desolate domain stats. Remove it when done: desolate close ${r.name}\n`
     : `asked to close ${workspace.domain}/${r.name}: the host removes it if nothing in it would be lost (its branches stay). desolate events --follow says when it is gone, or why not.\n`);
+} else if (verb === "issue" && args[0] === "offer") {
+  // A draft for the person: they read it on the dashboard, may edit it, and publish it as
+  // themselves, approving it on the Mac. Nothing here reaches GitHub.
+  const values: Record<string, string[]> = {};
+  const rest = args.slice(1);
+  for (let i = 0; i < rest.length; i += 2) {
+    const flag = rest[i]!;
+    if (!["--title", "--body", "--body-file", "--label", "--repo"].includes(flag) || rest[i + 1] === undefined) fail(`'${flag}' is not understood here`, 'desolate issue offer --title "..." [--body "..." | --body-file <file>] [--label <label>]... [--repo <owner/repo>]');
+    (values[flag] ??= []).push(rest[i + 1]!);
+  }
+  if (!values["--title"]) fail("an issue needs a title", 'desolate issue offer --title "..." --body-file notes.md');
+  let body = values["--body"]?.[0] ?? "";
+  if (values["--body-file"]) {
+    try {
+      body = fs.readFileSync(values["--body-file"][0]!, "utf8");
+    } catch (error) {
+      fail(`cannot read ${values["--body-file"][0]}: ${(error as Error).message}`, "name a file this workspace can read");
+    }
+  }
+  const title = values["--title"]![0]!;
+  const repo = await repoOf(values["--repo"]?.[0]);
+  const reply = await request({ op: "issue", repo, workspace: workspace.workspace, title, body, labels: values["--label"] ?? [] });
+  if (reply.ok !== true) fail(`the root did not take the issue: ${String(reply.error)}`, String(reply.fix ?? "desolate issue offer --help"));
+  process.stdout.write(`offered an issue for ${repo}: "${title}"${values["--label"] ? `, labelled ${values["--label"].join(", ")}` : ""}.\nThe person reads it on the dashboard, may edit it, and publishes it as themselves (or not). desolate events --follow says when it is published, with its page.\n`);
 } else if (verb === "domain" && args[0] === "stats") {
   const file = path.join(INBOX, "domain.json");
   let stats: unknown = null;
@@ -170,6 +196,6 @@ if (verb === "fetch") {
     process.stdout.write(`${repo}: ${result.branches} branch(es) written for the root${result.bundled ? "" : " (nothing new to bundle)"}.\n`);
   }
 } else {
-  process.stdout.write("desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n  desolate spawn [--name <w>] [--branch <b>] [-- <command...>]\n                                            another workspace in this domain, the command as its agent\n  desolate close <workspace>                remove one this workspace started, if nothing in it would be lost\n  desolate domain stats [--json]            this domain's workspaces, who started each, its limit, the Mac\n  desolate events [--follow] [--all]        what happens in this domain, one JSON object per line\n");
+  process.stdout.write("desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n  desolate spawn [--name <w>] [--branch <b>] [-- <command...>]\n                                            another workspace in this domain, the command as its agent\n  desolate close <workspace>                remove one this workspace started, if nothing in it would be lost\n  desolate domain stats [--json]            this domain's workspaces, who started each, its limit, the Mac\n  desolate events [--follow] [--all]        what happens in this domain, one JSON object per line\n  desolate issue offer --title <t> [--body <b> | --body-file <f>] [--label <l>]... [--repo <owner/repo>]\n                                            a GitHub issue, for the person to edit and publish\n");
   process.exit(verb && verb !== "help" ? 64 : 0);
 }

@@ -286,6 +286,35 @@ host:       the daemon checks the signature against w1's key, its age, that it w
 - **Outliving.** A workspace whose starter has been removed is flagged (`desolate list`,
   the dashboard's "Needs you"). It is not removed for it.
 
+## Issues a workspace offers
+
+```
+inside a workspace:  desolate issue offer --title ... --body-file ... --label ...
+root:                rootd checks every field (shared/issues.ts) and keeps it as offered
+dashboard:           you edit it; Publish freezes it ("approving")
+Mac:                 the approval page, or `desolate issue publish <id>`, shows it; you confirm;
+                       gh issue create --repo <r> --title=<t> --body-file <f> --label=<l>...
+```
+
+- **Checked before kept:** a title of at most 256 characters and a body of at most 64 KiB,
+  with no control, bidirectional or invisible characters (newlines and tabs in the body
+  are fine); at most 20 labels, each at most 50 characters with no comma (gh would read
+  it as two). At most 50 waiting per domain.
+- **Why the Mac approves it:** publishing acts as you on GitHub. The root's ordinary user,
+  which parses every domain's data, keeps the drafts and could change one; so the host shows
+  you the text and creates the issue from that text alone. The approval page's token is over
+  the issue's id and every word: a draft that changed after the page showed it is refused
+  (T1 `approve-web`).
+- **On the Mac:** `gh` is run with each field one argument, `--title=` and `--label=` in
+  their joined form (so a value that starts with a dash is still a value), and the body in
+  a file under `~/.desolate/state`, removed after. `DESOLATE_GH` names another `gh`. The page
+  it answers with is kept only if it is `https://github.com/<repo>/issues/<n>`.
+- **The preview** (`shared/ui/markdown.js`): headings, emphasis, code, lists and task
+  lists, tables, quotes, rules and links, built as elements with text nodes. HTML in the
+  Markdown is shown as text. A link keeps its address only if it is http, https or mailto, and
+  opens with no opener and no referrer. An image is drawn as a link to itself, never loaded.
+  Its work is bounded: 64 KiB of unclosed emphasis is parsed in milliseconds (T1 `issues`).
+
 ## What works today, and what does not
 
 "T2" is the fake backend: containers standing in for VMs, **not isolated**, good for
@@ -322,6 +351,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
 | Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`agent.sh`); on the M1, `claude.sh` with a stand-in token | `issues.sh` and `suede.sh` not run |
 | Workspaces that start workspaces in their own domain (`desolate spawn`, `close`, `domain stats`, `events` inside one): signed by the workspace, checked by the host | yes | T1; T2 (`16-spawn`: the limit, the labels, stats and events, a forged request refused beside a signed one run, close refused with uncommitted work) | on real VMs (vz) |
+| Issues offered by a workspace (`desolate issue offer`): edited on the dashboard with a Markdown preview, published by the host's `gh` after you approve the exact text on the Mac | yes | T1 (fields, the preview, the approval page's token); T2 (`17-issues`: every field to a stand-in gh byte for byte, not without confirming) | against github.com |
 | After a push: the pull request's page on GitHub; "merged into <base>" once the mirror shows it | yes | T1 (the link; a merge, a squash, a rebase), T2 (a squash on the stand-in forge) | the link has not been opened on github.com; the 15-minute fetch not watched in real use |
 
 ## Layout

@@ -10,8 +10,8 @@
 </head>
 <body>
 <header>
-  <h1>Pushes waiting for you</h1>
-  <p class="lede">Each push below leaves for the remote only if you approve it here. What it names is read from the text that gets signed; what it would send was worked out in the root by desolate's reviewer.</p>
+  <h1>Waiting for you</h1>
+  <p class="lede">Each push below leaves for the remote only if you approve it here. What it names is read from the text that gets signed; what it would send was worked out in the root by desolate's reviewer. Each issue below is created on GitHub, as you, with exactly the text shown, only if you publish it here.</p>
 </header>
 <main id="list" aria-live="polite"></main>
 <p id="status" class="status"></p>
@@ -27,6 +27,22 @@
     <div class="actions">
       <span class="arm"><button type="button" class="approve" disabled>Approve push</button></span>
       <button type="button" class="refuse">Refuse</button>
+      <span class="hint"></span>
+    </div>
+  </section>
+</template>
+<template id="issue-card">
+  <section class="card issue">
+    <dl class="names">
+      <dt>a new issue on</dt><dd class="repo"></dd>
+      <dt>title</dt><dd class="title"></dd>
+      <dt>labels</dt><dd class="labels"></dd>
+    </dl>
+    <p class="from"></p>
+    <pre class="body"></pre>
+    <div class="actions">
+      <span class="arm"><button type="button" class="approve" disabled>Publish issue</button></span>
+      <button type="button" class="refuse">Not now</button>
       <span class="hint"></span>
     </div>
   </section>

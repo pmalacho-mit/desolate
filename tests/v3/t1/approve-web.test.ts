@@ -13,7 +13,7 @@ import { after, before, describe, it } from "node:test";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-approve-"));
 process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31599";
-const { approveToken, embedAddress, handler, pushToken } = await import("../../../release/host/approve-web.ts");
+const { approveToken, embedAddress, handler, issueToken, pushToken } = await import("../../../release/host/approve-web.ts");
 const { formatApproval } = await import("../../../release/shared/approval.ts");
 
 const NAME = "desolate-approve.localhost";
@@ -23,6 +23,9 @@ const message = formatApproval(push);
 // What the root's user lists: a test can change it under the page, as a compromised one could.
 let listed = [{ message, at: "2026-11-12T00:00:00Z" }];
 const approved: string[] = [];
+let issuesListed: unknown[] = [];
+const published: string[] = [];
+const notNow: string[] = [];
 const refused: string[] = [];
 let server: Server;
 let port = 0;
@@ -33,6 +36,12 @@ before(async () => {
     summary: async () => ({ ok: true, commits: [{ commit: "a".repeat(40), subject: "<img src=x onerror=alert(1)>", author: "agent" }], diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n" }),
     approve: async (m) => void approved.push(m),
     refuse: async (m) => void refused.push(m),
+    issues: async () => issuesListed,
+    publishIssue: async (issue) => {
+      published.push(issue.title);
+      return `https://github.com/${issue.repo}/issues/7`;
+    },
+    refuseIssue: async (issue) => void notNow.push(issue.id),
   }, () => {}));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   port = (server.address() as AddressInfo).port;
@@ -183,5 +192,28 @@ describe("T1 the approval page", () => {
     assert.equal(approved.length, before);
     const fromFrame = await call("POST", "/approve", { ...embedded, origin: ORIGIN, "content-type": "application/json" }, JSON.stringify(good()));
     assert.equal(fromFrame.status, 200, "control: the framed page's own click signs");
+  });
+
+  it("an issue is published only as the page showed it: another word in it by the time of the click, and nothing is", async () => {
+    const issue = { id: "mh0abc12-0123abcd", domain: "dev", workspace: "w1", repo: "acme/widgets", title: "Fix <img src=x onerror=alert(1)>", body: "Steps: `$(id)`\n\n<script>alert(1)</script>", labels: ["bug", "desolate:run"], at: "2026-11-16T00:00:00Z", state: "approving" };
+    issuesListed = [issue, { ...issue, id: "bad", title: "an id that is not one" }, { ...issue, id: "mh0abc12-0123abce", title: "hidden \u202e text" }];
+    const listed = await call("GET", "/issues", asPage());
+    assert.equal(listed.status, 200);
+    const shown = (JSON.parse(listed.body) as { issues: { id: string; token: string; title: string }[] }).issues;
+    assert.deepEqual(shown.map((i) => i.id), [issue.id], "only issues whose every field is one desolate carries");
+    assert.equal(shown[0]!.title, issue.title, "as JSON text; the page sets it as text");
+    const ask = (body: Record<string, unknown>) => call("POST", "/issue", { ...asPage(), origin: ORIGIN, "content-type": "application/json" }, JSON.stringify(body));
+    // The root lists another body under the same id after the page showed it: refused.
+    issuesListed = [{ ...issue, body: "a different body" }];
+    assert.equal((await ask({ id: issue.id, token: shown[0]!.token, do: "publish" })).status, 409);
+    assert.deepEqual(published, []);
+    assert.equal((await call("POST", "/issue", { ...asPage(), origin: "http://evil.localhost:31599", "content-type": "application/json" }, JSON.stringify({ id: issue.id, token: shown[0]!.token, do: "publish" }))).status, 403, "another origin");
+    // Control: the very issue shown, published.
+    issuesListed = [issue];
+    const done = await ask({ id: issue.id, token: issueToken(approveToken(), issue as never), do: "publish" });
+    assert.equal(done.status, 200, done.body);
+    assert.deepEqual(published, [issue.title]);
+    assert.equal((await ask({ id: issue.id, token: shown[0]!.token, do: "refuse" })).status, 200);
+    assert.deepEqual(notNow, [issue.id]);
   });
 });

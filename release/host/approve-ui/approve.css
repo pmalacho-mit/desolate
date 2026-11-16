@@ -45,3 +45,6 @@ button.quiet { padding: 4px 10px; font-size: 13px; }
 /* Syntax colour (shared/ui/highlight.js): each token's colours, for light and dark. */
 pre.diff .hl { display: inline; min-width: 0; color: var(--hl-light, inherit); }
 @media (prefers-color-scheme: dark) { pre.diff .hl { color: var(--hl-dark, inherit); } }
+/* An issue's body: the very Markdown that is sent, as text. */
+.issue pre.body { margin: 8px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.issue .labels code { margin-right: 6px; }

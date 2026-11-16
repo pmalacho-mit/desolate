@@ -9,6 +9,7 @@
 //   offer <repo> <branch>   a bundle is waiting in the outbox
 //   spawn <name> ...        start a workspace in this domain, with a command in it
 //   close <name>            remove one this workspace started, if nothing would be lost
+//   issue <repo> ...        a GitHub issue offered, for the person to edit and publish
 //
 // spawn and close are signed by the asking workspace (shared/spawn.ts). The root cannot check
 // the signature (it does not have the key, by design), so it checks what it can, to answer
@@ -29,6 +30,7 @@ import { HOST_QUEUE } from "./layout.ts";
 import { fetchDomain, take } from "./offers.ts";
 import { drain, inbox, outbox } from "./outbox.ts";
 import { waiting } from "./pushed.ts";
+import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
 
 const RATE = { perMinute: 30 } as const;
@@ -95,7 +97,8 @@ const handle = async (domain: string, repoList: string[], request: Record<string
     return { ok: true };
   }
   if (request.op === "offer") return take(domain, request);
-  return { ok: false, error: "the root takes 'fetch', 'offer', 'spawn' and 'close' from a workspace, and nothing else" };
+  if (request.op === "issue") return issues.offer(domain, repoList, workspaces(domain).map((w) => w.workspace), request);
+  return { ok: false, error: "the root takes 'fetch', 'offer', 'issue', 'spawn' and 'close' from a workspace, and nothing else" };
 };
 
 const log = (line: string) => process.stderr.write(`${new Date().toISOString()} rootd: ${line}\n`);

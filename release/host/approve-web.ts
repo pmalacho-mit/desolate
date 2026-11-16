@@ -37,7 +37,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
 import { parseApproval } from "../shared/approval.ts";
 import type { PushApproval } from "../shared/approval.ts";
-import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME } from "../shared/names.ts";
+import { digestOf as issueDigest, draftOf } from "../shared/issues.ts";
+import type { Issue } from "../shared/issues.ts";
+import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, isSlug } from "../shared/names.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
 
@@ -72,6 +74,16 @@ const cookieName = (token: string) => `desolate_approve_${createHash("sha256").u
  *  nonce by the time of the click, the token no longer matches and nothing is signed. */
 export const pushToken = (token: string, message: string) => createHmac("sha256", Buffer.from(token, "hex")).update(`approve\n${message}`).digest("hex");
 const digestOf = (message: string) => createHash("sha256").update(message).digest("hex");
+/** An issue's own token: over its id and every word the page showed (shared/issues.ts). An
+ *  issue the root lists with other words by the time of the click no longer matches. */
+export const issueToken = (token: string, issue: Issue) => createHmac("sha256", Buffer.from(token, "hex")).update(`publish issue\n${issue.id}\n${issueDigest(issue)}`).digest("hex");
+/** The root's account of an issue, only if every field is one desolate carries. */
+const checkedIssue = (value: unknown): Issue | null => {
+  const v = value as Partial<Issue> | null;
+  const draft = draftOf(v);
+  if (!v || "error" in draft || typeof v.id !== "string" || !/^[0-9a-z]{6,12}-[0-9a-f]{8}$/.test(v.id) || !isSlug(v.domain) || v.state !== "approving") return null;
+  return { ...draft, id: v.id, domain: v.domain, workspace: isSlug(v.workspace) ? v.workspace : "unknown", at: String(v.at ?? ""), state: "approving", edited: v.edited === true };
+};
 
 export const SECURITY: Record<string, string> = {
   "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -118,6 +130,13 @@ export type Backend = {
   approve: (message: string) => Promise<void>;
   /** Take a waiting push off the list: the push that asked is refused. */
   refuse: (message: string) => Promise<void>;
+  /** Issues the person chose to publish on the dashboard, waiting here (the root's word:
+   *  each is checked, and shown as it is). */
+  issues: () => Promise<unknown[]>;
+  /** Create it on GitHub, as the person, with the host's own gh: returns its page. */
+  publishIssue: (issue: Issue) => Promise<string>;
+  /** Not now: back to a draft on the dashboard. */
+  refuseIssue: (issue: Issue) => Promise<void>;
 };
 
 const readBody = (req: IncomingMessage, limit = 4096): Promise<string | null> =>
@@ -208,6 +227,39 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       });
     }
     return json(res, 200, { pending: out });
+  }
+  if (req.method === "GET" && url.pathname === "/issues") {
+    const listed = (await backend.issues().catch(() => [] as unknown[])).map(checkedIssue).filter((i): i is Issue => i !== null);
+    return json(res, 200, { issues: listed.map((issue) => ({ ...issue, token: issueToken(token, issue) })) });
+  }
+  if (req.method === "POST" && url.pathname === "/issue") {
+    if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? ""))) return json(res, 415, { error: "JSON only" });
+    if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`) return json(res, 403, { error: "a request from another origin" });
+    let asked: { id?: unknown; token?: unknown; do?: unknown };
+    try {
+      asked = JSON.parse((await readBody(req)) ?? "") as typeof asked;
+    } catch {
+      return json(res, 400, { error: "not JSON" });
+    }
+    const given = String(asked.token ?? "");
+    if (!/^[0-9a-f]{64}$/.test(given)) return json(res, 403, { error: "not an issue this page showed" });
+    // The issue as the root lists it now; published only if it is the very text the page
+    // showed (the token is over it).
+    const issue = (await backend.issues()).map(checkedIssue).find((i) => i !== null && i.id === asked.id) ?? null;
+    if (!issue) return json(res, 410, { error: "that issue is no longer waiting" });
+    if (!sameSecret(given, issueToken(token, issue))) return json(res, 409, { error: "that issue is not the one this page showed: it changed, so nothing was published; look at it again" });
+    try {
+      if (asked.do === "publish") {
+        const where = await backend.publishIssue(issue);
+        log(`approve page: published an issue on ${issue.repo}: ${where}`);
+        return json(res, 200, { ok: true, url: where });
+      }
+      await backend.refuseIssue(issue);
+      log(`approve page: did not publish the issue ${issue.id} on ${issue.repo}`);
+      return json(res, 200, { ok: true });
+    } catch (error) {
+      return json(res, 502, { error: (error as Error).message });
+    }
   }
   // The diff of a push this page showed: named by its nonce and the token the page was given
   // for its very text, as an approval is.

@@ -24,6 +24,8 @@ Every day: a workspace, your work in it, and its push:
   desolate ui [--open] [--json]                                  the dashboard's address, for your browser
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
+  desolate issues [--json]                                       GitHub issues workspaces offered: edit them on the dashboard
+  desolate issue publish | refuse <id>                           create one on GitHub, as you, once you have read it (or not)
   desolate review <domain> <owner/repo> <branch> [--diff] [--against origin|domain] [--json]
                                                                  what a push would send; --diff: the diff itself
   desolate push <domain> <owner/repo> <branch> --expect <commit> [--allow-default]
@@ -293,6 +295,14 @@ const main = async (argv: string[]): Promise<number> => {
     // process does not pile lines up either, it stops when stdout does.)
     process.stdout.on("error", () => process.exit(0));
     await followEvents(replay, (line) => process.stdout.write(`${forTerminal(line)}\n`), (resume) => process.stdout.once("drain", resume));
+  }
+  if (verb === "issues" || verb === "issue") {
+    const { values, positionals } = flags(rest, {});
+    const issues = await import("./issues.ts");
+    if (verb === "issues") await issues.list(out, values.json === true);
+    else if (positionals[0] === "publish" || positionals[0] === "refuse") await issues.decide(positionals[0], positionals[1], out);
+    else refuse("desolate issue what?", "desolate issues | desolate issue publish <id> | desolate issue refuse <id>", EXIT.usage);
+    return EXIT.ok;
   }
   if (verb === "agent") {
     // `--` ends desolate's own flags: everything after it is the agent's command.
