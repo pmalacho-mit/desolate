@@ -139,7 +139,7 @@ const snapshot = () => {
     hostConnected: Date.now() - hostSeen < 150_000,
     repos: repos.list().map((r) => ({ repo: r.repo, pushable: r.pushable, defaultBranch: r.defaultBranch })),
     domains: list,
-    spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? 0])),
+    spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? null])),
     offers: offers.allOffers(),
     refused: domains.domains().flatMap((d) => refusalsOf(d.slug)),
     approvals: pendingApprovals(),
@@ -198,7 +198,7 @@ const forDomains = (state: Snapshot) => {
     const running = d.workspaces.filter((w) => w.host?.status === "running");
     const stats: Omit<Stats, "at"> = {
       v: 1, domain: d.slug, title: d.title, repos: d.repos,
-      spawn: { max: state.spawnMax[d.slug] ?? 0, used: d.workspaces.filter((w) => w.startedBy).length },
+      spawn: { max: state.spawnMax[d.slug] ?? null, used: d.workspaces.filter((w) => w.startedBy).length },
       mac: state.stack?.mac ?? null,
       running: { workspaces: running.length, memoryMiB: running.reduce((sum, w) => sum + (w.size?.memoryMiB ?? 0), 0) },
       workspaces: d.workspaces.map((w) => ({

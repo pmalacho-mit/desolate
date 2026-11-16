@@ -79,18 +79,20 @@ export const domainCommand = async (args: string[], values: Record<string, unkno
     refuse("add what?", `desolate domain ${first} add --repo <owner>/<repo> | add --secret <NAME> --hosts <host>[,...] [--headers <header>[,...]]`, EXIT.usage);
   }
   if (second === "spawn") {
-    // desolate domain <d> spawn [--max N]: how many workspaces its workspaces may start, at
-    // once. Held here, on the Mac (host/spawn.ts); the root is told, to answer early and show it.
+    // desolate domain <d> spawn [--max N|none]: how many workspaces its workspaces may have
+    // started at once. No limit unless a person sets one; 0 turns it off. Held here, on the Mac
+    // (host/spawn.ts); the root is told, to answer early and show it.
     const spawn = await import("./spawn.ts");
     if (values.max !== undefined) {
-      const max = Number(values.max);
-      if (!Number.isInteger(max) || max < 0 || max > 32) refuse(`--max '${String(values.max)}' is not a number of workspaces`, `desolate domain ${first} spawn --max 2   (0: its workspaces start none)`, EXIT.usage);
+      const max = values.max === "none" ? null : Number(values.max);
+      if (max !== null && (!Number.isInteger(max) || max < 0 || max > 1000)) refuse(`--max '${String(values.max)}' is not a number of workspaces`, `desolate domain ${first} spawn --max 2   (0: none; none: no limit)`, EXIT.usage);
       await rootctl("domain.spawn", { slug: first, max }, { quiet: true });
       spawn.setMax(first, max);
     } else await rootctl("domain.show", { slug: first }, { quiet: true });
     const max = spawn.maxFor(first);
     if (json) return out(JSON.stringify({ domain: first, max }));
-    return out(max === 0 ? `${first}: its workspaces cannot start workspaces (desolate domain ${first} spawn --max <n> lets them)` : `${first}: its workspaces may start up to ${max} workspace(s) at once, in ${first} only, each labelled with who started it. Each one counts until it is removed.`);
+    const how = `in ${first} only, each labelled with who started it`;
+    return out(max === 0 ? `${first}: its workspaces cannot start workspaces (desolate domain ${first} spawn --max none lets them again)` : max === null ? `${first}: its workspaces may start workspaces, ${how}, with no limit (desolate domain ${first} spawn --max <n> sets one; 0 turns it off)` : `${first}: its workspaces may have up to ${max} workspace(s) they started at once, ${how}. Each one counts until it is removed.`);
   }
   if (second === "stats") {
     // What the root last wrote for the domain's workspaces to read (desolate domain stats, in

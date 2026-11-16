@@ -3,7 +3,7 @@
 //
 // Kept in the host's own state (~/.desolate/state), which no VM is shown:
 //   workspace-keys/<vm>   each workspace VM's key: made here, written onto that VM's own disk
-//   spawn.json            each domain's limit, as the person set it here; and which workspace
+//   spawn.json            each domain's limit, if the person set one (none: no limit); which workspace
 //                         started which, as this host started them
 // The root has a copy of each limit, to answer a workspace early and to show it; this one is
 // the one that holds.
@@ -58,11 +58,13 @@ export const forget = (domain: string, workspace: string) => {
   }
 };
 
-export const maxFor = (domain: string) => ledger().max[domain] ?? 0;
-export const setMax = (domain: string, max: number) => {
+/** How many workspaces a domain's workspaces may have started at once. null: no limit, the
+ *  default (a person sets one with desolate domain <d> spawn --max <n>; 0 turns it off). */
+export const maxFor = (domain: string): number | null => ledger().max[domain] ?? null;
+export const setMax = (domain: string, max: number | null) => {
   const value = ledger();
-  if (max > 0) value.max[domain] = max;
-  else delete value.max[domain];
+  if (max === null) delete value.max[domain];
+  else value.max[domain] = max;
   save(value);
 };
 export const recordStarted = (domain: string, workspace: string, parent: string) => {
@@ -86,9 +88,9 @@ export const check = (r: Signed & { mac: string }, exists: (vm: string) => boole
   for (const [mac, at] of used) if (now - at > 30 * 60_000) used.delete(mac);
   if (r.op === "spawn") {
     const max = maxFor(r.domain);
-    if (max === 0) return `${r.domain} does not let its workspaces start workspaces (on the Mac: desolate domain ${r.domain} spawn --max <n>)`;
+    if (max === 0) return `${r.domain} does not let its workspaces start workspaces (on the Mac: desolate domain ${r.domain} spawn --max none)`;
     const live = startedIn(r.domain, exists).length;
-    if (live >= max) return `${r.domain} already has ${live} workspace(s) started by its workspaces, its limit (desolate domain ${r.domain} spawn --max <n>)`;
+    if (max !== null && live >= max) return `${r.domain} already has ${live} workspace(s) started by its workspaces, its limit (desolate domain ${r.domain} spawn --max <n>)`;
   } else {
     const parent = parentOf(r.domain, r.name);
     if (parent !== r.parent) return `${r.domain}/${r.name} was not started by ${r.parent}${parent ? "" : " (a person started it: only a person removes it)"}`;

@@ -16,7 +16,7 @@ import { recordOf, registry } from "./repos.ts";
 /** `env`: the repository whose devcontainer.json is the domain's environment (section 4.5,
  *  way 1). Unset: the first checkout that has one. */
 /** `spawnMax`: how many workspaces its workspaces may start, as the host last said (the host
- *  holds the limit that counts: host/spawn.ts). Unset: none. */
+ *  holds the limit that counts: host/spawn.ts). Unset: no limit. 0: none. */
 export type Domain = { slug: string; title: string; repos: string[]; createdAt: string; env?: string; size?: Partial<Size>; spawnMax?: number };
 
 const file = (slug: string) => path.join(domainPath(slug), "domain.json");
@@ -73,9 +73,10 @@ export const setSize = (slugArg: unknown, sizeArg: unknown) => {
 
 export const setSpawn = (slugArg: unknown, maxArg: unknown) => {
   const d = domain(slugOf(slugArg, "domain"));
-  const max = Number(maxArg);
-  if (!Number.isInteger(max) || max < 0 || max > 32) refuse(`'${String(maxArg)}' is not a number of workspaces`, `desolate domain ${d.slug} spawn --max 2`, EXIT.usage);
-  if (max === 0) delete d.spawnMax;
+  // null (or absent): no limit, the default. 0: its workspaces start none.
+  const max = maxArg === null || maxArg === undefined ? null : Number(maxArg);
+  if (max !== null && (!Number.isInteger(max) || max < 0 || max > 1000)) refuse(`'${String(maxArg)}' is not a number of workspaces`, `desolate domain ${d.slug} spawn --max 2`, EXIT.usage);
+  if (max === null) delete d.spawnMax;
   else d.spawnMax = max;
   writeJson(file(d.slug), d);
   return { domain: d.slug, max };
