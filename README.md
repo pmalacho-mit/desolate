@@ -30,6 +30,7 @@ gh auth login                             # as someone who can add deploy keys t
 git clone --branch release https://github.com/pmalacho-mit/desolate ~/desolate
 mkdir -p ~/.local/bin && ln -sf ~/desolate/cli.sh ~/.local/bin/desolate
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+echo 'source <(desolate completion)' >> ~/.zshrc && source ~/.zshrc   # tab completion
 desolate bootstrap                        # the root VM and the daemon; 5 to 10 minutes the first time
 ```
 

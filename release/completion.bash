@@ -1,5 +1,7 @@
-# Tab completion for `desolate`, for bash (and zsh through bashcompinit).
-#   source <(desolate completion)        or put that line in ~/.bashrc
+# Tab completion for `desolate`, for zsh and bash. To have it in every new terminal:
+#   echo 'source <(desolate completion)' >> ~/.zshrc     (bash: ~/.bashrc)
+# In zsh it runs through bashcompinit, which it loads itself (and compinit first, when the
+# shell has not), so that one line is all ~/.zshrc needs.
 #
 # Nothing here starts node or asks a VM: a TAB must answer at once. Domain and workspace
 # names are read from the host's own files, which only the root VM writes
@@ -77,5 +79,12 @@ _desolate() {
     # shellcheck disable=SC2207
     COMPREPLY=($(compgen -W "$words" -- "$cur"))
 }
+if [ -n "${ZSH_VERSION-}" ]; then
+    # zsh's `complete` is bashcompinit's, which needs compinit's compdef. (zsh only: plain
+    # zsh syntax would not parse in bash.)
+    autoload -U +X compinit bashcompinit
+    if ! type compdef >/dev/null 2>&1; then compinit -i; fi
+    bashcompinit
+fi
 complete -F _desolate desolate
 complete -F _desolate cli.sh
