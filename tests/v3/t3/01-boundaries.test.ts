@@ -413,6 +413,32 @@ describe("T3: boundaries that need a real VM", { skip: REAL ? false : "set DESOL
     assert.equal(fs.existsSync(path.join(stack.home, "mirrors/acme/widgets.git/poison")), false, "the shared mirror took nothing from either");
   });
 
+  it("T3 a workspace starts one in its own domain, on a real VM: its command's words arrive as words, and it closes it", async () => {
+    // What T2 cannot show: the command crosses `limactl shell` into a real VM, where a word
+    // with quotes, `$(...)` or a leading dash must still be one word.
+    stack.step("a workspace starts a workspace");
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const until = async (probe: () => boolean, ms: number) => {
+      for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(1000)) if (probe()) return true;
+      return false;
+    };
+    type Listed = { workspaces: { workspace: string; status: string; startedBy: string | null }[] }[];
+    const listed = () => (JSON.parse(stack.quiet("list", "a", "--json").stdout || "[]") as Listed)[0]?.workspaces ?? [];
+    const asked = asUser("a/w1", `desolate spawn --name helper -- bash -c 'printf "word:%s\\n" "$@"; sleep 600' _ 'tidy up; $(touch /tmp/pwned) "q"' --help`);
+    assert.equal(asked.code, 0, asked.stderr);
+    assert.ok(await until(() => listed().some((w) => w.workspace === "helper" && w.status === "running"), 300_000), JSON.stringify(listed()));
+    assert.equal(listed().find((w) => w.workspace === "helper")!.startedBy, "w1");
+    let log = "";
+    assert.ok(await until(() => /word:--help/.test((log = stack.quiet("agent", "log", "a/helper").stdout)), 60_000), log);
+    assert.match(log, /word:tidy up; \$\(touch \/tmp\/pwned\) "q"\r?\nword:--help/, "each word arrived as itself");
+    const seen = stack.inVm(vmOf("a/helper"), ["bash", "-c", "ls /tmp | grep -c pwned; true"], { root: true });
+    assert.equal(seen.stdout.trim(), "0", "nothing in the words was run as a command, in the VM");
+    assert.equal(fs.existsSync("/tmp/pwned"), false, "nor on the Mac");
+    // Closed by the one that started it, once nothing in it would be lost.
+    assert.equal(asUser("a/w1", "desolate close helper").code, 0);
+    assert.ok(await until(() => !listed().some((w) => w.workspace === "helper"), 120_000), JSON.stringify(listed()));
+  });
+
   it("T3 destroy leaves no VM and no process behind", () => {
     stack.step("destroy");
     const result = stack.desolate("destroy", "--all");

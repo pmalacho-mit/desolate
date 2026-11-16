@@ -4,7 +4,7 @@ $ desolate bootstrap --forge stand-in:ssh://git@<forge>:22 --forge-known-hosts <
 desolate bootstrap: backend vz, instance <instance>
   + home <home>
     creating the base VM from Lima's pinned Ubuntu image (downloads it the first time)
-    provisioning it (packages, node, docker, the editor server): several minutes, once
+    provisioning it (packages, node, docker, the editor server): several minutes
   + base image
   + config: backend vz, forge stand-in (<forge>:22)
     approver: a software key in <home>/approver; every push will ask on your terminal
@@ -23,7 +23,7 @@ bootstrap: 8 step(s) done.
   ok   vz: ICMP from a workspace: closed by the same confinement as TCP, UDP and DNS (measured on Lima 2.3.0: a confined guest's echo gets no reply; the unconfined control's does)
   ok   socket paths fit: the longest fits in 103 bytes
   ok   VMs forward nothing by themselves: every running VM refuses Lima's own forwarding
-  ok   base image: the base VM dsl-<instance>-base
+  ok   base image: the base VM dsl-<instance>-base, provisioned from this desolate's image (c08540b98ebefa8d)
   ok   root VM running: dsl-<instance>-root
   ok   approver: terminal; pushes are approved on this host
   ok   root: keyring answers: 0 key(s) held
@@ -51,7 +51,7 @@ $ desolate clone acme/widgets --no-domain
   read key: registered
   write key: registered (it asks you before every push)
 cloned acme/widgets: 1 branch(es), default main, 1 LFS object(s); pushable.
-next: desolate domain create <slug> --repo acme/widgets   (or, to a domain you have: desolate domain <slug> add --repo acme/widgets)
+next: desolate domain create <slug> --repo acme/widgets   (or, to a domain you have: desolate domain <slug> add --repo acme/widgets; or clone again with --domain <slug>)
 fetching acme/widgets with the read key
 [exit 0]
 
@@ -138,6 +138,8 @@ the start took <duration>: asked the root <duration>, VM booted <duration>, serv
 next: desolate editor b/w1 --open      its editor, in your browser
       desolate exec b/w1 -- <command>     a command in its devcontainer (bash, for a shell)
 [exit 0]
+
+## a workspace starts a workspace
 
 ## destroy
 
