@@ -115,7 +115,13 @@ if (verb === "fetch") {
       const i = own.indexOf(flag);
       return i >= 0 ? own[i + 1] : undefined;
     };
-    if (own.some((a, i) => a.startsWith("-") && a !== "--name" && a !== "--branch" && own[i - 1] !== "--name" && own[i - 1] !== "--branch")) fail(`spawn takes --name and --branch, then -- and a command`, "desolate spawn --name <workspace> [--branch <branch>] [-- <command...>]");
+    const usage = "desolate spawn [--name <workspace>] [--branch <branch>] [-- <command...>]";
+    const unknown = own.find((a, i) => a.startsWith("-") && a !== "--name" && a !== "--branch" && own[i - 1] !== "--name" && own[i - 1] !== "--branch");
+    if (unknown === "--help" || unknown === "-h") {
+      process.stdout.write(`${usage}\n  --name    its name (else one made from this workspace's)\n  --branch  the branch it works on, in each of the domain's repositories (else one named after it); one no other workspace has checked out\n  -- ...    a command it runs as its agent, as words (no shell); without one it is only made\nThen: desolate domain stats, desolate events --follow, desolate close <name>. /desolate/release/AGENTS.md, "Other workspaces".\n`);
+      process.exit(0);
+    }
+    if (unknown) fail(`spawn does not take '${unknown}': it takes --name and --branch, then -- and a command (the branch goes to each of the domain's repositories; there is no --checkout)`, usage);
     const name = value("--name") ?? `${workspace.workspace}-${randomBytes(2).toString("hex")}`.slice(0, 40);
     const branch = value("--branch") ?? "";
     if (branch && !isBranch(branch)) fail(`'${branch}' is not a branch desolate will carry`, "letters, digits, '.', '_', '-' and '/', not starting with a dash");
@@ -124,7 +130,7 @@ if (verb === "fetch") {
   const reply = await request({ ...r, mac: sign(key, r) });
   if (reply.ok !== true) fail(`the root did not take it: ${String(reply.error)}`, String(reply.fix ?? "desolate domain stats"));
   process.stdout.write(verb === "spawn"
-    ? `asked for ${workspace.domain}/${r.name}: the host starts it once it has checked that this workspace asked${r.op === "spawn" && r.command.length ? ", then runs the command in it as its agent" : ""}. It takes a minute or so.\nIt is labelled as started by ${workspace.workspace}. Follow it: desolate events --follow; see it: desolate domain stats. Remove it when done: desolate close ${r.name}\n`
+    ? `asked for ${workspace.domain}/${r.name}: the host starts it once it has checked that this workspace asked${r.op === "spawn" && r.command.length ? ", then runs the command in it as its agent" : ""}. It takes a minute or so.\nIt is labelled as started by ${workspace.workspace}. Follow it: desolate events --follow (--all for what already happened); see it: desolate domain stats. Remove it when done: desolate close ${r.name}\n`
     : `asked to close ${workspace.domain}/${r.name}: the host removes it if nothing in it would be lost (its branches stay). desolate events --follow says when it is gone, or why not.\n`);
 } else if (verb === "issue" && args[0] === "offer") {
   // A draft for the person: they read it on the dashboard, may edit it, and publish it as
