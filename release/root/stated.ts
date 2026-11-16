@@ -548,6 +548,14 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 400, { error: (error as Error).message });
     }
   }
+  if (req.method === "POST" && url.pathname === "/offer") {
+    // The person dismisses an offer: it leaves "Needs you", the branch stays (offers.ts).
+    if (req.headers["x-desolate-ui"] !== "1" || !String(req.headers["content-type"] ?? "").startsWith("application/json")) return json(res, 403, { error: "this comes from the dashboard itself" });
+    const asked = (await body(req)) as { domain?: unknown; repo?: unknown; branch?: unknown; do?: unknown };
+    const result = asked.do === "dismiss" ? offers.dismiss(asked.domain, asked.repo, asked.branch) : { error: "dismiss" };
+    changed();
+    return "error" in result ? json(res, 400, result) : json(res, 200, result);
+  }
   if (req.method === "POST" && url.pathname === "/issue") {
     // The person's edit of an offered issue, or their decision on it. Publishing only freezes
     // it here: the issue is created by the host, once the person approves it on the Mac.

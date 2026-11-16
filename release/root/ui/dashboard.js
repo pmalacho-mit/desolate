@@ -260,6 +260,10 @@ const openReview = async (offer, against = "origin") => {
 // as you, once you approve it on the Mac. Its text is an agent's: the editor's fields are
 // form fields, and the preview is built as elements (shared/ui/markdown.js), never as HTML.
 let editing = null; // { id, element, parts }
+const dismissOffer = async (o) => {
+  const response = await fetch("/offer", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1" }, body: JSON.stringify({ domain: o.domain, repo: o.repo, branch: o.branch, do: "dismiss" }) });
+  if (!response.ok) alert(`Not dismissed: ${(await response.json().catch(() => ({}))).error || `HTTP ${response.status}`}`);
+};
 const issueCall = async (id, what, fields) => {
   const response = await fetch("/issue", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1" }, body: JSON.stringify({ id, do: what, ...fields }) });
   const answer = await response.json().catch(() => ({}));
@@ -349,7 +353,9 @@ const needsYou = () => {
     items.push(el("li", { "data-offer": `${o.domain}/${o.repo}/${o.branch}` }, el("span", { class: "dot blue" }), el("div", { class: "what" },
       el("div", { class: "name" }, `Offered: ${o.repo} ${o.branch}`),
       el("div", { class: "line" }, `from ${o.domain}/${o.workspace}, at `, el("span", { class: "mono" }, short(o.commit)), o.lfs ? `, with ${o.lfs} LFS object(s)` : "")),
-      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview(o) }, "Review"), gitLink(o.repo))));
+      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview(o) }, "Review"), gitLink(o.repo),
+        // Not this one: off "Needs you". The branch stays, and offering it again brings it back.
+        el("button", { class: "quiet", title: "Take it off this list. The branch stays in the domain; offering it again brings it back.", onclick: () => dismissOffer(o) }, "Dismiss"))));
   }
   for (const d of state.domains) for (const w of d.workspaces) {
     const says = w.says.status;

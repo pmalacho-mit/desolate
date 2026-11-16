@@ -23,6 +23,7 @@ Every day: a workspace, your work in it, and its push:
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open] [--json]                                  the dashboard's address, for your browser
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
+  desolate offers dismiss <domain> <owner/repo> <branch>         not this one: off "Needs you" (the branch stays)
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
   desolate issues [--json]                                       GitHub issues workspaces offered: edit them on the dashboard
   desolate issue publish | refuse <id>                           create one on GitHub, as you, once you have read it (or not)
@@ -214,6 +215,14 @@ const main = async (argv: string[]): Promise<number> => {
   }
   if (verb === "offers") {
     const { values, positionals } = flags(rest, {});
+    if (positionals[0] === "dismiss") {
+      const [, domain, repo, branch] = positionals;
+      if (!domain || !repo || !branch) refuse("dismiss which offer?", "desolate offers dismiss <domain> <owner/repo> <branch>   (see desolate offers)", EXIT.usage);
+      const { rootctl } = await import("./stack.ts");
+      await rootctl("offers.dismiss", { domain, repo, branch }, { quiet: true });
+      out(`dismissed: ${domain} ${repo} ${branch} is no longer under "Needs you". The branch stays (desolate branches ${domain}); offering it again brings it back.`);
+      return EXIT.ok;
+    }
     const { offers } = await import("./push.ts");
     await offers(positionals[0], out, values.json === true);
     return EXIT.ok;
