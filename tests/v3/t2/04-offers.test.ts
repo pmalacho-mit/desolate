@@ -485,6 +485,13 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.notEqual(stack.quiet("offers", "dismiss", "dev", "acme/widgets", "pushed-here").code, 0, "a second dismissal says there is nothing to dismiss");
     inWs("dev/w1", `cd ${WT} && git push origin pushed-here 2>&1`);
     assert.ok((JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as { branch: string }[]).some((o) => o.branch === "pushed-here"), "offered again: back");
+    // The repository by its GitHub address (as suede's install, a package.json git dependency
+    // or `git clone` names it): read from the domain's mirror, with no credential, even from
+    // outside every checkout; and a push to it is an offer, not a push.
+    const byAddress = inWs("dev/w1", "cd /tmp && git ls-remote git@github.com:acme/widgets.git refs/heads/elsewhere && git ls-remote https://github.com/acme/widgets.git refs/heads/elsewhere");
+    assert.deepEqual(byAddress.stdout.trim().split("\n").map((l) => l.split("\t")[0]), [theirs, theirs], byAddress.stderr);
+    const control = inWs("dev/w1", "cd /tmp && GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/acme/widgets-other.git 2>&1; echo exit=$?");
+    assert.match(control.stdout, /exit=[1-9]/, "control: a repository the domain does not hold is not rewritten (prefix matches stop at .git)");
     // A delete of a branch the remote has is refused, saying where branches are deleted.
     assert.match(inWs("dev/w1", `cd ${WT} && git push origin :elsewhere 2>&1`).stdout, /deleting a branch is not something a workspace does/);
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");

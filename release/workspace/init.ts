@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { readJson } from "../shared/json.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
+import { urlRules } from "./git-urls.ts";
 
 const name = process.argv[2] ?? "";
 const plan = readJson<WorkspacePlan | null>(`/desolate/inbox/workspaces/${name}.json`, null);
@@ -122,6 +123,8 @@ if (who.code !== 0 || who.stdout.trim().endsWith(".desolate.invalid")) {
   await git(null, ["config", "--global", "user.name", plan.author?.name ?? `${plan.domain}/${plan.workspace}`]);
   await git(null, ["config", "--global", "user.email", plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`]);
 }
+// The domain's repositories by their GitHub addresses, for any tool that names one (git-urls.ts).
+for (const args of urlRules(plan.checkouts.map((c) => c.repo))) await git(null, ["config", "--global", ...args]).catch(() => "");
 fs.mkdirSync(path.join(os.homedir(), ".desolate"), { recursive: true });
 fs.writeFileSync(path.join(os.homedir(), ".desolate", "workspace.json"), JSON.stringify(plan, null, 2));
 // More than one checkout: a VSCodium workspace with all of them, which `desolate editor`
