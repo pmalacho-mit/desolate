@@ -10,7 +10,7 @@
 // tmux used to stand between the two, interpreting all of it itself; with the agent's terminal
 // streamed straight through, this does that part of tmux's job.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { byteByByte, inChunks, repeat } from "../../tests/nests/shared-terminal.harness.ts";
 
 const ESC = 0x1b;
@@ -26,8 +26,9 @@ export const terminalFilter = (): TerminalFilter => {
   // "text": passing bytes; "esc": just saw ESC; "csi": inside ESC [ ... (held, to look at);
   // "string": inside a string to drop; "stringEsc": inside one, just saw ESC (ST may follow);
   // "c2": just saw 0xC2, which with 0x80-0x9F is a C1 control written as UTF-8 (U+0080 to
-  // U+009F: some emulators act on those as on ESC-forms: OSC, DCS, CSI).
-  let state: "text" | "esc" | "csi" | "string" | "stringEsc" | "c2" = "text";
+  // U+009F: some emulators act on those as on ESC-forms: OSC, DCS, CSI); "csiIgnore": inside
+  // a CSI the filter will not pass, dropped up to and with its final byte.
+  let state: "text" | "esc" | "csi" | "csiIgnore" | "string" | "stringEsc" | "c2" = "text";
   let dropped = 0;
   let csi: number[] = [];
   // On the alternate screen, as far as what passed says (a full-screen program's own).
@@ -75,17 +76,36 @@ export const terminalFilter = (): TerminalFilter => {
           out.push(byte);
           state = "text";
         }
-      } else if (state === "csi") {
+      } else if (state === "csi" || state === "csiIgnore") {
+        // As a terminal's own parser reads a CSI (the DEC/VT500 state machine xterm and the
+        // others follow): a C0 control inside one is carried out and the CSI goes on, DEL is
+        // ignored, CAN and SUB cancel it, ESC cancels it and starts another. So the filter must
+        // go on reading it too: letting what it held go as text, at a control, once passed a
+        // window operation or SGR 8 straight through (in-source tests, 2026-11-16).
         if (byte >= 0x40 && byte <= 0x7e) {
-          emitCsi(byte);
-          state = "text";
-        } else if (csi.length < 256 && byte >= 0x20 && byte <= 0x3f) csi.push(byte);
-        else {
-          // Not a CSI a terminal would take: what was held is let go as text.
-          out.push(ESC, 0x5b, ...csi);
+          if (state === "csi") emitCsi(byte);
           csi = [];
-          state = byte === ESC ? "esc" : "text";
-          if (byte !== ESC) out.push(byte);
+          state = "text";
+        } else if (byte >= 0x20 && byte <= 0x3f) {
+          if (state === "csi" && csi.length < 256) csi.push(byte);
+          // Longer than any program writes: not held further, and not passed.
+          else {
+            csi = [];
+            state = "csiIgnore";
+          }
+        } else if (byte === 0x18 /* CAN */ || byte === 0x1a /* SUB */) {
+          csi = [];
+          state = "text";
+        } else if (byte === ESC) {
+          csi = [];
+          state = "esc";
+        } else if (byte < 0x20) out.push(byte);
+        else if (byte === 0x7f) continue;
+        else {
+          // A byte past ASCII has no place in a CSI: what a terminal makes of it differs, so the
+          // whole CSI is dropped, to its final byte.
+          csi = [];
+          state = "csiIgnore";
         }
       } else if (state === "string") {
         dropped++;
@@ -122,8 +142,29 @@ declare namespace terminalFilter {
   /** a string that never ends does not swallow the session: after 64 KiB of it, text passes
    *  again (here the last 4466 of 70,000 bytes, then "after") */
   export type NeverEnds = Expect<Invoke<typeof inChunks, [make: typeof terminalFilter, chunks: ["\u001b]52;", Invoke<typeof repeat, [text: "x", count: 70000]>, "after"]]>["length"], "=", 4471>;
-  /** a control byte inside a CSI (found writing these tests; see the reason) */
-  export type ControlInsideCsi = Todo<"bug: a C0 control inside a CSI makes the filter let the held CSI go as text (\"\\u001b[\\u00018;100;200t\" passes unchanged), and a terminal executes the control and finishes the CSI: the window operation, or SGR 8, that the filter drops when written plainly">;
+  /** inside a CSI, a terminal carries out a C0 control and goes on reading the CSI, and
+   *  ignores DEL: so the filter does too, and the window operation (t) or concealed text
+   *  (SGR 8) the control was hiding is still dropped; the control itself passes, in order */
+  export type ControlInsideCsi = Table<typeof filtered, [
+    [args: [text: "a\u001b[\u00018;100;200tb"], expected: "a\u0001b"],
+    [args: [text: "\u001b[1;\r8m"], expected: "\r\u001b[1m"],
+    [args: [text: "a\u001b[8\u007f;100;200tb"], expected: "ab"],
+    [args: [text: "\u001b[3\b1mred"], expected: "\b\u001b[31mred"],
+  ]>;
+  /** CAN and SUB cancel a CSI, and ESC cancels it and starts another: nothing of the
+   *  cancelled one is passed, and what follows is read afresh */
+  export type Cancelled = Table<typeof filtered, [
+    [args: [text: "a\u001b[8;100\u0018;200tb"], expected: "a;200tb"],
+    [args: [text: "a\u001b[8;100\u001a;200tb"], expected: "a;200tb"],
+    [args: [text: "a\u001b[8\u001b[32mb"], expected: "a\u001b[32mb"],
+  ]>;
+  /** a CSI the filter will not hold (longer than 256 bytes) or that has a byte past ASCII in
+   *  it is dropped whole, to its final byte: none of it reaches the terminal as text that
+   *  the terminal would still read as the CSI */
+  export type DroppedWhole = Table<typeof filtered, [
+    [args: [text: "a\u001b[8\u00ff;100;200tb"], expected: "ab"],
+  ]>;
+  export type TooLong = Expect<Invoke<typeof inChunks, [make: typeof terminalFilter, chunks: ["a\u001b[", Invoke<typeof repeat, [text: "1;", count: 200]>, "8mb"]]>, "=", "ab">;
 }
 
 /** What undoes the modes a full-screen program may leave on: after a detach, your shell's
