@@ -24,6 +24,12 @@ import * as path from "node:path";
 import { formatApproval, parseApproval } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
+import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../../tests/nests/home.harness.ts";
+import type { keyringTakes, modeOf, writeInHome } from "../../tests/nests/host-approver.harness.ts";
+import type { setEnv } from "../../tests/nests/env.harness.ts";
+import type { collect } from "../../tests/nests/host-stack.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 export type Kind = "touchid" | "terminal";
 const DIR = path.join(paths.home, "approver");
@@ -37,6 +43,11 @@ export const kind = (): Kind | null => {
     return null;
   }
 };
+declare namespace kind {
+  /** none until bootstrap makes one; a kind file that names neither kind is none */
+  export type NoneYet = Given<Invoke<typeof emptyHome>, [Expect<Invoke<typeof kind>, "=", null>, Expect<Invoke<typeof publicKey>, "=", null>]>;
+  export type NotAKind = Given<[Invoke<typeof emptyHome>, Invoke<typeof writeInHome, [name: "approver/kind", text: "yubikey\n"]>], Expect<Invoke<typeof kind>, "=", null>>;
+}
 export const publicKey = (): string | null => {
   try {
     return createPublicKey(fs.readFileSync(FILES.pub, "utf8")).export({ type: "spki", format: "pem" }).toString();
@@ -75,6 +86,24 @@ export const init = (log: (line: string) => void): boolean => {
   fs.writeFileSync(FILES.kind, `${chosen}\n`, { mode: 0o644 });
   return true;
 };
+
+declare namespace init {
+  /** the default: a software key, readable by this user only, made once */
+  export type TerminalKey = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: null]>],
+    [
+      Expect<Invoke<typeof init, [log: typeof collect]>, "=", true>,
+      Expect<Invoke<typeof kind>, "=", "terminal">,
+      Expect<Invoke<typeof modeOf, [name: "approver/key"]>, "=", 384>,
+      Expect<Invoke<typeof init, [log: typeof collect]>, "=", false>,
+    ]
+  >;
+  /** a kind asked for by a name it does not know is refused, never read as the default */
+  export type UnknownKind = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: "yubikey"]>],
+    Expect<Invoke<typeof refusalOf, [run: typeof init, args: [log: typeof collect]]>, "=", { message: "DESOLATE_APPROVER is 'yubikey'"; fix: "use touchid or terminal"; code: 1 }>
+  >;
+}
 
 const clean = (text: string) => text.replace(/[^\x20-\x7e]/g, "?").slice(0, 300);
 
@@ -123,6 +152,17 @@ export const sign = async (message: string, summary?: string): Promise<string> =
   return signWith("sha256", Buffer.from(message), createPrivateKey(fs.readFileSync(FILES.key, "utf8"))).toString("base64");
 };
 
+declare namespace sign {
+  /** refused before anyone is asked: a text that is not a push, a stack with no approver */
+  export type Refuses = Given<
+    Invoke<typeof emptyHome>,
+    [
+      Expect<Invoke<typeof refusalOf, [run: typeof sign, args: [message: "approve everything"]]>, "=", { message: "the root sent something that is not a push approval; nothing was signed"; fix: "desolate doctor"; code: 78 }>,
+      Expect<Invoke<typeof refusalOf, [run: typeof sign, args: [message: "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n"]]>, "=", { message: "this stack has no approver, so no push can be approved"; fix: "desolate bootstrap"; code: 78 }>,
+    ]
+  >;
+}
+
 /** The approval page's signature (host/approve-web.ts): the person's click on that page, on
  *  this Mac, is the confirmation; the page is what checks it was theirs. With the Touch ID
  *  approver the Secure Enclave asks as well. */
@@ -138,6 +178,23 @@ export const signClicked = (message: string): string => {
   if (which !== "terminal") throw new Error("this stack has no approver");
   return signWith("sha256", Buffer.from(message), createPrivateKey(fs.readFileSync(FILES.key, "utf8"))).toString("base64");
 };
+
+declare namespace signClicked {
+  type Push = "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n";
+  /** the approver's signature over exactly the text the page showed, and no other */
+  export type Signs = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: null]>, Invoke<typeof init, [log: typeof collect]>],
+    [
+      Expect<Invoke<typeof keyringTakes, [message: Push, signature: Invoke<typeof signClicked, [message: Push]>]>, "=", true>,
+      Expect<Invoke<typeof keyringTakes, [message: "desolate push approval v2\nrepo: acme/web\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n", signature: Invoke<typeof signClicked, [message: Push]>]>, "=", false>,
+    ]
+  >;
+  /** nothing that is not a push approval is signed, and nothing at all without an approver */
+  export type Refuses = [
+    Given<[Invoke<typeof emptyHome>, Invoke<typeof init, [log: typeof collect]>], Throws<Invoke<typeof signClicked, [message: "approve everything"]>, "not a push approval; nothing was signed">>,
+    Given<Invoke<typeof emptyHome>, Throws<Invoke<typeof signClicked, [message: Push]>, "this stack has no approver">>,
+  ];
+}
 
 /** `desolate approve --selftest`: one signature over a text that approves nothing, checked
  *  against the public key the root was given. Proves the person can approve before the

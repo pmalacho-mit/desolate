@@ -17,6 +17,9 @@ import { terminalFilter } from "../shared/terminal-filter.ts";
 import { printable } from "../shared/text.ts";
 import { guest } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
+import type { Expect, Given, Invoke, Mock, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said, vmAnswers } from "../../tests/nests/host-stack.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 type Workspace = { domain: string; workspace: string; vm: string; checkouts: { repo: string; path: string }[] };
@@ -38,6 +41,21 @@ const nameOf = (value: unknown) => {
   return name;
 };
 
+declare namespace nameOf {
+  /** "agent" unless named; a name is a file name in the VM (its log) and a word of the holder's */
+  export type Names = Table<typeof nameOf, [
+    [args: [value: undefined], expected: "agent"],
+    [args: [value: "dev-server"], expected: "dev-server"],
+  ]>;
+  export type Refuses = [
+    Expect<Invoke<typeof refusalOf, [run: typeof nameOf, args: [value: "../agent"]]>, "=", { message: "'../agent' is not an agent name"; fix: "lower-case letters, digits and dashes"; code: 64 }>,
+    Throws<Invoke<typeof nameOf, [value: "-x"]>, "'-x' is not an agent name">,
+    Throws<Invoke<typeof nameOf, [value: "Agent"]>, "'Agent' is not an agent name">,
+    Throws<Invoke<typeof nameOf, [value: "a b"]>, "'a b' is not an agent name">,
+    Throws<Invoke<typeof nameOf, [value: "a12345678901234567890123456789012345678901"]>, "is not an agent name">,
+  ];
+}
+
 export const start = async (where: string | undefined, options: { name?: string; checkout?: string }, command: string[], out: Out, json: boolean) => {
   if (command.length === 0) refuse("start what?", "desolate agent start <domain>/<workspace> -- <command...>", EXIT.usage);
   const w = await target(where);
@@ -51,6 +69,14 @@ export const start = async (where: string | undefined, options: { name?: string;
   out(`agent ${name} is running in ${w.domain}/${w.workspace} (${checkout!.repo})`);
   out(`  attach: desolate agent attach ${w.domain}/${w.workspace}${name === "agent" ? "" : ` --name ${name}`}   (Ctrl-] detaches; it keeps running)`);
 };
+
+declare namespace start {
+  /** a command, and a workspace named as <domain>/<workspace>, before anything is asked */
+  export type Usage = [
+    Expect<Invoke<typeof refusalOf, [run: typeof start, args: [where: "acme/w1", options: {}, command: [], out: typeof collect, json: false]]>, "=", { message: "start what?"; fix: "desolate agent start <domain>/<workspace> -- <command...>"; code: 64 }>,
+    Expect<Invoke<typeof refusalOf, [run: typeof start, args: [where: "acme", options: {}, command: ["claude"], out: typeof collect, json: false]]>, "=", { message: "which workspace?"; fix: "desolate agent <start|attach|log|stop> <domain>/<workspace>"; code: 64 }>,
+  ];
+}
 
 /** An agent in a workspace that was just made (`desolate up ... -- <command...>`, and what a
  *  workspace's `desolate spawn` runs): named "agent", in its first checkout. The command is
@@ -95,6 +121,24 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
   for (const a of rows)
     out(`  ${a.workspace}  ${a.name}  ${a.state}${a.exit !== null && a.exit !== undefined ? ` (exit ${a.exit})` : ""}  started ${ago(a.started)}, last output ${ago(a.lastOutput)}  ${a.command.join(" ").slice(0, 60)}`);
 };
+
+declare namespace list {
+  /** each VM's account of its agents is that VM's: only its own workspaces are asked, only rows
+   *  of the expected shape kept, every string made printable, a time that is not one dropped */
+  export type OnlyWhatIsWellFormed = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.list": [{ slug: "acme"; workspaces: [{ domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc"; checkouts: [] }, { domain: "acme"; workspace: "w2"; vm: "dsl-main-41eb634ef1"; checkouts: [] }] }] }]>,
+      Invoke<typeof vmAnswers, [answers: { list: [{ name: "dsl-main-ddb30a57cc"; status: "running"; labels: {} }, { name: "dsl-main-41eb634ef1"; status: "running"; labels: {} }]; exec: { code: 0; stdout: '[{"name":"agent","state":"running","command":["claude","-p","fix \\u001b[2J the docs"],"started":"2026-11-16T10:00:00Z","lastOutput":"yesterday","exit":null},{"name":"Evil\\u001b]0;x","state":"running","command":[]},{"name":"ok","state":"pwned","command":[]}]' } }]>,
+      Invoke<typeof list, [only: undefined, out: typeof collect, json: true]>,
+    ],
+    [
+      Expect<Invoke<typeof said>, "=", ['[{"name":"agent","state":"running","workspace":"acme/w1","command":["claude -p fix ?[2J the docs"],"started":"2026-11-16T10:00:00Z","lastOutput":null,"exit":null}]']>,
+      /** (w2's record names beta/w1's VM: it is not asked) */
+      Expect<Invoke<typeof rootAsked>, "matches", [{ op: "domain.list" }, { op: "exec"; args: { vm: "dsl-main-ddb30a57cc" } }]>,
+    ]
+  >;
+}
 
 export const stop = async (where: string | undefined, options: { name?: string }, out: Out) => {
   const w = await target(where);

@@ -11,6 +11,8 @@ import { INSTANCE, paths, RELEASE_DIR, guest } from "./paths.ts";
 import { backend, backendKind, config, ensureHome, pinForge, ROOT_VM, rootctl, rootSpec, saveConfig } from "./stack.ts";
 import type { Config, ForgeConfig } from "./stack.ts";
 import type { Check } from "./vm/types.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 
@@ -29,6 +31,22 @@ export const parseForge = (spec: string | undefined, knownHostsFile: string | un
   if (!knownHostsFile || !fs.existsSync(knownHostsFile)) refuse("a stand-in forge needs its host key", "pass --forge-known-hosts <file> (known_hosts lines for the forge)");
   return { kind: "stand-in", ssh: { user: match![1]!, host: match![2]!, port: Number(match![3]) }, knownHosts: fs.readFileSync(knownHostsFile!, "utf8") };
 };
+
+declare namespace parseForge {
+  /** GitHub unless a stand-in is named; a stand-in is an ssh address and the host key to pin */
+  export type Forges = [
+    Expect<Invoke<typeof parseForge, [spec: undefined, knownHostsFile: undefined]>, "matches", { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 } }>,
+    Expect<Invoke<typeof parseForge, [spec: "stand-in:ssh://git@192.168.5.2:2222", knownHostsFile: "release/root/github_known_hosts"]>, "matches", { kind: "stand-in"; ssh: { user: "git"; host: "192.168.5.2"; port: 2222 } }>,
+  ];
+  /** the user and the host become words of ssh's command line: nothing that could be an option */
+  export type Refuses = Table<typeof refusalOf, [
+    [args: [run: typeof parseForge, args: [spec: "stand-in:ssh://-oProxyCommand=sh@forge:22", knownHostsFile: "release/root/github_known_hosts"]], expected: { message: "--forge 'stand-in:ssh://-oProxyCommand=sh@forge:22' is not understood"; fix: "use --forge github, or --forge stand-in:ssh://git@<host>:<port> --forge-known-hosts <file>"; code: 1 }],
+    [args: [run: typeof parseForge, args: [spec: "stand-in:ssh://git@forge;id:22", knownHostsFile: "release/root/github_known_hosts"]], condition: "matches", expected: { message: "--forge 'stand-in:ssh://git@forge;id:22' is not understood" }],
+    [args: [run: typeof parseForge, args: [spec: "gitlab", knownHostsFile: undefined]], condition: "matches", expected: { message: "--forge 'gitlab' is not understood" }],
+    /** a stand-in whose host key is not given is not trusted on first use */
+    [args: [run: typeof parseForge, args: [spec: "stand-in:ssh://git@192.168.5.2:2222", knownHostsFile: undefined]], expected: { message: "a stand-in forge needs its host key"; fix: "pass --forge-known-hosts <file> (known_hosts lines for the forge)"; code: 1 }],
+  ]>;
+}
 
 const startRootServices = async () => {
   const uid = process.getuid!();

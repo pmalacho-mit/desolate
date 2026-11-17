@@ -4,6 +4,8 @@
 // never runs a command line the root VM wrote.
 import { isSlug, parseRepo } from "./names.ts";
 import { parseSigned } from "./spawn.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 type Args = Record<string, string | undefined>;
 export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
@@ -48,3 +50,60 @@ export const hostArgv = (kind: unknown, args: unknown): string[] | null => {
   for (const [key, value] of Object.entries(args as Record<string, unknown>)) if (typeof value === "string" && value.length <= (key === "command" ? 200_000 : key === "checkouts" ? 8_000 : 200)) clean[key] = value;
   return HOST_ACTIONS[kind]!(clean);
 };
+
+declare namespace hostArgv {
+  /** each kind the dashboard may ask for becomes one fixed `desolate` command line */
+  export type Kinds = Table<typeof hostArgv, [
+    [args: [kind: "workspace.start", args: { domain: "dev"; workspace: "w1" }], expected: ["start", "dev/w1"]],
+    [args: [kind: "workspace.stop", args: { domain: "dev"; workspace: "w1" }], expected: ["stop", "dev/w1"]],
+    [args: [kind: "workspace.up", args: { domain: "dev" }], expected: ["up", "dev"]],
+    [args: [kind: "workspace.up", args: { domain: "dev"; workspace: "issue-12" }], expected: ["up", "dev", "--name", "issue-12"]],
+    [args: [kind: "repo.fetch", args: { repo: "acme/widgets" }], expected: ["fetch", "acme/widgets"]],
+    [args: [kind: "domain.create", args: { domain: "dev"; title: "widgets work" }], expected: ["domain", "create", "dev", "--title", "widgets work"]],
+    [args: [kind: "domain.add", args: { domain: "dev"; repo: "acme/widgets" }], expected: ["domain", "dev", "add", "--repo", "acme/widgets"]],
+  ]>;
+  /** nothing else: a kind not on the list (an object's own keys included), a name that is not
+   *  a slug or a repository, anything that would read as an option, an argument that is not a
+   *  string */
+  export type Refuses = Table<typeof hostArgv, [
+    [args: [kind: "workspace.rm", args: { domain: "dev"; workspace: "w1" }], expected: null],
+    [args: [kind: "__proto__", args: {}], expected: null],
+    [args: [kind: "constructor", args: {}], expected: null],
+    [args: [kind: "workspace.start", args: { domain: "dev" }], expected: null],
+    [args: [kind: "workspace.start", args: { domain: "dev"; workspace: "../x" }], expected: null],
+    [args: [kind: "workspace.start", args: { domain: "--all"; workspace: "w1" }], expected: null],
+    [args: [kind: "workspace.up", args: { domain: "dev"; workspace: "--fetch" }], expected: null],
+    [args: [kind: "workspace.up", args: { domain: "dev; rm -rf ~" }], expected: null],
+    [args: [kind: "repo.fetch", args: { repo: "--upload-pack=x" }], expected: null],
+    [args: [kind: "domain.add", args: { domain: "dev"; repo: "acme/widgets/../x" }], expected: null],
+    [args: [kind: "workspace.start", args: { domain: ["dev"]; workspace: "w1" }], expected: null],
+    [args: [kind: "workspace.start", args: null], expected: null],
+    [args: [kind: 7, args: {}], expected: null],
+  ]>;
+  /** a title is a label: one that looks like an option or holds a control is left out, and
+   *  the domain is made without it */
+  export type Title = Table<typeof hostArgv, [
+    [args: [kind: "domain.create", args: { domain: "dev"; title: "--help" }], expected: ["domain", "create", "dev"]],
+    [args: [kind: "domain.create", args: { domain: "dev"; title: "a\u001b[2Jb" }], expected: ["domain", "create", "dev"]],
+  ]>;
+  /** a workspace's signed spawn: `up` with the command after `--`, each word one argv
+   *  element, so a shell's syntax in a word is that word's text */
+  export type Spawn = Expect<
+    Invoke<typeof hostArgv, [kind: "workspace.spawn", args: { domain: "acme"; workspace: "helper"; parent: "w1"; branch: "issue/9"; checkouts: '["acme/api=main"]'; command: '["claude","-p","fix it; $(rm -rf ~)"]'; at: "2026-11-16T00:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab" }]>,
+    "=",
+    ["up", "acme", "--name", "helper", "--started-by", "w1", "--checkout", "acme/api=main", "--branch", "issue/9", "--", "claude", "-p", "fix it; $(rm -rf ~)"]
+  >;
+  /** a close removes only a clean workspace */
+  export type Close = Expect<
+    Invoke<typeof hostArgv, [kind: "workspace.close", args: { domain: "acme"; workspace: "helper"; parent: "w1"; at: "2026-11-16T00:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab" }]>,
+    "=",
+    ["rm", "acme/helper", "--if-clean"]
+  >;
+  /** a spawn whose command is not JSON, or is a shell line rather than words, or that names
+   *  itself as its parent: nothing */
+  export type BadSpawn = Table<typeof hostArgv, [
+    [args: [kind: "workspace.spawn", args: { domain: "acme"; workspace: "helper"; parent: "w1"; command: "claude -p hi"; at: "2026-11-16T00:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab" }], expected: null],
+    [args: [kind: "workspace.spawn", args: { domain: "acme"; workspace: "helper"; parent: "w1"; command: '"claude -p hi"'; at: "2026-11-16T00:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab" }], expected: null],
+    [args: [kind: "workspace.spawn", args: { domain: "acme"; workspace: "w1"; parent: "w1"; command: '["claude"]'; at: "2026-11-16T00:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab" }], expected: null],
+  ]>;
+}

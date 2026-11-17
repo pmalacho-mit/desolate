@@ -8,6 +8,9 @@ import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Mock, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { gitAnswers, scriptedGit } from "../../tests/nests/workspace-git.harness.ts";
 
 export const OUTBOX = "/desolate/outbox";
 export const INBOX = "/desolate/inbox";
@@ -43,6 +46,24 @@ export const branches = async (repo: string): Promise<Record<string, string>> =>
   }
   return out;
 };
+
+declare namespace branches {
+  /** what is synced: each branch at its full commit id. The root reads this list as data, so
+   *  a ref an agent wrote by hand into .git/refs/heads under a name no branch may have (an
+   *  option, a range, a short id) is left out here, before it is ever written down */
+  export type OnlyWhatTheRootCarries = Given<
+    [
+      Mock<"../shared/run.ts", typeof scriptedGit>,
+      Invoke<typeof gitAnswers, [answers: [["for-each-ref", "1111111111111111111111111111111111111111 main\n2222222222222222222222222222222222222222 feature/greet\n1111111111111111111111111111111111111111 --upload-pack=touch x\n1111111111111111111111111111111111111111 a..b\n1111111111111111111111111111111111111111 x.lock\n1111111 short\n"]]]>,
+    ],
+    Expect<Invoke<typeof branches, [repo: "acme/app"]>, "=", { main: "1111111111111111111111111111111111111111"; "feature/greet": "2222222222222222222222222222222222222222" }>
+  >;
+  /** a clone git cannot read has no branches, rather than an error */
+  export type NoClone = Given<
+    [Mock<"../shared/run.ts", typeof scriptedGit>, Invoke<typeof gitAnswers, [answers: []]>],
+    Expect<Invoke<typeof branches, [repo: "acme/app"]>, "=", {}>
+  >;
+}
 
 /** Write the domain's branches of one repository to the outbox: an incremental bundle, less
  *  what the mirror has and what the root has said it holds, and the list of refs. */
@@ -100,6 +121,55 @@ export const stageLfs = async (repo: string, branch: string): Promise<{ oid: str
   }
   return staged;
 };
+
+declare namespace stageLfs {
+  /** a branch with nothing the remote lacks has nothing to stage, and git is not asked more */
+  export type NothingNew = Given<
+    [Mock<"../shared/run.ts", typeof scriptedGit>, Invoke<typeof gitAnswers, [answers: [["rev-list", ""]]]>],
+    Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
+  >;
+  /** only a small blob can be a pointer: a large one is never read, and a small one that is not
+   *  a pointer is an ordinary file */
+  export type OrdinaryFiles = Given<
+    [
+      Mock<"../shared/run.ts", typeof scriptedGit>,
+      Invoke<typeof gitAnswers, [answers: [
+        ["rev-list", "1111111111111111111111111111111111111111\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa README.md\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb big.bin\n"],
+        ["cat-file --batch-check", "1111111111111111111111111111111111111111 commit 200\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 120\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 5000\n"],
+        ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "# app\nA small file.\n"],
+      ]]>,
+    ],
+    Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
+  >;
+  /** a pointer is exactly git-lfs's three lines: another spec, an id that is not sha256 hex
+   *  in lower case, or a line more is a file that happens to look like one */
+  export type NotQuitePointers = Given<
+    [
+      Mock<"../shared/run.ts", typeof scriptedGit>,
+      Invoke<typeof gitAnswers, [answers: [
+        ["rev-list", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb b\ndddddddddddddddddddddddddddddddddddddddd d\n"],
+        ["cat-file --batch-check", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 130\ndddddddddddddddddddddddddddddddddddddddd blob 140\n"],
+        ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n"],
+        ["cat-file blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\nsize 12\n"],
+        ["cat-file blob dddddddddddddddddddddddddddddddddddddddd", "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n"],
+      ]]>,
+    ],
+    Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
+  >;
+  /** a pointer to an object that neither this clone nor the mirror holds stops the offer: the
+   *  remote would refuse a push that names an object it was never sent */
+  export type MissingObject = Given<
+    [
+      Mock<"../shared/run.ts", typeof scriptedGit>,
+      Invoke<typeof gitAnswers, [answers: [
+        ["rev-list", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa data/model.bin\n"],
+        ["cat-file --batch-check", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\n"],
+        ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n"],
+      ]]>,
+    ],
+    Throws<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "main references the LFS object 0123456789ab, which is neither in this clone nor in the mirror">
+  >;
+}
 
 /** Deliveries from the root (section 6.4): bundles in the inbox, imported as `root/<branch>`,
  *  never over a branch of the domain's own. */

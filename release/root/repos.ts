@@ -11,6 +11,10 @@ import { forge, git, gitBare, gitOk, remoteUrl, safeIn, sshCommand } from "./git
 import { ask } from "./keyring-client.ts";
 import { clonePath, HOOKS, KEYRING, MIRROR_HOOKS, mirrorPath, REGISTRY, ROOT } from "./layout.ts";
 import { settle } from "./pushed.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { aRegistry, emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 export type RepoRecord = {
   /** The root holds a write key for it. A domain has no access level: every domain reads,
@@ -27,6 +31,32 @@ export const registry = (): Registry => readJson<Registry>(REGISTRY, { repos: {}
 const save = (value: Registry) => writeJson(REGISTRY, value);
 export const recordOf = (repo: Repo): RepoRecord =>
   registry().repos[repoId(repo)] ?? refuse(`${repoId(repo)} is not cloned into the root`, `desolate clone ${repoId(repo)}`);
+
+declare namespace recordOf {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** what the root knows of a repository it cloned: whether it holds a write key, and the
+   *  remote's default branch as last fetched */
+  export type Known = Given<
+    [Fresh, Invoke<typeof aRegistry, [repos: { "acme/app": { pushable: false; defaultBranch: "trunk" } }]>],
+    Expect<Invoke<typeof recordOf, [repo: { owner: "acme"; name: "app" }]>, "=", { pushable: false; anonymous: false; defaultBranch: "trunk"; fetchedAt: null }>
+  >;
+  /** one it never cloned is a refusal that says how */
+  export type Unknown = Given<
+    Fresh,
+    Expect<Invoke<typeof refusalOf, [f: typeof recordOf, args: [repo: { owner: "acme"; name: "app" }]]>, "=", { message: "acme/app is not cloned into the root"; fix: "desolate clone acme/app"; code: 1 }>
+  >;
+}
+
+declare namespace list {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** every repository the root holds, by name */
+  export type Sorted = Given<
+    [Fresh, Invoke<typeof aRegistry, [repos: { "zeta/app": {}; "acme/web": { pushable: false }; "acme/api": {} }]>],
+    Expect<Invoke<typeof list>, "matches", [{ repo: "acme/api"; pushable: true }, { repo: "acme/web"; pushable: false }, { repo: "zeta/app" }]>
+  >;
+  /** none yet: an empty registry, not an error */
+  export type None = Given<Fresh, Expect<Invoke<typeof list>, "=", []>>;
+}
 
 const NOWHERE = "/dev/null/desolate/this-repository-is-not-pushable";
 
@@ -63,6 +93,21 @@ const fetchUrl = (repo: Repo, record: RepoRecord) => {
   if (f.kind !== "github") refuse("anonymous fetches are for public GitHub repositories", "clone it with a read key instead (drop --anonymous)");
   return `https://github.com/${repo.owner}/${repo.name}.git`;
 };
+
+declare namespace fetchUrl {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type GitHub = Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "" }]>;
+  /** with a read key, over ssh; without one (someone else's public repository), GitHub's https */
+  export type Ways = Given<[Fresh, GitHub], [
+    Expect<Invoke<typeof fetchUrl, [repo: { owner: "acme"; name: "app" }, record: { pushable: true; anonymous: false; defaultBranch: null; fetchedAt: null }]>, "=", "ssh://git@github.com:22/acme/app.git">,
+    Expect<Invoke<typeof fetchUrl, [repo: { owner: "acme"; name: "app" }, record: { pushable: false; anonymous: true; defaultBranch: null; fetchedAt: null }]>, "=", "https://github.com/acme/app.git">,
+  ]>;
+  /** anonymous fetches are GitHub's alone: a stand-in forge is reached with a key */
+  export type NotGitHub = Given<
+    [Fresh, Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "stand-in"; ssh: { user: "git"; host: "forge"; port: 2222 }; knownHosts: "" }]>],
+    Expect<Invoke<typeof refusalOf, [f: typeof fetchUrl, args: [repo: { owner: "acme"; name: "app" }, record: { pushable: false; anonymous: true; defaultBranch: null; fetchedAt: null }]]>, "=", { message: "anonymous fetches are for public GitHub repositories"; fix: "clone it with a read key instead (drop --anonymous)"; code: 1 }>
+  >;
+}
 
 const config = async (dir: string, pairs: Record<string, string>) => {
   for (const [key, value] of Object.entries(pairs)) await gitOk(dir, ["config", key, value]);

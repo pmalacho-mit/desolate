@@ -7,6 +7,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBranch, isCommit } from "./names.ts";
 import type { WorkspacePlan } from "./plan.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { dirScratch, emptyScratch, fifoScratch, linkScratch, readScratch, scratch, writeScratch } from "../../tests/nests/shared-files.harness.ts";
 
 export type Status = { color: string; message: string; updated: string };
 export const COLORS = ["gray", "blue", "green", "yellow", "orange", "red"];
@@ -47,6 +50,40 @@ export const readPlain = (base: string, file: string, most: number, refuseLarger
   }
 };
 
+declare namespace readPlain {
+  /** a file in the domain's clone, read; cut to `most`, or refused past it */
+  export type Reads = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "repos/acme/app/.git/note", text: "hello"]>],
+    [
+      Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/note"]>, most: 100, refuseLarger: true]>, "=", "hello">,
+      Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/note"]>, most: 3, refuseLarger: false]>, "=", "hel">,
+      Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/note"]>, most: 3, refuseLarger: true]>, "=", null>,
+    ]
+  >;
+  /** the file is a link to the root's own: not read */
+  export type LinkAtTheName = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "roots-own/note", text: "ROOT SECRET"]>, Invoke<typeof linkScratch, [name: "repos/acme/app/.git/note", target: "roots-own/note"]>],
+    Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/note"]>, most: 100, refuseLarger: true]>, "=", null>
+  >;
+  /** a directory on the way is a link elsewhere: not walked through, though the path does
+   *  lead to a file (the control) */
+  export type LinkOnTheWay = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "roots-own/note", text: "ROOT SECRET"]>, Invoke<typeof dirScratch, [name: "repos/acme/app"]>, Invoke<typeof linkScratch, [name: "repos/acme/app/.git", target: "roots-own"]>],
+    [
+      Expect<Invoke<typeof readScratch, [name: "repos/acme/app/.git/note"]>, "=", "ROOT SECRET">,
+      Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/note"]>, most: 100, refuseLarger: true]>, "=", null>,
+    ]
+  >;
+  /** a FIFO is not waited on, and a directory is not a file */
+  export type NotAFile = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof fifoScratch, [name: "repos/acme/app/.git/fifo"]>, Invoke<typeof dirScratch, [name: "repos/acme/app/.git/dir"]>],
+    [
+      Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/fifo"]>, most: 100, refuseLarger: true]>, "=", null>,
+      Expect<Invoke<typeof readPlain, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/dir"]>, most: 100, refuseLarger: true]>, "=", null>,
+    ]
+  >;
+}
+
 /** A status file is written by a workspace, which may be hostile: a known colour, one line
  *  of printable text, a bounded size. */
 export const readStatus = (base: string, file: string): Status | null => {
@@ -60,11 +97,51 @@ export const readStatus = (base: string, file: string): Status | null => {
     return null;
   }
 };
+
+declare namespace readStatus {
+  /** a known colour and a message made one printable line: what /desolate/status writes */
+  export type Reads = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "repos/acme/app/.git/desolate-status.json", text: '{"color":"green","message":"tests pass\\u001b[31m\\nnext","updated":"2026-11-16T10:00:00Z"}']>],
+    Expect<Invoke<typeof readStatus, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/desolate-status.json"]>]>, "=", { color: "green"; message: "tests pass [31m next"; updated: "2026-11-16T10:00:00Z" }>
+  >;
+  /** a colour the dashboard has no style for, or a file that is not JSON: no status at all */
+  export type Refuses = Given<
+    [
+      Invoke<typeof emptyScratch>,
+      Invoke<typeof writeScratch, [name: "repos/a/.git/desolate-status.json", text: '{"color":"javascript:alert(1)","message":"x"}']>,
+      Invoke<typeof writeScratch, [name: "repos/b/.git/desolate-status.json", text: "green: all good"]>,
+    ],
+    [
+      Expect<Invoke<typeof readStatus, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/a/.git/desolate-status.json"]>]>, "=", null>,
+      Expect<Invoke<typeof readStatus, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/b/.git/desolate-status.json"]>]>, "=", null>,
+    ]
+  >;
+}
+
 export const readNote = (base: string, file: string): string =>
   printableLines(readPlain(base, file, 16384, false) ?? "", " ").trimEnd();
+
+declare namespace readNote {
+  /** Markdown, lines kept; what a terminal or a page would act on, blanked; none: "" */
+  export type Reads = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "repos/acme/app/.git/desolate-note.md", text: "# done\n- tests\tpass\n\u001b]0;title\u0007\n\n"]>],
+    [
+      Expect<Invoke<typeof readNote, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/desolate-note.md"]>]>, "=", "# done\n- tests\tpass\n ]0;title">,
+      Expect<Invoke<typeof readNote, [base: Invoke<typeof scratch, [name: "repos"]>, file: Invoke<typeof scratch, [name: "repos/acme/app/.git/none.md"]>]>, "=", "">,
+    ]
+  >;
+}
 /** Where a checkout's status lives, under a domain's `repos` directory. */
 export const statusDir = (reposDir: string, c: { repo: string; kind: string; name: string }) =>
   c.kind === "main" ? path.join(reposDir, c.repo, ".git") : path.join(reposDir, c.repo, ".git", "worktrees", c.name);
+
+declare namespace statusDir {
+  /** the clone's own git directory, or the worktree's under it, where git keeps its HEAD */
+  export type Cases = Table<typeof statusDir, [
+    [args: [reposDir: "/desolate/repos", c: { repo: "acme/app"; kind: "main"; name: "" }], expected: "/desolate/repos/acme/app/.git"],
+    [args: [reposDir: "/desolate/repos", c: { repo: "acme/app"; kind: "worktree"; name: "w1" }], expected: "/desolate/repos/acme/app/.git/worktrees/w1"],
+  ]>;
+}
 
 /** What a checkout has checked out NOW (the plan says only what it started on): read from
  *  its HEAD as data, like its status. `branch` is a name desolate would carry, or null (a
@@ -116,6 +193,44 @@ export const readHead = (reposDir: string, c: { repo: string; kind: string; name
   return { branch: named, commit: refCommit(reposDir, path.join(reposDir, c.repo, ".git"), named) };
 };
 
+declare namespace readHead {
+  /** a branch, and the commit its loose ref names */
+  export type Loose = Given<
+    [
+      Invoke<typeof emptyScratch>,
+      Invoke<typeof writeScratch, [name: "repos/acme/app/.git/HEAD", text: "ref: refs/heads/issue/12\n"]>,
+      Invoke<typeof writeScratch, [name: "repos/acme/app/.git/refs/heads/issue/12", text: "0123456789abcdef0123456789abcdef01234567\n"]>,
+    ],
+    Expect<Invoke<typeof readHead, [reposDir: Invoke<typeof scratch, [name: "repos"]>, c: { repo: "acme/app"; kind: "main"; name: "" }]>, "=", { branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }>
+  >;
+  /** a worktree's HEAD is its own; its branch's ref is in the clone's packed-refs */
+  export type PackedFromAWorktree = Given<
+    [
+      Invoke<typeof emptyScratch>,
+      Invoke<typeof writeScratch, [name: "repos/acme/app/.git/worktrees/w1/HEAD", text: "ref: refs/heads/main\n"]>,
+      Invoke<typeof writeScratch, [name: "repos/acme/app/.git/packed-refs", text: "# pack-refs with: peeled fully-peeled sorted\n89abcdef0123456789abcdef0123456789abcdef refs/heads/issue/12\n0123456789abcdef0123456789abcdef01234567 refs/heads/main\n"]>,
+    ],
+    Expect<Invoke<typeof readHead, [reposDir: Invoke<typeof scratch, [name: "repos"]>, c: { repo: "acme/app"; kind: "worktree"; name: "w1" }]>, "=", { branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" }>
+  >;
+  /** detached: no branch, the commit itself; a branch with no commit yet: no commit */
+  export type Detached = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "repos/a/b/.git/HEAD", text: "0123456789abcdef0123456789abcdef01234567\n"]>, Invoke<typeof writeScratch, [name: "repos/c/d/.git/HEAD", text: "ref: refs/heads/main\n"]>],
+    [
+      Expect<Invoke<typeof readHead, [reposDir: Invoke<typeof scratch, [name: "repos"]>, c: { repo: "a/b"; kind: "main"; name: "" }]>, "=", { branch: null; commit: "0123456789abcdef0123456789abcdef01234567" }>,
+      Expect<Invoke<typeof readHead, [reposDir: Invoke<typeof scratch, [name: "repos"]>, c: { repo: "c/d"; kind: "main"; name: "" }]>, "=", { branch: "main"; commit: null }>,
+    ]
+  >;
+  /** caught half written (no newline yet): unsettled, null; a name desolate would not carry
+   *  as an argument: no branch and no commit */
+  export type Unsettled = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "repos/a/b/.git/HEAD", text: "ref: refs/heads/ma"]>, Invoke<typeof writeScratch, [name: "repos/c/d/.git/HEAD", text: "ref: refs/heads/--upload-pack=x\n"]>],
+    [
+      Expect<Invoke<typeof readHead, [reposDir: Invoke<typeof scratch, [name: "repos"]>, c: { repo: "a/b"; kind: "main"; name: "" }]>, "=", null>,
+      Expect<Invoke<typeof readHead, [reposDir: Invoke<typeof scratch, [name: "repos"]>, c: { repo: "c/d"; kind: "main"; name: "" }]>, "=", { branch: null; commit: null }>,
+    ]
+  >;
+}
+
 export type StatusView = { workspace: string; checkouts: { repo: string; branch: string; head: Head | null; status: Status | null; note: string }[]; status: Status | null };
 export const statusView = (reposDir: string, w: WorkspacePlan): StatusView => {
   const checkouts = w.checkouts.map((c) => ({ repo: c.repo, branch: c.branch, head: readHead(reposDir, c), status: readStatus(reposDir, path.join(statusDir(reposDir, c), "desolate-status.json")), note: readNote(reposDir, path.join(statusDir(reposDir, c), "desolate-note.md")) }));
@@ -123,3 +238,34 @@ export const statusView = (reposDir: string, w: WorkspacePlan): StatusView => {
   const latest = checkouts.map((c) => c.status).filter((s): s is Status => s !== null).sort((a, b) => b.updated.localeCompare(a.updated))[0] ?? null;
   return { workspace: `${w.domain}/${w.workspace}`, checkouts, status: latest };
 };
+
+declare namespace statusView {
+  /** each checkout as it stands; the workspace's status is whichever checkout set one last */
+  export type Latest = Given<
+    [
+      Invoke<typeof emptyScratch>,
+      Invoke<typeof writeScratch, [name: "repos/acme/app/.git/HEAD", text: "ref: refs/heads/main\n"]>,
+      Invoke<typeof writeScratch, [name: "repos/acme/app/.git/desolate-status.json", text: '{"color":"yellow","message":"older","updated":"2026-11-16T09:00:00Z"}']>,
+      Invoke<typeof writeScratch, [name: "repos/acme/lib/.git/worktrees/w1/desolate-status.json", text: '{"color":"green","message":"newer","updated":"2026-11-16T10:00:00Z"}']>,
+      Invoke<typeof writeScratch, [name: "repos/acme/lib/.git/worktrees/w1/desolate-note.md", text: "done\n"]>,
+    ],
+    Expect<
+      Invoke<typeof statusView, [reposDir: Invoke<typeof scratch, [name: "repos"]>, w: {
+        domain: "acme"; workspace: "w1"; vm: "dsl-t-0"; title: "w1"; fetch: false; createdAt: "2026-11-16T08:00:00Z";
+        checkouts: [
+          { repo: "acme/app"; kind: "main"; name: ""; branch: "main"; base: "origin/main"; path: "/workspaces/acme/app" },
+          { repo: "acme/lib"; kind: "worktree"; name: "w1"; branch: "task/w1"; base: "origin/main"; path: "/workspaces/acme/lib/.worktrees/w1" },
+        ];
+      }]>,
+      "=",
+      {
+        workspace: "acme/w1";
+        checkouts: [
+          { repo: "acme/app"; branch: "main"; head: { branch: "main"; commit: null }; status: { color: "yellow"; message: "older"; updated: "2026-11-16T09:00:00Z" }; note: "" },
+          { repo: "acme/lib"; branch: "task/w1"; head: null; status: { color: "green"; message: "newer"; updated: "2026-11-16T10:00:00Z" }; note: "done" },
+        ];
+        status: { color: "green"; message: "newer"; updated: "2026-11-16T10:00:00Z" };
+      }
+    >
+  >;
+}

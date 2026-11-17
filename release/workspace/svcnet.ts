@@ -20,6 +20,8 @@
 import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Table, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 type Listener = { port: number; address: string };
 /** /proc/net/tcp{,6}: state 0A is LISTEN; addresses are hex, in the kernel's byte order. */
@@ -61,6 +63,30 @@ const addressV6 = (hex: string) => {
   }
   return text;
 };
+
+// As the kernel writes them in /proc/net/tcp and tcp6: hex in capitals, each 32-bit word in
+// the machine's (little-endian) byte order.
+declare namespace addressV4 {
+  /** the addresses a listener binds: loopback, every address, docker's resolver (which
+   *  `L` leaves out) and one on a network */
+  export type Kernel = Table<typeof addressV4, [
+    [args: [hex: "0100007F"], expected: "127.0.0.1"],
+    [args: [hex: "00000000"], expected: "0.0.0.0"],
+    [args: [hex: "0B00007F"], expected: "127.0.0.11"],
+    [args: [hex: "0200A8C0"], expected: "192.168.0.2"],
+  ]>;
+}
+declare namespace addressV6 {
+  /** every address and loopback in their short forms; any other written out in full, which
+   *  connect takes as it is */
+  export type Kernel = Table<typeof addressV6, [
+    [args: [hex: "00000000000000000000000000000000"], expected: "::"],
+    [args: [hex: "00000000000000000000000001000000"], expected: "::1"],
+    [args: [hex: "B80D0120000000000000000001000000"], expected: "2001:DB8:0:0:0:0:0:1"],
+  ]>;
+  export type Mapped = Todo<"bug: an IPv4-mapped address as the kernel writes it (0000000000000000FFFF00000100007F, capitals) gives 0:0:0:0:0:FFFF:7F00:1, not 127.0.0.1: the mapped pattern looks for a lower-case ffff">;
+}
+
 /** Where to reach the listener on a port: a wildcard is reached at loopback. */
 const targetOf = (port: number): string => {
   const found = listening().find((l) => l.port === port);

@@ -3,7 +3,10 @@
 // workspace its name belongs to (section 4.4: v2's ingress host check, turned from a filter
 // into a router), and the egress relay learns which host an outbound connection wants.
 // Pure functions over a Buffer, so they are unit-tested without a socket.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { bytes, clientHello, repeated } from "../../tests/nests/shared-bytes.harness.ts";
+import type { clientSending } from "../../tests/nests/shared-socket.harness.ts";
 
 export type Sniffed =
   | { kind: "tls"; name: string | null }
@@ -36,6 +39,27 @@ export const normalizeName = (raw: string): string | null => {
   if (name.endsWith(".")) name = name.slice(0, -1);
   return /^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?)*$/.test(name) && name.length <= 253 ? name : null;
 };
+
+declare namespace normalizeName {
+  /** one spelling of a name: lower case, no port, no trailing dot */
+  export type Names = Table<typeof normalizeName, [
+    [args: [raw: "Web-One-abc123.Localhost"], expected: "web-one-abc123.localhost"],
+    [args: [raw: "a.localhost:5173"], expected: "a.localhost"],
+    [args: [raw: "a.localhost."], expected: "a.localhost"],
+  ]>;
+  /** anything else names nothing: an address in brackets, a port that is not a number, a
+   *  character a hostname cannot hold, an empty label */
+  export type Refuses = Table<typeof normalizeName, [
+    [args: [raw: "[::1]:80"], expected: null],
+    [args: [raw: "a.localhost:http"], expected: null],
+    [args: [raw: "a.localhost:80:80"], expected: null],
+    [args: [raw: "a_b.localhost"], expected: null],
+    [args: [raw: "a b"], expected: null],
+    [args: [raw: "a..b"], expected: null],
+    [args: [raw: "-a.localhost"], expected: null],
+    [args: [raw: ""], expected: null],
+  ]>;
+}
 
 /** The server_name of a TLS ClientHello, or null if it carries none. `undefined` if the
  *  record is not complete yet. */
@@ -94,6 +118,46 @@ export const sniff = (data: Buffer): Sniffed => {
   return { kind: "raw" };
 };
 
+declare namespace sniff {
+  /** HTTP: the Host header's name, by which the forwarder routes */
+  export type Http = Table<typeof sniff, [
+    [args: [data: Invoke<typeof bytes, [text: "GET / HTTP/1.1\r\nHost: Web-One-abc123.localhost:5173\r\nAccept: */*\r\n\r\n"]>], expected: { kind: "http"; name: "web-one-abc123.localhost" }],
+    [args: [data: Invoke<typeof bytes, [text: "PURGE /cache HTTP/1.0\nhost:a.localhost\n\n"]>], expected: { kind: "http"; name: "a.localhost" }],
+  ]>;
+  /** HTTP that names no one, or not by its head: refused, never routed. The first Host
+   *  counts; a header that only ends in "host", or one in the body, is not it */
+  export type HttpNamesNoOne = Table<typeof sniff, [
+    [args: [data: Invoke<typeof bytes, [text: "GET / HTTP/1.1\r\nHost: one.localhost\r\nHost: two.localhost\r\n\r\n"]>], expected: { kind: "http"; name: "one.localhost" }],
+    [args: [data: Invoke<typeof bytes, [text: "GET / HTTP/1.0\r\n\r\n"]>], expected: { kind: "http"; name: null }],
+    [args: [data: Invoke<typeof bytes, [text: "GET / HTTP/1.1\r\nX-Host: a.localhost\r\n\r\n"]>], expected: { kind: "http"; name: null }],
+    [args: [data: Invoke<typeof bytes, [text: "POST / HTTP/1.1\r\nContent-Length: 30\r\n\r\nHost: smuggled.localhost\r\n\r\n"]>], expected: { kind: "http"; name: null }],
+    [args: [data: Invoke<typeof bytes, [text: "GET / HTTP/9\r\n\r\n"]>], expected: { kind: "http"; name: null }],
+  ]>;
+  /** a request line longer than a sniff reads is HTTP that names no one, not a protocol with
+   *  no name (it once went, unchecked, to the port's first workspace) */
+  export type LongRequestLine = Expect<Invoke<typeof sniff, [data: Invoke<typeof repeated, [text: "GET /xxxxxxxxxxxxxxx", count: 1000]>]>, "=", { kind: "http"; name: null }>;
+  /** TLS: the ClientHello's server name; none, if it carries none */
+  export type Tls = Table<typeof sniff, [
+    [args: [data: Invoke<typeof clientHello, [name: "Web-Two-0a1b2c.localhost"]>], expected: { kind: "tls"; name: "web-two-0a1b2c.localhost" }],
+    [args: [data: Invoke<typeof clientHello, [name: null]>], expected: { kind: "tls"; name: null }],
+    [args: [data: Invoke<typeof clientHello, [name: "a b"]>], expected: { kind: "tls"; name: null }],
+  ]>;
+  /** not decidable yet: read more and ask again */
+  export type More = Table<typeof sniff, [
+    [args: [data: Invoke<typeof bytes, [text: ""]>], expected: { kind: "more" }],
+    [args: [data: Invoke<typeof bytes, [text: "GET / HT"]>], expected: { kind: "more" }],
+    [args: [data: Invoke<typeof bytes, [text: "GET / HTTP/1.1\r\nHost: a.localhost\r\n"]>], expected: { kind: "more" }],
+    [args: [data: Invoke<typeof clientHello, [name: "a.localhost", keep: 40]>], expected: { kind: "more" }],
+  ]>;
+  /** a protocol with no name in it (a server-speaks-first one, Redis, SSH; 0x16 not followed
+   *  by TLS's version byte) */
+  export type Raw = Table<typeof sniff, [
+    [args: [data: Invoke<typeof bytes, [text: "SSH-2.0-OpenSSH_9.6\r\n"]>], expected: { kind: "raw" }],
+    [args: [data: Invoke<typeof bytes, [text: "*1\r\n$4\r\nPING\r\n"]>], expected: { kind: "raw" }],
+    [args: [data: Invoke<typeof bytes, [text: "\u0016\u0001\u0000"]>], expected: { kind: "raw" }],
+  ]>;
+}
+
 /** Read from a socket until its first bytes are classified, or the wait or the size runs
  *  out. A client that says nothing within `quietMs` is a raw one (a protocol where the
  *  server speaks first). */
@@ -119,6 +183,22 @@ export const sniffSocket = (socket: import("node:net").Socket, quietMs: number):
     socket.on("data", onData);
     socket.on("close", onClose);
   });
+
+declare namespace sniffSocket {
+  /** read until the bytes say what they are, however they were split, and what was read is
+   *  kept to be passed on */
+  export type Decides = Expect<
+    Invoke<typeof sniffSocket, [socket: Invoke<typeof clientSending, [chunks: ["GET / HT", "TP/1.1\r\nHost: a.localhost\r\n\r\n"]]>, quietMs: 5000]>,
+    "matches",
+    { sniffed: { kind: "http"; name: "a.localhost" } }
+  >;
+  /** a client that says nothing (the server speaks first: SMTP, MySQL) is raw, once the wait
+   *  is over; so is one that leaves before it said what it was. Either is `undecided` */
+  export type Quiet = [
+    Expect<Invoke<typeof sniffSocket, [socket: Invoke<typeof clientSending, [chunks: []]>, quietMs: 20]>, "matches", { sniffed: { kind: "raw" }; undecided: true }>,
+    Expect<Invoke<typeof sniffSocket, [socket: Invoke<typeof clientSending, [chunks: ["GET / HT"], end: true]>, quietMs: 5000]>, "matches", { sniffed: { kind: "raw" }; undecided: true }>,
+  ];
+}
 
 /** A raw port's server's greeting so far, as a browser would read it if it came on the socket
  *  it preconnected (final review, 2026-11-16): an `answer` (Chrome takes "HTTP" within the first

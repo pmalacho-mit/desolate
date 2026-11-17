@@ -3,6 +3,9 @@
 // workspaces (`desolate events`, inside one; root/stated.ts). Pure: a state in, events out.
 import { printable } from "./text.ts";
 import { isBranch, isCommit, isSlug, parseRepo } from "./names.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { offersIn, perDomain } from "../../tests/nests/shared-events.harness.ts";
 
 export type Event = { v: 1; at: string; type: string; source: "host" | "pusher" | "root" } & Record<string, unknown>;
 
@@ -12,11 +15,52 @@ export const repoOrNull = (value: unknown) => (parseRepo(value) ? String(value) 
 export const branchOrNull = (value: unknown) => (isBranch(value) ? value : null);
 export const commitOrNull = (value: unknown) => (isCommit(value) ? value : null);
 export const slugOrNull = (value: unknown) => (isSlug(value) ? String(value) : null);
+
+declare namespace branchOrNull {
+  /** a name a script may pass on as an argument, or null: never one that starts with `-` */
+  export type Cases = Table<typeof branchOrNull, [
+    [args: [value: "issue/12"], expected: "issue/12"],
+    [args: [value: "--upload-pack=x"], expected: null],
+    [args: [value: 12], expected: null],
+  ]>;
+}
+declare namespace repoOrNull {
+  /** owner/name, or null: never an option, never a path that climbs */
+  export type Cases = Table<typeof repoOrNull, [
+    [args: [value: "acme/app"], expected: "acme/app"],
+    [args: [value: "-acme/app"], expected: null],
+    [args: [value: "acme/app/../x"], expected: null],
+  ]>;
+}
+declare namespace commitOrNull {
+  /** a full object id, or null: never a ref git would resolve */
+  export type Cases = Table<typeof commitOrNull, [
+    [args: [value: "0123456789abcdef0123456789abcdef01234567"], expected: "0123456789abcdef0123456789abcdef01234567"],
+    [args: [value: "HEAD"], expected: null],
+  ]>;
+}
+declare namespace slugOrNull {
+  /** a domain or workspace name, or null */
+  export type Cases = Table<typeof slugOrNull, [
+    [args: [value: "dev"], expected: "dev"],
+    [args: [value: "-dev"], expected: null],
+  ]>;
+}
 /** At most this many events from one change of the root's state. */
 const PER_CHANGE = 200;
 
 // (The fixed keys last: no field can stand in for them.)
 export const event = (type: string, source: Event["source"], fields: Record<string, unknown>): Event => ({ at: new Date().toISOString(), ...fields, v: 1, type, source });
+
+declare namespace event {
+  /** the fields as given, and the version, type and source after them: a field named `type`
+   *  in what a domain wrote cannot make an event of another type */
+  export type FixedKeysWin = Expect<
+    Invoke<typeof event, [type: "offered", source: "root", fields: { domain: "dev"; type: "approved"; source: "host"; v: 2 }]>,
+    "matches",
+    { domain: "dev"; type: "offered"; source: "root"; v: 1 }
+  >;
+}
 
 type State = {
   offers?: { domain?: unknown; workspace?: unknown; repo?: unknown; branch?: unknown; commit?: unknown }[];
@@ -101,4 +145,99 @@ export const stateEvents = (before: State | null, after: State): Event[] => {
     return n <= PER_CHANGE;
   });
 };
+
+declare namespace stateEvents {
+  /** from no state to one offer: that offer, its names as desolate would make them */
+  export type Offered = Expect<
+    Invoke<typeof stateEvents, [before: null, after: { offers: [{ domain: "dev"; workspace: "w1"; repo: "acme/app"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }] }]>,
+    "matches",
+    [{ v: 1; type: "offered"; source: "root"; domain: "dev"; workspace: "w1"; repo: "acme/app"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }]
+  >;
+  /** the same state again: nothing happened, so nothing is said */
+  export type Unchanged = Expect<
+    Invoke<typeof stateEvents, [before: { offers: [{ domain: "dev"; repo: "acme/app"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }] }, after: { offers: [{ domain: "dev"; repo: "acme/app"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }] }]>,
+    "=",
+    []
+  >;
+  /** an offer that moved to another commit is a new offer and the old one gone */
+  export type Moved = Expect<
+    Invoke<typeof stateEvents, [before: { offers: [{ domain: "dev"; repo: "acme/app"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }] }, after: { offers: [{ domain: "dev"; repo: "acme/app"; branch: "issue/12"; commit: "89abcdef0123456789abcdef0123456789abcdef" }] }]>,
+    "matches",
+    [{ type: "offered"; commit: "89abcdef0123456789abcdef0123456789abcdef" }, { type: "offer-gone"; commit: "0123456789abcdef0123456789abcdef01234567" }]
+  >;
+  /** what a domain wrote is carried only as desolate's own names, else null; a refusal's
+   *  reason is printable text */
+  export type HostileNames = Expect<
+    Invoke<typeof stateEvents, [before: null, after: {
+      offers: [{ domain: "Dev"; workspace: "-w"; repo: "../x"; branch: "--upload-pack=touch x"; commit: "HEAD" }];
+      refused: [{ domain: "dev"; repo: "acme/app"; why: "bad bundle\u001b]52;c;eA==\u0007" }];
+    }]>,
+    "matches",
+    [
+      { type: "offered"; domain: null; workspace: null; repo: null; branch: null; commit: null },
+      { type: "bundle-refused"; domain: "dev"; why: "bad bundle?]52;c;eA==?" },
+    ]
+  >;
+  /** a status said again with a new time, and one in a colour with no meaning: each an event,
+   *  the colour null and the message printable */
+  export type Status = Expect<
+    Invoke<typeof stateEvents, [
+      before: { domains: [{ slug: "dev"; workspaces: [{ workspace: "w1"; says: { status: { color: "green"; message: "ok"; updated: "1" } } }] }] },
+      after: { domains: [{ slug: "dev"; workspaces: [{ workspace: "w1"; says: { status: { color: "green"; message: "ok"; updated: "2" } } }, { workspace: "w2"; says: { status: { color: "javascript:x"; message: "a\u202eb"; updated: "1" } } }] }] },
+    ]>,
+    "matches",
+    [
+      { type: "status"; workspace: "w1"; color: "green"; message: "ok" },
+      { type: "status"; workspace: "w2"; color: null; message: "a?b" },
+      { type: "workspace-made"; workspace: "w2" },
+    ]
+  >;
+  /** an issue offered, then published: its page only if it is a GitHub issue's */
+  export type Issues = Expect<
+    Invoke<typeof stateEvents, [
+      before: { issues: [{ id: "abc123-0a1b2c3d"; state: "offered" }, { id: "def456-0a1b2c3d"; state: "offered" }] },
+      after: { issues: [{ id: "abc123-0a1b2c3d"; domain: "dev"; state: "published"; title: "Fix it"; url: "https://github.com/acme/app/issues/12" }, { id: "def456-0a1b2c3d"; domain: "dev"; state: "published"; title: "Other"; url: "javascript:alert(1)" }] },
+    ]>,
+    "matches",
+    [
+      { type: "issue-published"; id: "abc123-0a1b2c3d"; title: "Fix it"; url: "https://github.com/acme/app/issues/12" },
+      { type: "issue-published"; id: "def456-0a1b2c3d"; title: "Other"; url: null },
+    ]
+  >;
+  /** a workspace started by another, then stopped, then removed: who started it travels with
+   *  each, so the one that asked can follow it */
+  export type Workspaces = [
+    Expect<
+      Invoke<typeof stateEvents, [before: { domains: [{ slug: "dev"; workspaces: [] }] }, after: { domains: [{ slug: "dev"; workspaces: [{ workspace: "helper"; state: "up"; startedBy: "w1" }] }] }]>,
+      "matches",
+      [{ type: "workspace-made"; domain: "dev"; workspace: "helper"; state: "up"; startedBy: "w1" }]
+    >,
+    Expect<
+      Invoke<typeof stateEvents, [before: { domains: [{ slug: "dev"; workspaces: [{ workspace: "helper"; state: "up"; startedBy: "w1" }] }] }, after: { domains: [{ slug: "dev"; workspaces: [{ workspace: "helper"; state: "stopped"; startedBy: "w1" }] }] }]>,
+      "matches",
+      [{ type: "workspace-state"; workspace: "helper"; state: "stopped"; was: "up" }]
+    >,
+    Expect<
+      Invoke<typeof stateEvents, [before: { domains: [{ slug: "dev"; workspaces: [{ workspace: "helper"; state: "stopped"; startedBy: "w1" }] }] }, after: { domains: [{ slug: "dev"; workspaces: [] }] }]>,
+      "matches",
+      [{ type: "workspace-removed"; workspace: "helper"; startedBy: "w1" }]
+    >,
+  ];
+  /** a commit moving a checkout's branch: where it is, and where it was */
+  export type Head = Expect<
+    Invoke<typeof stateEvents, [
+      before: { domains: [{ slug: "dev"; workspaces: [{ workspace: "w1"; state: "up"; checkouts: [{ repo: "acme/app"; head: { branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" } }] }] }] },
+      after: { domains: [{ slug: "dev"; workspaces: [{ workspace: "w1"; state: "up"; checkouts: [{ repo: "acme/app"; head: { branch: "main"; commit: "89abcdef0123456789abcdef0123456789abcdef" } }] }] }] },
+    ]>,
+    "matches",
+    [{ type: "head"; repo: "acme/app"; branch: "main"; commit: "89abcdef0123456789abcdef0123456789abcdef"; was: { branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" } }]
+  >;
+  /** at most 200 events per domain from one change: one busy domain does not push out
+   *  another's */
+  export type PerDomain = Expect<
+    Invoke<typeof perDomain, [events: Invoke<typeof stateEvents, [before: null, after: Invoke<typeof offersIn, [counts: { busy: 250; quiet: 1 }]>]>]>,
+    "=",
+    { busy: 200; quiet: 1 }
+  >;
+}
 
