@@ -20,7 +20,7 @@ import { domain as domainOf } from "./domains.ts";
 import { bundleRefusal } from "./intake.ts";
 import { clearRefusal, inbox, listedRefs, noteRefusal, takeBundles } from "./outbox.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const fail = (message: string): never => {
   process.stderr.write(`git-remote-desolate: ${message}\n`);

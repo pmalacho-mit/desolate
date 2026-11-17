@@ -25,10 +25,10 @@ import type { Repo } from "../shared/names.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
-import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome, readState, writeState } from "../../tests/nests/home.harness.ts";
-import type { answerTo, inHome, leave, leaveLink, linkInHome, outbox } from "../../tests/nests/host-git-out.harness.ts";
-import type { collect } from "../../tests/nests/host-stack.harness.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, readState, writeState } from "../.harness/home.ts";
+import type { answerTo, inHome, leave, leaveLink, linkInHome, outbox } from "../.harness/host-git-out.ts";
+import type { collect } from "../.harness/host-stack.ts";
 
 export const GIT_VM = gitVmName(INSTANCE);
 

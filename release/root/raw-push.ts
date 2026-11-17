@@ -20,8 +20,8 @@ import * as repos from "./repos.ts";
 import { submitForReview } from "./review-client.ts";
 import { send } from "./send.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aRegistry, emptyRoot } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
 
 export const WAIT_MS = Number(process.env.DESOLATE_APPROVAL_WAIT_MS) || 110_000;
 

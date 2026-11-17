@@ -1,0 +1,13 @@
+#!/bin/sh
+# What a devcontainer runs as `desolate`, `/desolate/status` and the two git remote helpers:
+# the script of the same name in the release, as it is now.
+#
+# A devcontainer gets those four as binds of single files (devcontainer.ts). A bind of one
+# file holds that file as it was when the container started, and the release is a share
+# from the Mac: when an upgrade replaced status, a running container read a mix of old and
+# new, cut short ("/desolate/status: 103: Syntax error", every running devcontainer on the
+# M1, 2026-11-16). So the four are binds of this file, which never changes, and it runs the
+# one the release has now. KEEP IT THIS SMALL: a change here reaches a running container only
+# when it is made again (`desolate stop` then `start`, or a rebuild), and until then the
+# container keeps the old one, or a mix.
+exec "/desolate/release/workspace/${0##*/}" "$@"

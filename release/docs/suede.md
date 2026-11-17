@@ -24,8 +24,9 @@ commit, and only then does the pusher send it.
 ```bash
 desolate clone you/some-dependency                 # pushable: proposals go to it
 desolate clone you/app --no-push                   # the consumer: never written through desolate
-desolate domain create you--app --repo you/app          # where agents work on the consumer
 ```
+
+Cloning the consumer also makes the domain `you--app`, where agents work on it.
 
 The dependency must have suede's downstream Action on its `release` branch (every dependency
 made from suede's template has it), so that a `downstream/...` branch becomes a pull request.
@@ -85,8 +86,7 @@ Exit codes: 0 proposed (a pull request is open, or there was nothing new), 1 ref
 ## The recipe `recipes/suede.sh`: should any of this go upstream?
 
 When a consumer's default branch is pushed, the recipe asks the root which vendored
-dependencies which vendored dependencies
-the push changed (`desolate suede changed`) and, for each that the domain `suede` holds, starts an agent in a workspace
+dependencies the push changed (`desolate suede changed`) and, for each that the domain `suede` holds, starts an agent in a workspace
 with the dependency checked out on `upstream/<consumer>-<commit>`. The agent decides whether
 the change belongs upstream, makes it in the dependency's own layout (under `release/` on
 `main`), runs its tests and offers the branch. You push it (the approval page, as always), and

@@ -9,9 +9,9 @@ import { ROOT } from "../layout.ts";
 import { alive, hasProxyUser, PROXY_CODE, proxyDomainDir, proxyOutDir, spawnAsProxy, stopProxy } from "./as-proxy.ts";
 import type { Policy } from "./proxy.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../../tests/nests/refusal.harness.ts";
-import type { emptyRoot, makeDirIn, readJsonIn, writeIn } from "../../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Throws } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../.harness/refusal.ts";
+import type { emptyRoot, makeDirIn, readJsonIn, writeIn } from "../../.harness/root-state.ts";
 
 const DIR = `${ROOT.state}/proxy`;
 type Running = { socket: string; pid: number; domain: string; workspace: string };

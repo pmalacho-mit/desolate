@@ -17,8 +17,8 @@
 import { printable } from "../shared/text.ts";
 import { isBranch, isCommit, isSlug, parseRepo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { heardFrom } from "../../tests/nests/host-events.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { heardFrom } from "../.harness/host-events.ts";
 
 export type { Event } from "../shared/events.ts";
 export { stateEvents } from "../shared/events.ts";

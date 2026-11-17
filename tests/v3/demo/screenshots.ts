@@ -105,6 +105,9 @@ try {
   await shot(dashboard, "dashboard-branches.png", "details.branches", 10);
   await evaluate(dashboard, `[...document.querySelectorAll("button")].find((b) => b.textContent === "Review")?.click()`);
   await until(dashboard, /files? changed/);
+  // As tall as the card: its Push bar sticks to the viewport's bottom, so a viewport shorter
+  // than the card draws it halfway down the picture.
+  await send("Emulation.setDeviceMetricsOverride", { width: 1100, height: 1900, deviceScaleFactor: 2, mobile: false }, dashboard.sessionId);
   await sleep(2500);
   await shot(dashboard, "review.png", "#review-card", 0, 1500);
   }
@@ -178,6 +181,8 @@ try {
   await type(editor, "greet.js");
   await sleep(900);
   await press(editor, "Enter", "Enter", 13);
+  // The pointer off the title bar, so no tooltip is in the picture.
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: 800, y: 300 }, editor.sessionId);
   await sleep(2500);
   await shot(editor, "editor.png");
   say(`app ${APP}`);

@@ -31,7 +31,9 @@
     // is not a break in this stack.
     "skipLibCheck": true
   },
-  "include": ["release/**/*.ts", "tests/v3/**/*.ts", "tests/nests/**/*.ts"],
+  // release/.harness by name: a wildcard skips a folder whose name starts with a dot, and
+  // setup.ts is imported by nothing (Vitest loads it).
+  "include": ["release/**/*.ts", "release/.harness/*.ts", "tests/v3/**/*.ts"],
   // docs/typescript2mermaid-suede is a vendored tool with its own dependency
   // (ts-morph, uninstalled here), and .worktrees holds whole other checkouts of
   // this same repo -- type-checking either would report failures that say

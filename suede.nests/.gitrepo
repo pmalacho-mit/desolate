@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:pmalacho-mit/suede.nests.git
+	branch = release
+	commit = 8ca3937fcf8bada86955ef5b26e60496a8a75214
+	parent = a706efd1abd12c3d6070d28313b9c4a62d056830
+	method = merge
+	cmdver = 0.4.9

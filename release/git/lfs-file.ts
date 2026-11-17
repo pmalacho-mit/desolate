@@ -18,8 +18,8 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { fetchedFrom, holdsEverything, holdsNothing } from "../../tests/nests/git-lfs.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { fetchedFrom, holdsEverything, holdsNothing } from "../.harness/git-lfs.ts";
 
 /** The two stores of a repository this VM reads (its argument, from git's config): none for
  *  anything that is not `<owner>/<repo>`. */

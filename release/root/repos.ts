@@ -12,9 +12,9 @@ import { ask } from "./keyring-client.ts";
 import { clonePath, HOOKS, KEYRING, MIRROR_HOOKS, mirrorPath, REGISTRY, ROOT } from "./layout.ts";
 import { settle } from "./pushed.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
-import type { aRegistry, emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
+import type { aRegistry, emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
 export type RepoRecord = {
   /** The root holds a write key for it. A domain has no access level: every domain reads,

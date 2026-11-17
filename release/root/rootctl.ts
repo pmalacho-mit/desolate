@@ -15,8 +15,8 @@ import { isRecord } from "../shared/json.ts";
 import { ROOT } from "./layout.ts";
 import { ops } from "./ops.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aRegistry, emptyRoot } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
 
 export const SOCKET = path.join(ROOT.run, "rootctl", "rootctl.sock");
 

@@ -9,9 +9,9 @@ import { domainNameFor, isSlug, parseRepo, repoId } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 import { INSTANCE } from "./paths.ts";
 import { config, ensureProxyUser, rootctl } from "./stack.ts";
-import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../../tests/nests/host-stack.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 type Key = { role: "read" | "write"; pubkey: string };

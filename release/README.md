@@ -126,7 +126,7 @@ cannot take is approving a push, so a script's work ends at an offer.
   back to the dependency: `desolate upstream`, and the suede recipe.
 - [docs/developing-desolate.md](docs/developing-desolate.md): desolate developed from a desolate
   workspace: its tests there, an inner stack, and pushing, pulling and restarting on the change.
-  An agent doing that reads the repository's own [`AGENTS.md`](../AGENTS.md).
+  An agent doing that reads the repository's own [`AGENTS.md`](https://github.com/pmalacho-mit/desolate/blob/main/AGENTS.md).
 - [AGENTS.md](AGENTS.md): what an agent in a workspace reads.
 - [docs/incidents.md](docs/incidents.md): ways desolate has been wrong, and what each taught.
 

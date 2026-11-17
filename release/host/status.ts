@@ -9,9 +9,9 @@ import type { StatusView as View } from "../shared/status.ts";
 import { paths } from "./paths.ts";
 import { rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { checkoutSays, rootRecord, statusSays } from "../../tests/nests/host-status.harness.ts";
-import type { emptyHome } from "../../tests/nests/home.harness.ts";
+import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { checkoutSays, rootRecord, statusSays } from "../.harness/host-status.ts";
+import type { emptyHome } from "../.harness/home.ts";
 
 type Out = (line: string) => void;
 const viewOf = (w: WorkspacePlan): View => statusView(paths.domainRepos(w.domain), w);

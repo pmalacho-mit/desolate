@@ -13,9 +13,9 @@ import { git, gitOk } from "./git.ts";
 import { clonePath, domainPath, mirrorPath, ROOT } from "./layout.ts";
 import { recordOf, registry } from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
-import type { aDomain, aWorkspace, emptyRoot, namesIn, readJsonIn, writeVmIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
+import type { aDomain, aWorkspace, emptyRoot, namesIn, readJsonIn, writeVmIn } from "../.harness/root-state.ts";
 
 /** `env`: the repository whose devcontainer.json is the domain's environment (section 4.5,
  *  way 1). Unset: the first checkout that has one. */

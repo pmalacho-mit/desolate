@@ -11,8 +11,8 @@ import { readJson, writeJson } from "../shared/json.ts";
 import { readPlain } from "../shared/status.ts";
 import { domainPath, ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aDomain, emptyRoot, linkIn, pathIn, writeFilledIn, writeIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, linkIn, pathIn, writeFilledIn, writeIn, writeJsonIn } from "../.harness/root-state.ts";
 
 export const outbox = (domain: string) => path.join(domainPath(domain), "outbox");
 export const inbox = (domain: string) => path.join(domainPath(domain), "inbox");

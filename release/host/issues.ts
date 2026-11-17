@@ -19,11 +19,11 @@ import type { Issue } from "../shared/issues.ts";
 import { printable, printableLines } from "../shared/text.ts";
 import { paths } from "./paths.ts";
 import { rootctl } from "./stack.ts";
-import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome } from "../../tests/nests/home.harness.ts";
-import type { errorOf, fakeGh, ghCalls } from "../../tests/nests/host-gh.harness.ts";
-import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../../tests/nests/host-stack.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../.harness/home.ts";
+import type { errorOf, fakeGh, ghCalls } from "../.harness/host-gh.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 

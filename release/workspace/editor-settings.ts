@@ -10,7 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export const HELD: Record<string, unknown> = {
   // The workspace VM is the boundary (P1): everything in it is as trusted as anything else

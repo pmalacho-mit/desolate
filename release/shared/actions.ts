@@ -5,7 +5,7 @@
 import { isSlug, parseRepo } from "./names.ts";
 import { parseSigned } from "./spawn.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 type Args = Record<string, string | undefined>;
 export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {

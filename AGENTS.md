@@ -56,11 +56,13 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   `release/.suede/core`, `release/.github/workflows`. Update them all with
   `bash .suede/core/sync.sh`, on `main` (git-subrepo 0.4.9 needed). Never by hand, and never by
   checking out `release`.
-- **Dependencies:** all development-only: `.suede/nests` (the in-source tests' DSL and Vitest
-  plugin), `.suede/devcontainers-suede` and `docs/typescript2mermaid-suede`.
-  `bash .suede/core/list.sh` shows them; nothing ships or is declared for consumers. The
-  release type-checks without nests through `release/nests.d.ts` and `release/nests-harness.d.ts`
-  ([`tests/nests/README.md`](tests/nests/README.md)).
+- **Dependencies:** all three are for development only, installed with suede's installer and
+  `--dev` (so no declaring symlink): `suede.nests` (the in-source tests' DSL and Vitest
+  plugin), `devcontainers-suede` and `docs/typescript2mermaid-suede`.
+  `bash .suede/core/list.sh` lists them. None ships or is declared for consumers. The release
+  type-checks without suede.nests through `release/nests.d.ts`, its stub. The tests' harness
+  ships, in `release/.harness` ([its README](release/.harness/README.md)), and is imported by
+  type only, so the code never loads it.
 - **A release that changes `release/.github/workflows`** (what `sync.sh` does when suede's
   release workflow moves) is refused by the Actions token, which may not change workflow
   files. Publish it from `main` on the Mac instead: `bash .suede/core/push-release.sh`, which
@@ -81,14 +83,15 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   person typing. Keep agent-specific (and vendor-specific) structure out of its core.
 - **A function's in-source tests are its usage notes.** Under each function with a contract, a
   `declare namespace` of its name shows a reviewer what it takes, answers and refuses
-  ([`tests/nests/README.md`](tests/nests/README.md)). Add or change them with the function.
+  ([`release/.harness/README.md`](release/.harness/README.md)). Add or change them with the
+  function.
 - **Comments say why**, in plain sentences, and record what was measured. Transcripts record
   every message a person sees. A changed message is a reviewed change.
 
 ## Testing from inside the workspace
 
 ```bash
-make test                                    # T1: tsc, node tests, in-source tests. About 25 s
+make test                                    # T1: tsc, node tests, in-source tests. Under a minute
 docker build -t desolate/base:latest -f release/image/Dockerfile release   # once per VM, 90 s
 tests/v3/run.sh t2                           # T2: the whole stack in containers. About 18 min
 ```
@@ -121,18 +124,20 @@ your change is about them:
 
 ## What has been tested, and what has not
 
-As of 2026-11-14, on the owner's M1 Max (macOS, Lima with vz) unless it says otherwise.
+As of 2026-11-16, on the owner's M1 Max (macOS, Lima with vz) unless it says otherwise.
 [`release/docs/reference.md`](release/docs/reference.md) ("What works today") has the full
 table, feature by feature.
 
 **Tested**
 
-- **T1:** all of it, on the Mac and inside a workspace.
-- **T2:** 120 of 126 inside a workspace (the three failures above). On the Mac under Colima,
-  about 92 of 115: `05-egress` and `08-devcontainer` always fail there, and `07` too.
-- **T4** (`tests/v3/run.sh t4`, about 3 minutes, on the Mac): read-only shares and forced
-  egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over
-  a real share, the editor, a secret.
+- **T1:** all of it, on the Mac (on 2026-11-16: the node tests, and 1,420 in-source tests in
+  99 files) and, earlier, inside a workspace.
+- **T2:** 120 of 126 inside a workspace when last run there (the three failures above). On the
+  Mac under Colima, 122 of 142 on 2026-11-16: the failures are the known Mac ones, in
+  `05-egress`, `06-editor`, `07-secrets` and `08-devcontainer` ([T2 on a Mac](tests/v3/README.md#t2-on-a-mac-is-a-partial-tier)).
+- **T4** (`tests/v3/run.sh t4`, about 3 minutes, on the Mac), 15 of 15 on 2026-11-16:
+  read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path
+  between domains, an offer over a real share, the editor, a secret.
 - **Upgrades, by hand on the M1:**
   - `git pull` then `desolate bootstrap` kept every piece of state, and re-provisioned the base
     and root VMs in place.

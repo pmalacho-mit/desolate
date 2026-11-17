@@ -36,7 +36,7 @@ import { SUEDE_CORE } from "../shared/suede.ts";
 import { ask } from "./keyring-client.ts";
 import { GITCONFIG, KEYRING, PINNED_FORGE, REVIEWER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const LIMIT = { header: 64 * 1024, bundle: 2 * 1024 ** 3, refs: 2000, commits: 50, files: 200, idleMs: 60_000, submitMs: 600_000 } as const;
 const log = (message: string) => console.error(`${new Date().toISOString()} reviewer: ${message}`);
@@ -91,7 +91,7 @@ declare namespace SENSITIVE {
   export type NotListed = Table<typeof SENSITIVE.test, [
     [args: [string: "src/github/client.ts"], expected: false],
     [args: [string: "docs/gitmodules.md"], expected: false],
-    [args: [string: ".suede/nests/README.md"], expected: false],
+    [args: [string: "suede.nests/README.md"], expected: false],
     [args: [string: "README.md"], expected: false],
   ]>;
 }

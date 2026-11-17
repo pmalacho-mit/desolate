@@ -4,9 +4,9 @@
 // into a router), and the egress relay learns which host an outbound connection wants.
 // Pure functions over a Buffer, so they are unit-tested without a socket.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { bytes, clientHello, repeated } from "../../tests/nests/shared-bytes.harness.ts";
-import type { clientSending } from "../../tests/nests/shared-socket.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { bytes, clientHello, repeated } from "../.harness/shared-bytes.ts";
+import type { clientSending } from "../.harness/shared-socket.ts";
 
 export type Sniffed =
   | { kind: "tls"; name: string | null }

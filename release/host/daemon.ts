@@ -7,8 +7,8 @@
 // that name belongs to, and a request that names no workspace gets 421 and reaches nothing.
 // What has no name in its protocol (Postgres, Redis) reaches the first workspace that had
 // the port; the others are asked to keep the number taken, so their servers move on.
-// A port the host itself holds cannot be listened on: every workspace is asked to keep it
-// taken. Ports below 1024 are never forwarded.
+// A port the host itself holds cannot be listened on: it is not forwarded, and `desolate
+// ports` and the dashboard say so. Ports below 1024 are never forwarded.
 //
 // THE LINK. Each workspace's only way out is one stream to its own proxy in the root. The
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
@@ -45,11 +45,11 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Mock, Mocked, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { answerOf, answers, asked, askedTls, daemonAnswering, failsAtOnce, failsHalfway, heldByColima, helloTo, keepLog, nameOf, rawOwners, said, setOf, shown, sixGiB, vmAnswering, wire, ws } from "../../tests/nests/host-daemon.harness.ts";
-import type { emptyHome, writeState } from "../../tests/nests/home.harness.ts";
-import type { repeated } from "../../tests/nests/shared-bytes.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Call, Expect, Given, Invoke, Mock, Mocked, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { answerOf, answers, asked, askedTls, daemonAnswering, failsAtOnce, failsHalfway, heldByColima, helloTo, keepLog, nameOf, rawOwners, said, setOf, shown, sixGiB, vmAnswering, wire, ws } from "../.harness/host-daemon.ts";
+import type { emptyHome, writeState } from "../.harness/home.ts";
+import type { repeated } from "../.harness/shared-bytes.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
 const PIDFILE = path.join(paths.state, "daemon.pid");
@@ -1114,8 +1114,8 @@ const serve = async () => {
       if (Date.now() - (hostHeld.get(port) ?? 0) < 10_000) continue;
       const server = createServer((client) => void onInbound(port, client));
       server.on("error", (error: NodeJS.ErrnoException) => {
-        // Something on the host has this port. It cannot be published; every workspace is
-        // asked to keep the number taken instead.
+        // Something on the host has this port. It cannot be published, and is reported as not
+        // forwarded (hostHeld).
         if (forwards.get(port) === server) forwards.delete(port);
         hostHeld.set(port, Date.now());
         if (error.code !== "EADDRINUSE") log(`port ${port}: ${error.message}`);

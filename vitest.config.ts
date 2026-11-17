@@ -3,9 +3,9 @@
 // declared namespace and an `import type` are erased). The tiers' own tests (tests/v3) are
 // node:test files, run by tests/v3/run.sh, not by Vitest.
 import { defineConfig } from "vitest/config";
-import namespaceTests from "./.suede/nests/vite-plugin/plugin.mts";
+import namespaceTests from "./suede.nests/vite-plugin/plugin.mts";
 
 export default defineConfig({
-  plugins: [namespaceTests({ exclude: ["tests/**", "samples/**", "demo-out/**", ".suede/**"] })],
-  test: { include: [], passWithNoTests: false, setupFiles: ["tests/nests/setup.ts"] },
+  plugins: [namespaceTests({ exclude: ["tests/**", "samples/**", "demo-out/**", "suede.nests/**", "devcontainers-suede/**", ".suede/**"] })],
+  test: { include: [], passWithNoTests: false, setupFiles: ["release/.harness/setup.ts"] },
 });
