@@ -11,22 +11,18 @@ on the M1 Max on 2026-11-13, with a private copy of this repository standing in 
 | | In a workspace | On the Mac |
 |---|---|---|
 | **T1** (tsc, node tests, in-source tests) | yes: everything passes, in 24 s | yes |
-| **T2** (the fake backend: the whole stack in containers) | yes: 120 of 126 in 17.5 min, on the workspace VM's own Docker. The six that fail are below. | 123 of 142 under Colima on 2026-11-17 (only `05`, `07` and `08`, which cannot pass there) |
+| **T2** (the fake backend: the whole stack in containers) | yes: 142 of 142 in 13 min on 2026-11-17, on the workspace VM's own Docker | in a workspace, as here ([how](https://github.com/pmalacho-mit/desolate/blob/main/tests/v3/README.md#t2-from-a-mac-run-it-in-a-desolate-workspace)); under Colima, 123 of 142 (`05`, `07` and `08` cannot pass there) |
 | **An inner stack** (`desolate bootstrap` on the fake backend) | yes, and its dashboard, approval page and editors open in your Mac's browser | n/a |
 | **T3** (real VMs, QEMU) | in principle, under software emulation (the M1 has no nested virtualization): hours. Not tried | n/a |
 | **T4** (real VMs, vz) | no: it needs the Mac's hypervisor | yes, from your checkout |
 | **An agent on it** | yes, as for any repository (`recipes/claude.sh`, or any other) | |
 
-T2 inside the workspace is faster than on the Mac (the root suite takes 23 s against about
-two minutes under Colima), and two suites that always fail under Colima pass there (05,
-egress, and 08, the devcontainer), because the "VMs" are containers on a real Linux Docker.
-The six that fail inside:
-- 06's check that nothing on the host reaches an editor around its gate finds the outer workspace's own editor on `127.0.0.1:31580`, where the test makes sure
-  nothing listens. That's nesting, not a fault.
-- 07's fail-closed check and its transcript: two log lines in another order, and a refusal checked before it was
-  on record. 07 fails on the Mac too.
-- 09's dashboard diff check and its transcript: the side-by-side diff never rendered in Playwright's Chromium 131 within five
-  minutes. It renders on the Mac; not explained yet.
+T2 inside the workspace is faster than on the Mac and passes whole: 142 of 142 in 13 minutes
+on 2026-11-17, where under Colima `05` (egress), `07` (secrets) and `08` (the devcontainer)
+cannot pass, because there the "VMs" are containers on a real Linux Docker. It is how T2 is
+run from a Mac. To run only the tests, a clone with no keys is enough (`--anonymous`: the
+repository is public); [tests/v3/README.md](https://github.com/pmalacho-mit/desolate/blob/main/tests/v3/README.md#t2-from-a-mac-run-it-in-a-desolate-workspace)
+has the commands.
 
 ## Once: a workspace for desolate
 
