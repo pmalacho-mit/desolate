@@ -11,7 +11,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
-import { findChrome, loadPage } from "../lib/browser.ts";
+import { findChrome, loadPage, openBrowser } from "../lib/browser.ts";
 
 let stack: Stack;
 type Editor = { host: string; port: number; token: string; url: string };
@@ -190,7 +190,11 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
     assert.ok(chrome, "this check needs Chrome or Chromium: install one, or set DESOLATE_CHROME to its path");
     const e = editors.one!;
     const profile = fs.mkdtempSync(path.join(stack.work, "chrome-"));
-    const dump = (url: string, until?: RegExp, ms = 5000) => loadPage(chrome, profile, url, { until, ms });
+    // One browser for all of it, as a person's: the cookie the editor gives it is still there
+    // when it next opens the dev server's page, and the editor's bare address.
+    const person = await openBrowser(chrome, profile);
+    after(() => person.close());
+    const dump = (url: string, until?: RegExp, ms = 5000) => person.load(url, { until, ms });
     // The first load of a just-started server can end before the workbench has run, so this
     // asks until it has, a bounded number of times.
     const started = /renderer-ExtensionHost-[0-9a-f-]+\) was successful/;

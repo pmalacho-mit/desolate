@@ -105,8 +105,8 @@ The fake backend's network link is a unix socket on the host, bind-mounted into 
 a socket made on the Mac, so every test that sends traffic from a workspace (egress,
 secrets, the devcontainer's pulls) fails with "this workspace's proxy is not
 answering". Git, offers, the root's checks and most of the dashboard do run. Use T2 on
-Linux for the rest; on the Mac, the boundary tier is T4. On an M1 on 2026-11-16, 122 of 142
-passed, and what failed was in `05-egress`, `06-editor`, `07-secrets` and `08-devcontainer`.
+Linux for the rest; on the Mac, the boundary tier is T4. On an M1 on 2026-11-17, 123 of 142
+passed, and what failed was in `05-egress`, `07-secrets` and `08-devcontainer`.
 
 ## Debugging a failure
 
