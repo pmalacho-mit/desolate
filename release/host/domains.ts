@@ -71,6 +71,37 @@ const trustCa = async (domain: string) => {
 const repoList = (value: unknown): string[] =>
   Array.isArray(value) ? value.map(String) : typeof value === "string" ? [value] : [];
 
+/** A domain's secrets as the root lists them: names and where each goes, never a value. */
+export type SecretListed = {
+  name: string;
+  hosts: string[];
+  headers: string[] | null;
+  on: boolean;
+  secondsLeft?: number;
+};
+/** What the secrets page (approve-web.ts) does, as the CLI's `domain <d> secret ...` does:
+ *  through the root's control socket, from the host. The value goes from here to the root's
+ *  secret store, and nowhere else: not the dashboard, which the root's ordinary user serves. */
+export const secretOps = {
+  domains: async () =>
+    (await rootctl<{ slug: string }[]>("domain.list", {}, { quiet: true })).map((d) => d.slug),
+  list: (domain: string) => rootctl<SecretListed[]>("secret.list", { domain }, { quiet: true }),
+  set: async (
+    domain: string,
+    secret: { name: string; value: string; hosts: string[]; headers: string[] },
+  ) => {
+    await ensureProxyUser(domain);
+    const listed = await changeSecrets<SecretListed[]>(domain, "set", secret);
+    await trustCa(domain);
+    return listed;
+  },
+  switch: (domain: string, name: string, on: boolean) =>
+    changeSecrets<SecretListed[]>(domain, "switch", { name, on }),
+  remove: (domain: string, name: string) =>
+    changeSecrets<SecretListed[]>(domain, "remove", { name }),
+};
+export type SecretOps = typeof secretOps;
+
 export const domainCommand = async (
   args: string[],
   values: Record<string, unknown>,

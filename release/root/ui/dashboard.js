@@ -629,7 +629,11 @@ const domainCard = (d) => {
     head, repos,
     el("div", { class: "meta" },
       d.net === "enforce" ? pill("network: listed hosts only", "green", "its workspaces reach only the hosts on its list (desolate domain net)") : pill("network: open", "yellow", "its workspaces reach any host; its proxy logs where they went (desolate net log)"),
-      d.secrets.map((s) => pill(s.name, s.on ? "accent" : "", s.on ? "a secret its workspaces may use by name: the value is put in by the proxy, never in a workspace" : "a secret, switched off", { "data-secret": s.name }))),
+      d.secrets.map((s) => pill(s.name, s.on ? "accent" : "", s.on ? "a secret its workspaces may use by name: the value is put in by the proxy, never in a workspace" : "a secret, switched off", { "data-secret": s.name })),
+      // Secrets are set on the Mac's own page (the approval page's origin), never here: this
+      // page is served by the root's ordinary user, which never sees a secret's value.
+      state.stack && state.stack.approveHostname
+        ? el("a", { class: "button quiet small", href: `http://${state.stack.approveHostname}:${state.stack.editorPort}/secrets?domain=${encodeURIComponent(d.slug)}`, target: "_blank", rel: "noopener noreferrer", "data-secrets": d.slug, title: "Add, replace, switch off or remove this domain's secrets, on the Mac's own page: the value never passes through the dashboard" }, d.secrets.length ? "Secrets..." : "Add a secret...") : null),
     el("ul", { class: "rows" },
       // The domain's environment, built once, before its first workspace (host/templates.ts).
       d.building ? el("li", { "data-building": d.slug }, el("span", { class: "dot blue", title: "building" }),
