@@ -298,7 +298,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       checks.push({
         name: "lima", ok: version.code === 0 && number !== null && (major > least[0]! || (major === least[0] && minor >= least[1]!)),
         detail: version.code === 0 ? version.stdout.trim() : "limactl was not found",
-        fix: process.platform === "darwin" ? `brew upgrade lima (${least.join(".")} or newer)` : `install Lima ${least.join(".")} or newer (https://lima-vm.io) and put limactl on PATH, or set DESOLATE_LIMACTL`,
+        fix: process.platform === "darwin" ? `brew ${version.code === 0 ? "upgrade" : "install"} lima (${least.join(".")} or newer)` : `install Lima ${least.join(".")} or newer (https://lima-vm.io) and put limactl on PATH, or set DESOLATE_LIMACTL`,
       });
       for (const override of ["default.yaml", "override.yaml"])
         if (fs.existsSync(path.join(LIMA_HOME, "_config", override)))
