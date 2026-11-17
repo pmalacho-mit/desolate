@@ -49,7 +49,7 @@ import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
 import { urlRules } from "./git-urls.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { projectWith } from "../../tests/nests/workspace-files.harness.ts";
 
 export const STATE = "/run/desolate/devcontainer.json";
@@ -120,6 +120,37 @@ export const CACHE_ENV: Record<string, string> = {
   UV_CACHE_DIR: "/desolate/cache/uv",
   GOMODCACHE: "/desolate/cache/go-mod",
 };
+/** A spec's run arguments less the ones that choose a network, in each spelling docker reads:
+ *  `--network=x` and `--net=x`, and `--network x` and `--net x`, whose value is the next
+ *  word. Kept, that word was read by docker run as the image (`--network bridge` left
+ *  `bridge`). */
+const withoutNetwork = (args: unknown[]): unknown[] => {
+  const kept: unknown[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (typeof arg === "string" && /^--net(work)?$/.test(arg)) i++;
+    else if (typeof arg !== "string" || !/^--net(work)?=/.test(arg)) kept.push(arg);
+  }
+  return kept;
+};
+
+declare namespace withoutNetwork {
+  /** both spellings of both names go, a two-word one with its value */
+  export type Network = Table<typeof withoutNetwork, [
+    [args: [args: ["--network", "bridge", "--privileged"]], expected: ["--privileged"]],
+    [args: [args: ["--net", "none", "--cap-add=SYS_PTRACE"]], expected: ["--cap-add=SYS_PTRACE"]],
+    [args: [args: ["--network=bridge", "--net=container:db"]], expected: []],
+    /** at the end, with no value after it; and before a flag, which docker reads as its value */
+    [args: [args: ["--privileged", "--network"]], expected: ["--privileged"]],
+    [args: [args: ["--net", "--privileged", "--init"]], expected: ["--init"]],
+  ]>;
+  /** controls: flags that only start alike, and words that are not flags, are the project's */
+  export type Keeps = Table<typeof withoutNetwork, [
+    [args: [args: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]], expected: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]],
+    [args: [args: []], expected: []],
+  ]>;
+}
+
 /** The spec desolate hands the CLI: the project's, plus what the header lists. */
 export const overrideOf = (spec: Record<string, unknown>, checkout: string, home: string, who: { domain: string; workspace: string; devHostname?: string; cache?: boolean } = { domain: "", workspace: "" }): Record<string, unknown> => {
   // The domain's cache is a share a VM gets when it is made: one made by an older desolate has
@@ -177,7 +208,7 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
     workspaceMount: bind("/workspaces", "/workspaces"),
     workspaceFolder: checkout,
     mounts: [...list(spec.mounts), ...ours],
-    runArgs: [...list(spec.runArgs).filter((arg) => typeof arg !== "string" || !/^--net(work)?(=|$)/.test(arg)), "--network=host"],
+    runArgs: [...withoutNetwork(list(spec.runArgs)), "--network=host"],
     containerEnv,
   };
 };
@@ -226,7 +257,13 @@ declare namespace overrideOf {
     "matches",
     { runArgs: ["--privileged", "--cap-add=SYS_PTRACE", "--network=host"] }
   >;
-  export type NetworkAsTwoWords = Todo<"bug: runArgs ['--network', 'bridge'] (the flag and its value as two words, as docker takes them) drops the flag and keeps 'bridge', which docker run then reads as the image; its value should go with it">;
+  /** a network named as two words goes with its value: docker run would read a value left
+   *  behind as the image */
+  export type NetworkAsTwoWords = Expect<
+    Invoke<typeof overrideOf, [spec: { image: "node:22"; runArgs: ["--network", "bridge", "--privileged"] }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    "matches",
+    { runArgs: ["--privileged", "--network=host"] }
+  >;
 
   /** where the project and desolate both say something: the workspace's folder and mount are
    *  the VM's (git works only on its paths), and the project's environment wins over
