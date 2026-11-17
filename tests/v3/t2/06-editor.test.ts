@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
+import { findChrome, loadPage, openBrowser } from "../lib/browser.ts";
 
 let stack: Stack;
 type Editor = { host: string; port: number; token: string; url: string };
@@ -185,16 +186,20 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
 
   it("in a real browser the workbench loads, and the dev server's page cannot see the editor's cookie", async () => {
     stack.step("a browser opens the editor");
-    const chrome = [process.env.DESOLATE_CHROME, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find((file) => file && fs.existsSync(file));
+    const chrome = findChrome();
     assert.ok(chrome, "this check needs Chrome or Chromium: install one, or set DESOLATE_CHROME to its path");
     const e = editors.one!;
     const profile = fs.mkdtempSync(path.join(stack.work, "chrome-"));
-    const dump = (url: string) =>
-      spawnSync(chrome!, ["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--host-resolver-rules=MAP *.localhost 127.0.0.1", "--enable-logging=stderr", "--log-level=0", "--virtual-time-budget=60000", "--dump-dom", url], { encoding: "utf8", timeout: 180_000, maxBuffer: 64 * 1024 * 1024 });
-    // The first load of a just-started server can end before the workbench has run (headless
-    // Chrome stops at its time budget), so this asks until it has, a bounded number of times.
-    let page = dump(e.url);
-    for (let i = 0; i < 8 && !/renderer-ExtensionHost-[0-9a-f-]+\) was successful/.test(page.stderr); i++) page = dump(e.url);
+    // One browser for all of it, as a person's: the cookie the editor gives it is still there
+    // when it next opens the dev server's page, and the editor's bare address.
+    const person = await openBrowser(chrome, profile);
+    after(() => person.close());
+    const dump = (url: string, until?: RegExp, ms = 5000) => person.load(url, { until, ms });
+    // The first load of a just-started server can end before the workbench has run, so this
+    // asks until it has, a bounded number of times.
+    const started = /renderer-ExtensionHost-[0-9a-f-]+\) was successful/;
+    let page = await dump(e.url, started, 60_000);
+    for (let i = 0; i < 8 && !started.test(page.stderr); i++) page = await dump(e.url, started, 60_000);
     // The workbench's own console, in Chrome's log: it started, and both of its WebSockets
     // (the management connection and the extension host's) connected, through the host's
     // forwarder and the gate, to the editor's server in the VM.
@@ -203,21 +208,34 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
     assert.match(consoleOf(page.stderr), /Creating a socket \(renderer-ExtensionHost-[0-9a-f-]+\) was successful/);
     // The same browser profile now holds the editor's cookie. A page served by the
     // workspace's dev server, on the dev hostname, asks for its cookies.
-    stack.inVm(vmOf("web/one"), ["bash", "-c", "cd /workspaces/acme/app && (setsid nohup python3 -m http.server 3000 --bind 127.0.0.1 >/tmp/http.log 2>&1 </dev/null &) ; sleep 1"]);
+    // On a port nothing on this machine holds: one that is held is not forwarded, and its
+    // address reaches that program instead (on the owner's Mac another user holds 3000).
+    const free = async (port: number): Promise<number> => {
+      for (const host of ["127.0.0.1", "::1"]) {
+        const ok = await new Promise<boolean>((resolve) => {
+          const probe = net.createServer().once("error", (error: NodeJS.ErrnoException) => resolve(error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT"));
+          probe.listen(port, host, () => probe.close(() => resolve(true)));
+        });
+        if (!ok) return free(port + 1);
+      }
+      return port;
+    };
+    const devPort = await free(3917);
+    stack.inVm(vmOf("web/one"), ["bash", "-c", `cd /workspaces/acme/app && (setsid nohup python3 -m http.server ${devPort} --bind 127.0.0.1 >/tmp/http.log 2>&1 </dev/null &) ; sleep 1`]);
     const dev = e.host.replace("-editor-", "-");
     let seen = "";
     // The forwarder publishes the port a moment after the server starts listening.
     for (let i = 0; i < 40 && !/<title>cookies:/.test(seen); i++) {
-      seen = dump(`http://${dev}:3000/page.html`).stdout;
+      seen = (await dump(`http://${dev}:${devPort}/page.html`, /<title>cookies:/)).stdout;
       if (!/<title>cookies:/.test(seen)) await new Promise((resolve) => setTimeout(resolve, 500));
     }
     assert.match(seen, /<title>cookies:\[\]<\/title>/, `the dev server's page ran its script and saw no cookie: ${seen.slice(0, 300)}`);
     // CONTROL: that profile does hold the editor's cookie, and sends it to the editor's own
     // name: the bare address, with no token in it, is answered with the workbench. A fresh
     // profile gets the editor's refusal.
-    assert.match(dump(`http://${e.host}:${e.port}/`).stdout, /vscode-workbench-web-configuration/);
+    assert.match((await dump(`http://${e.host}:${e.port}/`, /vscode-workbench-web-configuration/)).stdout, /vscode-workbench-web-configuration/);
     const fresh = fs.mkdtempSync(path.join(stack.work, "chrome-fresh-"));
-    const stranger = spawnSync(chrome!, ["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", `--user-data-dir=${fresh}`, "--host-resolver-rules=MAP *.localhost 127.0.0.1", "--virtual-time-budget=5000", "--dump-dom", `http://${e.host}:${e.port}/`], { encoding: "utf8", timeout: 120_000 });
+    const stranger = await loadPage(chrome, fresh, `http://${e.host}:${e.port}/`, { until: /Forbidden|vscode-workbench-web-configuration/ });
     assert.match(stranger.stdout, /Forbidden/);
     assert.doesNotMatch(stranger.stdout, /vscode-workbench-web-configuration/);
   });

@@ -11,7 +11,7 @@ on the M1 Max on 2026-11-13, with a private copy of this repository standing in 
 | | In a workspace | On the Mac |
 |---|---|---|
 | **T1** (tsc, node tests, in-source tests) | yes: everything passes, in 24 s | yes |
-| **T2** (the fake backend: the whole stack in containers) | yes: 120 of 126 in 17.5 min, on the workspace VM's own Docker. The six that fail are below. | 122 of 142 under Colima on 2026-11-16 (its known failures) |
+| **T2** (the fake backend: the whole stack in containers) | yes: 120 of 126 in 17.5 min, on the workspace VM's own Docker. The six that fail are below. | 123 of 142 under Colima on 2026-11-17 (only `05`, `07` and `08`, which cannot pass there) |
 | **An inner stack** (`desolate bootstrap` on the fake backend) | yes, and its dashboard, approval page and editors open in your Mac's browser | n/a |
 | **T3** (real VMs, QEMU) | in principle, under software emulation (the M1 has no nested virtualization): hours. Not tried | n/a |
 | **T4** (real VMs, vz) | no: it needs the Mac's hypervisor | yes, from your checkout |
