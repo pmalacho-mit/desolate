@@ -13,7 +13,7 @@ of you (step 6). One of desolate's first users? Read [dogfooding.md](dogfooding.
 
 - **A Mac with Apple silicon** (M1 or later). desolate runs its VMs with Apple's
   Virtualization.framework, through Lima; an Intel Mac is not supported.
-- **Homebrew**, and from it: `brew install lima node gh`
+- **Homebrew**, and from it: `brew install lima node gh jq` (`jq` is for the recipes in step 6)
   - Lima **2.3 or newer** (`limactl --version`): older versions let a confined VM's pings out.
   - node **22.18 or newer**: desolate is TypeScript that node runs directly.
   - GitHub's CLI, signed in (`gh auth login`) as someone who can add deploy keys to the
