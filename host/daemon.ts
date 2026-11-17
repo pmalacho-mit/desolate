@@ -7,8 +7,8 @@
 // that name belongs to, and a request that names no workspace gets 421 and reaches nothing.
 // What has no name in its protocol (Postgres, Redis) reaches the first workspace that had
 // the port; the others are asked to keep the number taken, so their servers move on.
-// A port the host itself holds cannot be listened on: every workspace is asked to keep it
-// taken. Ports below 1024 are never forwarded.
+// A port the host itself holds cannot be listened on: it is not forwarded, and `desolate
+// ports` and the dashboard say so. Ports below 1024 are never forwarded.
 //
 // THE LINK. Each workspace's only way out is one stream to its own proxy in the root. The
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
@@ -1114,8 +1114,8 @@ const serve = async () => {
       if (Date.now() - (hostHeld.get(port) ?? 0) < 10_000) continue;
       const server = createServer((client) => void onInbound(port, client));
       server.on("error", (error: NodeJS.ErrnoException) => {
-        // Something on the host has this port. It cannot be published; every workspace is
-        // asked to keep the number taken instead.
+        // Something on the host has this port. It cannot be published, and is reported as not
+        // forwarded (hostHeld).
         if (forwards.get(port) === server) forwards.delete(port);
         hostHeld.set(port, Date.now());
         if (error.code !== "EADDRINUSE") log(`port ${port}: ${error.message}`);

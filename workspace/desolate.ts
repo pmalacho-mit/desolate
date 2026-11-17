@@ -5,7 +5,7 @@
 //   desolate offer [<owner/repo>] [<branch>]  bundle a branch for the root; a person pushes it
 //   desolate sync                          write this domain's branches out for the root now
 //   desolate status ...                    /desolate/status (the wrapper, workspace/desolate, runs it)
-//   desolate spawn [--name <w>] [--branch <b>] [-- <command...>]
+//   desolate spawn [--name <w>] [--branch <b>] [--checkout <owner/repo>=worktree:<b>]... [-- <command...>]
 //                                          another workspace in this domain, signed by this one
 //   desolate close <workspace>             remove one this workspace started (only if it is clean)
 //   desolate domain stats [--json]         this domain's workspaces, who started each, its limit
@@ -382,7 +382,7 @@ const main = async (argv: string[]) => {
       process.stdout.write(`${repo}: ${result.branches} branch(es) written for the root${result.bundled ? "" : " (nothing new to bundle)"}.\n`);
     }
   } else {
-    process.stdout.write("desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n  desolate spawn [--name <w>] [--branch <b>] [-- <command...>]\n                                            another workspace in this domain, the command as its agent\n  desolate close <workspace>                remove one this workspace started, if nothing in it would be lost\n  desolate domain stats [--json]            this domain's workspaces, who started each, its limit, the Mac\n  desolate events [--follow] [--all]        what happens in this domain, one JSON object per line\n  desolate issue offer --title <t> [--body <b> | --body-file <f>] [--label <l>]... [--repo <owner/repo>]\n                                            a GitHub issue, for the person to edit and publish\n");
+    process.stdout.write("desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n  desolate spawn [--name <w>] [--branch <b>] [--checkout <owner/repo>=worktree:<b>]... [-- <command...>]\n                                            another workspace in this domain, the command as its agent\n  desolate close <workspace>                remove one this workspace started, if nothing in it would be lost\n  desolate domain stats [--json]            this domain's workspaces, who started each, its limit, the Mac\n  desolate events [--follow] [--all]        what happens in this domain, one JSON object per line\n  desolate issue offer --title <t> [--body <b> | --body-file <f>] [--label <l>]... [--repo <owner/repo>]\n                                            a GitHub issue, for the person to edit and publish\n");
     process.exit(usageExit(verb));
   }
 };

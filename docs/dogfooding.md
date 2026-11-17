@@ -13,7 +13,7 @@ workspace. On the Mac and in the root you look and decide; you do not `npm insta
 The [README](../README.md#the-one-rule-you-keep) says why. Everything else on this page is
 about convenience; this is about safety.
 
-And two habits:
+And three habits:
 - **Approve only what you reviewed.** A push waits for you to type the branch name (or click
   Approve on the approval page), and it sends exactly the commit it names. Read what it says
   it sends.
@@ -77,6 +77,10 @@ workspace, the network rules, upgrading with `git pull` and `desolate bootstrap`
 - **macOS may ask whether `limactl` may accept incoming connections.** Click Deny.
 - **`desolate rm <domain>/<workspace>` removes the workspace and anything uncommitted in it.**
   `desolate stop` keeps everything.
+- **A dev server on a port a program on your Mac already holds is not forwarded,** and its
+  address on that port reaches that program instead. `desolate ports` and the dashboard say
+  "not forwarded" and name the program; `desolate doctor` notes common dev ports held on the
+  Mac. Run the server on another port.
 - **Only ports 80 and 443 reach the network from a workspace.** A registry on another port
   (`:5000`), ssh to a forge, or a database outside cannot be reached at all.
 - **A private registry during an image build** (its token a desolate secret, used by a
@@ -119,6 +123,9 @@ clones, and the root VM's disk holds your keys.
 git -C ~/desolate pull && desolate bootstrap        # update: nothing of yours is touched
 desolate destroy --all                              # leave: every VM, and ~/.desolate
 ```
+
+A workspace's devcontainer made before an update keeps what desolate gave it then (its
+mounts and environment) until it is made again: `desolate stop` then `desolate start` it.
 
 After leaving, delete the deploy keys titled `desolate read (host ...)` and
 `desolate write (host ...)` from each repository you cloned (GitHub: the repository's

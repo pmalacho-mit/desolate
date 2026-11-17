@@ -10,7 +10,7 @@ host's approver key, and that key signs only after you type the branch name on y
 terminal. Nothing in any VM can approve, and a script or agent harness driving `desolate`
 on your Mac stops there too, because the prompt is on the terminal and not on its input.
 It is a gate against work being pushed without you having looked, not a defence against
-hostile code on your Mac (see the rule above). If you want that as well, on a Mac
+hostile code on your Mac (see [the one rule](../README.md#the-one-rule-you-keep)). If you want that as well, on a Mac
 `DESOLATE_APPROVER=touchid desolate bootstrap` keeps the approver key in the Secure Enclave
 behind Touch ID; that path is written and has never been run. `desolate approve --selftest`
 checks whichever you have without pushing anything.
@@ -30,7 +30,11 @@ signs only for a request from its own tab: a cookie only that address gives, its
 It cannot be framed, and its Approve button arms only after the tab has had your attention
 for a second and the pointer then moves onto it, so a click aimed at something else when a
 window opened under it lands on nothing. Treat the address like a password: anyone with it,
-on your Mac, can approve. In the git terminal (`desolate git`) the same page opens beside the
+on your Mac, can approve. The pages are served on both `127.0.0.1` and `::1` (where browsers
+look first for these names), or not at all: while another program holds the port on `::1`,
+desolate prints no address with a token in it, and retires the tokens (a tab already open
+would send that program its cookie); a retired token is refused until it is made again
+(`desolate bootstrap` makes them all again). In the git terminal (`desolate git`) the same page opens beside the
 shell when a push waits: `git push`, then Approve, in one tab. Only the git terminal's own
 origin may frame it; there the pointer over the frame counts as your attention, and in Chrome
 Approve arms only while the browser reports the button visible and uncovered.
@@ -77,8 +81,8 @@ from, which is how far to believe it:
 | `source` | types | believe it as |
 |---|---|---|
 | `pusher` | `pushed`, `push-failed`, `push-uncertain` | the remote's own answer: `pushed` means the branch is at that commit |
-| `host` | `approved`, `refused`, `workspace-up`, `workspace-down`, `git-push-handed` | the host's own doing |
-| `root` | `offered`, `offer-gone`, `bundle-refused`, `status`, `head` (a checkout switched branch or its branch moved), `approval-waiting` | an agent's word, relayed: safe to print, not to trust |
+| `host` | `approved`, `refused`, `workspace-up`, `workspace-down`, `git-push-handed`, `git-delivery-handed` | the host's own doing |
+| `root` | `offered`, `offer-gone`, `bundle-refused`, `status`, `head` (a checkout switched branch or its branch moved), `approval-waiting`, `workspace-made`, `workspace-state`, `workspace-removed`, `issue-offered`, `issue-published`, `issue-rejected` | an agent's word, relayed: safe to print, not to trust |
 
 For example, a pull request for every branch pushed (the `gh` here is yours, on the Mac; no
 VM has it):
@@ -98,8 +102,8 @@ characters taken out (and a name desolate would not make is `null`). Pass a fiel
 program as an argument, never into the text of a script: `osascript -e 'on run argv' -e
 'display notification (item 1 of argv)' -e 'end run' -- "$message"`, not
 `osascript -e "display notification \"$message\""`, which runs what the message says.
-Approvals given at the terminal (`desolate push`, `desolate approve`) are not events yet;
-the page's are.
+An approval given at the terminal (`desolate push`, `desolate approve`) is an `approved`
+event too, with `"via": "terminal"`; a refusal there is not an event.
 
 **What a push is, exactly.** The push goes out through the root's pusher, the one program
 that can use a write key, and it asks the remote for one change: the branch moves from the
@@ -256,7 +260,7 @@ Application Firewall's own strings):
 
 **Click Deny.** desolate never needs another machine to connect to it:
 
-- Everything desolate listens on is your Mac's loopback (`127.0.0.1`): the dashboard, the
+- Everything desolate listens on is your Mac's loopback (`127.0.0.1` and `::1`): the dashboard, the
   editors, dev servers, each workspace's link. The macOS firewall does not apply to loopback,
   so Deny changes nothing for desolate.
 - desolate's VMs forward nothing onto your Mac by themselves: every desolate VM refuses
@@ -358,14 +362,16 @@ Mac:                 the approval page, or `desolate issue publish <id>`, shows 
 
 ## What works today, and what does not
 
-"T2" is the fake backend: containers standing in for VMs, **not isolated**, good for
-everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through Lima).
+"T1" is static and unit: the type check, node's tests, and the in-source tests beside the
+code. "T2" is the fake backend: containers standing in for VMs, **not isolated**, good for
+everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through Lima); it
+last ran in the first pass's cloud sandbox.
 "Mac" means Lima with Virtualization.framework, the product backend.
 
 | | Implemented | Tested | Not yet |
 |---|---|---|---|
 | bootstrap, doctor, destroy | yes | T2, T3 | installing the host's own tools (it checks for them and says what to install) |
-| Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T3 | |
+| Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T3; `clone --keys-by-hand` against github.com | |
 | P2: pushes only by a person (`--expect`, exit codes, LFS first, audit) | yes | T2 | |
 | P2: the approval is given on the host, outside every VM (a signed challenge; `desolate approve` for a raw `git push origin`) | yes | T2, with the `terminal` approver, which is the default | the opt-in Touch ID approver (`host/approver/touchid.swift`) has never been compiled or run |
 | P3: keys never leave the keyring; a secret's value never leaves the root | yes | T2 | |
@@ -374,7 +380,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T3, T4 | |
 | Offers, the root's view (`git fetch --all`), deliveries between domains | yes | T2 | |
 | `desolate upstream`: a consumer's change to a vendored suede dependency, split by suede's own upstream (pinned) in the git VM, pushed as `downstream/...` after your approval ([suede.md](suede.md)) | yes | T1, T2; against github.com | LFS files in the dependency |
-| Ports: same number, routed by name, reservations; a bare `localhost` sent to the workspace serving the port; none forwarded under the editor's name | yes | T2 (`03`, `06`); on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
+| Ports: same number, routed by name, reservations; a port a program on the Mac holds reported as not forwarded; a bare `localhost` sent to the workspace serving the port; none forwarded under the editor's name | yes | T2 (`03`, `06`); on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
 | P5: read-only shares against root in the VM | yes | **T3** (and measured on an M1 for the Mac) | |
 | P5: forced egress against root in the VM | yes | **T3**; Mac: measured for TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
 | Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T3 | |
@@ -382,7 +388,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T3 | v2's workspace extension's panel ([`release/vscode-image/extension`](https://github.com/pmalacho-mit/desolate/tree/4f32c77/release/vscode-image/extension) at `4f32c77`) is not ported; a bare `localhost` link reaches the workspace through the forwarder |
 | The project's devcontainer, from its own `devcontainer.json` (features included), inside the workspace VM; `exec` and the editor enter it | yes | T2 (an image, a Dockerfile, a failing spec, no spec, a changed spec, a compose spec and its ports); on the M1, a public image with a feature, compose with Docker outside and inside | a compose service that is not glibc gets no port relay and no editor |
 | The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T3 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
-| The Mac backend (`vz`) | yes | **T4 on an M1**: read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over a real share, the editor, a secret | |
+| The Mac backend (`vz`) | yes | **T4 on an M1** (15 of 15, 2026-11-16): read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over a real share, the editor, a secret | |
 | Pushes by the pusher alone (it speaks receive-pack; compare-and-swap from the commit you saw) | yes | T1, T2; against github.com | |
 | One-click approval in the browser, beside the git terminal | yes | T1, T2, and in Chrome | Firefox and Safari cannot say whether Approve is covered (Chrome can) |
 | The git VM: your git in a browser tab, no network or keys; a remote per domain; LFS | yes | T2 | |
@@ -390,7 +396,7 @@ everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through 
 | Upgrades: `git pull` then `bootstrap` (root and base re-provisioned in place when the image changed); `destroy` keeps the root's keys, secrets and rules for the next `bootstrap` | yes | T1, T2 (`13-rebuild`); by hand on the M1 | |
 | Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T3 inside a workspace |
 | Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
-| Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`agent.sh`); on the M1, `claude.sh` with a stand-in token | `issues.sh` and `suede.sh` not run |
+| Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`12-agent`: `agent.sh`); on the M1, `agent.sh` to an offer and `claude.sh` with a stand-in token | `issues.sh` and `suede.sh` not run |
 | Workspaces that start workspaces in their own domain (`desolate spawn`, `close`, `domain stats`, `events` inside one): signed by the workspace, checked by the host | yes | T1; T2 (`16-spawn`: the limit, the labels, stats and events, a forged request refused beside a signed one run, close refused with uncommitted work) | on real VMs (vz) |
 | Issues offered by a workspace (`desolate issue offer`): edited on the dashboard with a Markdown preview, published by the host's `gh` after you approve the exact text on the Mac | yes | T1 (fields, the preview, the approval page's token); T2 (`17-issues`: every field to a stand-in gh byte for byte, not without confirming) | against github.com |
 | After a push: the pull request's page on GitHub; "merged into <base>" once the mirror shows it | yes | T1 (the link; a merge, a squash, a rebase), T2 (a squash on the stand-in forge) | the link has not been opened on github.com; the 15-minute fetch not watched in real use |
@@ -408,13 +414,14 @@ root/              runs in the root VM: keyring, mirrors, clones, offers, push, 
   stated.ts, ui/   the state service and the dashboard it serves
   outbox.ts        the only code that touches what a domain wrote: how, and why, is at its top
 workspace/         runs in each workspace VM: its init, its daemon, its network, its
-                   devcontainer (devcontainer.ts, enter.sh), its editor, and git's helpers
+                   devcontainer (devcontainer.ts, enter.sh, entry), its editor, and git's helpers
                    there (git-remote-desolate-mirror, -offer)
 git/               runs in the git VM: your git in a browser tab, and suede's upstream (pinned)
 recipes/           scripts of ordinary desolate commands, for tasks you do often (README.md)
 completion.bash    tab completion, zsh and bash: echo 'source <(desolate completion)' >> ~/.zshrc
 shared/            names, exit codes, the name sniffer: used on more than one side
 image/             what a VM image contains (provision.sh) and how it is built
+.harness/          the in-source tests' harness, imported by type only: nothing of it runs (README.md)
 docs/              getting started, the reference, agents, suede, developing desolate, dogfooding;
                    incidents.md: ways desolate has been wrong, and what each taught
 ```

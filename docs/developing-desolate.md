@@ -11,7 +11,7 @@ on the M1 Max on 2026-11-13, with a private copy of this repository standing in 
 | | In a workspace | On the Mac |
 |---|---|---|
 | **T1** (tsc, node tests, in-source tests) | yes: everything passes, in 24 s | yes |
-| **T2** (the fake backend: the whole stack in containers) | yes: 120 of 126 in 17.5 min, on the workspace VM's own Docker. The six that fail are below. | 92 of 115 under Colima (its known failures) |
+| **T2** (the fake backend: the whole stack in containers) | yes: 120 of 126 in 17.5 min, on the workspace VM's own Docker. The six that fail are below. | 122 of 142 under Colima on 2026-11-16 (its known failures) |
 | **An inner stack** (`desolate bootstrap` on the fake backend) | yes, and its dashboard, approval page and editors open in your Mac's browser | n/a |
 | **T3** (real VMs, QEMU) | in principle, under software emulation (the M1 has no nested virtualization): hours. Not tried | n/a |
 | **T4** (real VMs, vz) | no: it needs the Mac's hypervisor | yes, from your checkout |
@@ -116,7 +116,8 @@ on what changed:
 | What changed | Run | What happens |
 |---|---|---|
 | anything in `release/` (most changes) | `desolate bootstrap` | The daemon and the root's services restart on the new code: 9 s. Running workspaces and agents keep running, the one you developed in included. |
-| `release/workspace/` (what runs in a workspace) | then `desolate stop desolate/<w>` and `desolate start desolate/<w>` | 24 s. Its agents end, and its devcontainer is made again if desolate's mounts or environment for it changed: what was installed in it by hand goes (put it in the devcontainer's `postCreateCommand`). Checkouts and uncommitted work stay. |
+| `release/workspace/desolate`, `status`, or the git remote helpers (`git-remote-desolate-offer`, `-mirror`) | nothing more than the pull | A workspace reads `release/` from the Mac's checkout as it is now: the VM links to these, and a devcontainer runs them through `workspace/entry`, so the next command in it runs the new code. A devcontainer made before `entry` existed still holds them as binds of single files, which go stale on an upgrade: stop and start it once. |
+| the rest of `release/workspace/` (what runs in a workspace) | then `desolate stop desolate/<w>` and `desolate start desolate/<w>` | 24 s. Its agents end, and its devcontainer starts again. It is made again if desolate's mounts or environment for it changed (`overrideOf` in `devcontainer.ts`): what was installed in it by hand goes (put it in the devcontainer's `postCreateCommand`). A change to `workspace/entry` itself reaches a devcontainer only this way. Checkouts and uncommitted work stay. |
 | `pins.env`, `image/` | `desolate bootstrap` | The base and root VMs are provisioned again in place (35 s here, once); templates are rebuilt on the next `up`. Workspaces keep their older tools until remade. |
 | `tests/` only | nothing | |
 
