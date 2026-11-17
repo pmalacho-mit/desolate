@@ -89,3 +89,64 @@ textarea.wide { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; 
 .markdown li.task { list-style: none; }
 /* The Write/Preview toggle: a button its own size, not the editor's width (it stretched in the column). */
 [data-preview-toggle] { justify-self: start; align-self: flex-start; width: auto; }
+
+/* ---- Scanning (dogfooding, 2026-11-17): what matters is a pill of its own colour, not a
+   phrase in a sentence of the same grey. Each pill says more on hover (its title). */
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; line-height: 18px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--soft); background: transparent; white-space: nowrap; vertical-align: 1px; }
+.pill.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
+.pill.green { color: var(--green); border-color: color-mix(in srgb, var(--green) 55%, transparent); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.pill.red { color: var(--red); border-color: color-mix(in srgb, var(--red) 55%, transparent); background: color-mix(in srgb, var(--red) 10%, transparent); font-weight: 600; }
+.pill.orange { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 55%, transparent); background: color-mix(in srgb, var(--orange) 10%, transparent); font-weight: 600; }
+.pill.yellow { color: var(--yellow); border-color: color-mix(in srgb, var(--yellow) 55%, transparent); background: color-mix(in srgb, var(--yellow) 10%, transparent); }
+.pill.blue { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 55%, transparent); background: color-mix(in srgb, var(--blue) 10%, transparent); font-weight: 600; }
+.pill.accent { color: var(--accent); border-color: var(--accent); }
+.pill.repo { color: var(--ink); }
+.pill[title] { cursor: help; }
+.pill.pulse::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .pill.pulse::before { animation: none; } }
+.num-add { color: var(--green); font-weight: 700; }
+.num-del { color: var(--red); font-weight: 700; }
+.num { font-weight: 700; color: var(--ink); }
+.danger { color: var(--red) !important; border-color: color-mix(in srgb, var(--red) 60%, transparent) !important; }
+/* A disabled button says why on hover: the span around it carries the reason (a disabled
+   button itself gets no hover). */
+.tip { display: inline-flex; }
+.tip > button:disabled { pointer-events: none; cursor: not-allowed; }
+.tip:has(> button:disabled) { cursor: not-allowed; }
+
+/* ---- Sections and cards that fold. */
+.section-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.section-head h2 { margin: 0; }
+button.fold { background: transparent; border: 0; color: var(--soft); padding: 0 4px; font-size: 14px; width: 22px; }
+button.fold::before { content: "\25BE"; }
+.folded > .section-head button.fold::before, .card[data-folded] button.fold::before { content: "\25B8"; }
+.foldable.folded > .section-body { display: none; }
+input.filter { width: 240px; max-width: 100%; }
+.fold-head { cursor: pointer; }
+.card[data-folded] { padding-bottom: 12px; }
+.repos { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 2px; align-items: center; }
+.meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0 4px; align-items: center; }
+hr.split { border: 0; border-top: 1px solid var(--line); margin: 12px 0 0; }
+.empty-ws { margin: 8px 0 4px; padding: 12px 14px; border: 1px dashed var(--line); border-radius: 8px; display: grid; gap: 8px; justify-items: start; }
+.empty-ws .line { color: var(--soft); font-size: 13px; }
+.what .name { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.checkout { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--soft); margin-top: 2px; }
+.new-domain { display: grid; gap: 10px; }
+.new-domain .choices { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.new-domain label.choice { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
+
+/* ---- The review: a panel on the right, the window's height, its width the person's. */
+#review { position: fixed; top: 0; right: 0; bottom: 0; width: var(--review-w, min(820px, 56vw)); max-width: 100vw; z-index: 5; display: flex; background: var(--card); border-left: 1px solid var(--line); box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18); }
+#review[hidden] { display: none; }
+#review .resizer { flex: none; width: 7px; cursor: col-resize; background: transparent; border-right: 1px solid var(--line); }
+#review .resizer:hover, #review .resizer.dragging { background: color-mix(in srgb, var(--accent) 25%, transparent); }
+#review-body { flex: 1; min-width: 0; overflow: auto; }
+#review-body > .card { border: 0; border-radius: 0; margin: 0; padding: 0 18px 0; min-height: 100%; }
+#review-body .review-head { position: sticky; top: 0; z-index: 2; background: var(--card); padding: 14px 0 10px; border-bottom: 1px solid var(--line); margin-bottom: 10px; }
+#review-body .sbs, #review-body pre.diff { max-height: none; }
+body.reviewing main { margin-right: var(--review-w, min(820px, 56vw)); max-width: none; }
+@media (max-width: 900px) { body.reviewing main { margin-right: 0; } #review { width: 100vw; } #review .resizer { display: none; } }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.stat { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; margin: 6px 0; font-size: 13px; }
+.warnbox { border: 1px solid color-mix(in srgb, var(--orange) 60%, transparent); background: color-mix(in srgb, var(--orange) 9%, transparent); border-radius: 8px; padding: 8px 12px; margin: 8px 0; color: var(--ink); }

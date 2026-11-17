@@ -42,6 +42,17 @@ export type WorkspacePlan = {
   createdAt: string;
 };
 
+/** One checkout's commits against the remote, as the root sees them (root/offers.ts
+ *  `unpushedOf`): `count` commits its HEAD has that no branch of origin has, or null when that
+ *  could not be told; `why` says what keeps it from being called pushed. */
+export type Unpushed = {
+  repo: string;
+  branch: string | null;
+  commit: string | null;
+  count: number | null;
+  why: string | null;
+};
+
 export const checkoutPath = (repo: string, kind: "main" | "worktree", name: string) =>
   kind === "main" ? `/workspaces/${repo}` : `/workspaces/${repo}/.worktrees/${name}`;
 

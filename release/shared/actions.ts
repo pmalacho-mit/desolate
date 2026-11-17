@@ -13,13 +13,21 @@ export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
     isSlug(a.domain) && isSlug(a.workspace) ? ["start", `${a.domain}/${a.workspace}`] : null,
   "workspace.stop": (a) =>
     isSlug(a.domain) && isSlug(a.workspace) ? ["stop", `${a.domain}/${a.workspace}`] : null,
+  // The dashboard's Delete: only what would lose nothing, checked again by the host when it
+  // runs (workspaces.ts remove). A plain `desolate rm` is the person's own, in a terminal.
+  "workspace.remove": (a) =>
+    isSlug(a.domain) && isSlug(a.workspace)
+      ? ["rm", `${a.domain}/${a.workspace}`, "--if-clean", "--if-pushed"]
+      : null,
   "workspace.up": (a) =>
     isSlug(a.domain) && (a.workspace === undefined || a.workspace === "" || isSlug(a.workspace))
       ? ["up", a.domain, ...(a.workspace ? ["--name", a.workspace] : [])]
       : null,
   "repo.fetch": (a) => (a.repo !== undefined && parseRepo(a.repo) ? ["fetch", a.repo] : null),
-  "domain.create": (a) =>
-    isSlug(a.domain)
+  // `repos`: the repositories it starts with, comma-separated (each must be one).
+  "domain.create": (a) => {
+    const repos = a.repos ? a.repos.split(",") : [];
+    return isSlug(a.domain) && repos.length <= 20 && repos.every((r) => parseRepo(r))
       ? [
           "domain",
           "create",
@@ -27,8 +35,10 @@ export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
           ...(a.title && /^[\x20-\x7e]{1,80}$/.test(a.title) && !a.title.startsWith("-")
             ? ["--title", a.title]
             : []),
+          ...repos.flatMap((r) => ["--repo", r]),
         ]
-      : null,
+      : null;
+  },
   "domain.add": (a) =>
     isSlug(a.domain) && a.repo !== undefined && parseRepo(a.repo)
       ? ["domain", a.domain, "add", "--repo", a.repo]
@@ -134,6 +144,14 @@ declare namespace hostArgv {
         args: [kind: "domain.add", args: { domain: "dev"; repo: "acme/widgets" }],
         expected: ["domain", "dev", "add", "--repo", "acme/widgets"],
       ],
+      [
+        args: [kind: "domain.create", args: { domain: "dev"; repos: "acme/widgets,acme/lib" }],
+        expected: ["domain", "create", "dev", "--repo", "acme/widgets", "--repo", "acme/lib"],
+      ],
+      [
+        args: [kind: "workspace.remove", args: { domain: "dev"; workspace: "w1" }],
+        expected: ["rm", "dev/w1", "--if-clean", "--if-pushed"],
+      ],
     ]
   >;
   /** nothing else: a kind not on the list (an object's own keys included), a name that is not
@@ -143,6 +161,10 @@ declare namespace hostArgv {
     typeof hostArgv,
     [
       [args: [kind: "workspace.rm", args: { domain: "dev"; workspace: "w1" }], expected: null],
+      [
+        args: [kind: "domain.create", args: { domain: "dev"; repos: "acme/widgets,--help" }],
+        expected: null,
+      ],
       [args: [kind: "__proto__", args: {}], expected: null],
       [args: [kind: "constructor", args: {}], expected: null],
       [args: [kind: "workspace.start", args: { domain: "dev" }], expected: null],

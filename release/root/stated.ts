@@ -43,8 +43,10 @@ import { hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
 import { stateEvents } from "../shared/events.ts";
 import { writeJson } from "../shared/json.ts";
 import { outlived } from "../shared/plan.ts";
+import type { Unpushed } from "../shared/plan.ts";
 import type { Stats } from "../shared/stats.ts";
 import {
+  domainNameFor,
   isBranch,
   isCommit,
   isLocalhostSuffix,
@@ -54,7 +56,7 @@ import {
   ROOT_HOSTNAME,
   ROOT_UI,
 } from "../shared/names.ts";
-import { statusView } from "../shared/status.ts";
+import { readHead, statusView } from "../shared/status.ts";
 import type { Head } from "../shared/status.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import * as domains from "./domains.ts";
@@ -235,30 +237,112 @@ type Making = Pick<Action, "kind" | "args" | "state" | "lines" | "at">;
  *  is the domain's workspace planned since. Dogfooding, 2026-11-17: the row said "planned",
  *  then "running" with Stop, a minute before its editor came, and none of it said it was
  *  still being made. */
-export const makingOf = (
+/** What each of the dashboard's actions on a workspace is doing to it, said on its row. */
+const DOING: Record<string, string> = {
+  "workspace.up": "being made",
+  "workspace.start": "starting",
+  "workspace.stop": "stopping",
+  "workspace.remove": "deleting",
+};
+/** The dashboard's action still at this workspace, if any: a start, stop or delete names it;
+ *  an up names it, or (without a name) made it, so it is the domain's workspace planned since. */
+const actionFor = (
   w: { workspace: string; createdAt?: string },
   domain: string,
   list: readonly Making[],
-): string | null => {
+): Making | null => {
   for (let i = list.length - 1; i >= 0; i -= 1) {
     const a = list[i]!;
     if ((a.state !== "queued" && a.state !== "running") || a.args.domain !== domain) continue;
     const named = a.args.workspace ?? "";
     const mine =
-      a.kind === "workspace.start"
-        ? named === w.workspace
-        : a.kind === "workspace.up"
-          ? // The environment is built by whichever up comes first, named or not.
-            w.workspace === TEMPLATE_BUILD ||
-            (named ? named === w.workspace : (w.createdAt ?? "") >= a.at)
-          : false;
-    if (!mine) continue;
-    if (a.state === "queued") return "waiting for the Mac";
-    const last = [...a.lines].reverse().find((line) => line.trim() !== "") ?? "";
-    return printable(last.replace(/^progress:\s*/, "").trim()).slice(0, 200);
+      a.kind === "workspace.up"
+        ? // The environment is built by whichever up comes first, named or not.
+          w.workspace === TEMPLATE_BUILD ||
+          (named ? named === w.workspace : (w.createdAt ?? "") >= a.at)
+        : DOING[a.kind] !== undefined && named === w.workspace;
+    if (mine) return a;
   }
   return null;
 };
+export const makingOf = (
+  w: { workspace: string; createdAt?: string },
+  domain: string,
+  list: readonly Making[],
+): string | null => {
+  const a = actionFor(w, domain, list);
+  if (!a) return null;
+  if (a.state === "queued") return "waiting for the Mac";
+  const last = [...a.lines].reverse().find((line) => line.trim() !== "") ?? "";
+  return printable(last.replace(/^progress:\s*/, "").trim()).slice(0, 200);
+};
+/** What that action is doing to it, in a word or two ("starting", "stopping"...), or null. */
+export const doingOf = (
+  w: { workspace: string; createdAt?: string },
+  domain: string,
+  list: readonly Making[],
+): string | null => {
+  const a = actionFor(w, domain, list);
+  return a ? (DOING[a.kind] ?? null) : null;
+};
+
+declare namespace doingOf {
+  /** each of the dashboard's actions on a workspace, said in its own word */
+  export type Says = Table<
+    typeof doingOf,
+    [
+      [
+        args: [
+          w: { workspace: "w1" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.stop";
+              args: { domain: "acme"; workspace: "w1" };
+              state: "running";
+              lines: [];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: "stopping",
+      ],
+      [
+        args: [
+          w: { workspace: "w1" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.remove";
+              args: { domain: "acme"; workspace: "w1" };
+              state: "queued";
+              lines: [];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: "deleting",
+      ],
+      [
+        args: [
+          w: { workspace: "w1"; createdAt: "2026-11-17T20:00:05.000Z" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.up";
+              args: { domain: "acme" };
+              state: "running";
+              lines: [];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: "being made",
+      ],
+      [args: [w: { workspace: "w1" }, domain: "acme", list: []], expected: null],
+    ]
+  >;
+}
 
 declare namespace makingOf {
   /** the dashboard's New workspace (no name) makes the one planned after it began; a named
@@ -317,7 +401,7 @@ declare namespace makingOf {
     ]
   >;
   /** not this workspace's: one made before the action began, another domain's, another
-   *  name's, a stop, or an action that is over */
+   *  name's (an up, a stop), or an action that is over */
   export type NotItsOwn = Table<
     typeof makingOf,
     [
@@ -358,7 +442,7 @@ declare namespace makingOf {
             },
             {
               kind: "workspace.stop";
-              args: { domain: "acme"; workspace: "w1" };
+              args: { domain: "acme"; workspace: "w2" };
               state: "running";
               lines: [];
               at: "2026-11-17T20:00:00.000Z";
@@ -378,6 +462,37 @@ declare namespace makingOf {
   >;
 }
 
+// Each workspace's commits against the remote (offers.unpushedOf), for the dashboard's Delete:
+// counted in the background, since it runs git, and again when a HEAD moves or every two
+// minutes (the remote moves too).
+const pushedOf = new Map<string, { heads: string; at: number; result: Unpushed[] }>();
+let checkingPushed = false;
+const checkPushed = async () => {
+  if (checkingPushed) return;
+  checkingPushed = true;
+  const seen = new Set<string>();
+  try {
+    for (const d of domains.domains())
+      for (const w of domains.workspaces(d.slug)) {
+        if (w.workspace === TEMPLATE_BUILD) continue;
+        const key = `${d.slug}/${w.workspace}`;
+        seen.add(key);
+        const reposDir = path.join(domainPath(d.slug), "repos");
+        const heads = w.checkouts.map((c) => readHead(reposDir, c)?.commit ?? "").join(",");
+        const known = pushedOf.get(key);
+        if (known && known.heads === heads && Date.now() - known.at < 120_000) continue;
+        try {
+          pushedOf.set(key, { heads, at: Date.now(), result: await offers.unpushedOf(d.slug, w) });
+        } catch (error) {
+          console.error(`stated: ${key}'s commits could not be counted: ${String(error)}`);
+        }
+      }
+    for (const key of pushedOf.keys()) if (!seen.has(key)) pushedOf.delete(key);
+  } finally {
+    checkingPushed = false;
+  }
+};
+
 const snapshot = () => {
   // What was pushed and has since landed in the branch it was for (pushed.ts): a branch
   // still at that commit is marked "merged into <base>".
@@ -386,6 +501,14 @@ const snapshot = () => {
     slug: d.slug,
     title: d.title,
     repos: d.repos,
+    // The repository whose own domain this is (`desolate clone` made it, owner--repo), or
+    // null: the dashboard calls it the repository's home domain, and offers a new domain for
+    // work across repositories instead of adding one to it.
+    home:
+      d.repos.find((r) => {
+        const repo = parseRepo(r);
+        return repo !== null && domainNameFor(repo) === d.slug;
+      }) ?? null,
     branches: branchesOf(d.slug, d.repos).map((b) => ({
       ...b,
       landed: landedFor(pushed, b.repo, b.branch, b.commit),
@@ -406,8 +529,12 @@ const snapshot = () => {
           workspace: w.workspace,
           vm: w.vm,
           state: w.state,
-          // Still being made or started by the dashboard's action: what it is at.
+          // Still being made, started, stopped or deleted by the dashboard's action: what it
+          // is doing, and the step it is at.
+          doing: doingOf(w, d.slug, actions),
           making: makingOf(w, d.slug, actions),
+          // Its commits against the remote, as last counted (checkPushed): for Delete.
+          pushed: pushedOf.get(`${d.slug}/${w.workspace}`)?.result ?? null,
           size: w.size ?? null,
           // Who asked for it (null: the person), and whether that one is gone before it.
           startedBy: w.startedBy?.workspace ?? null,
@@ -430,9 +557,12 @@ const snapshot = () => {
     // The host's daemon tells this service what only the host knows. If it has gone quiet,
     // what is shown about VMs is stale, and the page says so.
     hostConnected: Date.now() - hostSeen < 150_000,
-    repos: repos
-      .list()
-      .map((r) => ({ repo: r.repo, pushable: r.pushable, defaultBranch: r.defaultBranch })),
+    repos: repos.list().map((r) => ({
+      repo: r.repo,
+      pushable: r.pushable,
+      defaultBranch: r.defaultBranch,
+      fetchedAt: r.fetchedAt ?? null,
+    })),
     domains: list,
     spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? null])),
     offers: offers.allOffers(),
@@ -1317,5 +1447,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     }
   setInterval(publish, 1000);
   setInterval(takeQueue, 500);
+  setInterval(() => void checkPushed(), 10_000);
+  void checkPushed();
   publish();
 }
