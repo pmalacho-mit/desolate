@@ -172,32 +172,64 @@ const click = async (t: Tab, x: number, y: number) => {
   );
 };
 
-// SHOTS=dashboard,git,editor (the default: all three)
-const only = new Set((process.env.SHOTS ?? "dashboard,git,editor").split(","));
+// SHOTS=dashboard,secrets,git,editor (the default: all four)
+const only = new Set((process.env.SHOTS ?? "dashboard,secrets,git,editor").split(","));
 try {
   // ------------------------------------------------------------ the dashboard
+  // UNFOLDED=<domain>,<domain>: only these domains' cards open, the rest folded to a line (a
+  // stack with many domains, pictured as a person who folded the rest would see it).
   if (only.has("dashboard")) {
     const dashboard = await tab(address(/dashboard\s+(http:\S+)/, "ui"), 1100, 900);
     await until(dashboard, /Offered: /);
+    if (process.env.UNFOLDED) {
+      const open = process.env.UNFOLDED.split(",");
+      await evaluate(
+        dashboard,
+        `localStorage.setItem("desolate-folded", JSON.stringify([...document.querySelectorAll("[data-domain]")].map((c) => c.dataset.domain).filter((d) => !${JSON.stringify(open)}.includes(d)).map((d) => "domain:" + d)))`,
+      );
+      await send("Page.reload", {}, dashboard.sessionId);
+      await until(dashboard, /Offered: /);
+    }
     await sleep(1500);
     await shot(dashboard, "dashboard.png", "main", 0);
-    await evaluate(dashboard, `document.querySelector("details.branches summary")?.click()`);
-    await sleep(600);
-    await shot(dashboard, "dashboard-branches.png", "details.branches", 10);
+    const offered = process.env.UNFOLDED?.split(",")[0];
     await evaluate(
       dashboard,
-      `[...document.querySelectorAll("button")].find((b) => b.textContent === "Review")?.click()`,
+      `document.querySelector('${offered ? `[data-domain="${offered}"] ` : ""}details.branches summary')?.click()`,
     );
-    await until(dashboard, /files? changed/);
-    // As tall as the card: its Push bar sticks to the viewport's bottom, so a viewport shorter
-    // than the card draws it halfway down the picture.
-    await send(
-      "Emulation.setDeviceMetricsOverride",
-      { width: 1100, height: 1900, deviceScaleFactor: 2, mobile: false },
-      dashboard.sessionId,
+    await sleep(600);
+    await shot(
+      dashboard,
+      "dashboard-branches.png",
+      `${offered ? `[data-domain="${offered}"] ` : ""}details.branches`,
+      10,
     );
+    // The review: a panel on the right, the window's height.
+    await evaluate(
+      dashboard,
+      `[...document.querySelectorAll("#needs button")].find((b) => b.textContent === "Review")?.click()`,
+    );
+    await until(dashboard, /commits?\b[\s\S]*\+\d/);
     await sleep(2500);
-    await shot(dashboard, "review.png", "#review-card", 0, 1500);
+    await shot(dashboard, "review.png");
+  }
+
+  // ------------------------------------------------------------ the secrets page
+  // (Its cookie is the approval page's: that address is opened first. SECRETS_DOMAIN names a
+  // domain with a secret to show; the value is never on the page.)
+  if (only.has("secrets")) {
+    const page = await tab(address(/approvals\s+(http:\S+)/, "approve", "--web"), 1100, 900);
+    await sleep(1500);
+    await send(
+      "Page.navigate",
+      {
+        url: `${address(/approvals\s+(http:\/\/[^/]+)/, "approve", "--web")}/secrets?domain=${process.env.SECRETS_DOMAIN ?? ""}`,
+      },
+      page.sessionId,
+    );
+    await until(page, /To see its value|has no secrets yet/);
+    await sleep(800);
+    await shot(page, "secrets.png", "main", 12);
   }
 
   // ------------------------------------------------------------ the git terminal, a push, its approval beside it
