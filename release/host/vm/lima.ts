@@ -29,6 +29,8 @@ import { INSTANCE, paths, RELEASE_DIR } from "../paths.ts";
 import { duplexOf, parseSs } from "./fake.ts";
 import { socatAddress } from "./types.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
+import type { Call, Expect, Given, Invoke, Throws } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { baseYaml, cloneCall, confinement, madeWithoutLinkToken } from "../../../tests/nests/host-lima.harness.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIMA_HOME = path.join(paths.home, "lima");
@@ -90,6 +92,40 @@ export const unmounted = (procMounts: string, shares: { guest: string; writable:
   }
   return { missing, wrong };
 };
+
+declare namespace unmounted {
+  /** every share mounted, by its file system, the right way round: nothing to wait for */
+  export type Ready = Expect<
+    Invoke<typeof unmounted, [procMounts: "mount0 /desolate/release virtiofs ro,relatime 0 0\nmount1 /workspaces virtiofs rw,relatime 0 0\n", shares: [{ guest: "/desolate/release"; writable: false }, { guest: "/workspaces"; writable: true }], fsType: "virtiofs", flags: true]>,
+    "=",
+    { missing: []; wrong: [] }
+  >;
+  /** a bare mount point (the root disk's, before virtiofs got there) is not the share yet */
+  export type NotYet = Expect<
+    Invoke<typeof unmounted, [procMounts: "/dev/vda1 / ext4 rw 0 0\n", shares: [{ guest: "/workspaces"; writable: true }], fsType: "virtiofs", flags: true]>,
+    "=",
+    { missing: ["/workspaces"]; wrong: [] }
+  >;
+  /** a read-only share that came up writable is wrong, and so is the reverse; the last mount at
+   *  a path is the one that counts */
+  export type WrongWay = Expect<
+    Invoke<typeof unmounted, [procMounts: "m /desolate/release virtiofs ro 0 0\nm /desolate/release virtiofs rw 0 0\nm /workspaces virtiofs ro 0 0\n", shares: [{ guest: "/desolate/release"; writable: false }, { guest: "/workspaces"; writable: true }], fsType: "virtiofs", flags: true]>,
+    "=",
+    { missing: []; wrong: ["/desolate/release is mounted read-write", "/workspaces is mounted read-only"] }
+  >;
+  /** qemu holds read-only itself (9p's `readonly`), so the guest's flag is not compared */
+  export type FlagsNotHeld = Expect<
+    Invoke<typeof unmounted, [procMounts: "m /desolate/release 9p rw 0 0\n", shares: [{ guest: "/desolate/release"; writable: false }], fsType: "9p", flags: false]>,
+    "=",
+    { missing: []; wrong: [] }
+  >;
+  /** /proc/mounts writes a space in a path as \\040 */
+  export type Escaped = Expect<
+    Invoke<typeof unmounted, [procMounts: "m /git/acme/my\\040app virtiofs rw 0 0\n", shares: [{ guest: "/git/acme/my app"; writable: true }], fsType: "virtiofs", flags: true]>,
+    "=",
+    { missing: []; wrong: [] }
+  >;
+}
 
 export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
@@ -507,3 +543,81 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   };
   return backend;
 };
+
+declare namespace limaBackend {
+  type Vz = Invoke<typeof limaBackend, [kind: "vz"]>;
+  type Qemu = Invoke<typeof limaBackend, [kind: "qemu"]>;
+  type Workspace = {
+    name: "dsl-main-0123456789"; role: "workspace"; egress: "none";
+    shares: [{ host: "<home>/domains/acme/repos"; guest: "/workspaces"; writable: true }, { host: "<home>/mirrors/acme/web.git"; guest: "/desolate/mirrors/acme/web.git"; writable: false }];
+    sockets: [{ host: "<home>/run/dsl-main-0123456789/proxy.sock"; guest: "/desolate/link/proxy.sock" }];
+    cpus: 4; memoryMiB: 8192; diskGiB: 60; labels: { title: "acme/w1" };
+  };
+
+  /** a VM is a clone of the base with its shares (read-only where the spec says), its size, its
+   *  own ssh port, Lima's own forwarding refused on every address and protocol, and no network
+   *  of Lima's that could go around the proxy */
+  export type Clones = Expect<Invoke<typeof cloneCall, [backend: Vz, spec: Workspace]>, "=", [
+    '--tty=false',
+    'clone',
+    '--set',
+    '.mounts = [{"location":"<home>/domains/acme/repos","mountPoint":"/workspaces","writable":true},{"location":"<home>/mirrors/acme/web.git","mountPoint":"/desolate/mirrors/acme/web.git","writable":false}]',
+    '--set',
+    '.cpus = 4',
+    '--set',
+    '.memory = "8192MiB"',
+    '--set',
+    '.disk = "60GiB"',
+    '--set',
+    '.ssh.localPort = <ssh port>',
+    '--set',
+    '.portForwards = [{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"udp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"udp","ignore":true}]',
+    '--set',
+    '.networks = []',
+    'dsl-main-base',
+    'dsl-main-0123456789',
+  ]>;
+  /** a disk no larger than the base's is the base's (a clone can grow and never shrink), and
+   *  what the spec leaves out is 2 CPUs and 2 GiB */
+  export type KeepsTheBaseDisk = Expect<
+    Invoke<typeof cloneCall, [backend: Vz, spec: { name: "dsl-main-small"; role: "workspace"; egress: "none"; shares: []; sockets: []; diskGiB: 20; labels: {} }]>,
+    "=",
+    [
+      '--tty=false',
+      'clone',
+      '--set',
+      '.mounts = []',
+      '--set',
+      '.cpus = 2',
+      '--set',
+      '.memory = "2048MiB"',
+      '--set',
+      '.ssh.localPort = <ssh port>',
+      '--set',
+      '.portForwards = [{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"udp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"udp","ignore":true}]',
+      '--set',
+      '.networks = []',
+      'dsl-main-base',
+      'dsl-main-small',
+    ]
+  >;
+
+  /** vz: Lima's pinned Ubuntu, virtiofs, the release read-only, no containerd, nothing forwarded */
+  export type VzBase = Expect<Invoke<typeof baseYaml, [backend: Vz]>, "=", 'minimumLimaVersion: 2.0.0\nbase:\n- template:_images/ubuntu-24.04\nvmType: vz\narch: <arch>\nmountType: virtiofs\ncpus: 2\nmemory: 2GiB\ndisk: 30GiB\ncontainerd:\n  system: false\n  user: false\nportForwards: [{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"udp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"udp","ignore":true}]\nnetworks: []\nmounts:\n- location: "<release>"\n  mountPoint: /desolate/release\n  writable: false\n'>;
+  /** qemu: desolate's own image, booted by its kernel, shares over 9p (QEMU keeps them read-only) */
+  export type QemuBase = Expect<Invoke<typeof baseYaml, [backend: Qemu]>, "=", 'vmType: qemu\narch: <arch>\nmountType: 9p\ncpus: 2\nmemory: 2GiB\ndisk: 30GiB\nmounts: []\ncontainerd:\n  system: false\n  user: false\nportForwards: [{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"udp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"udp","ignore":true}]\nnetworks: []\nimages:\n- location: "<home>/images/<arch>/disk.raw"\n  arch: <arch>\n  kernel:\n    location: "<home>/images/<arch>/vmlinuz"\n    cmdline: "root=LABEL=desolate-root rw console=ttyS0"\n  initrd:\n    location: "<home>/images/<arch>/initrd"\n'>;
+
+  /** a VM with no egress starts under a profile that lets its host process reach two loopback
+   *  ports, its ssh and its link, and unix sockets other than the Mac's resolver: nothing else */
+  export type Confined = Expect<Invoke<typeof confinement, [backend: Vz, spec: { name: "dsl-main-cut"; role: "workspace"; egress: "none"; shares: []; sockets: []; labels: {} }]>, "=", '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n'>;
+
+  /** a VM is started only if desolate made it (its record is beside Lima's) */
+  export type StartsOnlyItsOwn = Throws<Call<Vz, "start", [name: "dsl-main-someone-else"]>, "dsl-main-someone-else is not a VM desolate made">;
+  /** a link on the Mac's loopback opens only with a token: a VM made before tokens gets none */
+  export type NoTokenNoLink = Given<
+    Invoke<typeof madeWithoutLinkToken, [name: "dsl-main-old"]>,
+    Throws<Call<Vz, "link", [name: "dsl-main-old"]>, "dsl-main-old has no link token: it was made by an older desolate. Remove the workspace and make it again.">
+  >;
+  /** there is no suspend: a stop is asked for instead of a pause that is not there */
+  export type NoSuspend = Throws<Call<Vz, "suspend", [name: "dsl-main-0123456789"]>, "the vz backend cannot suspend a VM (Lima has no suspend to disk for it); stop it instead">;
+}

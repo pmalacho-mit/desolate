@@ -390,6 +390,18 @@ fields to the tty as they were. It shows the checked draft now.
 existed failed their devcontainer at every start after an upgrade, as red lines under
 "Needs you" for days.
 
+## Found writing the in-source tests (2026-11-16)
+
+Tests written under every function, as notes for a reviewer on how each is used, asked
+questions no tier had asked.
+
+**A window operation that reached the person's terminal.** The filter between an agent's
+output and the Mac's terminal drops xterm's window operations and concealed text. Put a
+control byte, a DEL, or 256 bytes of parameters inside the sequence, and the filter gave up
+on it and let it go as text. The terminal, reading the same bytes by the DEC parser, carries
+out the control and finishes the sequence. The filter now reads a CSI as that parser does.
+(`release/shared/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
+
 ## The rules these left
 
 - **A negative check needs a positive control.** A probe that failed to run is

@@ -21,6 +21,9 @@ import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, parseRepo } from "../sh
 import { embedAddress } from "./approve-web.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { writeState } from "../../tests/nests/home.harness.ts";
+import type { ask, gitVmDown, noShell, quiet } from "../../tests/nests/host-web.harness.ts";
 
 export const TOKEN_FILE = path.join(paths.state, "git-token");
 const UI = path.join(RELEASE_DIR, "host", "git-ui");
@@ -108,7 +111,8 @@ export const handler = (spawn: (argv: string[]) => ChildProcess, log: (line: str
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     const refused = refusal(GIT_HOSTNAME, req.headers);
-    if (refused) return send(res, refused.status, "text/plain; charset=utf-8", `desolate: refused ${refused.why.replace(/this is the editor of/, "this is the git terminal at")}\n`);
+    // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
+    if (refused) return send(res, refused.status, "text/plain; charset=utf-8", `desolate: refused ${refused.why.replace(/this is the editor of/, "this is the git terminal at").replace("`desolate editor`", "`desolate git`")}\n`);
     const token = gitToken();
     const name = cookieName(token);
     const url = new URL(req.url ?? "/", `http://${GIT_HOSTNAME}`);
@@ -190,3 +194,58 @@ export const handler = (spawn: (argv: string[]) => ChildProcess, log: (line: str
     return json(res, 200, { ok: true });
   };
 };
+
+declare namespace handler {
+  /** This stack's token, as `desolate git` put it in the address. */
+  type Token = "abababababababababababababababababababababababab";
+  type HasToken = Invoke<typeof writeState, [name: "git-token", text: Token]>;
+  type Cookie = "desolate_git_5e00ea51cf17=abababababababababababababababababababababababab";
+  type Page = Invoke<typeof handler, [spawn: typeof noShell, log: typeof quiet]>;
+  /** What the page's own script sends. */
+  type Script = { host: "desolate-git.localhost:31581"; "sec-fetch-site": "same-origin"; origin: "http://desolate-git.localhost:31581"; cookie: Cookie; "content-type": "application/json" };
+
+  /** the address's token becomes a cookie; the repository it names is kept only if it is one */
+  export type SignsIn = Given<
+    HasToken,
+    [
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/?tkn=abababababababababababababababababababababababab&repo=acme/web"; headers: { host: "desolate-git.localhost:31581" } }]>, "matches", { status: 303; headers: { location: "/?repo=acme%2Fweb"; "set-cookie": "desolate_git_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/" } }>,
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/?tkn=abababababababababababababababababababababababab&repo=../../etc"; headers: { host: "desolate-git.localhost:31581" } }]>, "matches", { status: 303; headers: { location: "/" } }>,
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/?tkn=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"; headers: { host: "desolate-git.localhost:31581" } }]>, "matches", { status: 403; text: "desolate: refused: that is not this stack's git terminal address; `desolate git` prints it\n" }>,
+    ]
+  >;
+  /** another name for this port (a workspace's, where an agent's page is) is refused first */
+  export type OnlyByItsName = Given<
+    HasToken,
+    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/approvals-frame"; headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 421; text: "desolate: refused this is the git terminal at desolate-git.localhost; open it by that name (`desolate git` prints the address)\n" }>
+  >;
+  /** a shell is opened only by the page's own script: signed in, same-origin, this origin, JSON */
+  export type OnlyThePage = Given<
+    HasToken,
+    [
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/session"; headers: { host: "desolate-git.localhost:31581"; "sec-fetch-site": "same-origin"; "content-type": "application/json" }; body: {} }]>, "matches", { status: 401 }>,
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/session"; headers: { host: "desolate-git.localhost:31581"; cookie: Cookie; "content-type": "application/json" }; body: {} }]>, "matches", { status: 403; json: { error: "a request this page did not make" } }>,
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/session"; headers: { host: "desolate-git.localhost:31581"; "sec-fetch-site": "same-origin"; origin: "http://acme-web-0a1b2c.localhost:31581"; cookie: Cookie; "content-type": "application/json" }; body: {} }]>, "matches", { status: 403; text: "desolate: refused a request from another origin (http://acme-web-0a1b2c.localhost:31581)\n" }>,
+      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/session"; headers: { host: "desolate-git.localhost:31581"; "sec-fetch-site": "same-origin"; origin: "http://desolate-git.localhost:31581"; cookie: Cookie; "content-type": "text/plain" }; body: "{}" }]>, "matches", { status: 415 }>,
+    ]
+  >;
+  /** the git VM is readied before a shell opens in it, and a VM that does not come up is said */
+  export type ReadiesTheVm = Given<
+    HasToken,
+    Expect<Invoke<typeof ask, [handler: Invoke<typeof handler, [spawn: typeof noShell, log: typeof quiet, prepare: typeof gitVmDown]>, request: { method: "POST"; url: "/session"; headers: Script; body: { repo: "acme/web" } }]>, "matches", { status: 502; json: { error: "the git VM could not be readied: it did not start" } }>
+  >;
+  /** a shell's input needs that shell's own token, which only the page that opened it was given */
+  export type NoSuchShell = Given<
+    HasToken,
+    Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/session/0123456789abcdef/input"; headers: Script; body: { token: "000000000000000000000000000000000000000000000000"; data: "bHMK" } }]>, "matches", { status: 404; json: { error: "no such shell" } }>
+  >;
+  /** the approval page beside the terminal: its address, with its key in the fragment, to this
+   *  page's script; and this page may frame that one and nothing else */
+  export type FramesTheApprovals = Given<
+    [HasToken, Invoke<typeof writeState, [name: "approve-token", text: Token]>],
+    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/approvals-frame"; headers: Script }]>, "matches", {
+      status: 200;
+      headers: { "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'none'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; frame-src http://desolate-approve.localhost:31581"; "x-frame-options": "DENY" };
+      json: { url: "http://desolate-approve.localhost:31581/embed#k=cba2baa14dd006b2aa6983bca3c648b5ab3438eb0b303069f92240a36171f833" };
+    }>
+  >;
+}

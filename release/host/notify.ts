@@ -8,7 +8,7 @@
 import { spawn } from "node:child_process";
 import { printable } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Notice = { title: string; body: string };
 
@@ -37,6 +37,28 @@ declare namespace notice {
     Expect<Invoke<typeof notice, [e: { source: "root"; type: "status"; domain: "dev"; workspace: "w1"; color: "green"; message: "done" }]>, "=", null>,
     Expect<Invoke<typeof notice, [e: { source: "pusher"; type: "approval-waiting"; repo: "acme/widgets" }]>, "=", null>,
   ];
+  /** red is a failure, said as the workspace's own words */
+  export type Failed = Expect<Invoke<typeof notice, [e: { source: "root"; type: "status"; domain: "dev"; workspace: "w1"; color: "red"; message: "the tests cannot run" }]>, "=", { title: "desolate: dev/w1 failed"; body: "dev/w1 says: the tests cannot run" }>;
+  /** an offer names its branch and the commit's first twelve digits */
+  export type Offered = Expect<
+    Invoke<typeof notice, [e: { source: "root"; type: "offered"; domain: "dev"; workspace: "w1"; repo: "acme/widgets"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }]>,
+    "=",
+    { title: "desolate: dev/w1 offered a branch"; body: "acme/widgets issue/12 at 0123456789ab: desolate review, or the dashboard" }
+  >;
+  /** work the root would not take from a domain, and why, under that domain's name */
+  export type BundleRefused = Expect<
+    Invoke<typeof notice, [e: { source: "root"; type: "bundle-refused"; domain: "dev"; repo: "acme/widgets"; why: "a .git directory inside a tree" }]>,
+    "=",
+    { title: "desolate: refused work from dev"; body: "acme/widgets: a .git directory inside a tree" }
+  >;
+  /** what the forge answered, from the pusher only: landed, failed, or not known */
+  export type Pushes = [
+    Expect<Invoke<typeof notice, [e: { source: "pusher"; type: "pushed"; repo: "acme/widgets"; branch: "issue/12"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { title: "desolate: pushed"; body: "acme/widgets issue/12 is now 0123456789ab" }>,
+    Expect<Invoke<typeof notice, [e: { source: "pusher"; type: "push-failed"; repo: "acme/widgets"; branch: "issue/12"; error: "rejected: non-fast-forward" }]>, "=", { title: "desolate: a push failed"; body: "acme/widgets issue/12: rejected: non-fast-forward" }>,
+    Expect<Invoke<typeof notice, [e: { source: "pusher"; type: "push-uncertain"; repo: "acme/widgets"; branch: "issue/12"; error: "the forge did not answer" }]>, "=", { title: "desolate: a push may not have landed"; body: "acme/widgets issue/12: the forge did not answer" }>,
+  ];
+  /** the root's user cannot say a push landed: that is the pusher's word, from a log only root writes */
+  export type RootSaysPushed = Expect<Invoke<typeof notice, [e: { source: "root"; type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", null>;
 }
 
 const show = (n: Notice) => {

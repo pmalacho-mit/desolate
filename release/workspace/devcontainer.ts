@@ -48,6 +48,9 @@ import { devHostname } from "../shared/names.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
 import { urlRules } from "./git-urls.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { projectWith } from "../../tests/nests/workspace-files.harness.ts";
 
 export const STATE = "/run/desolate/devcontainer.json";
 export type State =
@@ -68,6 +71,15 @@ export const locate = (dir: string): string | undefined => {
   return fs.existsSync(nested) ? nested : fs.existsSync(flat) ? flat : undefined;
 };
 
+declare namespace locate {
+  /** the two places the spec may be, the folder's first; nowhere else */
+  export type Nested = Expect<Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer/devcontainer.json", ".devcontainer.json"]]>]>, "endsWith", "/.devcontainer/devcontainer.json">;
+  export type Flat = Expect<Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer.json"]]>]>, "endsWith", "/.devcontainer.json">;
+  /** a spec in a subfolder of .devcontainer (one of several configurations) is not looked for:
+   *  the workspace is then the VM itself */
+  export type None = Expect<Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer/python/devcontainer.json", "devcontainer.json"]]>]>, "=", undefined>;
+}
+
 const EXTENSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9._-]+)?$/;
 /** customizations.vscode.extensions (and any other editor's namespace), valid ids only. */
 export const extensionsOf = (spec: Record<string, unknown>): string[] => {
@@ -81,6 +93,21 @@ export const extensionsOf = (spec: Record<string, unknown>): string[] => {
   return [...ids];
 };
 
+declare namespace extensionsOf {
+  /** the editor's extensions, from every editor's namespace, each once */
+  export type Lists = Table<typeof extensionsOf, [
+    [args: [spec: { customizations: { vscode: { extensions: ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode@10.1.0"] } } }], expected: ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode@10.1.0"]],
+    [args: [spec: { customizations: { vscode: { extensions: ["ms-python.python"] }; codespaces: { extensions: ["ms-python.python", "golang.go"] } } }], expected: ["ms-python.python", "golang.go"]],
+    [args: [spec: { image: "node:22" }], expected: []],
+    [args: [spec: { customizations: { vscode: { extensions: "ms-python.python" }; jetbrains: null } }], expected: []],
+  ]>;
+  /** the spec is the project's, and the ids go to the editor's installer: only
+   *  `publisher.name[@version]`, never a path, a flag or a second word */
+  export type Refuses = Table<typeof extensionsOf, [
+    [args: [spec: { customizations: { vscode: { extensions: ["eslint", "-x.y", "../x.y", "/tmp/x.vsix", "a.b c", "a.b@", "a.b;id", 42] } } }], expected: []],
+  ]>;
+}
+
 const ENV_CA = "/desolate/ca/ca-certificates.crt";
 /** Where package managers keep their downloads, in the domain's cache (section 4.7, C4):
  *  what one workspace of a domain fetched, the next finds. Only download caches, never where
@@ -93,6 +120,37 @@ export const CACHE_ENV: Record<string, string> = {
   UV_CACHE_DIR: "/desolate/cache/uv",
   GOMODCACHE: "/desolate/cache/go-mod",
 };
+/** A spec's run arguments less the ones that choose a network, in each spelling docker reads:
+ *  `--network=x` and `--net=x`, and `--network x` and `--net x`, whose value is the next
+ *  word. Kept, that word was read by docker run as the image (`--network bridge` left
+ *  `bridge`). */
+const withoutNetwork = (args: unknown[]): unknown[] => {
+  const kept: unknown[] = [];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (typeof arg === "string" && /^--net(work)?$/.test(arg)) i++;
+    else if (typeof arg !== "string" || !/^--net(work)?=/.test(arg)) kept.push(arg);
+  }
+  return kept;
+};
+
+declare namespace withoutNetwork {
+  /** both spellings of both names go, a two-word one with its value */
+  export type Network = Table<typeof withoutNetwork, [
+    [args: [args: ["--network", "bridge", "--privileged"]], expected: ["--privileged"]],
+    [args: [args: ["--net", "none", "--cap-add=SYS_PTRACE"]], expected: ["--cap-add=SYS_PTRACE"]],
+    [args: [args: ["--network=bridge", "--net=container:db"]], expected: []],
+    /** at the end, with no value after it; and before a flag, which docker reads as its value */
+    [args: [args: ["--privileged", "--network"]], expected: ["--privileged"]],
+    [args: [args: ["--net", "--privileged", "--init"]], expected: ["--init"]],
+  ]>;
+  /** controls: flags that only start alike, and words that are not flags, are the project's */
+  export type Keeps = Table<typeof withoutNetwork, [
+    [args: [args: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]], expected: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]],
+    [args: [args: []], expected: []],
+  ]>;
+}
+
 /** The spec desolate hands the CLI: the project's, plus what the header lists. */
 export const overrideOf = (spec: Record<string, unknown>, checkout: string, home: string, who: { domain: string; workspace: string; devHostname?: string; cache?: boolean } = { domain: "", workspace: "" }): Record<string, unknown> => {
   // The domain's cache is a share a VM gets when it is made: one made by an older desolate has
@@ -150,10 +208,109 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
     workspaceMount: bind("/workspaces", "/workspaces"),
     workspaceFolder: checkout,
     mounts: [...list(spec.mounts), ...ours],
-    runArgs: [...list(spec.runArgs).filter((arg) => typeof arg !== "string" || !/^--net(work)?(=|$)/.test(arg)), "--network=host"],
+    runArgs: [...withoutNetwork(list(spec.runArgs)), "--network=host"],
     containerEnv,
   };
 };
+
+declare namespace overrideOf {
+  /** a single-container spec: the project's, with the VM's paths, the VM's network, and
+   *  desolate's shares, tools and environment added */
+  export type SingleContainer = Expect<
+    Invoke<typeof overrideOf, [spec: { image: "node:22" }, checkout: "/workspaces/acme/app", home: "/home/acme", who: { domain: "acme"; workspace: "w1"; devHostname: "acme-w1-0a1b2c.localhost" }]>,
+    "=",
+    {
+      image: "node:22";
+      workspaceMount: "source=/workspaces,target=/workspaces,type=bind";
+      workspaceFolder: "/workspaces/acme/app";
+      mounts: [
+        "source=/desolate/mirrors,target=/desolate/mirrors,type=bind,readonly",
+        "source=/desolate/inbox,target=/desolate/inbox,type=bind,readonly",
+        "source=/desolate/outbox,target=/desolate/outbox,type=bind",
+        "source=/desolate/release,target=/desolate/release,type=bind,readonly",
+        "source=/run/desolate,target=/run/desolate,type=bind",
+        "source=/opt/desolate/editor,target=/opt/desolate/editor,type=bind,readonly",
+        "source=/home/acme/.desolate-editor,target=/desolate/editor-data,type=bind",
+        "source=/etc/ssl/certs,target=/desolate/ca,type=bind,readonly",
+        "source=/usr/local/bin/node,target=/desolate/bin/node,type=bind,readonly",
+        "source=/desolate/release/workspace/desolate,target=/usr/local/bin/desolate,type=bind,readonly",
+        "source=/desolate/release/workspace/git-remote-desolate-offer,target=/usr/local/bin/git-remote-desolate-offer,type=bind,readonly",
+        "source=/desolate/release/workspace/git-remote-desolate-mirror,target=/usr/local/bin/git-remote-desolate-mirror,type=bind,readonly",
+        "source=/desolate/release/workspace/status,target=/desolate/status,type=bind,readonly",
+        "source=/desolate/cache,target=/desolate/cache,type=bind",
+        "source=/desolate/scratch,target=/desolate/scratch,type=bind",
+      ];
+      runArgs: ["--network=host"];
+      containerEnv: {
+        GIT_CONFIG_COUNT: "1"; GIT_CONFIG_KEY_0: "safe.directory"; GIT_CONFIG_VALUE_0: "*";
+        SSL_CERT_FILE: "/desolate/ca/ca-certificates.crt"; NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt"; REQUESTS_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; CURL_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; GIT_SSL_CAINFO: "/desolate/ca/ca-certificates.crt";
+        DESOLATE_WORKSPACE: "1"; DESOLATE_DOMAIN: "acme"; DESOLATE_WORKSPACE_NAME: "w1"; DESOLATE_DEV_HOSTNAME: "acme-w1-0a1b2c.localhost";
+        npm_config_cache: "/desolate/cache/npm"; npm_config_store_dir: "/desolate/cache/pnpm"; YARN_CACHE_FOLDER: "/desolate/cache/yarn"; PIP_CACHE_DIR: "/desolate/cache/pip"; UV_CACHE_DIR: "/desolate/cache/uv"; GOMODCACHE: "/desolate/cache/go-mod";
+      };
+    }
+  >;
+
+  /** the project's own run arguments are kept, except the ones that choose a network: the
+   *  container is on the VM's, the only way out the VM has */
+  export type NetworkIsTheVms = Expect<
+    Invoke<typeof overrideOf, [spec: { image: "node:22"; runArgs: ["--privileged", "--network=bridge", "--net=none", "--cap-add=SYS_PTRACE", "--network"] }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    "matches",
+    { runArgs: ["--privileged", "--cap-add=SYS_PTRACE", "--network=host"] }
+  >;
+  /** a network named as two words goes with its value: docker run would read a value left
+   *  behind as the image */
+  export type NetworkAsTwoWords = Expect<
+    Invoke<typeof overrideOf, [spec: { image: "node:22"; runArgs: ["--network", "bridge", "--privileged"] }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    "matches",
+    { runArgs: ["--privileged", "--network=host"] }
+  >;
+
+  /** where the project and desolate both say something: the workspace's folder and mount are
+   *  the VM's (git works only on its paths), and the project's environment wins over
+   *  desolate's defaults, which are only defaults */
+  export type ProjectAndDesolate = Expect<
+    Invoke<typeof overrideOf, [spec: { image: "node:22"; workspaceMount: "source=${localWorkspaceFolder},target=/src,type=bind"; workspaceFolder: "/src"; containerEnv: { NODE_ENV: "development"; SSL_CERT_FILE: "/etc/ssl/project.pem" } }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    "matches",
+    { workspaceMount: "source=/workspaces,target=/workspaces,type=bind"; workspaceFolder: "/workspaces/acme/app"; containerEnv: { NODE_ENV: "development"; SSL_CERT_FILE: "/etc/ssl/project.pem"; NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt"; DESOLATE_WORKSPACE: "1" } }
+  >;
+
+  /** a compose spec: the same shares in its primary service, read-only written in the target
+   *  (the CLI drops every other option), the project's own mounts first and /workspaces last,
+   *  so it is mounted over whatever the compose file puts there. Its network stays its own.
+   *  A VM made before the domain's cache existed gets no cache mount and no cache variables */
+  export type Compose = Expect<
+    Invoke<typeof overrideOf, [spec: { dockerComposeFile: "compose.yml"; service: "app"; mounts: ["source=..,target=/src,type=bind"] }, checkout: "/workspaces/acme/app", home: "/home/acme", who: { domain: "acme"; workspace: "w1"; cache: false }]>,
+    "=",
+    {
+      dockerComposeFile: "compose.yml";
+      service: "app";
+      workspaceFolder: "/workspaces/acme/app";
+      mounts: [
+        "source=..,target=/src,type=bind",
+        "source=/desolate/mirrors,target=/desolate/mirrors:ro,type=bind",
+        "source=/desolate/inbox,target=/desolate/inbox:ro,type=bind",
+        "source=/desolate/outbox,target=/desolate/outbox,type=bind",
+        "source=/desolate/release,target=/desolate/release:ro,type=bind",
+        "source=/run/desolate,target=/run/desolate,type=bind",
+        "source=/opt/desolate/editor,target=/opt/desolate/editor:ro,type=bind",
+        "source=/home/acme/.desolate-editor,target=/desolate/editor-data,type=bind",
+        "source=/etc/ssl/certs,target=/desolate/ca:ro,type=bind",
+        "source=/usr/local/bin/node,target=/desolate/bin/node:ro,type=bind",
+        "source=/desolate/release/workspace/desolate,target=/usr/local/bin/desolate:ro,type=bind",
+        "source=/desolate/release/workspace/git-remote-desolate-offer,target=/usr/local/bin/git-remote-desolate-offer:ro,type=bind",
+        "source=/desolate/release/workspace/git-remote-desolate-mirror,target=/usr/local/bin/git-remote-desolate-mirror:ro,type=bind",
+        "source=/desolate/release/workspace/status,target=/desolate/status:ro,type=bind",
+        "source=/desolate/scratch,target=/desolate/scratch,type=bind",
+        "source=/workspaces,target=/workspaces,type=bind",
+      ];
+      containerEnv: {
+        GIT_CONFIG_COUNT: "1"; GIT_CONFIG_KEY_0: "safe.directory"; GIT_CONFIG_VALUE_0: "*";
+        SSL_CERT_FILE: "/desolate/ca/ca-certificates.crt"; NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt"; REQUESTS_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; CURL_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; GIT_SSL_CAINFO: "/desolate/ca/ca-certificates.crt";
+        DESOLATE_WORKSPACE: "1"; DESOLATE_DOMAIN: "acme"; DESOLATE_WORKSPACE_NAME: "w1";
+      };
+    }
+  >;
+}
 
 /** `forwardPorts` entries that name another compose service (`db:5432`): what bridge.ts
  *  carries there. A bare number, or the primary service's own name, needs nothing: every
@@ -169,6 +326,23 @@ export const forwardsOf = (spec: Record<string, unknown>): { port: number; host:
   }
   return [...out].map(([port, host]) => ({ port, host }));
 };
+
+declare namespace forwardsOf {
+  /** `service:port` entries for the other services; a bare number, or the primary service's
+   *  own name, is mirrored already */
+  export type OtherServices = Table<typeof forwardsOf, [
+    [args: [spec: { service: "app"; forwardPorts: [3000, "db:5432", "app:8080", "cache:6379"] }], expected: [{ port: 5432; host: "db" }, { port: 6379; host: "cache" }]],
+    [args: [spec: { service: "app" }], expected: []],
+    /** one number, one listener in the VM: the first entry for a port has it */
+    [args: [spec: { service: "app"; forwardPorts: ["db:5432", "replica:5432"] }], expected: [{ port: 5432; host: "db" }]],
+  ]>;
+  /** the name becomes a host to connect to inside the service's network, and the number a
+   *  listener in the VM: loopback names, privileged or impossible ports, and anything that is
+   *  not one name and one number are left out */
+  export type Refuses = Table<typeof forwardsOf, [
+    [args: [spec: { service: "app"; forwardPorts: ["localhost:9000", "127.0.0.1:9001", "db:80", "db:70000", "-db:5432", "db;id:5432", "db:5432:1", "db: 5432", "user@db:5432"] }], expected: []],
+  ]>;
+}
 
 /** svcnet.ts in the primary service, as the VM's user, with the editor's node (a glibc
  *  program, as the editor's server is). Kept if one already answers. */

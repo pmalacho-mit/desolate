@@ -59,6 +59,9 @@ import * as proxy from "./proxy/manage.ts";
 import { landedFor, pushedList } from "./pushed.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, pathIn, writeIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const TOKEN_FILE = "/etc/desolate/host-token";
@@ -70,6 +73,24 @@ const readToken = (file: string): string | null => {
     return null;
   }
 };
+declare namespace readToken {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a token the host installed: 48 hex digits, whitespace around it ignored */
+  export type Reads = Given<
+    [Fresh, Invoke<typeof writeIn, [where: "state", name: "token", text: "0123456789abcdef0123456789abcdef0123456789abcdef\n"]>],
+    Expect<Invoke<typeof readToken, [file: Invoke<typeof pathIn, [where: "state", name: "token"]>]>, "=", "0123456789abcdef0123456789abcdef0123456789abcdef">
+  >;
+  /** anything else is no token at all, so nothing is let in with it: too short, not hex, none */
+  export type NoToken = Given<
+    [Fresh, Invoke<typeof writeIn, [where: "state", name: "short", text: "0123456789abcdef"]>, Invoke<typeof writeIn, [where: "state", name: "upper", text: "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"]>],
+    [
+      Expect<Invoke<typeof readToken, [file: Invoke<typeof pathIn, [where: "state", name: "short"]>]>, "=", null>,
+      Expect<Invoke<typeof readToken, [file: Invoke<typeof pathIn, [where: "state", name: "upper"]>]>, "=", null>,
+      Expect<Invoke<typeof readToken, [file: Invoke<typeof pathIn, [where: "state", name: "missing"]>]>, "=", null>,
+    ]
+  >;
+}
+
 const hostToken = () => readToken(TOKEN_FILE);
 /** The person's browser's credential for the dashboard. The host made it and installed it
  *  as root; `desolate ui` prints the dashboard's address with it. The name and the origin
@@ -82,6 +103,14 @@ const uiToken = () => readToken(UI_TOKEN_FILE);
 /** A cookie's name of this stack's own: cookies are kept per host name, not per port, and
  *  two stacks on one machine (a test beside the real one) share `desolate.localhost`. */
 const cookieName = (token: string) => `desolate_ui_${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
+
+declare namespace cookieName {
+  /** a name of this stack's own, from its token: two stacks on one machine keep two cookies */
+  export type PerStack = Table<typeof cookieName, [
+    [args: [token: "000000000000000000000000000000000000000000000000"], expected: "desolate_ui_f9a2ba511957"],
+    [args: [token: "111111111111111111111111111111111111111111111111"], expected: "desolate_ui_2f7a94061bca"],
+  ]>;
+}
 
 // ------------------------------------------------------------------ state
 type HostFacts = {
@@ -319,6 +348,18 @@ const takeQueue = () => {
 // ------------------------------------------------------------------ actions
 const quote = (word: string) => (/^[A-Za-z0-9_./:=@-]+$/.test(word) ? word : `'${word.replace(/'/g, "'\\''")}'`);
 
+declare namespace quote {
+  /** the command shown on the dashboard is one a person could paste: a word that a shell
+   *  would read as more than a word is quoted */
+  export type Words = Table<typeof quote, [
+    [args: [word: "acme/w1"], expected: "acme/w1"],
+    [args: [word: "--title"], expected: "--title"],
+    [args: [word: "Acme widgets"], expected: "'Acme widgets'"],
+    [args: [word: "it's"], expected: "'it'\\''s'"],
+    [args: [word: "$(rm -rf ~)"], expected: "'$(rm -rf ~)'"],
+  ]>;
+}
+
 const act = (kind: string, args: Record<string, string>, from: { signed?: boolean } = {}): Action | { error: string } => {
   // A spawn or a close is a workspace's signed request, never a click on the dashboard.
   if (SIGNED_KINDS.has(kind) && !from.signed) return { error: `'${kind}' is asked for by a workspace, not from the dashboard` };
@@ -344,6 +385,22 @@ const act = (kind: string, args: Record<string, string>, from: { signed?: boolea
   for (const wake of [...waiters]) wake();
   return action;
 };
+
+declare namespace act {
+  /** a click is queued for the host as the one command it will run, which the page shows */
+  export type Queues = [
+    Expect<Invoke<typeof act, [kind: "workspace.start", args: { domain: "acme"; workspace: "w1" }]>, "matches", { kind: "workspace.start"; state: "queued"; command: "desolate start acme/w1"; lines: [] }>,
+    Expect<Invoke<typeof act, [kind: "domain.create", args: { domain: "acme"; title: "Acme widgets" }]>, "matches", { command: "desolate domain create acme --title 'Acme widgets'" }>,
+  ];
+  /** a spawn or a close is a workspace's signed request, never a click; and nothing off the
+   *  host's fixed list is anything */
+  export type Refuses = Table<typeof act, [
+    [args: [kind: "workspace.spawn", args: { domain: "acme"; workspace: "helper" }], expected: { error: "'workspace.spawn' is asked for by a workspace, not from the dashboard" }],
+    [args: [kind: "workspace.close", args: { domain: "acme"; workspace: "helper" }], expected: { error: "'workspace.close' is asked for by a workspace, not from the dashboard" }],
+    [args: [kind: "workspace.rm", args: { domain: "acme"; workspace: "w1" }], expected: { error: "'workspace.rm' with those arguments is not something the dashboard does" }],
+    [args: [kind: "workspace.start", args: { domain: "acme"; workspace: "--all" }], expected: { error: "'workspace.start' with those arguments is not something the dashboard does" }],
+  ]>;
+}
 
 /** A push from the dashboard: `git push origin <commit>:<branch>` in the root clone. That
  *  goes to git-remote-desolate-push, which asks the keyring for a challenge and waits for
@@ -382,6 +439,26 @@ const push = (args: Record<string, string>, record: (command: string) => Action)
   });
   return action;
 };
+
+declare namespace push {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** the dashboard's Push is for the commit the person reviewed, still offered at it: a
+   *  malformed one, one never offered, and one that moved since are refused before git runs.
+   *  (One that passes waits for the person's approval on the host: T2's.) */
+  export type Refuses = Given<
+    [
+      Fresh,
+      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
+      Invoke<typeof writeJsonIn, [where: "domains", name: "acme/offers.json", value: [{ domain: "acme"; repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T12:00:00.000Z" }]]>,
+    ],
+    [
+      Expect<Invoke<typeof act, [kind: "offer.push", args: { domain: "acme"; repo: "acme/app"; branch: "fix"; commit: "HEAD" }]>, "=", { error: "a push names a domain, a repository, a branch and the commit that was reviewed" }>,
+      Expect<Invoke<typeof act, [kind: "offer.push", args: { domain: "acme"; repo: "acme/app"; branch: "--force"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { error: "a push names a domain, a repository, a branch and the commit that was reviewed" }>,
+      Expect<Invoke<typeof act, [kind: "offer.push", args: { domain: "acme"; repo: "acme/app"; branch: "other"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { error: "other is no longer offered at 0123456789ab: it moved, or was withdrawn. Review it again." }>,
+      Expect<Invoke<typeof act, [kind: "offer.push", args: { domain: "acme"; repo: "acme/app"; branch: "fix"; commit: "89abcdef0123456789abcdef0123456789abcdef" }]>, "=", { error: "fix is no longer offered at 89abcdef0123: it moved, or was withdrawn. Review it again." }>,
+    ]
+  >;
+}
 
 // ------------------------------------------------------------------ http
 const body = (req: IncomingMessage, limit = 262_144): Promise<unknown> =>

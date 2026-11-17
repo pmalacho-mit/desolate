@@ -3,7 +3,7 @@
 // change what is seen (bidirectional overrides reorder a line; zero-width characters hide in
 // one). One rule for every place desolate shows such text.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 /** Controls, format characters (bidirectional overrides, zero-width), private-use and
  *  unassigned code points, and the line and paragraph separators. */
@@ -24,6 +24,13 @@ declare namespace printable {
     [args: [value: "xxxxxxxxxx", max: 4], expected: "xxxx"],
     [args: [value: undefined], expected: ""],
     [args: [value: "a\tb\nc", max: 10, instead: " "], expected: "a b c"],
+    /** a carriage return cannot send the cursor back to write over what was printed */
+    [args: [value: "tests: ok\rFAIL"], expected: "tests: ok?FAIL"],
+    /** one spelling of each character (NFC), and its length counted in characters, an emoji
+     *  one, not in UTF-16 units */
+    [args: [value: "cafe\u0301"], expected: "caf\u00e9"],
+    [args: [value: "\u{1f44d}\u{1f44d}\u{1f44d}", max: 2], expected: "\u{1f44d}\u{1f44d}"],
+    [args: [value: 42], expected: "42"],
   ]>;
 }
 
@@ -32,6 +39,7 @@ export const printableLines = (value: unknown, instead = "?"): string =>
   String(value ?? "").split("\n").map((line) => line.split("\t").map((part) => printable(part, Infinity, instead)).join("\t")).join("\n");
 
 declare namespace printableLines {
+  /** a diff or a note, its lines and tabs kept, nothing cut; within a line, as printable */
   export type Cases = Table<typeof printableLines, [
     [args: [value: "+ ok\n-\tgone\n"], expected: "+ ok\n-\tgone\n"],
     [args: [value: "+ x = 1; \u202e// \u2066evil\u2069\n\u001b[2J"], expected: "+ x = 1; ?// ?evil?\n?[2J"],

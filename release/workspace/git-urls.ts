@@ -14,7 +14,7 @@
 //
 // Only the `.git` spellings: insteadOf rewrites a prefix, and `https://github.com/o/app`
 // would also rewrite `https://github.com/o/app-other.git` into a repository that is not it.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 /** `git config --global` argument lists, in order: each rule's old values, then the new ones. */
 export const urlRules = (repos: readonly string[]): string[][] =>
@@ -40,4 +40,17 @@ declare namespace urlRules {
     ]],
     [args: [repos: []], expected: []],
   ]>;
+  /** the key names the repository, so setting one repository's rules again (`--unset-all`
+   *  first) leaves every other's alone */
+  export type EachItsOwn = [
+    Expect<Invoke<typeof urlRules, [repos: ["acme/app", "acme/lib"]]>["length"], "=", 16>,
+    Expect<Invoke<typeof urlRules, [repos: ["acme/app", "acme/lib"]]>[8], "=", ["--unset-all", "url.desolate-mirror::acme/lib.insteadOf"]>,
+  ];
+  /** a name with dots is still one key: git takes the section and the variable at the first
+   *  and the last dot, and everything between is the subsection */
+  export type DotsInTheName = Expect<
+    Invoke<typeof urlRules, [repos: ["acme/suede.nests"]]>[3],
+    "=",
+    ["--add", "url.desolate-mirror::acme/suede.nests.insteadOf", "https://github.com/acme/suede.nests.git"]
+  >;
 }

@@ -19,6 +19,11 @@ import type { Issue } from "../shared/issues.ts";
 import { printable, printableLines } from "../shared/text.ts";
 import { paths } from "./paths.ts";
 import { rootctl } from "./stack.ts";
+import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../../tests/nests/home.harness.ts";
+import type { errorOf, fakeGh, ghCalls } from "../../tests/nests/host-gh.harness.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../../tests/nests/host-stack.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 
@@ -103,6 +108,51 @@ export const publish = async (issue: Issue): Promise<string> => {
     fs.rmSync(lock, { recursive: true, force: true });
   }
 };
+declare namespace publish {
+  type Issue = { id: "abc123-0123abcd"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "--web is slow"; body: "Steps:\n1. open it"; labels: ["bug"]; at: "2026-11-16T10:00:00Z"; state: "approving" };
+  /** made by the person's gh, each field one argument (a title starting with dashes is still
+   *  the title), the body from a file of the host's; the root is told where it is */
+  export type Publishes = Given<
+    [Invoke<typeof emptyHome>, Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "issue.done": {} }]>, Invoke<typeof fakeGh, [stdout: "https://github.com/acme/web/issues/7\n", status: 0]>],
+    [
+      Expect<Invoke<typeof publish, [issue: Issue]>, "=", "https://github.com/acme/web/issues/7">,
+      Expect<Invoke<typeof ghCalls>, "=", [["issue", "create", "--repo", "acme/web", "--title=--web is slow", "--body-file", "<home>/state/issue-<tmp>/body.md", "--label=bug"]]>,
+      Expect<Invoke<typeof rootAsked>, "matches", [{ op: "issue.done"; args: { id: "abc123-0123abcd"; url: "https://github.com/acme/web/issues/7" } }]>,
+    ]
+  >;
+  /** once, whatever asks again: the same text is not made a second issue */
+  export type Once = Given<
+    [Invoke<typeof emptyHome>, Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "issue.done": {} }]>, Invoke<typeof fakeGh, [stdout: "https://github.com/acme/web/issues/7\n", status: 0]>, Invoke<typeof publish, [issue: Issue]>],
+    [Expect<Invoke<typeof publish, [issue: Issue]>, "=", "https://github.com/acme/web/issues/7">, Expect<Invoke<typeof ghCalls>["length"], "=", 1>]
+  >;
+  /** gh said no: said, with what usually causes it, and nothing kept, so it can be tried again */
+  export type GhRefused = Given<
+    [Invoke<typeof emptyHome>, Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>, Invoke<typeof fakeGh, [stdout: "", status: 1, stderr: "could not add label: 'bug' not found"]>],
+    [
+      Expect<Invoke<typeof errorOf, [run: typeof publish, args: [issue: Issue]]>, "=", "gh did not create it: could not add label: 'bug' not found (a label must exist in the repository first)">,
+      Expect<Invoke<typeof errorOf, [run: typeof publish, args: [issue: Issue]]>, "=", "gh did not create it: could not add label: 'bug' not found (a label must exist in the repository first)">,
+      Expect<Invoke<typeof ghCalls>["length"], "=", 2>,
+    ]
+  >;
+  /** an answer that is not a page of this repository's is not taken for one, and is not run again */
+  export type NoPage = Given<
+    [Invoke<typeof emptyHome>, Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>, Invoke<typeof fakeGh, [stdout: "https://evil.example/acme/web/issues/7NL", status: 0]>],
+    [
+      Expect<Invoke<typeof errorOf, [run: typeof publish, args: [issue: Issue]]>, "=", "gh created it, but answered with no page of acme/web's: look on GitHub (it will not be published again)">,
+      Expect<Invoke<typeof refusalOf, [run: typeof publish, args: [issue: Issue]]>, "matches", { message: "not published again: an earlier attempt at this exact issue did not say how it ended (published; gh answered with no page of acme/web's)" }>,
+      Expect<Invoke<typeof ghCalls>["length"], "=", 1>,
+    ]
+  >;
+  /** text that would not read on the approval page as it is published is never handed to gh */
+  export type NotADraft = Given<
+    [Invoke<typeof emptyHome>, Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>, Invoke<typeof fakeGh, [stdout: "https://github.com/acme/web/issues/7\n", status: 0]>],
+    [
+      Expect<Invoke<typeof errorOf, [run: typeof publish, args: [issue: { id: "abc123-0123abcd"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "ok \u202e evil"; body: "Steps:\n1. open it"; labels: ["bug"]; at: "2026-11-16T10:00:00Z"; state: "approving" }]]>, "=", "not published: the title holds a control or invisible character">,
+      Expect<Invoke<typeof ghCalls>, "=", []>,
+    ]
+  >;
+}
+
 export const refuseIssue = async (issue: Issue) => {
   await rootctl("issue.done", { id: issue.id, refused: "not published: you said not now, on the Mac" }, { quiet: true, timeoutMs: 30_000 });
 };
@@ -144,6 +194,18 @@ const confirm = async (question: string): Promise<string> => {
   });
 };
 
+declare namespace list {
+  /** what is waiting: drafts and those to publish, their text kept to text */
+  export type Waiting = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "issue.list": [{ id: "abc123-0123abcd"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "Login \u001b[31mloops"; body: "Steps:\n1. open it"; labels: ["bug"]; at: "2026-11-16T10:00:00Z"; state: "approving" }, { id: "def456-89abcdef"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "Docs"; body: "Steps:\n1. open it"; labels: []; at: "2026-11-16T10:00:00Z"; state: "offered" }, { id: "aaa111-00000000"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "--web is slow"; body: "Steps:\n1. open it"; labels: ["bug"]; at: "2026-11-16T10:00:00Z"; state: "published" }] }]>, Invoke<typeof list, [out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", [
+      '  abc123-0123abcd  to publish  acme/web  "Login ?[31mloops"  [bug]  from acme/w1',
+      '  def456-89abcdef  offered    acme/web  "Docs"  from acme/w1',
+      "edit them on the dashboard (desolate ui); publish one here: desolate issue publish <id>",
+    ]>
+  >;
+}
+
 export const decide = async (what: "publish" | "refuse", id: string | undefined, out: Out) => {
   if (!id) refuse(`${what} which issue?`, "desolate issues", EXIT.usage);
   let issue = (await waiting()).find((i) => i.id === id) ?? refuse(`no issue '${id}' is waiting`, "desolate issues");
@@ -169,3 +231,22 @@ export const decide = async (what: "publish" | "refuse", id: string | undefined,
   if (answer !== "publish") throw new Refusal("not confirmed: nothing was published", `desolate issue publish ${issue.id}, and type publish when it asks`, EXIT.unconfirmed);
   out(`published: ${await publish({ ...issue, ...draft })}`);
 };
+
+declare namespace decide {
+  /** which one, and only one that is waiting */
+  export type Refuses = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "issue.list": [] }]>],
+    [
+      Expect<Invoke<typeof refusalOf, [run: typeof decide, args: [what: "publish", id: undefined, out: typeof collect]]>, "=", { message: "publish which issue?"; fix: "desolate issues"; code: 64 }>,
+      Expect<Invoke<typeof refusalOf, [run: typeof decide, args: [what: "publish", id: "abc123-0123abcd", out: typeof collect]]>, "=", { message: "no issue 'abc123-0123abcd' is waiting"; fix: "desolate issues"; code: 1 }>,
+    ]
+  >;
+  /** not now: one waiting to be published goes back to a draft, and the root is told */
+  export type NotNow = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "issue.list": [{ id: "abc123-0123abcd"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "--web is slow"; body: "Steps:\n1. open it"; labels: ["bug"]; at: "2026-11-16T10:00:00Z"; state: "approving" }]; "issue.done": {} }]>, Invoke<typeof decide, [what: "refuse", id: "abc123-0123abcd", out: typeof collect]>],
+    [
+      Expect<Invoke<typeof said>, "=", ["abc123-0123abcd is a draft on the dashboard again. Reject it there to drop it."]>,
+      Expect<Invoke<typeof rootAsked>, "matches", [{ op: "issue.list" }, { op: "issue.done"; args: { refused: "not published: you said not now, on the Mac" } }]>,
+    ]
+  >;
+}

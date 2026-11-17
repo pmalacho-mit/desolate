@@ -15,6 +15,9 @@ import { parseApproval } from "../shared/approval.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import type { Issue } from "../shared/issues.ts";
+import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, rootAnswers, said } from "../../tests/nests/host-stack.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 type Offer = { domain: string; repo: string; branch: string; commit: string; workspace: string; lfs: number; at: string; base?: string };
@@ -33,9 +36,48 @@ export const offers = async (domain: string | undefined, out: Out, json: boolean
   const issues = (await rootctl<Issue[]>("issue.list", { waiting: true }, { quiet: true }).catch(() => [] as Issue[])).filter((i) => (i.state === "offered" || i.state === "approving") && (!domain || i.domain === domain));
   if (list.length === 0 && issues.length === 0) return out("no offers. In a workspace, `desolate offer` marks a branch ready for you.");
   out("Needs you:");
-  for (const o of list) out(`  ${o.domain}  ${o.repo}  ${plain(o.branch)}  ${o.commit.slice(0, 12)}  from ${plain(o.workspace) || "(a workspace of the domain)"}${o.base ? `  for ${plain(o.base)}` : ""}${o.lfs ? `  ${o.lfs} LFS object(s)` : ""}\n    review: desolate review ${o.domain} ${o.repo} ${o.branch}`);
+  for (const o of list) out(`  ${o.domain}  ${o.repo}  ${plain(o.branch)}  ${o.commit.slice(0, 12)}  from ${plain(o.workspace) || "(a workspace of the domain)"}${o.base ? `  for ${plain(o.base)}` : ""}${o.lfs ? `  ${o.lfs} LFS object(s)` : ""}\n    review: desolate review ${o.domain} ${o.repo} ${plain(o.branch)}`);
   for (const i of issues) out(`  ${i.domain}  ${i.repo}  issue "${printable(i.title, 100)}"  from ${plain(i.workspace)}${i.state === "approving" ? "  waiting for you to publish it" : ""}\n    ${i.state === "approving" ? `publish: desolate issue publish ${i.id}` : `edit it on the dashboard (desolate ui), or publish: desolate issue publish ${i.id}`}`);
 };
+
+declare namespace offers {
+  /** what needs the person: offers, each with the command that reviews it; a domain whose
+   *  bundle git refused, and what to do; issues a workspace offered */
+  export type Lists = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: {
+        "offers.list": [{ domain: "acme"; repo: "acme/web"; branch: "fix/login"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T10:00:00Z"; base: "v3" }];
+        "offers.refused": [{ domain: "beta"; repo: "beta/api"; at: "2026-11-16T09:00:00Z"; why: "a .git directory inside a tree" }];
+        "issue.list": [{ id: "abc123-0123abcd"; domain: "acme"; workspace: "w1"; repo: "acme/web"; title: "Login loops after a reset"; body: ""; labels: []; at: "2026-11-16T10:00:00Z"; state: "offered" }];
+      }]>,
+      Invoke<typeof offers, [domain: undefined, out: typeof collect, json: false]>,
+    ],
+    Expect<Invoke<typeof said>, "=", [
+      "Refused from beta (beta/api, 2026-11-16T09:00:00Z): a .git directory inside a tree",
+      "  Nothing new from beta is taken while one of its branches holds what git refused. Delete that branch in the workspace, then `desolate sync` there.",
+      "Needs you:",
+      "  acme  acme/web  fix/login  0123456789ab  from w1  for v3",
+      "    review: desolate review acme acme/web fix/login",
+      '  acme  acme/web  issue "Login loops after a reset"  from w1',
+      "    edit it on the dashboard (desolate ui), or publish: desolate issue publish abc123-0123abcd",
+    ]>
+  >;
+  /** nothing waiting, and how something comes to */
+  export type Nothing = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "offers.list": []; "offers.refused": []; "issue.list": [] }]>, Invoke<typeof offers, [domain: undefined, out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", ["no offers. In a workspace, `desolate offer` marks a branch ready for you."]>
+  >;
+  /** a branch name is the domain's text: shown as text on both its lines, whatever prints them */
+  export type BranchAsText = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "offers.list": [{ domain: "acme"; repo: "acme/web"; branch: "fix/login\u001b]0;pwned\u0007"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T10:00:00Z" }]; "offers.refused": []; "issue.list": [] }]>,
+      Invoke<typeof offers, [domain: undefined, out: typeof collect, json: false]>,
+    ],
+    Expect<Invoke<typeof said>, "=", ["Needs you:", "  acme  acme/web  fix/login?]0;pwned?  0123456789ab  from w1", "    review: desolate review acme acme/web fix/login?]0;pwned?"]>
+  >;
+}
 
 /** `desolate branches [<domain>]`: every branch each domain has, not only what was offered.
  *  The list is each domain's own word; `desolate review` reads the branch in the root. */
@@ -77,6 +119,39 @@ export const review = async (args: string[], out: Out, json: boolean, against: "
   if (!r.pushable) out(`${r.repo} is not pushable (cloned --no-push): there is no write key for it.`);
   else out(`to push exactly this: desolate push ${domain} ${r.repo} ${plain(r.branch)} --expect ${r.commit}${r.isDefault ? " --allow-default" : ""}`);
 };
+
+declare namespace review {
+  /** what a push would send, the commit subjects as text (an escape is shown, not obeyed), and
+   *  the exact command that pushes exactly this commit */
+  export type Shows = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { review: { repo: "acme/web"; branch: "fix/login"; commit: "0123456789abcdef0123456789abcdef01234567"; pushable: true; isDefault: false; commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "Fix the login loop\u001b[2J" }]; files: ["src/login.ts"]; stat: "1 file changed, 3 insertions(+)"; lfsObjects: 0; warnings: [] } }]>, Invoke<typeof review, [args: ["acme", "acme/web", "fix/login"], out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", [
+      "acme/web  fix/login  at 0123456789abcdef0123456789abcdef01234567, against origin",
+      "a push would send 1 commit(s): 1 file changed, 3 insertions(+)",
+      "  0123456789ab  Fix the login loop?[2J",
+      "  src/login.ts",
+      "read the diff: desolate review acme acme/web fix/login --diff",
+      "  or in the dashboard: http://desolate.localhost:31581/?review&domain=acme&repo=acme%2Fweb&branch=fix%2Flogin",
+      "  or with git, in `desolate root shell`",
+      "to push exactly this: desolate push acme acme/web fix/login --expect 0123456789abcdef0123456789abcdef01234567",
+    ]>
+  >;
+  /** the default branch needs --allow-default said out loud; a repository cloned --no-push has
+   *  no write key, and says so instead */
+  export type DefaultBranch = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { review: { repo: "acme/web"; branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; pushable: true; isDefault: true; commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "Fix the login loop\u001b[2J" }]; files: ["src/login.ts"]; stat: "1 file changed, 3 insertions(+)"; lfsObjects: 0; warnings: [] } }]>, Invoke<typeof review, [args: ["acme", "acme/web", "main"], out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "includes", "to push exactly this: desolate push acme acme/web main --expect 0123456789abcdef0123456789abcdef01234567 --allow-default">
+  >;
+  export type NotPushable = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { review: { repo: "acme/web"; branch: "fix/login"; commit: "0123456789abcdef0123456789abcdef01234567"; pushable: false; isDefault: false; commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "Fix the login loop\u001b[2J" }]; files: ["src/login.ts"]; stat: "1 file changed, 3 insertions(+)"; lfsObjects: 0; warnings: [] } }]>, Invoke<typeof review, [args: ["acme", "acme/web", "fix/login"], out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "includes", "acme/web is not pushable (cloned --no-push): there is no write key for it.">
+  >;
+  /** all three names, or a usage error before the root is asked */
+  export type ReviewWhat = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
+    Expect<Invoke<typeof refusalOf, [run: typeof review, args: [args: ["acme", "acme/web"], out: typeof collect, json: false]]>, "=", { message: "review what?"; fix: "desolate review <domain> <owner/repo> <branch> [--against origin|domain]   (see `desolate branches` and `desolate offers`)"; code: 64 }>
+  >;
+}
 
 const PUSH = ["node", "--disable-warning=ExperimentalWarning", `${guest.release}/root/push.ts`];
 
@@ -129,5 +204,16 @@ export const approve = async (out: Out): Promise<number> => {
   }
   return 0;
 };
+
+declare namespace approve {
+  /** nothing waiting: said, and nothing is signed */
+  export type NothingWaiting = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "approvals.pending": [] }]>],
+    [
+      Expect<Invoke<typeof approve, [out: typeof collect]>, "=", 0>,
+      Expect<Invoke<typeof said>, "=", ["nothing is waiting for approval. (`desolate push` asks by itself; this is for a raw `git push` in `desolate root shell`.)"]>,
+    ]
+  >;
+}
 
 export const rootShell = (): Promise<number> => backend().attach(ROOT_VM, ["bash", "-l"], { cwd: guest.rootClones });

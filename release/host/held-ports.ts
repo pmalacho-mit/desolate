@@ -9,7 +9,7 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import { printable } from "../shared/text.ts";
 
 export const DEV_PORTS = [3000, 3001, 4200, 5000, 5173, 5174, 8000, 8080, 8888];
@@ -25,6 +25,14 @@ declare namespace portsToCheck {
     [args: [value: undefined], expected: [3000, 3001, 4200, 5000, 5173, 5174, 8000, 8080, 8888]],
     [args: [value: "none"], expected: []],
     [args: [value: "3000, 80, x, 9000"], expected: [3000, 9000]],
+    [args: [value: " none "], expected: []],
+  ]>;
+  /** only what the forwarder would forward: whole numbers from 1024 to 65535; the rest is dropped, not refused */
+  export type Bounds = Table<typeof portsToCheck, [
+    [args: [value: "1024,65535"], expected: [1024, 65535]],
+    [args: [value: "1023,65536,0,-3000"], expected: []],
+    [args: [value: "5173.5,,"], expected: []],
+    [args: [value: ""], expected: []],
   ]>;
 }
 

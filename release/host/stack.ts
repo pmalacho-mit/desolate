@@ -9,6 +9,10 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
 import { limaBackend } from "./vm/lima.ts";
 import type { Backend, VmSpec } from "./vm/types.ts";
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, writeState } from "../../tests/nests/home.harness.ts";
+import type { setEnv } from "../../tests/nests/env.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 export type ForgeConfig = {
   kind: "github" | "stand-in";
@@ -34,6 +38,36 @@ export const backendKind = (): Config["backend"] => {
   if (env === "fake" && stored && stored !== "fake") refuse(`DESOLATE_BACKEND=fake, but this stack was bootstrapped on ${stored}`, "unset DESOLATE_BACKEND");
   return (env as Config["backend"] | undefined) ?? stored ?? defaultBackend();
 };
+
+declare namespace backendKind {
+  /** what bootstrap recorded, when this command names none */
+  export type Recorded = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "config.json", text: '{"backend":"qemu"}']>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>],
+    Expect<Invoke<typeof backendKind>, "=", "qemu">
+  >;
+  /** the fake backend (no isolation at all) only when this very command asks for it by name */
+  export type FakeOnlyByName = [
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
+      Expect<Invoke<typeof backendKind>, "=", "fake">
+    >,
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "config.json", text: '{"backend":"fake"}']>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>],
+      Expect<Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>, "=", { message: "this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name"; fix: "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend"; code: 1 }>
+    >,
+  ];
+  /** nor on a stack that was bootstrapped on a real one; and no backend it does not know */
+  export type Refuses = [
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "config.json", text: '{"backend":"vz"}']>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
+      Expect<Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>, "=", { message: "DESOLATE_BACKEND=fake, but this stack was bootstrapped on vz"; fix: "unset DESOLATE_BACKEND"; code: 1 }>
+    >,
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "docker"]>],
+      Expect<Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>, "=", { message: "DESOLATE_BACKEND is 'docker'"; fix: "use fake, qemu or vz"; code: 1 }>
+    >,
+  ];
+}
 
 let cached: Backend | null = null;
 export const backend = (): Backend => {
@@ -64,6 +98,20 @@ export const rootSpec = (): VmSpec => ({
   diskGiB: 30, // (the base's: a clone's disk cannot be smaller; 20 was never applied)
   labels: { title: "root" },
 });
+
+declare namespace rootSpec {
+  /** the root reaches the network (it fetches and pushes); it reads desolate's code and cannot
+   *  change it, and holds the mirrors, its clones and every domain's share */
+  export type Shares = Expect<Invoke<typeof rootSpec>, "matches", {
+    role: "root"; egress: "open"; sockets: [];
+    shares: [
+      { guest: "/desolate/release"; writable: false },
+      { guest: "/desolate/mirrors"; writable: true },
+      { guest: "/desolate/root"; writable: true },
+      { guest: "/desolate/domains"; writable: true },
+    ];
+  }>;
+}
 
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 

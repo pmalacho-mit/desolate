@@ -19,6 +19,9 @@ import { afterPush } from "./pushed.ts";
 import * as repos from "./repos.ts";
 import { submitForReview } from "./review-client.ts";
 import { send } from "./send.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aRegistry, emptyRoot } from "../../tests/nests/root-state.harness.ts";
 
 export const WAIT_MS = Number(process.env.DESOLATE_APPROVAL_WAIT_MS) || 110_000;
 
@@ -89,3 +92,22 @@ export const pushCommit = async (repo: Repo, commit: string, branch: string, for
   if (link) say(`desolate: open a pull request into ${base}, in your browser, as yourself: ${link}`);
   return null;
 };
+
+declare namespace pushCommit {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Registry = Invoke<typeof aRegistry, [repos: { "acme/app": { defaultBranch: "main" }; "acme/docs": { pushable: false } }]>;
+  /** refused before anything is asked of the keyring or the person: a ref that is not a
+   *  branch, the default branch (that is `desolate push --allow-default`, on the host), and a
+   *  repository the root holds no write key for. (A push that passes these waits for the
+   *  person's approval on the host: T2's and T4's.) */
+  export type Refuses = Given<[Fresh, Registry], [
+    Expect<Invoke<typeof pushCommit, [repo: { owner: "acme"; name: "app" }, commit: "0123456789abcdef0123456789abcdef01234567", branch: "refs/tags/v1..x", forced: false, from: "a raw git push", say: typeof console.error]>, "=", "desolate pushes branches">,
+    Expect<Invoke<typeof pushCommit, [repo: { owner: "acme"; name: "app" }, commit: "0123456789abcdef0123456789abcdef01234567", branch: "main", forced: false, from: "a raw git push", say: typeof console.error]>, "=", "main is the default branch: push a branch; or, on the host: desolate push <domain> acme/app main --expect 0123456789abcdef0123456789abcdef01234567 --allow-default">,
+    Expect<Invoke<typeof pushCommit, [repo: { owner: "acme"; name: "docs" }, commit: "0123456789abcdef0123456789abcdef01234567", branch: "fix", forced: false, from: "a raw git push", say: typeof console.error]>, "=", "acme/docs is not pushable: the root holds no write key for it">,
+  ]>;
+  /** and one the root never cloned is not a push at all */
+  export type Unknown = Given<
+    [Fresh, Registry],
+    Throws<Invoke<typeof pushCommit, [repo: { owner: "acme"; name: "other" }, commit: "0123456789abcdef0123456789abcdef01234567", branch: "fix", forced: false, from: "a raw git push", say: typeof console.error]>, "acme/other is not cloned into the root">
+  >;
+}

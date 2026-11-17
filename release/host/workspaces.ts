@@ -16,6 +16,9 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
+import type { Expect, Given, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { setEnv } from "../../tests/nests/env.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 type Workspace = WorkspacePlan & { state: string };
@@ -28,6 +31,17 @@ export const splitTarget = (target: string | undefined): { domain: string; works
   if (parts.length !== 2 || !parts[0] || !parts[1]) refuse(`'${target ?? ""}' does not name a workspace`, "name it as <domain>/<workspace> (see `desolate list`)", EXIT.usage);
   return { domain: parts[0]!, workspace: parts[1]! };
 };
+
+declare namespace splitTarget {
+  /** `<domain>/<workspace>`, and nothing more or less */
+  export type Names = Expect<Invoke<typeof splitTarget, [target: "acme/w1"]>, "=", { domain: "acme"; workspace: "w1" }>;
+  export type Refuses = [
+    Expect<Invoke<typeof refusalOf, [run: typeof splitTarget, args: [target: "acme"]]>, "=", { message: "'acme' does not name a workspace"; fix: "name it as <domain>/<workspace> (see `desolate list`)"; code: 64 }>,
+    Throws<Invoke<typeof splitTarget, [target: "acme/w1/x"]>, "'acme/w1/x' does not name a workspace">,
+    Throws<Invoke<typeof splitTarget, [target: "/w1"]>, "'/w1' does not name a workspace">,
+    Throws<Invoke<typeof splitTarget, [target: undefined]>, "'' does not name a workspace">,
+  ];
+}
 
 export const specOf = (plan: WorkspacePlan, repos: string[]): VmSpec => ({
   name: plan.vm,
@@ -58,6 +72,31 @@ export const specOf = (plan: WorkspacePlan, repos: string[]): VmSpec => ({
   labels: { title: `${plan.domain}/${plan.workspace}`, domain: plan.domain, workspace: plan.workspace },
 });
 
+declare namespace specOf {
+  type Plan = {
+    domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc"; title: "w1"; fetch: false; createdAt: "2026-11-16T10:00:00Z";
+    checkouts: [{ repo: "acme/web"; kind: "worktree"; name: "fix-login"; branch: "fix/login"; base: "origin/main"; path: "/workspaces/acme/web/.worktrees/fix-login" }];
+    size: { cpus: 4; memoryMiB: 8192; diskGiB: 60 };
+  };
+  /** no network but its link; its domain's clones, outbox and caches writable; the inbox (the
+   *  root's to write) and the mirrors of its domain's repositories, and only those, read-only */
+  export type Shares = Expect<Invoke<typeof specOf, [plan: Plan, repos: ["acme/web", "acme/api"]]>, "matches", {
+    name: "dsl-main-ddb30a57cc"; role: "workspace"; egress: "none";
+    shares: [
+      { guest: "/desolate/release"; writable: false },
+      { guest: "/workspaces"; writable: true },
+      { guest: "/desolate/outbox"; writable: true },
+      { guest: "/desolate/inbox"; writable: false },
+      { guest: "/desolate/cache"; writable: true },
+      { guest: "/desolate/mirrors/acme/web.git"; writable: false },
+      { guest: "/desolate/mirrors/acme/api.git"; writable: false },
+    ];
+    sockets: [{ guest: "/desolate/link/proxy.sock" }];
+    cpus: 4; memoryMiB: 8192; diskGiB: 60;
+    labels: { title: "acme/w1"; domain: "acme"; workspace: "w1" };
+  }>;
+}
+
 const sized = (name: string, fallback: number, min: number, max: number) => {
   const value = process.env[name];
   if (value === undefined || value === "") return fallback;
@@ -76,6 +115,21 @@ export const stackDefaults = (): Size => {
     diskGiB: sized("DESOLATE_WORKSPACE_DISK_GIB", mac.diskGiB, LIMITS.diskGiB[0], LIMITS.diskGiB[1]),
   };
 };
+declare namespace stackDefaults {
+  type Overrides = [
+    Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_CPUS", value: "3"]>,
+    Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_MEMORY_MIB", value: "6144"]>,
+    Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_DISK_GIB", value: "40"]>,
+  ];
+  /** the environment overrides what this Mac would give, each part */
+  export type Overridden = Given<Overrides, Expect<Invoke<typeof stackDefaults>, "=", { cpus: 3; memoryMiB: 6144; diskGiB: 40 }>>;
+  /** within the limits a workspace may have, as whole numbers */
+  export type Refuses = Given<
+    Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_CPUS", value: "1.5"]>,
+    Expect<Invoke<typeof refusalOf, [run: typeof stackDefaults, args: []]>, "=", { message: "DESOLATE_WORKSPACE_CPUS is '1.5'"; fix: "a whole number from 1 to 64"; code: 1 }>
+  >;
+}
+
 /** `--cpus 4 --memory 8g --disk 60g`, read and checked. */
 export const sizeFlags = (values: { cpus?: unknown; memory?: unknown; disk?: unknown }): Partial<Size> => {
   const size: Partial<Size> = {};
@@ -86,6 +140,21 @@ export const sizeFlags = (values: { cpus?: unknown; memory?: unknown; disk?: unk
   if (why) refuse(why, "--cpus <n> --memory <8g> --disk <60g>", EXIT.usage);
   return size;
 };
+
+declare namespace sizeFlags {
+  /** each flag as `up` and `domain <d> size` take it; what is not given is left to the next */
+  export type Reads = Table<typeof sizeFlags, [
+    [args: [values: { cpus: "4"; memory: "8g"; disk: "60g" }], expected: { cpus: 4; memoryMiB: 8192; diskGiB: 60 }],
+    [args: [values: { memory: "4096" }], expected: { memoryMiB: 4096 }],
+    [args: [values: {}], expected: {}],
+  ]>;
+  /** a usage error (exit 64), with the spelling that works */
+  export type Refuses = [
+    Expect<Invoke<typeof refusalOf, [run: typeof sizeFlags, args: [values: { memory: "lots" }]]>, "=", { message: "--memory 'lots' is not an amount"; fix: "--memory 8g (or 4096 for MiB)"; code: 64 }>,
+    Throws<Invoke<typeof sizeFlags, [values: { cpus: "four" }]>, "CPUs must be from 1 to 64">,
+    Throws<Invoke<typeof sizeFlags, [values: { disk: "10g" }]>, "disk must be from 30 GiB to 2048 GiB">,
+  ];
+}
 
 /** What a workspace VM printed is the workspace's text. On its way to the person's
  *  terminal it is text: nothing in it may move the cursor, retitle the window or write the
@@ -167,6 +236,11 @@ export const urlsOf = (plan: { domain: string; workspace: string }) => ({
   editor: `http://${editorHostname(INSTANCE, plan.domain, plan.workspace)}:${editorHostPort()}`,
   dev: `http://${devHostname(INSTANCE, plan.domain, plan.workspace)}`,
 });
+
+declare namespace urlsOf {
+  /** its editor, on the stack's editor port, and its dev servers, each at a name of its own */
+  export type Names = Expect<Invoke<typeof urlsOf, [plan: { domain: "acme"; workspace: "w1" }]>, "=", { editor: "http://acme-w1-editor-1a26c5.localhost:31581"; dev: "http://acme-w1-1a26c5.localhost" }>;
+}
 
 export const up = async (domain: string | undefined, options: { name?: string; checkouts: string[]; branch?: string; base?: string; fetch: boolean; size?: Partial<Size>; startedBy?: string; command?: string[]; keep?: { startedBy?: { workspace: string; createdAt: string }; parent?: string | null } }, out: Out, json: boolean) => {
   if (!domain) refuse("which domain?", "desolate up <domain> [--name <workspace>]", EXIT.usage);
@@ -358,6 +432,26 @@ export const vouched = <W extends { domain: string; workspace: string; vm: strin
     refuse(`the root's answer about ${domain}/${workspace ?? w.workspace} does not name that workspace's own VM`, "desolate doctor; if it persists, the root VM is not well: desolate bootstrap");
   return w;
 };
+declare namespace isOwnVm {
+  /** the VM a record names is the one the host computes for that workspace, in that domain */
+  export type Records = Table<typeof isOwnVm, [
+    [args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }], expected: true],
+    [args: [domain: "acme", w: { workspace: "w1"; vm: "dsl-main-ddb30a57cc" }], expected: true],
+    /** another domain's workspace of the same name has another VM */
+    [args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-41eb634ef1" }], expected: false],
+    [args: [domain: "acme", w: { domain: "beta"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }], expected: false],
+    [args: [domain: "acme", w: { domain: "acme"; workspace: "../w1"; vm: "dsl-main-ddb30a57cc" }], expected: false],
+    [args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-root" }], expected: false],
+  ]>;
+}
+declare namespace vouched {
+  /** the root's answer is used only if it names the workspace asked about, and its own VM */
+  export type Passes = Expect<Invoke<typeof vouched, [w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }, domain: "acme", workspace: "w1"]>, "=", { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }>;
+  export type Refuses = [
+    Throws<Invoke<typeof vouched, [w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-41eb634ef1" }, domain: "acme", workspace: "w1"]>, "the root's answer about acme/w1 does not name that workspace's own VM">,
+    Throws<Invoke<typeof vouched, [w: { domain: "acme"; workspace: "w2"; vm: "dsl-main-ddb30a57cc" }, domain: "acme", workspace: "w1"]>, "the root's answer about acme/w1 does not name that workspace's own VM">,
+  ];
+}
 const find = async (target: string | undefined) => {
   const { domain, workspace } = splitTarget(target);
   return vouched(await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }), domain, workspace);

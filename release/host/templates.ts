@@ -33,6 +33,8 @@ import { imageFingerprint } from "./image.ts";
 import { INSTANCE, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
+import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, noBuilder, rootAnswers, said } from "../../tests/nests/host-stack.harness.ts";
 
 type EnvKey = { repo: string; spec: string; id: string };
 export type Builder = {
@@ -54,6 +56,24 @@ export const keyOf = (env: EnvKey) =>
 /** `dsl-<instance>-t<9 hex>`: as long as a workspace's VM name (the socket-path check counts
  *  on it), and never one ("t" is not hex). */
 export const templateVm = (domain: string, key: string) => `dsl-${INSTANCE}-t${hashOf(domain, key).slice(0, 9)}`;
+
+declare namespace keyOf {
+  type Env = { repo: "acme/web"; spec: ".devcontainer"; id: "0123456789abcdef0123456789abcdef01234567" };
+  /** sixteen hex digits, the same for the same environment, another for any change to its spec */
+  export type Keys = [
+    Expect<Invoke<typeof keyOf, [env: Env]>, "matches", "^[0-9a-f]{16}$">,
+    Expect<Invoke<typeof keyOf, [env: Env]>, "=", Invoke<typeof keyOf, [env: Env]>>,
+    Expect<Invoke<typeof keyOf, [env: Env]>, "!=", Invoke<typeof keyOf, [env: { repo: "acme/web"; spec: ".devcontainer"; id: "1111111111111111111111111111111111111111" }]>>,
+  ];
+}
+declare namespace templateVm {
+  /** as long as a workspace's VM name (dsl-<instance>- and ten more), and never one: "t" is
+   *  not hex; one domain's template is never another's */
+  export type Names = [
+    Expect<Invoke<typeof templateVm, [domain: "acme", key: "0123456789abcdef"]>, "matches", "^dsl-main-t[0-9a-f]{9}$">,
+    Expect<Invoke<typeof templateVm, [domain: "acme", key: "0123456789abcdef"]>, "!=", Invoke<typeof templateVm, [domain: "beta", key: "0123456789abcdef"]>>,
+  ];
+}
 
 /** Run as root in the template before it is stopped: what is one workspace's goes. */
 const SCRUB = `set -e
@@ -77,6 +97,26 @@ export const ensure = async (domain: string, repos: string[], build: Builder, sa
     return null;
   }
 };
+
+declare namespace ensure {
+  /** a domain with no devcontainer spec has no template, and nothing is said */
+  export type NoSpec = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "domain.env-key": null }]>],
+    [
+      Expect<Invoke<typeof ensure, [domain: "acme", repos: ["acme/web"], build: typeof noBuilder, say: typeof collect]>, "=", null>,
+      Expect<Invoke<typeof said>, "=", []>,
+    ]
+  >;
+  /** anything that goes wrong only makes the start slower: the workspace is made from the base,
+   *  and the person is told why */
+  export type NeverStopsAWorkspace = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
+    [
+      Expect<Invoke<typeof ensure, [domain: "acme", repos: ["acme/web"], build: typeof noBuilder, say: typeof collect]>, "=", null>,
+      Expect<Invoke<typeof said>, "=", ["  no template: the root did not answer 'domain.env-key'. This workspace is made from desolate's base."]>,
+    ]
+  >;
+}
 
 const ensureOrThrow = async (domain: string, repos: string[], build: Builder, say: (line: string) => void, envRepo?: string): Promise<string | null> => {
   const b = backend();

@@ -12,6 +12,9 @@ import type { Repo } from "../shared/names.ts";
 import { git } from "./git.ts";
 import { ask } from "./keyring-client.ts";
 import { clonePath, REVIEWER } from "./layout.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Call, Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { attemptsThat } from "../../tests/nests/root-retry.harness.ts";
 
 const RETRY = new Set(["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"]);
 /** The reviewer is one request per process: between two, it is starting. */
@@ -25,6 +28,22 @@ export const withReviewer = async <T>(attempt: () => Promise<T>): Promise<T> => 
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 };
+
+declare namespace withReviewer {
+  type Starting = Invoke<typeof attemptsThat, [outcomes: [{ fails: "ENOENT" }, { fails: "ECONNRESET" }, { tips: [] }]]>;
+  /** between two requests the reviewer is starting: a missing socket, or one that drops the
+   *  connection, is asked again */
+  export type Starts = Given<
+    Starting,
+    [Expect<Invoke<typeof withReviewer, [attempt: Starting["attempt"]]>, "=", { tips: [] }>, Expect<Call<Starting, "calls">, "=", 3>]
+  >;
+  type Denied = Invoke<typeof attemptsThat, [outcomes: [{ fails: "EACCES" }, { tips: [] }]]>;
+  /** a failure that is not that is the caller's to report, at once */
+  export type NotStarting = Given<
+    Denied,
+    [Throws<Invoke<typeof withReviewer, [attempt: Denied["attempt"]]>, "connect EACCES">, Expect<Call<Denied, "calls">, "=", 1>]
+  >;
+}
 
 const handOver = (header: Record<string, unknown>, file: string): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {

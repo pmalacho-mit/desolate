@@ -2,7 +2,8 @@
 // git VM), the root (a push of a `downstream/...` branch) and the reviewer agree on.
 // Nothing here runs a program; the checks that need git take one that the caller runs.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { gitAnswering } from "../../tests/nests/shared-git.harness.ts";
 import { isCommit, parseRepo, repoId } from "./names.ts";
 import type { Repo } from "./names.ts";
 
@@ -11,6 +12,7 @@ export const segment = (raw: string) =>
   raw.replace(/[^A-Za-z0-9_.-]/g, "-").replace(/-+/g, "-").replace(/^[-.]+/, "").replace(/[-.]+$/, "");
 
 declare namespace segment {
+  /** what a branch segment may hold: anything else one dash, and no dot or dash at its ends */
   export type Cases = Table<typeof segment, [
     [args: [raw: "acme"], expected: "acme"],
     [args: [raw: "my_app.v2"], expected: "my_app.v2"],
@@ -25,13 +27,26 @@ export const downstreamBranch = (consumer: Repo, commit: string) =>
   `downstream/${segment(consumer.owner)}/${segment(consumer.name) || "repo"}-${commit}`;
 
 declare namespace downstreamBranch {
+  /** the consumer's owner and name, as suede spells a segment, and the consumer's commit */
   export type Cases = Table<typeof downstreamBranch, [
     [args: [consumer: { owner: "acme"; name: "app" }, commit: "0123456789abcdef0123456789abcdef01234567"], expected: "downstream/acme/app-0123456789abcdef0123456789abcdef01234567"],
+    /** names suede would spell otherwise are spelled its way, and an empty one is `repo` */
+    [args: [consumer: { owner: "Acme Corp"; name: "my app" }, commit: "0123456789abcdef0123456789abcdef01234567"], expected: "downstream/Acme-Corp/my-app-0123456789abcdef0123456789abcdef01234567"],
+    [args: [consumer: { owner: "acme"; name: "..." }, commit: "0123456789abcdef0123456789abcdef01234567"], expected: "downstream/acme/repo-0123456789abcdef0123456789abcdef01234567"],
   ]>;
 }
 
 /** A suede proposal's branch, as the root sees one. */
 export const isDownstream = (branch: string) => branch.startsWith("downstream/");
+
+declare namespace isDownstream {
+  /** a branch under `downstream/`, and only one under it */
+  export type Cases = Table<typeof isDownstream, [
+    [args: [branch: "downstream/acme/app-0123456789abcdef0123456789abcdef01234567"], expected: true],
+    [args: [branch: "feature/downstream/x"], expected: false],
+    [args: [branch: "downstream"], expected: false],
+  ]>;
+}
 
 /** The repository a remote's address names (`.gitrepo`'s `remote`, suede's `--remote`), or
  *  null. Any host: desolate pushes to the repository the person named, through its own forge,
@@ -46,6 +61,7 @@ export const remoteRepo = (url: unknown): Repo | null => {
 };
 
 declare namespace remoteRepo {
+  /** the owner and name of an address git would reach over the network, on any host */
   export type Names = Table<typeof remoteRepo, [
     [args: [url: "https://github.com/acme/lib"], expected: { owner: "acme"; name: "lib" }],
     [args: [url: "https://github.com/acme/lib.git"], expected: { owner: "acme"; name: "lib" }],
@@ -53,6 +69,8 @@ declare namespace remoteRepo {
     [args: [url: "git@github.com-acme__lib:acme/lib.git"], expected: { owner: "acme"; name: "lib" }],
     [args: [url: "ssh://git@10.0.0.2:2222/acme/lib.git"], expected: { owner: "acme"; name: "lib" }],
   ]>;
+  /** never a local path, a file:// or a transport helper (which git would run), an argument
+   *  that is an option, a path of more than owner and name, or one that climbs */
   export type Refuses = Table<typeof remoteRepo, [
     [args: [url: "/srv/git/acme/lib.git"], expected: null],
     [args: [url: "file:///srv/acme/lib"], expected: null],
@@ -67,6 +85,14 @@ declare namespace remoteRepo {
 /** GitHub's names are not case-sensitive. */
 export const sameRepo = (a: Repo, b: Repo) => repoId(a).toLowerCase() === repoId(b).toLowerCase();
 
+declare namespace sameRepo {
+  /** one repository whatever the case it is spelled in; another name is another repository */
+  export type Cases = Table<typeof sameRepo, [
+    [args: [a: { owner: "Acme"; name: "Lib" }, b: { owner: "acme"; name: "lib" }], expected: true],
+    [args: [a: { owner: "acme"; name: "lib" }, b: { owner: "acme"; name: "lib2" }], expected: false],
+  ]>;
+}
+
 /** What a `.gitrepo` says, as `git config --blob ... --get subrepo.<key>` read it. */
 export type Gitrepo = { remote: string | null; branch: string | null; commit: string | null; parent: string | null; method: string | null };
 
@@ -80,6 +106,7 @@ export const gitrepoProblem = (g: Gitrepo): string | null => {
 };
 
 declare namespace gitrepoProblem {
+  /** what becomes a git argument must be a full commit id, and the method one git-subrepo has */
   export type Cases = Table<typeof gitrepoProblem, [
     [args: [g: { remote: "https://github.com/acme/lib"; branch: "release"; commit: "0123456789abcdef0123456789abcdef01234567"; parent: null; method: "merge" }], expected: null],
     [args: [g: { remote: null; branch: null; commit: "0123456789abcdef0123456789abcdef01234567 -F /etc/passwd"; parent: null; method: null }], expected: "its commit is not a full commit id"],
@@ -116,3 +143,30 @@ export const downstreamRefusal = async (git: Git, commit: string, tips: string[]
   for (const base of bases) if ((await githubOf(git, base)) === mine) return null;
   return "it changes the dependency's .github/: a pushed branch's own workflows run on the remote, with its secrets, on the push itself. Proposals leave .github/ alone; make that change in the dependency yourself";
 };
+
+declare namespace downstreamRefusal {
+  /** the control: a proposal on the dependency's release, its .github/ that release's */
+  export type SameWorkflows = Expect<
+    Invoke<typeof downstreamRefusal, [git: Invoke<typeof gitAnswering, [answers: { "merge-base --all cccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddd": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"; "rev-parse --verify --quiet cccccccccccccccccccccccccccccccccccccccc:.github": "1111111111111111111111111111111111111111\n"; "rev-parse --verify --quiet eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:.github": "1111111111111111111111111111111111111111\n" }]>, commit: "cccccccccccccccccccccccccccccccccccccccc", tips: ["dddddddddddddddddddddddddddddddddddddddd"]]>,
+    "=",
+    null
+  >;
+  /** neither has a .github/: nothing is changed there either */
+  export type NoWorkflows = Expect<
+    Invoke<typeof downstreamRefusal, [git: Invoke<typeof gitAnswering, [answers: { "merge-base --all cccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddd": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n" }]>, commit: "cccccccccccccccccccccccccccccccccccccccc", tips: ["dddddddddddddddddddddddddddddddddddddddd"]]>,
+    "=",
+    null
+  >;
+  /** the same proposal with its .github/ changed (or added): refused, and why */
+  export type ChangedWorkflows = Expect<
+    Invoke<typeof downstreamRefusal, [git: Invoke<typeof gitAnswering, [answers: { "merge-base --all cccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddd": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n"; "rev-parse --verify --quiet cccccccccccccccccccccccccccccccccccccccc:.github": "2222222222222222222222222222222222222222\n"; "rev-parse --verify --quiet eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee:.github": "1111111111111111111111111111111111111111\n" }]>, commit: "cccccccccccccccccccccccccccccccccccccccc", tips: ["dddddddddddddddddddddddddddddddddddddddd"]]>,
+    "startsWith",
+    "it changes the dependency's .github/"
+  >;
+  /** one that builds on nothing the remote has is not a proposal at all */
+  export type Unrelated = Expect<
+    Invoke<typeof downstreamRefusal, [git: Invoke<typeof gitAnswering, [answers: {}]>, commit: "cccccccccccccccccccccccccccccccccccccccc", tips: ["dddddddddddddddddddddddddddddddddddddddd"]]>,
+    "=",
+    "it builds on nothing the remote has: a suede proposal builds on the dependency's release"
+  >;
+}

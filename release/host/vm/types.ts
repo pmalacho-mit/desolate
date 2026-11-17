@@ -12,6 +12,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Duplex } from "node:stream";
 import type { RunResult } from "../../shared/run.ts";
+import type { Invoke, Table, Throws } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Share = { host: string; guest: string; writable: boolean };
 
@@ -111,3 +112,23 @@ export const socatAddress = (target: number | string): string => {
   if (!/^(\/[A-Za-z0-9._-]+)+$/.test(target) || target.includes("/../") || target.length > 200) throw new Error("bad socket path");
   return `UNIX-CONNECT:${target}`;
 };
+
+declare namespace socatAddress {
+  /** a port on the VM's own loopback, or a socket by an absolute path of plain names */
+  export type Targets = Table<typeof socatAddress, [
+    [args: [target: 8080], expected: "TCP:127.0.0.1:8080"],
+    [args: [target: "/desolate/link/proxy.sock"], expected: "UNIX-CONNECT:/desolate/link/proxy.sock"],
+  ]>;
+  /** the address is one socat word: nothing in it may reach another host, climb out of its
+   *  directory, or add an option */
+  export type Refuses = [
+    Throws<Invoke<typeof socatAddress, [target: 0]>, "bad port 0">,
+    Throws<Invoke<typeof socatAddress, [target: 65536]>, "bad port 65536">,
+    Throws<Invoke<typeof socatAddress, [target: 22.5]>, "bad port 22.5">,
+    Throws<Invoke<typeof socatAddress, [target: "/desolate/../etc/shadow"]>, "bad socket path">,
+    Throws<Invoke<typeof socatAddress, [target: "relative.sock"]>, "bad socket path">,
+    Throws<Invoke<typeof socatAddress, [target: "/tmp/x,fork"]>, "bad socket path">,
+    Throws<Invoke<typeof socatAddress, [target: "/tmp/a:b"]>, "bad socket path">,
+    Throws<Invoke<typeof socatAddress, [target: "/tmp/a b"]>, "bad socket path">,
+  ];
+}

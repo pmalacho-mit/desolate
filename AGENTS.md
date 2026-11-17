@@ -56,9 +56,11 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   `release/.suede/core`, `release/.github/workflows`. Update them all with
   `bash .suede/core/sync.sh`, on `main` (git-subrepo 0.4.9 needed). Never by hand, and never by
   checking out `release`.
-- **Dependencies:** `release/.suede/nests` is vendored (it ships inside `release/`);
-  `.suede/devcontainers-suede` and `docs/typescript2mermaid-suede` are development-only.
-  `bash .suede/core/list.sh` shows them; nothing is declared for consumers.
+- **Dependencies:** all development-only: `.suede/nests` (the in-source tests' DSL and Vitest
+  plugin), `.suede/devcontainers-suede` and `docs/typescript2mermaid-suede`.
+  `bash .suede/core/list.sh` shows them; nothing ships or is declared for consumers. The
+  release type-checks without nests through `release/nests.d.ts` and `release/nests-harness.d.ts`
+  ([`tests/nests/README.md`](tests/nests/README.md)).
 - **A release that changes `release/.github/workflows`** (what `sync.sh` does when suede's
   release workflow moves) is refused by the Actions token, which may not change workflow
   files. Publish it from `main` on the Mac instead: `bash .suede/core/push-release.sh`, which
@@ -77,6 +79,9 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   in a domain's repository (P4).
 - **desolate is not only for agents.** It is a development stack that works the same for a
   person typing. Keep agent-specific (and vendor-specific) structure out of its core.
+- **A function's in-source tests are its usage notes.** Under each function with a contract, a
+  `declare namespace` of its name shows a reviewer what it takes, answers and refuses
+  ([`tests/nests/README.md`](tests/nests/README.md)). Add or change them with the function.
 - **Comments say why**, in plain sentences, and record what was measured. Transcripts record
   every message a person sees. A changed message is a reviewed change.
 

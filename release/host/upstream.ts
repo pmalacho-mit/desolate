@@ -16,6 +16,10 @@ import { forTerminal, printable } from "../shared/text.ts";
 import { ensureGitClone, ensureGitVm, GIT_VM } from "./git-vm.ts";
 import { guest } from "./paths.ts";
 import { backend, config, rootctl } from "./stack.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { pullWaitedFor, upstreamSays } from "../../tests/nests/host-upstream.harness.ts";
+import type { vmAnswering } from "../../tests/nests/host-daemon.harness.ts";
 
 type Out = (line: string) => void;
 const USAGE = "desolate upstream <consumer> <dependency-dir> <owner/repo> [--from <domain>/<branch>] [--no-wait] [--remote <url>]";
@@ -72,6 +76,56 @@ export const waitForPull = async (dependency: Repo, branch: string, out: Out): P
   return 2;
 };
 
+declare namespace waitForPull {
+  type Lib = { owner: "acme"; name: "lib" };
+  /** the pull request is there: 0, and its address. Asked by the branch, as owner:branch */
+  export type Opened = Expect<
+    Invoke<typeof pullWaitedFor, [wait: typeof waitForPull, dependency: Lib, branch: "suede/app-0123456", waitS: "1", routes: { "repos/acme/lib/pulls": [{ html_url: "https://github.com/acme/lib/pull/7"; draft: false }] }]>,
+    "=",
+    {
+      code: 0;
+      lines: ["waiting for the pull request (up to 1 s; --no-wait skips this) ...", "pull request opened:", "  https://github.com/acme/lib/pull/7"];
+      asked: [{ route: "repos/acme/lib/pulls?head=acme%3Asuede%2Fapp-0123456&state=all&per_page=1"; token: false }];
+    }
+  >;
+  /** a draft says why: the change did not replay cleanly onto the release */
+  export type Draft = Expect<
+    Invoke<typeof pullWaitedFor, [wait: typeof waitForPull, dependency: Lib, branch: "suede/app-0123456", waitS: "1", routes: { "repos/acme/lib/pulls": [{ html_url: "https://github.com/acme/lib/pull/7"; draft: true }] }]>,
+    "matches",
+    { code: 0; lines: ["waiting for the pull request (up to 1 s; --no-wait skips this) ...", "pull request opened as a draft: replaying the change onto the current release hit conflicts, left as markers for the maintainers:", "  https://github.com/acme/lib/pull/7"] }
+  >;
+  /** the forge's words are shown as text: a terminal sequence in an address is made harmless */
+  export type Printable = Expect<
+    Invoke<typeof pullWaitedFor, [wait: typeof waitForPull, dependency: Lib, branch: "suede/app-0123456", waitS: "1", routes: { "repos/acme/lib/pulls": [{ html_url: "https://github.com/acme/lib/pull/7\u001b]8;;https://evil.test\u0007" }] }]>,
+    "matches",
+    { code: 0; lines: ["waiting for the pull request (up to 1 s; --no-wait skips this) ...", "pull request opened:", "  https://github.com/acme/lib/pull/7?]8;;https://evil.test?"] }
+  >;
+  /** the Action that opens it failed: 1, and where to read why */
+  export type ActionFailed = Expect<
+    Invoke<typeof pullWaitedFor, [wait: typeof waitForPull, dependency: Lib, branch: "suede/app-0123456", waitS: "1", routes: {
+      "repos/acme/lib/pulls": [];
+      "repos/acme/lib/actions/runs": { workflow_runs: [{ status: "completed"; conclusion: "failure"; html_url: "https://github.com/acme/lib/actions/runs/9" }] };
+    }]>,
+    "matches",
+    { code: 1; lines: ["waiting for the pull request (up to 1 s; --no-wait skips this) ...", "the Action that opens the pull request ended: failure", "  https://github.com/acme/lib/actions/runs/9"] }
+  >;
+  /** the Action succeeded and removed its branch: the dependency had the change already, so 0 */
+  export type NothingNew = Expect<
+    Invoke<typeof pullWaitedFor, [wait: typeof waitForPull, dependency: Lib, branch: "suede/app-0123456", waitS: "1", routes: {
+      "repos/acme/lib/pulls": [];
+      "repos/acme/lib/actions/runs": { workflow_runs: [{ status: "completed"; conclusion: "success" }] };
+    }]>,
+    "matches",
+    { code: 0; lines: ["waiting for the pull request (up to 1 s; --no-wait skips this) ...", "nothing new to propose: the dependency's main already has this change, so its Action removed the branch and opened no pull request."] }
+  >;
+  /** nothing within the wait: 2, and where to follow it */
+  export type NoneInTime = Expect<
+    Invoke<typeof pullWaitedFor, [wait: typeof waitForPull, dependency: Lib, branch: "suede/app-0123456", waitS: "0.02", routes: { "repos/acme/lib/pulls": [] }]>,
+    "matches",
+    { code: 2; lines: ["waiting for the pull request (up to 0.02 s; --no-wait skips this) ...", "no pull request after 0.02 s. Follow the Action at https://github.com/acme/lib/actions (branch: suede/app-0123456)."] }
+  >;
+}
+
 export const upstreamCommand = async (positionals: string[], values: Record<string, unknown>, out: Out): Promise<number> => {
   if (positionals.length !== 3) refuse("upstream what?", USAGE, EXIT.usage);
   const [consumerName, dir, dependencyName] = positionals as [string, string, string];
@@ -106,3 +160,41 @@ export const upstreamCommand = async (positionals: string[], values: Record<stri
   }
   return waitForPull(dependency, branch, out);
 };
+
+declare namespace upstreamCommand {
+  type Usage = "desolate upstream <consumer> <dependency-dir> <owner/repo> [--from <domain>/<branch>] [--no-wait] [--remote <url>]";
+  /** what it is asked is checked before anything runs: three words, two repositories, and a
+   *  --from that can only be a branch or a commit */
+  export type Refuses = [
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib"], values: {}]>, "=", { refused: "upstream what?"; fix: Usage; code: 64 }>,
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["app", "lib", "acme/lib"], values: {}]>, "=", { refused: "'app' is not a repository"; fix: Usage; code: 64 }>,
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/../lib"], values: {}]>, "=", { refused: "'acme/../lib' is not a repository"; fix: Usage; code: 64 }>,
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/lib"], values: { from: "--upload-pack=touch /tmp/x" }]>, "=", { refused: "'--upload-pack=touch /tmp/x' is not a branch or a commit"; fix: Usage; code: 64 }>,
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/lib"], values: { from: "dev/main..HEAD" }]>, "=", { refused: "'dev/main..HEAD' is not a branch or a commit"; fix: Usage; code: 64 }>,
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/lib"], values: { from: "HEAD@{1}" }]>, "=", { refused: "'HEAD@{1}' is not a branch or a commit"; fix: Usage; code: 64 }>,
+  ];
+  /** both repositories must be desolate's, and the dependency pushable: the root's word */
+  export type NotHeld = Given<
+    [Mock<"./stack.ts">, Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: [{ repo: "acme/lib"; pushable: true }]]>],
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/lib"], values: {}]>, "=", { refused: "desolate does not hold acme/app"; fix: "desolate clone acme/app --no-push"; code: 1 }>
+  >;
+  export type NotPushable = Given<
+    [Mock<"./stack.ts">, Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: [{ repo: "acme/app"; pushable: false }, { repo: "acme/lib"; pushable: false }]]>],
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/lib"], values: {}]>, "=", {
+      refused: "acme/lib is not pushable: the root holds no write key for it, so nothing can be proposed to it";
+      fix: "it was cloned --no-push. To make it pushable: desolate clone acme/lib";
+      code: 1;
+    }>
+  >;
+  /** past those checks (names matched as GitHub does, in any case), the git VM's clone must
+   *  name a whole commit, or nothing is run there */
+  export type NoCommit = Given<
+    [
+      Mock<"./stack.ts">,
+      Mock<"./git-vm.ts">,
+      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: [{ repo: "Acme/App"; pushable: false }, { repo: "acme/lib"; pushable: true }]]>,
+      Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "HEAD\n", stderr: ""]>]>,
+    ],
+    Expect<Invoke<typeof upstreamSays, [command: typeof upstreamCommand, positionals: ["acme/app", "lib", "acme/lib"], values: {}]>, "=", { refused: "acme/app has no HEAD in your git VM clone"; fix: "desolate git acme/app, then git fetch <domain>"; code: 1 }>
+  >;
+}

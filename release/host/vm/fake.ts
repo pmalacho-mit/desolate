@@ -21,6 +21,7 @@ import { INSTANCE } from "../paths.ts";
 import { GUEST_USER } from "./types.ts";
 import { socatAddress } from "./types.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
+import type { Expect, Invoke } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
 
 const IMAGE = process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest";
 const LABEL = "desolate.instance";
@@ -66,6 +67,21 @@ const execArgs = (name: string, argv: string[], options: ExecOptions, interactiv
   args.push(name, ...argv);
   return args;
 };
+
+declare namespace execArgs {
+  /** the guest user by default, with its own HOME; each variable one -e word, never a shell line */
+  export type AsTheUser = Expect<
+    Invoke<typeof execArgs, [name: "dsl-main-w", argv: ["git", "status"], options: { cwd: "/workspaces/acme/web"; env: { A: "x; rm -rf /" } }, interactive: false]>,
+    "=",
+    ["exec", "-u", "desolate", "-w", "/workspaces/acme/web", "-e", "HOME=/home/desolate", "-e", "A=x; rm -rf /", "dsl-main-w", "git", "status"]
+  >;
+  /** root only when asked for, and stdin kept open only when there is input to give */
+  export type AsRoot = Expect<
+    Invoke<typeof execArgs, [name: "dsl-main-root", argv: ["id"], options: { root: true }, interactive: true]>,
+    "=",
+    ["exec", "-i", "-u", "0:0", "-e", "HOME=/root", "dsl-main-root", "id"]
+  >;
+}
 
 export const fakeBackend = (): Backend => {
   const containerArgs = (spec: VmSpec, image: string) => {
@@ -251,3 +267,18 @@ export const parseSs = (text: string): Listener[] => {
   }
   return [...seen.values()].sort((a, b) => a.port - b.port);
 };
+
+declare namespace parseSs {
+  /** each listener once, by port: IPv4, IPv6 in brackets, and a link-local zone dropped */
+  export type Listeners = Expect<
+    Invoke<typeof parseSs, [text: "LISTEN 0 511 0.0.0.0:5173 0.0.0.0:*\nLISTEN 0 4096 [::]:5173 [::]:*\nLISTEN 0 128 127.0.0.1:31580 0.0.0.0:*\nLISTEN 0 128 [fe80::1%eth0]:8080 [::]:*\n"]>,
+    "=",
+    [{ port: 5173; address: "0.0.0.0" }, { port: 5173; address: "::" }, { port: 8080; address: "fe80::1" }, { port: 31580; address: "127.0.0.1" }]
+  >;
+  /** the same address and port twice is one listener; a line that names no port is none */
+  export type Ignores = Expect<
+    Invoke<typeof parseSs, [text: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 1 *:* *:*\ngarbage\n\n"]>,
+    "=",
+    [{ port: 80; address: "0.0.0.0" }]
+  >;
+}

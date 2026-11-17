@@ -53,4 +53,6 @@ image-out/
 /demo-out
 
 # suede.nests: its cache and diagnostics, made when the in-source tests run
-release/.suede/nests/.derived/
+.suede/nests/.derived/
+# and the tests it writes out when asked to extract one (scratch)
+*.temp.ts

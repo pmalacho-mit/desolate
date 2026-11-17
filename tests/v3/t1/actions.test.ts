@@ -47,7 +47,7 @@ describe("T1 the spec desolate hands the devcontainer CLI", () => {
     assert.equal(merged.image, "example/dev:1");
     assert.equal(merged.workspaceFolder, "/workspaces/acme/app");
     assert.equal(merged.workspaceMount, "source=/workspaces,target=/workspaces,type=bind");
-    assert.deepEqual(merged.runArgs, ["--cap-add=SYS_PTRACE", "--privileged", "--network=host"], "the spec's own arguments stay (nothing is refused); only its choice of network gives way");
+    assert.deepEqual(merged.runArgs, ["--cap-add=SYS_PTRACE", "--network=host"], "the spec's own arguments stay (nothing is refused); only its choice of network gives way, and `--net` takes the next word as its value whatever it is, as docker reads it");
     assert.equal(merged.mounts[0], "source=cache,target=/cache,type=volume");
     assert.ok(merged.mounts.includes("source=/desolate/mirrors,target=/desolate/mirrors,type=bind,readonly"), "the mirrors, read-only, at their own path");
     assert.ok(merged.mounts.includes("source=/desolate/inbox,target=/desolate/inbox,type=bind,readonly"));

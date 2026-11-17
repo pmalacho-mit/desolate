@@ -3,7 +3,8 @@
 // v2's `owner/repo` as `owner__repo` needed a whole rule set, so v3 never encodes one).
 import { createHash } from "node:crypto";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { setEnv } from "../../tests/nests/env.harness.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
 /** GitHub's own rules, narrowed: no leading dot or dash, no "..", no ".git" suffix. */
@@ -55,10 +56,20 @@ declare namespace parseRepo {
     [args: [value: "acme/.."], expected: null],
     [args: [value: "acme/widgets.git"], expected: null],
     [args: [value: "-acme/widgets"], expected: null],
+    [args: [value: ".hidden/widgets"], expected: null],
+    [args: [value: "acme/widgets."], expected: null],
+    [args: [value: "acme/a..b"], expected: null],
+    [args: [value: "acme/my widgets"], expected: null],
+    [args: [value: 42], expected: null],
   ]>;
 }
 
 export const repoId = (repo: Repo) => `${repo.owner}/${repo.name}`;
+
+declare namespace repoId {
+  /** a repository as text, its own case kept: what parseRepo read */
+  export type Spelled = Expect<Invoke<typeof repoId, [repo: { owner: "Acme"; name: "My_App.js" }]>, "=", "Acme/My_App.js">;
+}
 
 
 /** The domain `clone` makes a repository: `owner--repo`, each part a slug (its runs of
@@ -81,6 +92,9 @@ declare namespace domainNameFor {
     [args: [repo: { owner: "Acme"; name: "My__App" }], expected: "acme--my-app"],
     [args: [repo: { owner: "acme"; name: "a--b" }], expected: "acme--a-b"],
     [args: [repo: { owner: "xn"; name: "app" }], expected: "gh-xn--app"],
+    /** too long for a slug: cut, and a hash of the whole keeps two names cut alike apart */
+    [args: [repo: { owner: "a-very-long-organisation-name"; name: "and-an-even-longer-repository-name" }], expected: "a-very-long-organisation-name--an-1ab687"],
+    [args: [repo: { owner: "a-very-long-organisation-name"; name: "and-an-even-longer-repository-other" }], expected: "a-very-long-organisation-name--an-08ee6f"],
   ]>;
 }
 
@@ -153,6 +167,16 @@ declare namespace pullRequestUrl {
 export const isLfsOid = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
 
+declare namespace isLfsOid {
+  /** an LFS object's id: a sha256, in full and in lower case, and so a safe file name */
+  export type Ids = Table<typeof isLfsOid, [
+    [args: [value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"], expected: true],
+    [args: [value: "2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824"], expected: false],
+    [args: [value: "0123456789abcdef0123456789abcdef01234567"], expected: false],
+    [args: [value: "../../2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b98"], expected: false],
+  ]>;
+}
+
 const hex = (text: string, length: number) =>
   createHash("sha256").update(text).digest("hex").slice(0, length);
 
@@ -164,6 +188,24 @@ export const rootVmName = (instance: string) => `dsl-${instance}-root`;
 export const gitVmName = (instance: string) => `dsl-${instance}-git`;
 export const workspaceVmName = (instance: string, domain: string, workspace: string) =>
   `dsl-${instance}-${hex(`${domain}\0${workspace}`, 10)}`;
+
+declare namespace rootVmName {
+  /** one root VM per stack, named by its instance */
+  export type Name = Expect<Invoke<typeof rootVmName, [instance: "t1"]>, "=", "dsl-t1-root">;
+}
+declare namespace gitVmName {
+  /** one git VM per stack, likewise */
+  export type Name = Expect<Invoke<typeof gitVmName, [instance: "t1"]>, "=", "dsl-t1-git">;
+}
+declare namespace workspaceVmName {
+  /** short and opaque, the same for the same workspace every time; the domain and the
+   *  workspace kept apart in what is hashed, so `a-b`'s `c` is not `a`'s `b-c` */
+  export type Names = Table<typeof workspaceVmName, [
+    [args: [instance: "t1", domain: "acme", workspace: "w1"], expected: "dsl-t1-ddb30a57cc"],
+    [args: [instance: "t1", domain: "a-b", workspace: "c"], expected: "dsl-t1-695274f6b8"],
+    [args: [instance: "t1", domain: "a", workspace: "b-c"], expected: "dsl-t1-02654a5c0c"],
+  ]>;
+}
 
 /** One hostname per surface (section 4.4). The hex is not a secret: it keeps two stacks, or
  *  a recreated workspace, from sharing a cookie jar by name. */
@@ -187,6 +229,15 @@ export const devHostname = (instance: string, domain: string, workspace: string)
   `${domain}-${workspace}-${surfaceHex(instance, domain, workspace)}.${HOSTNAME_SUFFIX}`;
 export const editorHostname = (instance: string, domain: string, workspace: string) =>
   `${domain}-${workspace}-editor-${surfaceHex(instance, domain, workspace)}.${HOSTNAME_SUFFIX}`;
+
+declare namespace devHostname {
+  /** a workspace's dev servers: readable, and a hex that keeps another stack's apart */
+  export type Name = Expect<Invoke<typeof devHostname, [instance: "t1", domain: "acme", workspace: "w1"]>, "=", "acme-w1-96fd85.localhost">;
+}
+declare namespace editorHostname {
+  /** its editor: the same hex, a name of its own, so the two share no cookies */
+  export type Name = Expect<Invoke<typeof editorHostname, [instance: "t1", domain: "acme", workspace: "w1"]>, "=", "acme-w1-editor-96fd85.localhost">;
+}
 export const ROOT_HOSTNAME = `desolate.${HOSTNAME_SUFFIX}`;
 /** The approval page (host/approve-web.ts), served by the host daemon itself on the editors'
  *  port. A name of its own, not under ROOT_HOSTNAME: the dashboard's content comes from the
@@ -205,6 +256,18 @@ export const editorHostPort = () => {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error(`DESOLATE_EDITOR_PORT must be a port from 1024 to 65535, not '${process.env.DESOLATE_EDITOR_PORT}'`);
   return port;
 };
+
+declare namespace editorHostPort {
+  /** the gate's own port unless the person moves it */
+  export type Default = Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: null]>, Expect<Invoke<typeof editorHostPort>, "=", 31581>>;
+  /** or another, for a second stack beside the first */
+  export type Moved = Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "41581"]>, Expect<Invoke<typeof editorHostPort>, "=", 41581>>;
+  /** a port that needs root, or is not a port: refused, saying what was given */
+  export type Refuses = [
+    Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "80"]>, Throws<Invoke<typeof editorHostPort>, "DESOLATE_EDITOR_PORT must be a port from 1024 to 65535, not '80'">>,
+    Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "31581x"]>, Throws<Invoke<typeof editorHostPort>, "not '31581x'">>,
+  ];
+}
 
 /** The root UI: the state service in the root VM, which serves the dashboard. It is on the
  *  root VM's loopback; the host's forwarder carries it on the editors' port, at

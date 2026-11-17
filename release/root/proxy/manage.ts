@@ -8,6 +8,10 @@ import { normalizeName } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import { alive, hasProxyUser, PROXY_CODE, proxyDomainDir, proxyOutDir, spawnAsProxy, stopProxy } from "./as-proxy.ts";
 import type { Policy } from "./proxy.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Throws } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../../tests/nests/refusal.harness.ts";
+import type { emptyRoot, makeDirIn, readJsonIn, writeIn } from "../../../tests/nests/root-state.harness.ts";
 
 const DIR = `${ROOT.state}/proxy`;
 type Running = { socket: string; pid: number; domain: string; workspace: string };
@@ -42,6 +46,14 @@ export const start = async (vm: string, domain: string, workspace: string): Prom
   return { socket };
 };
 
+declare namespace start {
+  /** a VM's name becomes the proxy's socket's: nothing else is one */
+  export type NotAVm = [
+    Throws<Invoke<typeof start, [vm: "../../etc", domain: "acme", workspace: "w1"]>, "not a VM name">,
+    Throws<Invoke<typeof start, [vm: "dsl-T-1", domain: "acme", workspace: "w1"]>, "not a VM name">,
+  ];
+}
+
 export const stop = (vm: string) => {
   const existing = readJson<Running | null>(file(vm), null);
   if (existing && alive(existing.pid)) stopProxy(existing.domain, existing.pid);
@@ -72,6 +84,32 @@ export const setPolicy = (domain: string, change: { mode?: unknown; allow?: unkn
   writeJson(policyFile(domain), next, 0o640);
   return next;
 };
+
+declare namespace setPolicy {
+  type Fresh = Invoke<typeof emptyRoot>;
+  // The domain's directory, as root/proxy-user.sh makes it.
+  type Dir = Invoke<typeof makeDirIn, [where: "proxies", name: "domains/acme"]>;
+  /** open until enforced; then the hosts allowed (lowercased, without a trailing dot, sorted),
+   *  less those denied; an internal address the person names; kept where the proxies read it */
+  export type Rules = Given<
+    [Fresh, Dir],
+    [
+      Expect<Invoke<typeof policy, [domain: "acme"]>, "=", { mode: "open"; hosts: []; internal: [] }>,
+      Expect<Invoke<typeof setPolicy, [domain: "acme", change: { mode: "enforce"; allow: ["Registry.npmjs.org.", "*.GitHub.com", "pypi.org"] }]>, "=", { mode: "enforce"; hosts: ["*.github.com", "pypi.org", "registry.npmjs.org"]; internal: [] }>,
+      Expect<Invoke<typeof setPolicy, [domain: "acme", change: { deny: ["pypi.org"]; internal: ["10.0.0.5"] }]>, "=", { mode: "enforce"; hosts: ["*.github.com", "registry.npmjs.org"]; internal: ["10.0.0.5"] }>,
+      Expect<Invoke<typeof readJsonIn, [where: "proxies", name: "domains/acme/policy.json"]>, "matches", { mode: "enforce"; internal: ["10.0.0.5"] }>,
+    ]
+  >;
+  /** a mode that is not one, a host with a port, a name that is not one, an internal address
+   *  that is not one IPv4 address: refused, and nothing is written */
+  export type Refuses = Given<[Fresh, Dir], [
+    Expect<Invoke<typeof refusalOf, [f: typeof setPolicy, args: [domain: "acme", change: { mode: "closed" }]]>, "=", { message: "a domain's network is 'open' or 'enforce'"; fix: "desolate domain acme net enforce | open"; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof setPolicy, args: [domain: "acme", change: { allow: ["api.example.com:8443"] }]]>, "=", { message: "'api.example.com:8443' is not a hostname or a *.wildcard"; fix: "for example: api.example.com or *.example.com"; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof setPolicy, args: [domain: "acme", change: { allow: ["*"] }]]>, "matches", { message: "'*' is not a hostname or a *.wildcard" }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof setPolicy, args: [domain: "acme", change: { internal: ["10.0.0.0/8"] }]]>, "=", { message: "'10.0.0.0/8' is not an IPv4 address"; fix: "name the one internal address this domain may reach"; code: 1 }>,
+    Expect<Invoke<typeof readJsonIn, [where: "proxies", name: "domains/acme/policy.json"]>, "=", null>,
+  ]>;
+}
 
 /** What the domain has been reaching, against its allowlist: v2's `proxy recommend`. With
  *  the network open, this is the list to allow before enforcing; enforced, it is what was
@@ -120,3 +158,31 @@ export const auditLog = (filter: { domain?: string; last?: number }) => {
   }
   return entries.sort((a, b) => String(a.time).localeCompare(String(b.time))).slice(-(filter.last ?? 100));
 };
+
+declare namespace auditLog {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a domain's proxies' own log, oldest first: a line that is not JSON, or that names another
+   *  domain than the log it is in (a domain's proxies write their own log), is not believed */
+  export type Believed = Given<
+    [Fresh, Invoke<typeof writeIn, [where: "proxies", name: "out/acme/audit.log", text: '{"time":"2026-11-16T12:00:02Z","domain":"acme","host":"b.example","verdict":"allowed"}\nnot json\n{"time":"2026-11-16T12:00:01Z","domain":"beta","host":"forged.example","verdict":"allowed"}\n{"time":"2026-11-16T12:00:00Z","domain":"acme","host":"a.example","verdict":"refused"}\n']>],
+    Expect<Invoke<typeof auditLog, [filter: { domain: "acme" }]>, "matches", [{ host: "a.example" }, { host: "b.example" }]>
+  >;
+}
+
+declare namespace recommend {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** what the domain reached that its allowlist does not name, most first, and what was
+   *  refused for not being on it: the list to read before enforcing */
+  export type Reached = Given<
+    [
+      Fresh,
+      Invoke<typeof writeIn, [where: "proxies", name: "domains/acme/policy.json", text: '{"mode":"enforce","hosts":["*.npmjs.org"]}']>,
+      Invoke<typeof writeIn, [where: "proxies", name: "out/acme/audit.log", text: '{"time":"1","domain":"acme","host":"pypi.org","verdict":"allowed"}\n{"time":"2","domain":"acme","host":"pypi.org","verdict":"allowed"}\n{"time":"3","domain":"acme","host":"github.com","verdict":"allowed"}\n{"time":"4","domain":"acme","host":"registry.npmjs.org","verdict":"allowed"}\n{"time":"5","domain":"acme","host":"evil.example","verdict":"refused","reason":"evil.example is not on the domain acme\'s allowlist"}\n{"time":"6","domain":"acme","host":"1.2.3.4","verdict":"refused","reason":"a destination is a hostname"}\n']>,
+    ],
+    Expect<Invoke<typeof recommend, [domain: "acme"]>, "=", {
+      mode: "enforce"; listed: ["*.npmjs.org"];
+      reached: [{ host: "pypi.org"; count: 2 }, { host: "github.com"; count: 1 }];
+      refused: [{ host: "evil.example"; count: 1 }];
+    }>
+  >;
+}
