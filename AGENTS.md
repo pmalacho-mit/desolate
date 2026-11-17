@@ -128,6 +128,11 @@ your change is about them:
 | `07-secrets` | the fail-closed check, and its transcript | two log lines in another order; a refusal checked before it was on record. Fails on the Mac too |
 | `09-ui` | the side-by-side diff, and its transcript | never rendered in Playwright's Chromium 131 within five minutes. Renders on the Mac. **Not explained** |
 
+On the Mac since Chrome 157.0.8103.79 (2026-11-16): every check that reads a page with
+`chrome --dump-dom` (in `04-offers`, `06-editor` and `09-ui`) fails with an empty page, because
+that Chrome crashes in `--dump-dom` (exit 139) even on a `data:` URL. The same Chrome driven over
+the DevTools protocol works.
+
 ## What has been tested, and what has not
 
 As of 2026-11-16, on the owner's M1 Max (macOS, Lima with vz) unless it says otherwise.
@@ -161,17 +166,30 @@ table, feature by feature.
 - **The recipes** (`release/recipes/`), on the M1: `agent.sh` with the stand-in agent, to an
   offer (T2 `12-agent` too); `claude.sh` with a fake token: installed, first run answered,
   started, the token substituted by the proxy, and Anthropic answering 401, as it should.
-  `issues.sh` and `suede.sh` have not been run.
+  `issues.sh` (2026-11-16, with the stand-in agent): a labelled issue got its workspace on
+  `issue/<n>`, the agent offered, and closing the issue stopped it. `suede.sh` (the same
+  night): a pushed commit that changed a vendored dependency got a workspace with both
+  repositories, the dependency's own suede machinery left out, and the agent's offer.
 - **A person's day in a workspace**, by hand on the M1: commits carry the Mac's git identity;
   `git push` offers the branch and says nothing went to the remote; `git fetch` brings a
   commit made on GitHub a moment before (3.7 s); a dev server opens at its workspace's name.
   The editor itself was loaded, but not clicked through: its Source Control and Sync were
   checked as the git commands they run.
-- **The pull-request link after a push:** T1 (the URL it builds).
+- **A new person's first hour, 2026-11-16:** desolate installed from the `release` branch
+  on a second stack, getting-started followed from the top with a new repository (a Vite app
+  with a devcontainer): clone, a workspace, the editor, a dev server with hot reload from the
+  Mac's browser, a plain `git push`, review, a push approved on the approval page, the pull
+  request on GitHub, an issue offered from the workspace and published, a domain on enforce,
+  a secret proven substituted (an endpoint that says 200 only for the real value), `git pull`
+  and `bootstrap` to update, and `destroy --all` to leave. It found three things, fixed in
+  #136.
+- **The pull-request link after a push:** T1 (the URL it builds), and on github.com: the
+  dashboard's link named the comparison GitHub had.
 - **The "merged into <base>" mark:**
   - T1: a merge, a squash, a rebase, a half-merged branch, and a base that changed the file
     again.
   - T2: a squash merge on the stand-in forge, with its branch then deleted.
+  - github.com: a squash merge, seen after `desolate fetch` (2026-11-16).
 
 **Not tested, or not working**
 
@@ -179,7 +197,6 @@ table, feature by feature.
   in testing. The Mac's GitHub account (`mitdesolate`) has push but not admin, and cannot be
   made admin, so its deploy keys must be added by the owner by hand
   (`desolate clone pmalacho-mit/desolate --domain desolate --keys-by-hand`).
-- **The pull-request link opened on github.com.** The stand-in forge gets no link.
 - **The merged mark in real use:**
   - the root's fetch every 15 minutes, of a repository with a push waiting to land, has not
     been watched happen;
