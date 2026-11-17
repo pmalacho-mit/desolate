@@ -704,6 +704,76 @@ describe("T2 section 4.8: the root UI", () => {
     );
   });
 
+  it("Delete from the dashboard removes only a workspace with nothing to lose", async () => {
+    stack.step("delete from the dashboard");
+    // A workspace of its own, on the remote's main: nothing in it is unpushed.
+    const made = stack.quiet("up", "web", "--name", "spare", "--base", "origin/main");
+    assert.equal(made.code, 0, made.stderr);
+    type Seen = {
+      doing?: string | null;
+      pushed?: { repo: string; count: number | null; why: string | null }[] | null;
+      host?: { looked?: { lost: string[] } } | null;
+    };
+    const spare = async () => ws(await state(), "web/spare") as Seen | undefined;
+    const lost = async () => (await spare())?.host?.looked?.lost;
+    // The host looks at it while it runs (every 30 s); the root counts its commits.
+    assert.ok(
+      await until(
+        async () => Array.isArray(await lost()) && Array.isArray((await spare())?.pushed),
+        120_000,
+      ),
+      `looked at and counted: ${JSON.stringify(await spare())}`,
+    );
+    assert.deepEqual(
+      (await spare())!.pushed!.map((c) => c.count),
+      [0],
+      "on the remote's main, nothing is unpushed",
+    );
+    const removeIt = async () => {
+      assert.equal(
+        (await action("workspace.remove", { domain: "web", workspace: "spare" })).status,
+        202,
+      );
+      assert.ok(
+        await until(
+          async () => ["done", "failed"].includes((await state()).actions.at(-1)?.state ?? ""),
+          120_000,
+        ),
+      );
+      return (await state()).actions.at(-1)!;
+    };
+    // CONTROL: an untracked file in it. The dashboard is told why, and the host refuses too
+    // when asked anyway: the workspace is still there.
+    assert.equal(stack.quiet("exec", "web/spare", "--", "touch", "notes.txt").code, 0);
+    assert.ok(
+      await until(
+        async () => ((await lost()) ?? []).some((l) => /untracked files/.test(l)),
+        90_000,
+      ),
+      `seen: ${JSON.stringify(await lost())}`,
+    );
+    const refused = await removeIt();
+    assert.equal(refused.command, "desolate rm web/spare --if-clean --if-pushed");
+    assert.equal(refused.state, "failed");
+    assert.match(
+      refused.lines.join("\n"),
+      /was not removed: uncommitted changes or untracked files/,
+    );
+    assert.ok(await spare(), "still there");
+    // Nothing left in it: removed.
+    assert.equal(stack.quiet("exec", "web/spare", "--", "rm", "notes.txt").code, 0);
+    assert.ok(
+      await until(async () => (await lost())?.length === 0, 90_000),
+      `seen: ${JSON.stringify(await lost())}`,
+    );
+    const done = await removeIt();
+    assert.equal(done.state, "done", done.lines.join("\n"));
+    assert.ok(
+      await until(async () => (await spare()) === undefined, 30_000),
+      "gone from the state",
+    );
+  });
+
   it("the transcript reads as reviewed", () => {
     stack.checkTranscript("t2-09-ui");
   });
