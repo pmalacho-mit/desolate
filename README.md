@@ -87,13 +87,15 @@ release/           THE SHIPPED TREE (see release/README.md for its layout)
 tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (real VMs, QEMU); t4 runs t3's tests on the Mac's own VMs
 tests/probes/v3/   Phase 0 probes to run on a Mac
 suede.nests/       the in-source tests' DSL and Vitest plugin (a development dependency; release/.harness has their conventions)
+suede.vsix.format-on-save/  has the editor format a file as on save, from the command line (a development dependency)
 docs/v3/           the decisions, progress against the spec, and the first pass's handoff (a record)
 .devcontainer/     this repository's devcontainer, for developing desolate in a desolate workspace
 ```
 
 ```bash
-npm install              # TypeScript and Vitest, for T1
+npm install              # TypeScript, Vitest and Prettier, for T1
 make test                # T1: seconds, anywhere
+make format              # Prettier over the TypeScript, as the editor does on save
 make e2e-fast            # T2: minutes; needs Docker and the base image (tests/v3/README.md)
 make e2e-slow            # T3: real VMs; run whenever something structural changes
 tests/v3/run.sh t4       # T4: the boundary tests on the Mac's own VMs (vz); about 3 minutes
