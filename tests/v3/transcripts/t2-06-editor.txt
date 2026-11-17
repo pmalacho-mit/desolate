@@ -59,4 +59,6 @@ next: desolate editor web/one --open      its editor, in your browser
 
 ## a browser opens the editor
 
+## open the editor from another site
+
 ## stop and start
