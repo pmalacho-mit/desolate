@@ -408,6 +408,37 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
     assert.doesNotMatch(stranger.stdout, /vscode-workbench-web-configuration/);
   });
 
+  it("the dashboard's Open editor, a link from another site, opens the editor in a real browser", async () => {
+    stack.step("open the editor from another site");
+    // What the dashboard's link does: a page on another site sends the browser to the
+    // editor's address, token and folder in it. The editor's own answer to that is a
+    // redirect, which the browser follows as cross-site again; the gate refused it, and the
+    // editor never opened from the dashboard (dogfooding on the M1, 2026-11-17). A page at a
+    // data: URL is another site to every other.
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const e = editors.one!;
+    const profile = fs.mkdtempSync(path.join(stack.work, "chrome-link-"));
+    const elsewhere = `data:text/html,<script>location.href=${encodeURIComponent(JSON.stringify(e.url))}</script>`;
+    const opened = /vscode-workbench-web-configuration|editor-gate: refused/;
+    let page = await loadPage(chrome, profile, elsewhere, { until: opened, ms: 60_000 });
+    // A just-started editor can answer late: ask again, a bounded number of times.
+    for (let i = 0; i < 4 && !opened.test(page.stdout); i++)
+      page = await loadPage(chrome, profile, elsewhere, { until: opened, ms: 60_000 });
+    assert.doesNotMatch(page.stdout, /editor-gate: refused/, page.stdout.slice(0, 300));
+    assert.match(page.stdout, /vscode-workbench-web-configuration/, page.stdout.slice(0, 300));
+    // CONTROL: the same page with a wrong token gets the gate's refusal, so the check above
+    // would have seen one.
+    const wrong = e.url.replace(/tkn=[0-9a-f]+/, `tkn=${"0".repeat(48)}`);
+    const refused = await loadPage(
+      chrome,
+      fs.mkdtempSync(path.join(stack.work, "chrome-link-wrong-")),
+      `data:text/html,<script>location.href=${encodeURIComponent(JSON.stringify(wrong))}</script>`,
+      { until: opened, ms: 30_000 },
+    );
+    assert.match(refused.stdout, /editor-gate: refused a request another site started/);
+  });
+
   it("the editor comes back with the workspace, and a stopped workspace's name answers nothing", async () => {
     stack.step("stop and start");
     assert.equal(stack.quiet("stop", "web/one").code, 0);
