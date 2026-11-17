@@ -105,9 +105,14 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
     });
     const booted = bootstrap(stack);
     assert.equal(booted.code, 0, `${booted.stdout}\n${booted.stderr}`.slice(-1500));
-    assert.equal(stack.quiet("clone", "acme/app", "--no-domain").code, 0);
-    assert.equal(stack.quiet("domain", "create", "web").code, 0);
-    assert.equal(stack.quiet("domain", "web", "add", "--repo", "acme/app").code, 0);
+    for (const args of [
+      ["clone", "acme/app", "--no-domain"],
+      ["domain", "create", "web"],
+      ["domain", "web", "add", "--repo", "acme/app"],
+    ]) {
+      const done = stack.quiet(...args);
+      assert.equal(done.code, 0, `${args.join(" ")}: ${done.stdout}\n${done.stderr}`.slice(-1500));
+    }
   });
   after(() => {
     stack.destroy();
