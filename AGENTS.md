@@ -62,9 +62,8 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   `release/.suede/core`, `release/.github/workflows`. Update them all with
   `bash .suede/core/sync.sh`, on `main` (git-subrepo 0.4.9 needed). Never by hand, and never by
   checking out `release`.
-- **Dependencies:** all three are for development only, installed with suede's installer and
-  `--dev` (so no declaring symlink): `suede.nests` (the in-source tests' DSL and Vitest
-  plugin), `devcontainers-suede` and `docs/typescript2mermaid-suede`.
+- **Dependencies:** for development only, installed with suede's installer and `--dev` (so no
+  declaring symlink): `suede.nests` (the in-source tests' DSL and Vitest plugin).
   `bash .suede/core/list.sh` lists them. None ships or is declared for consumers. The release
   type-checks without suede.nests through `release/nests.d.ts`, its stub. The tests' harness
   ships, in `release/.harness` ([its README](release/.harness/README.md)), and is imported by
