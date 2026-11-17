@@ -7,8 +7,10 @@
 // as an argument, never as script.
 import { spawn } from "node:child_process";
 import { printable } from "../shared/text.ts";
+import { EXIT, refuse } from "../shared/exit.ts";
+import { readPhone } from "./phone.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export type Notice = { title: string; body: string };
 
@@ -265,7 +267,95 @@ const show = (n: Notice) => {
   else spawn("notify-send", [n.title, n.body], { stdio: "ignore" }).on("error", () => {});
 };
 
-export const notify = async (out: (line: string) => void) => {
+/** One notification for ntfy (ntfy.sh, or a server of your own), as its JSON publish: the
+ *  topic is the URL's path, which is the only secret a topic has, so `desolate notify` is
+ *  given the whole URL and prints none of it. `click`: what tapping it opens (the dashboard
+ *  on the tailnet, when `desolate phone` is on). */
+export const ntfyRequest = (
+  topicUrl: string,
+  n: Notice,
+  click?: string,
+): { endpoint: string; body: string } | { refused: string } => {
+  let url: URL;
+  try {
+    url = new URL(topicUrl);
+  } catch {
+    return {
+      refused: "--ntfy takes the topic's whole address: https://ntfy.sh/<a long random topic>",
+    };
+  }
+  const topic = url.pathname.replace(/^\//, "");
+  if (url.protocol !== "https:")
+    return { refused: "--ntfy takes an https address: the alert's text crosses the internet" };
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(topic))
+    return {
+      refused: "--ntfy takes https://<server>/<topic>, a topic of letters, digits, - and _",
+    };
+  return {
+    endpoint: `${url.origin}/`,
+    body: JSON.stringify({ topic, title: n.title, message: n.body, ...(click ? { click } : {}) }),
+  };
+};
+
+declare namespace ntfyRequest {
+  /** the topic from the address, the notification's words as JSON (never as a header) */
+  export type Publishes = Expect<
+    Invoke<
+      typeof ntfyRequest,
+      [
+        topicUrl: "https://ntfy.sh/desolate-x7Kq2",
+        n: { title: "desolate: dev/w1 asks for you"; body: "dev/w1 says: which API version?" },
+        click: "https://mac.tail1234.ts.net:8443/",
+      ]
+    >,
+    "=",
+    {
+      endpoint: "https://ntfy.sh/";
+      body: '{"topic":"desolate-x7Kq2","title":"desolate: dev/w1 asks for you","message":"dev/w1 says: which API version?","click":"https://mac.tail1234.ts.net:8443/"}';
+    }
+  >;
+  /** not https, no topic, or a path that is not one topic */
+  export type Refuses = Table<
+    typeof ntfyRequest,
+    [
+      [
+        args: [topicUrl: "http://ntfy.sh/t", n: { title: "t"; body: "b" }],
+        expected: {
+          refused: "--ntfy takes an https address: the alert's text crosses the internet";
+        },
+      ],
+      [
+        args: [topicUrl: "https://ntfy.sh/", n: { title: "t"; body: "b" }],
+        expected: {
+          refused: "--ntfy takes https://<server>/<topic>, a topic of letters, digits, - and _";
+        },
+      ],
+      [
+        args: [topicUrl: "https://ntfy.sh/a/b", n: { title: "t"; body: "b" }],
+        expected: {
+          refused: "--ntfy takes https://<server>/<topic>, a topic of letters, digits, - and _";
+        },
+      ],
+      [
+        args: [topicUrl: "ntfy", n: { title: "t"; body: "b" }],
+        expected: {
+          refused: "--ntfy takes the topic's whole address: https://ntfy.sh/<a long random topic>";
+        },
+      ],
+    ]
+  >;
+}
+
+export const notify = async (out: (line: string) => void, ntfy?: string) => {
+  if (ntfy !== undefined) {
+    const checked = ntfyRequest(ntfy, { title: "", body: "" });
+    if ("refused" in checked)
+      refuse(
+        checked.refused,
+        "desolate notify --ntfy https://ntfy.sh/<a long random topic>",
+        EXIT.usage,
+      );
+  }
   const { followEvents } = await import("./daemon.ts");
   const said = new Map<string, number>();
   out(
@@ -291,6 +381,22 @@ export const notify = async (out: (line: string) => void) => {
       }
       out(`${new Date().toLocaleTimeString()}  ${n.title}: ${n.body}`);
       show(n);
+      if (ntfy !== undefined) {
+        const phone = readPhone();
+        const sent = ntfyRequest(
+          ntfy,
+          n,
+          phone ? `https://${phone.name}:${phone.httpsPort}/` : undefined,
+        );
+        if ("endpoint" in sent)
+          void fetch(sent.endpoint, {
+            method: "POST",
+            body: sent.body,
+            signal: AbortSignal.timeout(10_000),
+          })
+            .then((r) => !r.ok && out(`  (ntfy answered ${r.status}: not sent to your phone)`))
+            .catch(() => out("  (ntfy did not answer: not sent to your phone)"));
+      }
     },
     (resume) => resume(),
   );

@@ -273,12 +273,17 @@ const diffElement = (diff) => {
   shownDiff = { diff, layout, all, tokens: diff.tokens, node };
   return node;
 };
+// Side by side, unless chosen otherwise, or on a phone: two columns of code do not fit a
+// screen that narrow, and one does.
+const narrow = () => typeof matchMedia === "function" && matchMedia("(max-width: 640px)").matches;
 let layout = (() => {
   try {
-    return localStorage.getItem("desolate-diff-layout") === "unified" ? "unified" : "sides";
+    const chosen = localStorage.getItem("desolate-diff-layout");
+    if (chosen === "unified" || chosen === "sides") return chosen;
   } catch {
-    return "sides";
+    /* no storage: the default below */
   }
+  return narrow() ? "unified" : "sides";
 })();
 const setLayout = (value) => {
   layout = value;

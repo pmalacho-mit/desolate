@@ -267,3 +267,18 @@ pre.diff span.hl { display: inline; min-width: 0; padding: 0; }
 /* Syntax colour (shared/ui/highlight.js): each token's colours, for light and dark. */
 .hl { color: var(--hl-light, inherit); }
 @media (prefers-color-scheme: dark) { .hl { color: var(--hl-dark, inherit); } }
+/* A phone (the dashboard over Tailscale, `desolate phone`): one column, buttons big enough for a
+   thumb, inputs at 16px so iOS does not zoom into them, and clear of the notch and the home bar.
+   (Narrow rows already put their buttons under their names: the container query on ul.rows.) */
+@media (max-width: 640px) {
+  :root { --btn: 40px; }
+  header { flex-wrap: wrap; padding: max(var(--s2), env(safe-area-inset-top)) max(var(--s4), env(safe-area-inset-right)) var(--s2) max(var(--s4), env(safe-area-inset-left)); }
+  main { padding: var(--s4) max(var(--s3), env(safe-area-inset-right)) max(48px, env(safe-area-inset-bottom)) max(var(--s3), env(safe-area-inset-left)); gap: var(--s5); }
+  .card { padding: var(--s3); }
+  button, a.button { font-size: 15px; }
+  button.small, a.button.small { font-size: 13px; min-height: 32px; }
+  input, select, textarea, textarea.wide { font-size: 16px; }
+  form.inline > * { flex: 1 1 100%; }
+  .sbs, pre.diff { max-height: 70vh; }
+  #review-card > .buttons { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}

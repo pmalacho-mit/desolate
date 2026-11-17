@@ -31,6 +31,7 @@ Every day: a workspace, your work in it, and its push:
   desolate rm <domain>/<workspace> --if-clean [--if-pushed]      only if nothing in it would be lost (and its commits are on the remote)
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open | --link] [--json]                         the dashboard's address; --open signs your browser in to all three pages
+  desolate phone [on | off]                                      the dashboard on your phone, over Tailscale
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
   desolate offers dismiss <domain> <owner/repo> <branch>         not this one: off "Needs you" (the branch stays)
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
@@ -81,8 +82,9 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
   desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
 
 Hearing about it, and scripting it:
-  desolate notify                                               notifications on this Mac: a push waiting, an offer,
+  desolate notify [--ntfy <https://ntfy.sh/topic>]              notifications on this Mac: a push waiting, an offer,
                                                                  a workspace asking for you, a push done; until stopped
+                                                                 (--ntfy: to your phone too; pick a long random topic)
   desolate events [--replay <n>]                                 what happens, as JSON lines, until stopped: pushed,
                                                                  offered, status, approval-waiting, workspace-up, ...
 
@@ -536,6 +538,42 @@ const main = async (argv: string[]): Promise<number> => {
     if (values.open === true) openInBrowser(await signinAddress());
     return EXIT.ok;
   }
+  if (verb === "phone") {
+    const { positionals } = flags(rest, {});
+    const what = positionals[0] ?? "status";
+    const phone = await import("./phone.ts");
+    if (what === "on") {
+      const on = await phone.phoneOn();
+      if ("refused" in on) refuse(on.refused, on.fix);
+      const { ui } = await import("./daemon.ts");
+      const token = new URL((await ui()).dashboard).searchParams.get("tkn") ?? "";
+      out(
+        `the dashboard is on your tailnet, for ${on.login}'s devices only:\n  ${phone.phoneAddress(on, token)}\n` +
+          "open it once on your phone: it carries the dashboard's token, so keep it to yourself.\n" +
+          "Pushes are still approved here, on the Mac. desolate phone off takes it off the tailnet.",
+      );
+      return EXIT.ok;
+    }
+    if (what === "off") {
+      await phone.phoneOff();
+      out("the dashboard is off your tailnet.");
+      return EXIT.ok;
+    }
+    if (what === "status" && positionals.length <= 1) {
+      const on = phone.readPhone();
+      out(
+        on
+          ? `on: https://${on.name}:${on.httpsPort}/ for ${on.login}'s devices (desolate phone on prints it with its token)`
+          : "off: desolate phone on puts the dashboard on your tailnet",
+      );
+      return EXIT.ok;
+    }
+    refuse(
+      `desolate phone takes on, off, or nothing, not '${what}'`,
+      "desolate phone on",
+      EXIT.usage,
+    );
+  }
   if (verb === "down") {
     if (flags(rest, {}).positionals.length > 0)
       refuse(
@@ -761,8 +799,8 @@ const main = async (argv: string[]): Promise<number> => {
     return upstreamCommand(positionals, values, out);
   }
   if (verb === "notify") {
-    flags(rest, {});
-    await (await import("./notify.ts")).notify(out);
+    const { values: notifyValues } = flags(rest, { ntfy: { type: "string" } });
+    await (await import("./notify.ts")).notify(out, notifyValues.ntfy as string | undefined);
     return EXIT.ok;
   }
   if (verb === "git") {

@@ -46,6 +46,7 @@ import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
+import { servePhone } from "./phone.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
@@ -2724,6 +2725,9 @@ const serve = async () => {
     editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }),
   );
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
+  // The dashboard for your phone, over Tailscale Serve (phone.ts): on 127.0.0.1 only, and it
+  // refuses everything until `desolate phone on`.
+  servePhone(log);
 
   const reconcile = () => {
     const wanted = new Set<number>();
