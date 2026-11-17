@@ -13,6 +13,17 @@
   <h1>Waiting for you</h1>
   <p class="lede">Each push below leaves for the remote only if you approve it here. What it names is read from the text that gets signed; what it would send was worked out in the root by desolate's reviewer. Each issue below is created on GitHub, as you, with exactly the text shown, only if you publish it here.</p>
 </header>
+<section id="empty" class="card empty" hidden>
+  <p class="big">Nothing is waiting for your approval.</p>
+  <p class="more">This is where a push, or an issue a workspace offers, stops until you say yes. One appears here, within a second, when:</p>
+  <ul class="more">
+    <li>you click <b>Push</b> on an offered branch on the dashboard,</li>
+    <li>you run <code>desolate push</code> in a terminal on this Mac,</li>
+    <li>you <code>git push</code> in the git VM (<code>desolate git --open</code>), or</li>
+    <li>you click <b>Publish</b> on an issue a workspace offered.</li>
+  </ul>
+  <p class="more">Keep this tab open: the tab's title says how many wait.</p>
+</section>
 <main id="list" aria-live="polite"></main>
 <p id="status" class="status"></p>
 <template id="card">
