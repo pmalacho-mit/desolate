@@ -20,11 +20,31 @@ const post = (url, body) => fetch(url, { method: "POST", headers: { "content-typ
 const b64 = (bytes) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
 const unb64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
+// What the page waits on, or why it stopped, in the terminal itself, where the person is
+// looking: said only in the header, it left a terminal with a cursor and nothing else
+// (dogfooding, 2026-11-17: opened from the dashboard by a browser without this page's cookie).
+const note = (text) => term.write(`\x1b[2m${text.replace(/\n/g, "\r\n")}\x1b[0m\r\n`);
 const start = async () => {
   status.textContent = "starting...";
-  const answer = await post("/session", { repo });
+  const slow = setTimeout(() => note("Starting the git VM and your clone there: the first time takes a minute or two..."), 1500);
+  let answer;
+  try {
+    answer = await post("/session", { repo });
+  } catch (error) {
+    clearTimeout(slow);
+    status.textContent = "the host daemon did not answer";
+    note(`The host daemon did not answer (${error.message}). Is desolate running? On the Mac: desolate doctor`);
+    return;
+  }
+  clearTimeout(slow);
   const body = await answer.json().catch(() => ({}));
-  if (!answer.ok) { status.textContent = body.error || `HTTP ${answer.status}`; return; }
+  if (!answer.ok) {
+    status.textContent = body.error || `HTTP ${answer.status}`;
+    note(answer.status === 401
+      ? "This browser has not opened the git terminal's own address yet. On the Mac, run:\n\n    desolate git --open\n\nonce: it carries this stack's token, and gives this browser the cookie it needs. After that, Open in git on the dashboard opens it."
+      : `The shell did not start: ${body.error || `HTTP ${answer.status}`}`);
+    return;
+  }
   const { id, token } = body;
   const encoder = new TextEncoder();
   let queue = Promise.resolve();
