@@ -25,7 +25,9 @@
 //                   dashboard's "Open editor" (another site: each *.localhost name is its
 //                   own), and a page that does not know the token cannot make it. Without
 //                   it, the one click the dashboard offers was refused (found on the M1,
-//                   in a real browser; the test had only read the link).
+//                   in a real browser; the test had only read the link). The gate answers
+//                   that navigation itself (openingPage): the editor's own answer to it is
+//                   a redirect, which the browser follows as cross-site again.
 //   Origin          absent, or the editor's own hostname.
 //   a document      `vscode-remote-resource` opened as a page or in a frame is answered
 //                   with `Content-Security-Policy: sandbox`: an opaque origin, which reads
@@ -35,6 +37,7 @@
 // against other pages in the person's browser. A workspace that broke its own gate would
 // expose only itself. What separates workspaces from each other, which name reaches which
 // VM, is the host's forwarder (host/daemon.ts), outside every VM.
+import { createHash } from "node:crypto";
 import { createServer, request } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as fs from "node:fs";
@@ -121,6 +124,75 @@ const refuse = (res: ServerResponse, { status, why }: { status: number; why: str
   res.end(`desolate editor-gate: refused ${why}\n`);
 };
 
+/** The answer to the one navigation from another site the gate lets in (openedWithToken):
+ *  the editor's cookie, as the editor's server sets it, and a page that goes on to the same
+ *  address without the token, from this origin.
+ *
+ *  Why not the editor's own answer: it is a 302 to that address, and a redirect keeps the
+ *  request's site, so the browser sent `Sec-Fetch-Site: cross-site` again, with no token in
+ *  the address now, and the gate refused it; a reload of it as well (dogfooding on the M1,
+ *  2026-11-17: "Open editor" on the dashboard opened a refusal, and only typing the address
+ *  opened the editor). A navigation this page starts is the editor's origin's own, which the
+ *  gate passes like any other: nothing more is let in than before. */
+export const openingPage = (token: string, url: string) => {
+  const parsed = new URL(url, "http://editor");
+  parsed.searchParams.delete("tkn");
+  const next = `/${parsed.search}`;
+  // In a script, and in the page: JSON for the one, and nothing a parser could take as
+  // markup for either.
+  const inScript = JSON.stringify(next).replace(/</g, "\\u003c");
+  const inPage = next.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+  return {
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      // What the editor's server sets (measured, VSCodium 1.116): its workbench reads it.
+      "set-cookie": `vscode-tkn=${token}; Max-Age=604800; SameSite=Lax`,
+      "cache-control": "no-store",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      "content-security-policy": `default-src 'none'; script-src 'sha256-${createHash("sha256")
+        .update(`location.replace(${inScript})`)
+        .digest("base64")}'`,
+    },
+    body: `<!doctype html><meta charset="utf-8"><title>Opening the editor</title><script>location.replace(${inScript})</script><p><a href="${inPage}">Open the editor</a></p>\n`,
+  };
+};
+
+declare namespace openingPage {
+  /** the cookie the editor's server would set, and on to the same address without the token */
+  export type Opens = [
+    Expect<
+      Invoke<
+        typeof openingPage,
+        [token: "0123abcd", url: "/?tkn=0123abcd&folder=%2Fworkspaces%2Facme%2Fapp"]
+      >["headers"]["set-cookie"],
+      "=",
+      "vscode-tkn=0123abcd; Max-Age=604800; SameSite=Lax"
+    >,
+    Expect<
+      Invoke<
+        typeof openingPage,
+        [token: "0123abcd", url: "/?tkn=0123abcd&folder=%2Fworkspaces%2Facme%2Fapp"]
+      >["body"],
+      "includes",
+      'location.replace("/?folder=%2Fworkspaces%2Facme%2Fapp")'
+    >,
+  ];
+  /** whatever else the address says stays text: no markup in the script, or in the link */
+  export type Inert = [
+    Expect<
+      Invoke<typeof openingPage, [token: "0123abcd", url: "/?tkn=0123abcd&x=</script><b>"]>["body"],
+      "includes",
+      'location.replace("/?x=%3C%2Fscript%3E%3Cb%3E")'
+    >,
+    Expect<
+      Invoke<typeof openingPage, [token: "0123abcd", url: "/?tkn=0123abcd&x=</script><b>"]>["body"],
+      "excludes",
+      "<b>"
+    >,
+  ];
+}
+
 export const gate = (editorHost: string, serverPort: number, tokenFile?: string) => {
   const token = () => {
     try {
@@ -131,8 +203,15 @@ export const gate = (editorHost: string, serverPort: number, tokenFile?: string)
     }
   };
   const server = createServer((req, res) => {
-    const refused = refusal(editorHost, req.headers, openedWithToken(req, token()));
+    const known = token();
+    const opened = openedWithToken(req, known);
+    const refused = refusal(editorHost, req.headers, opened);
     if (refused) return refuse(res, refused);
+    if (opened && known) {
+      const page = openingPage(known, req.url ?? "/");
+      res.writeHead(200, page.headers);
+      return res.end(page.body);
+    }
     const upstream = request(
       {
         host: "127.0.0.1",
@@ -343,8 +422,9 @@ declare namespace gate {
     ]
   >;
 
-  /** the dashboard's "Open editor": a navigation from another site, which the gate lets
-   *  through because its address carries this editor's token */
+  /** the dashboard's "Open editor": a navigation from another site, which the gate answers
+   *  itself because its address carries this editor's token (openingPage): the editor's
+   *  server never sees it, and what the page then opens is a same-origin request */
   export type OpenedFromTheDashboard = Expect<
     Invoke<
       typeof throughGate,
@@ -363,8 +443,8 @@ declare namespace gate {
         },
       ]
     >,
-    "=",
-    { status: 200; reached: true; csp: null }
+    "matches",
+    { status: 200; reached: false }
   >;
 
   /** that exception and nothing near it: a wrong token, a frame, a fetch, another path or

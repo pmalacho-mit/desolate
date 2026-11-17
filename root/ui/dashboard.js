@@ -432,13 +432,17 @@ const allLanded = (d, w) => {
 const workspaceRow = (d, w) => {
   const host = w.host || {};
   const running = host.status === "running";
+  // Being made or started by an action of the dashboard's: said so, with the step it is at,
+  // and no Start or Stop until it is done (they were offered meanwhile, and read as "it has
+  // not started"; dogfooding, 2026-11-17).
+  const making = typeof w.making === "string";
   const says = w.says.status;
   const key = `ws:${d.slug}/${w.workspace}`;
   const target = { domain: d.slug, workspace: w.workspace };
   return el("li", { "data-workspace": `${d.slug}/${w.workspace}` },
-    el("span", { class: `dot ${running ? (says ? says.color : "gray") : "hollow"}`, title: says ? says.color : running ? "no status set" : "stopped" }),
+    el("span", { class: `dot ${making ? "blue" : running ? (says ? says.color : "gray") : "hollow"}`, title: making ? "starting" : says ? says.color : running ? "no status set" : "stopped" }),
     el("div", { class: "what" },
-      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub" }, state.hostConnected ? (host.status || w.state) : `${w.state} (as last known)`), " ",
+      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub", "data-making": making ? "" : null }, making ? "starting..." : !state.hostConnected ? `${w.state} (as last known)` : w.state === "planned" && !running ? "not made yet" : (host.status || w.state)), " ",
         // Who started it: you, or a workspace of the domain (desolate spawn in it); and a
         // warning when that one is gone and this one is still here.
         w.startedBy
@@ -448,6 +452,7 @@ const workspaceRow = (d, w) => {
         landedOf(d, c) ? [" ", el("span", { class: "chip merged", "data-merged": landedOf(d, c) }, `merged into ${landedOf(d, c)}`)] : null,
         c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)
           ? [" ", el("button", { class: "quiet small", "data-diff-checkout": c.repo, onclick: () => openReview({ domain: d.slug, repo: c.repo, branch: c.head.branch }) }, "Diff")] : null)),
+      making && w.making ? el("div", { class: "line sub", "data-making-step": "" }, redact(w.making)) : null,
       says ? el("div", { class: "line", "data-says": "" }, says.message) : null,
       allLanded(d, w) ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. ", running ? "Stop frees its memory; " : "", el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " removes it, with anything uncommitted in it.") : null,
       host.devcontainer ? el("div", { class: "line" }, `devcontainer: ${host.devcontainer}`) : null,
@@ -456,9 +461,9 @@ const workspaceRow = (d, w) => {
       // A port this Mac holds (another user's program, often, on a shared Mac): the
       // workspace's server on it is not forwarded, and its address reaches that program.
       ...(host.heldOnMac || []).map((h) => el("div", { class: "line warn", "data-held-on-mac": String(h.port) }, `not forwarded: :${h.port}. This Mac's port ${h.port} is held (${h.by}), so the workspace's address on it reaches that program, not this workspace. Run it on another port.`))),
-    el("div", { class: "buttons" },
+    el("div", { class: "buttons" }, making ? null : [
       running && host.editor ? el("a", { class: "button", href: host.editor, target: "_blank", rel: "noopener", "data-editor": "" }, "Open editor") : null,
-      running ? button("Stop", key, "workspace.stop", target, true) : button("Start", key, "workspace.start", target)));
+      running ? button("Stop", key, "workspace.stop", target, true) : button("Start", key, "workspace.start", target)]));
 };
 
 /** Every branch the domain has (its own list), offered or not: each one reviewable. */
@@ -487,7 +492,12 @@ const domainCard = (d) => {
       el("span", { class: "chip" }, d.net === "enforce" ? "network: listed hosts only" : "network: open"),
       d.secrets.map((s) => el("span", { class: `chip ${s.on ? "" : "off"}`, title: s.on ? "a secret this domain's workspaces may use by name" : "switched off" }, s.name))),
     el("div", { class: "sub" }, d.repos.length ? d.repos.join(", ") : "No repositories yet."),
-    el("ul", { class: "rows" }, d.workspaces.map((w) => workspaceRow(d, w))),
+    el("ul", { class: "rows" },
+      // The domain's environment, built once, before its first workspace (host/templates.ts).
+      d.building ? el("li", { "data-building": d.slug }, el("span", { class: "dot blue", title: "building" }),
+        el("div", { class: "what" }, el("div", { class: "name" }, "Building this domain's environment", " ", el("span", { class: "sub" }, "once: its workspaces start from it")),
+          d.building.line ? el("div", { class: "line sub" }, redact(d.building.line)) : null)) : null,
+      d.workspaces.map((w) => workspaceRow(d, w))),
     (state.issues || []).some((i) => i.domain === d.slug && i.state === "published") ? el("div", { class: "line sub", "data-published-issues": "" }, "Issues published lately: ",
       (state.issues || []).filter((i) => i.domain === d.slug && i.state === "published").map((i, n) => [n ? ", " : "", i.url && /^https:\/\/github\.com\//.test(i.url) ? el("a", { href: i.url, target: "_blank", rel: "noopener noreferrer" }, i.title) : i.title])) : null,
     branchList(d),

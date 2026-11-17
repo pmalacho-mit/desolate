@@ -10,3 +10,8 @@ import { afterAll } from "./vitest.ts";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-nests-"));
 process.env.DESOLATE_HOME = home;
 afterAll(() => fs.rmSync(home, { recursive: true, force: true }));
+
+// And the stack's settings at their defaults: the tests' expectations name the default
+// port, and a person running a second stack beside another's sets DESOLATE_EDITOR_PORT in
+// their shell (developing-desolate.md), which failed nine of them (2026-11-17).
+delete process.env.DESOLATE_EDITOR_PORT;

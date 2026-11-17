@@ -411,6 +411,21 @@ read 102 lines of the 118. The four are now binds of `release/workspace/entry`, 
 never changes and runs the release's script of its own name. A container made before this
 keeps its old binds until it is made again. (`release/workspace/devcontainer.ts`, `overrideOf`)
 
+## Found by the owner, trying it as a new person would (2026-11-17)
+
+**"Open editor" on the dashboard opened a refusal.** The editor's gate lets one request from
+another site through: the navigation that carries the editor's token, which is what the
+dashboard's link is. The editor answers that with a 302 to the same address without the
+token, and a browser follows a redirect with the site it started from: `Sec-Fetch-Site:
+cross-site` again, now with no token, so the gate refused it ("refused a request another
+site started"), and refused a reload as well. Only typing the address opened the editor. The
+check written for this exception had sent one request and read its answer, and so never
+followed the redirect. The gate now answers the token's navigation itself: the editor's
+cookie, and a page of the editor's own origin that goes on to the address without the
+token, which is a same-origin request. Nothing more is let in than before.
+(`release/workspace/editor-gate.ts`, `openingPage`; T2 `06-editor`, "the dashboard's Open
+editor, a link from another site", with a wrong token as its control)
+
 ## The rules these left
 
 - **A negative check needs a positive control.** A probe that failed to run is
