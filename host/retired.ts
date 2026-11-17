@@ -14,7 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { paths } from "./paths.ts";
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { emptyHome, readState, stateFiles, writeState } from "../../tests/nests/home.harness.ts";
 
 const file = () => path.join(paths.state, "tokens-retired");
@@ -28,6 +28,20 @@ export const retiredAt = (): number => {
     return 0;
   }
 };
+
+declare namespace retiredAt {
+  /** never retired: 0, which every check below reads as "nothing is stale" */
+  export type Never = Given<Invoke<typeof emptyHome>, Expect<Invoke<typeof retiredAt>, "=", 0>>;
+  export type OnRecord = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000\n"]>],
+    Expect<Invoke<typeof retiredAt>, "=", 1763300000000>
+  >;
+  /** a record that is not a positive number is no retiring */
+  export type Unreadable = [
+    Given<[Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "yesterday"]>], Expect<Invoke<typeof retiredAt>, "=", 0>>,
+    Given<[Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "-5"]>], Expect<Invoke<typeof retiredAt>, "=", 0>>,
+  ];
+}
 
 export const retire = () => {
   // Always a larger number than the last one, whatever the clock did.
@@ -58,6 +72,17 @@ declare namespace retire {
  *  known) was made before the last retiring. */
 export const stale = (epoch: number, at = retiredAt()) => at > 0 && epoch < at;
 
+declare namespace stale {
+  /** made after the last retiring (marked with it, or a later one) is served; before it, not */
+  export type Epochs = Table<typeof stale, [
+    [args: [epoch: 1763300000000, at: 1763300000000], expected: false],
+    [args: [epoch: 1763300000001, at: 1763300000000], expected: false],
+    [args: [epoch: 1763200000000, at: 1763300000000], expected: true],
+    [args: [epoch: 0, at: 1763300000000], expected: true],
+    [args: [epoch: 0, at: 0], expected: false],
+  ]>;
+}
+
 const dashboardEpoch = () => path.join(paths.state, "ui-token.epoch");
 /** The dashboard's token, made again since, and the root given its copy? */
 export const dashboardStale = (at = retiredAt()) => {
@@ -74,3 +99,33 @@ export const dashboardMade = () => {
   const at = retiredAt();
   if (at > 0) fs.writeFileSync(dashboardEpoch(), `${at}\n`, { mode: 0o600 });
 };
+
+declare namespace dashboardStale {
+  /** never retired: the dashboard is served, whatever else is in the home */
+  export type NeverRetired = Given<Invoke<typeof emptyHome>, Expect<Invoke<typeof dashboardStale>, "=", false>>;
+  /** retired, and no token made since: refused until bootstrap */
+  export type NoToken = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "ui-token", text: "u"]>, Invoke<typeof retire>],
+    Expect<Invoke<typeof dashboardStale>, "=", true>
+  >;
+  /** a token there but no word that the root has it: a copy made before the retiring, so refused */
+  export type TokenWithoutEpoch = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>, Invoke<typeof writeState, [name: "ui-token", text: "u"]>],
+    Expect<Invoke<typeof dashboardStale>, "=", true>
+  >;
+  /** marked with an older retiring than the last: refused */
+  export type OlderEpoch = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>, Invoke<typeof writeState, [name: "ui-token", text: "u"]>, Invoke<typeof writeState, [name: "ui-token.epoch", text: "1763200000000"]>],
+    Expect<Invoke<typeof dashboardStale>, "=", true>
+  >;
+}
+
+declare namespace dashboardMade {
+  /** bootstrap's new token, marked with the last retiring: served again */
+  export type ServedAgain = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>, Invoke<typeof writeState, [name: "ui-token", text: "u"]>, Invoke<typeof dashboardMade>],
+    [Expect<Invoke<typeof dashboardStale>, "=", false>, Expect<Invoke<typeof readState, [name: "ui-token.epoch"]>, "=", "1763300000000\n">]
+  >;
+  /** never retired: nothing to mark */
+  export type NothingToMark = Given<[Invoke<typeof emptyHome>, Invoke<typeof dashboardMade>], Expect<Invoke<typeof stateFiles>, "=", []>>;
+}

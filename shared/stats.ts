@@ -7,7 +7,7 @@
 // that carries a token (an editor's).
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export type Stats = {
   v: 1;
@@ -58,4 +58,34 @@ declare namespace statsLines {
   export type Empty = Table<typeof statsLines, [
     [args: [value: null], expected: ["domain   \"\"  ", "  running here: 0 workspace(s), 0 GiB given to them", "  started by workspaces: 0, no limit (desolate spawn; start one only when the work needs it)"]],
   ]>;
+  /** a domain at work: the Mac and what its workspaces take of it, the limit, and each
+   *  workspace with who started it, what each checkout has checked out (its branch when HEAD
+   *  is not known), and its status, made printable */
+  export type AtWork = Expect<
+    Invoke<typeof statsLines, [value: {
+      v: 1; domain: "acme"; title: "Acme work"; repos: ["acme/app", "acme/lib"]; at: "2026-11-16T10:00:00Z";
+      spawn: { max: 4; used: 1 }; mac: { cpus: 10; memoryMiB: 65536 }; running: { workspaces: 2; memoryMiB: 12288 };
+      workspaces: [
+        { workspace: "w1"; state: "up"; vm: "running"; startedBy: null; outlived: false; size: { cpus: 4; memoryMiB: 8192; diskGiB: 30 }; checkouts: [{ repo: "acme/app"; branch: "main"; head: "issue/12" }]; status: { color: "green"; message: "tests pass\u001b[2J" } },
+        { workspace: "helper"; state: "stopped"; vm: null; startedBy: "w0"; outlived: true; size: { cpus: 2; memoryMiB: 4608; diskGiB: 30 }; checkouts: [{ repo: "acme/lib"; branch: "task/x"; head: null }]; status: null },
+      ];
+    }]>,
+    "=",
+    [
+      "domain acme  \"Acme work\"  acme/app, acme/lib",
+      "  this Mac: 10 CPUs, 64 GiB; running here: 2 workspace(s), 12 GiB given to them",
+      "  started by workspaces: 1 of at most 4 (desolate spawn; each counts until removed)",
+      "  w1  running  4 CPU, 8 GiB  started by the person",
+      "      acme/app  issue/12",
+      "      status green: tests pass?[2J",
+      "  helper  stopped  2 CPU, 4.5 GiB  started by w0 (since removed: this one outlived it)",
+      "      acme/lib  task/x",
+    ]
+  >;
+  /** a limit of 0 is the person's no, said as such */
+  export type TurnedOff = Expect<
+    Invoke<typeof statsLines, [value: { domain: "acme"; title: "t"; repos: []; spawn: { max: 0; used: 0 } }]>,
+    "includes",
+    "  its workspaces cannot start workspaces: the person turned it off"
+  >;
 }

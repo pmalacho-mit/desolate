@@ -10,7 +10,8 @@
 // tmux used to stand between the two, interpreting all of it itself; with the agent's terminal
 // streamed straight through, this does that part of tmux's job.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { byteByByte, inChunks, repeat } from "../../tests/nests/shared-terminal.harness.ts";
 
 const ESC = 0x1b;
 const BEL = 0x07;
@@ -102,6 +103,29 @@ export const terminalFilter = (): TerminalFilter => {
   return Object.assign(filter, { reset: () => resetAfter(alternate) });
 };
 
+declare namespace terminalFilter {
+  /** a string split across reads is still dropped whole, its ST split too, and what follows
+   *  it passes */
+  export type AcrossReads = Table<typeof inChunks, [
+    [args: [make: typeof terminalFilter, chunks: ["a\u001b", "]52;c;", "cm0gLXJmIH4=\u0007b"]], expected: "ab"],
+    [args: [make: typeof terminalFilter, chunks: ["a\u001b]0;title\u001b", "\\b"]], expected: "ab"],
+  ]>;
+  /** one byte a read: the same as one read, for what passes and for what is dropped. A
+   *  character of UTF-8 split between reads arrives whole */
+  export type ByteByByte = Table<typeof byteByByte, [
+    [args: [make: typeof terminalFilter, text: "\u001b[1;32mok ✓\u001b[0m"], expected: "\u001b[1;32mok ✓\u001b[0m"],
+    [args: [make: typeof terminalFilter, text: "a\u001b]52;c;eA==\u0007b\u009dc"], expected: "abc"],
+  ]>;
+  /** 0xC2 starts ordinary characters too (a no-break space is C2 A0): only C2 80 to C2 9F,
+   *  the C1 controls, are dropped */
+  export type NotC1 = Expect<Invoke<typeof byteByByte, [make: typeof terminalFilter, text: "no-break\u00a0space, \u00a9 2026"]>, "=", "no-break\u00a0space, \u00a9 2026">;
+  /** a string that never ends does not swallow the session: after 64 KiB of it, text passes
+   *  again (here the last 4466 of 70,000 bytes, then "after") */
+  export type NeverEnds = Expect<Invoke<typeof inChunks, [make: typeof terminalFilter, chunks: ["\u001b]52;", Invoke<typeof repeat, [text: "x", count: 70000]>, "after"]]>["length"], "=", 4471>;
+  /** a control byte inside a CSI (found writing these tests; see the reason) */
+  export type ControlInsideCsi = Todo<"bug: a C0 control inside a CSI makes the filter let the held CSI go as text (\"\\u001b[\\u00018;100;200t\" passes unchanged), and a terminal executes the control and finishes the CSI: the window operation, or SGR 8, that the filter drops when written plainly">;
+}
+
 /** What undoes the modes a full-screen program may leave on: after a detach, your shell's
  *  terminal is yours again (mouse reporting, focus events, a hidden cursor, keypad mode,
  *  bracketed paste, colours), and the alternate screen left if the program was on it. Only
@@ -110,6 +134,15 @@ export const terminalFilter = (): TerminalFilter => {
  *  over what the agent had printed. */
 export const resetAfter = (alternate: boolean) =>
   `${alternate ? "\u001b[?1049l" : ""}\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1004l\u001b[?2004h\u001b[?25h\u001b>\u001b[0m`;
+
+declare namespace resetAfter {
+  /** mouse, focus events, bracketed paste, the cursor, keypad, colours; and the alternate
+   *  screen left only when the program was on it */
+  export type Sequences = Table<typeof resetAfter, [
+    [args: [alternate: false], expected: "\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1004l\u001b[?2004h\u001b[?25h\u001b>\u001b[0m"],
+    [args: [alternate: true], expected: "\u001b[?1049l\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1006l\u001b[?1004l\u001b[?2004h\u001b[?25h\u001b>\u001b[0m"],
+  ]>;
+}
 
 /** The reset owed after this output: for the tests below. */
 export const resetOwed = (text: string): boolean => {

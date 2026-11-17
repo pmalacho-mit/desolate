@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export const LIMIT = { title: 256, body: 65_536, labels: 20, label: 50, waiting: 50 } as const;
 export const ID = /^[0-9a-z]{6,12}-[0-9a-f]{8}$/;
@@ -53,10 +53,33 @@ declare namespace draftOf {
     [args: [value: { repo: "acme"; title: "x" }], expected: { error: "an issue names its repository as <owner>/<repo>" }],
     [args: [value: { repo: "acme/app"; title: "" }], expected: { error: "an issue needs a title, of at most 256 characters" }],
   ]>;
+  /** a body keeps its newlines and tabs; nothing else invisible, and it is text or nothing */
+  export type Body = Table<typeof draftOf, [
+    [args: [value: { repo: "acme/app"; title: "x"; body: "a\tb\n" }], expected: { repo: "acme/app"; title: "x"; body: "a\tb\n"; labels: [] }],
+    [args: [value: { repo: "acme/app"; title: "x"; body: "a\u0007" }], expected: { error: "the body holds a control or invisible character (newlines and tabs are fine)" }],
+    [args: [value: { repo: "acme/app"; title: "x"; body: "zero\u200bwidth" }], expected: { error: "the body holds a control or invisible character (newlines and tabs are fine)" }],
+    [args: [value: { repo: "acme/app"; title: "x"; body: 5 }], expected: { error: "the body is text, of at most 65536 characters" }],
+  ]>;
+  /** labels are a list of names gh takes as given: not one string, not a blank one */
+  export type Labels = Table<typeof draftOf, [
+    [args: [value: { repo: "acme/app"; title: "x"; labels: "bug" }], expected: { error: "labels are a list, of at most 20" }],
+    [args: [value: { repo: "acme/app"; title: "x"; labels: [" "] }], expected: { error: "' ' is not a label desolate carries (at most 50 characters, no comma)" }],
+  ]>;
+  /** not even an object: the first thing missing is said */
+  export type NotADraft = Expect<Invoke<typeof draftOf, [value: null]>, "=", { error: "an issue names its repository as <owner>/<repo>" }>;
 }
 
 /** What the approval covers: the repository and every word of the issue. */
 export const digestOf = (d: Draft) => createHash("sha256").update(JSON.stringify(["desolate-issue-v1", d.repo, d.title, d.body, d.labels])).digest("hex");
+
+declare namespace digestOf {
+  /** every word is covered: a label added after the approval is another digest, so the
+   *  approval no longer matches */
+  export type Covers = Table<typeof digestOf, [
+    [args: [d: { repo: "acme/app"; title: "Fix the login loop"; body: ""; labels: ["bug"] }], expected: "7b571941f8fbcdbe6fe2bc94948fbb1d631fd6e0d2108c5802bb5732bf0115ed"],
+    [args: [d: { repo: "acme/app"; title: "Fix the login loop"; body: ""; labels: ["bug", "urgent"] }], expected: "09767c2db8b82d798f131d1a58c5bf3f1155b7dc70c5025673a14bac3343e2ea"],
+  ]>;
+}
 
 export type Issue = Draft & {
   id: string;
@@ -82,9 +105,16 @@ export const issueUrl = (repo: string, value: unknown): string | null => {
 };
 
 declare namespace issueUrl {
+  /** the issue's page on github.com, for this repository, and nothing else */
   export type Cases = Table<typeof issueUrl, [
     [args: [repo: "acme/app", value: "https://github.com/acme/app/issues/12\n"], expected: "https://github.com/acme/app/issues/12"],
     [args: [repo: "acme/app", value: "https://github.com/acme/other/issues/12"], expected: null],
     [args: [repo: "acme/app", value: "javascript:alert(1)"], expected: null],
+    /** GitHub's own casing of the repository is the same repository */
+    [args: [repo: "acme/my.app", value: "https://github.com/ACME/My.App/issues/1"], expected: "https://github.com/ACME/My.App/issues/1"],
+    /** a dot in the name is a dot, not any character */
+    [args: [repo: "acme/my.app", value: "https://github.com/acme/myxapp/issues/1"], expected: null],
+    [args: [repo: "acme/app", value: "https://github.com/acme/app/issues/12#evil"], expected: null],
+    [args: [repo: "acme/app", value: "https://github.com/acme/app/pull/12"], expected: null],
   ]>;
 }

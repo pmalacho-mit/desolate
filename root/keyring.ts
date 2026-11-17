@@ -31,6 +31,9 @@ import { formatApproval, parseApproval } from "../shared/approval.ts";
 import { parseRepo, repoId, isBranch, isCommit } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { KEYRING } from "./layout.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aKeysDir, emptyRoot, myUid, readIn, writeIn } from "../../tests/nests/root-state.harness.ts";
 
 export type Role = "read" | "write";
 const isRole = (value: unknown): value is Role => value === "read" || value === "write";
@@ -42,6 +45,14 @@ const pubFile = (repo: Repo, role: Role) => path.join(KEYRING.pub, repo.owner, r
 const agentOf = (role: Role) => path.join(KEYRING.private, `${role}-agent.sock`);
 /** The key's comment is how keyring-askpass learns which repository a signature is for. */
 export const commentOf = (repo: Repo, role: Role) => `desolate-${role}:${repoId(repo)}`;
+
+declare namespace commentOf {
+  /** what keyring-askpass reads to learn which repository a write signature is for */
+  export type Names = Table<typeof commentOf, [
+    [args: [repo: { owner: "acme"; name: "app" }, role: "write"], expected: "desolate-write:acme/app"],
+    [args: [repo: { owner: "acme"; name: "app" }, role: "read"], expected: "desolate-read:acme/app"],
+  ]>;
+}
 
 const audit = (entry: Record<string, unknown>) => {
   fs.appendFileSync(KEYRING.audit, JSON.stringify({ time: new Date().toISOString(), ...entry }) + "\n", { mode: 0o640 });
@@ -121,6 +132,45 @@ const challenge = (request: Record<string, unknown>): Record<string, unknown> =>
   return { ok: true, message };
 };
 
+declare namespace challenge {
+  // A repository is pushable when the keyring holds its write key (made by `create`).
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Pushable = Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write", text: "a private key"]>;
+  type Issued = Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null }]>;
+  /** anyone may ask: the challenge is the text the host's approver will show and sign,
+   *  naming exactly this push and a nonce of the keyring's */
+  export type Issues = Given<
+    [Fresh, Pushable, Issued],
+    [
+      Expect<Issued, "matches", { ok: true }>,
+      Expect<Invoke<typeof parseApproval, [text: Issued["message"]]>, "matches", { repo: "acme/app"; branch: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null }>,
+    ]
+  >;
+  /** what the remote's branch is now, when it is not new: the push moves it from exactly that */
+  export type Onto = Given<
+    [Fresh, Pushable],
+    Expect<Invoke<typeof parseApproval, [text: Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: "89abcdef0123456789abcdef0123456789abcdef" }]>["message"]]>, "matches", { onto: "89abcdef0123456789abcdef0123456789abcdef" }>
+  >;
+  /** a repository with no write key is not pushable, and gets no challenge */
+  export type NotPushable = Given<
+    Fresh,
+    Expect<Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "acme/app has no write key: it is not pushable" }>
+  >;
+  /** nothing that is not a repository, a branch and a whole commit; never the all-zero id
+   *  (git's "no such ref", which would make a push a deletion) */
+  export type Refuses = Table<typeof challenge, [
+    [args: [request: { repo: "acme/../x"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
+    [args: [request: { repo: "acme/app"; ref: "--upload-pack=x"; commit: "0123456789abcdef0123456789abcdef01234567" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
+    [args: [request: { repo: "acme/app"; ref: "main"; commit: "HEAD" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
+    [args: [request: { repo: "acme/app"; ref: "main"; commit: "0000000000000000000000000000000000000000" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
+  ]>;
+  /** and `onto` is a whole commit or null: never git's all-zero id, never a branch name */
+  export type BadOnto = Given<[Fresh, Pushable], [
+    Expect<Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: "0000000000000000000000000000000000000000" }]>, "=", { ok: false; error: "a push names what the remote's branch is now (a commit), or null for a new branch" }>,
+    Expect<Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: "main" }]>, "=", { ok: false; error: "a push names what the remote's branch is now (a commit), or null for a new branch" }>,
+  ]>;
+}
+
 /** The approver's public key. Trusted only as root installed it: a file this VM's ordinary
  *  users could have replaced is no key at all (P6). */
 const approverKey = (): { key: ReturnType<typeof createPublicKey> } | { error: string } => {
@@ -163,6 +213,34 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
   return { ok: true, id };
 };
 
+declare namespace approve {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Pushable = Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write", text: "a private key"]>;
+  type Issued = Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null }]>;
+  /** a challenge the keyring issued, answered with a signature that is not the host
+   *  approver's, files no approval: the push it names is still not approved. (The approver's
+   *  key is root's, at /etc/desolate: a test cannot install one, so the signature that would
+   *  pass is T2's and T4's to show.) */
+  export type NotTheApprovers = Given<
+    [Fresh, Pushable, Issued],
+    [
+      Expect<Invoke<typeof approve, [request: { message: Issued["message"]; signature: "c2lnbmVkIGJ5IHNvbWVvbmUgZWxzZQ==" }]>, "matches", { ok: false }>,
+      Expect<Invoke<typeof approved, [request: { repo: "acme/app"; ref: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "no approval on file for that push" }>,
+    ]
+  >;
+  /** a well-formed approval text the keyring never issued (or issued and has forgotten) is
+   *  refused before any signature is looked at, and the refusal is audited */
+  export type NotIssued = Given<
+    Fresh,
+    [
+      Expect<Invoke<typeof approve, [request: { message: "desolate push approval v2\nrepo: acme/app\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n"; signature: "AAAA" }]>, "=", { ok: false; error: "that challenge is not outstanding: each lasts two minutes and approves once" }>,
+      Expect<Invoke<typeof readIn, [where: "sys", name: "keyring/audit.log"]>, "includes", '"event":"refused","repo":"acme/app","ref":"main"'>,
+    ]
+  >;
+  /** text that is not an approval is not one */
+  export type NotAnApproval = Expect<Invoke<typeof approve, [request: { message: "approve everything"; signature: "AAAA" }]>, "=", { ok: false; error: "that is not an approval message" }>;
+}
+
 /** Whether a live approval names exactly this push. The pre-push hook's question. */
 const approved = (request: Record<string, unknown>): Record<string, unknown> => {
   for (const approval of approvals.values())
@@ -186,6 +264,19 @@ const consume = (request: Record<string, unknown>): Record<string, unknown> => {
   audit({ event: "refused", repo, reason: "no approval on file" });
   return { ok: false, error: `no person has approved a push to ${repo}` };
 };
+
+declare namespace consume {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** ssh-agent asks before every write-key signature: with no approval a person gave, the
+   *  answer is no, and the refusal is audited */
+  export type NoApproval = Given<
+    Fresh,
+    [
+      Expect<Invoke<typeof consume, [request: { repo: "acme/app" }]>, "=", { ok: false; error: "no person has approved a push to acme/app" }>,
+      Expect<Invoke<typeof readIn, [where: "sys", name: "keyring/audit.log"]>, "includes", '"event":"refused","repo":"acme/app","reason":"no approval on file"'>,
+    ]
+  >;
+}
 
 const revoke = (request: Record<string, unknown>) => {
   const existed = approvals.delete(String(request.id ?? ""));
@@ -227,6 +318,43 @@ const publicOps = (request: Record<string, unknown>): Record<string, unknown> =>
   return { ok: false, error: `unknown op '${String(op)}': this socket has no operation that returns private key material, by design (see keyring.ts)` };
 };
 
+declare namespace publicOps {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** there is no operation that returns a private key: asking for one is an unknown op, said so */
+  export type NoExport = [
+    Expect<Invoke<typeof publicOps, [request: { op: "export"; repo: "acme/app"; role: "write" }]>, "=", { ok: false; error: "unknown op 'export': this socket has no operation that returns private key material, by design (see keyring.ts)" }>,
+    Expect<Invoke<typeof publicOps, [request: { op: "consume"; repo: "acme/app" }]>, "matches", { ok: false; error: "unknown op 'consume': this socket has no operation that returns private key material, by design (see keyring.ts)" }>,
+  ];
+  /** the keys held, by repository and role: names only, and only under names that are a
+   *  repository's */
+  export type Lists = Given<
+    [Fresh, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read.pub", text: "ssh-ed25519 AAAA desolate-read:acme/app"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write.pub", text: "ssh-ed25519 BBBB desolate-write:acme/app"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/..bad/read.pub", text: "x"]>],
+    Expect<Invoke<typeof publicOps, [request: { op: "list" }]>, "=", { ok: true; keys: [{ repo: "acme/app"; role: "read" }, { repo: "acme/app"; role: "write" }] }>
+  >;
+  /** a public half, for the forge's deploy keys; a key that was never made is said so */
+  export type Pubkey = Given<
+    [Fresh, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read", text: "PRIVATE"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read.pub", text: "ssh-ed25519 AAAA desolate-read:acme/app\n"]>],
+    [
+      Expect<Invoke<typeof publicOps, [request: { op: "pubkey"; repo: "acme/app"; role: "read" }]>, "matches", { ok: true; pubkey: "ssh-ed25519 AAAA desolate-read:acme/app" }>,
+      Expect<Invoke<typeof publicOps, [request: { op: "pubkey"; repo: "acme/app"; role: "write" }]>, "=", { ok: false; error: "no write key for acme/app" }>,
+    ]
+  >;
+  /** a key is named by a repository and one of two roles, nothing else */
+  export type Names = Table<typeof publicOps, [
+    [args: [request: { op: "pubkey"; repo: "../../etc"; role: "read" }], expected: { ok: false; error: "not a repository: ../../etc" }],
+    [args: [request: { op: "pubkey"; repo: "acme/app"; role: "admin" }], expected: { ok: false; error: "role is 'read' or 'write'" }],
+  ]>;
+}
+
+declare namespace internalOps {
+  /** the askpass's socket answers the askpass's one question and nothing else: not even a
+   *  challenge or an approval */
+  export type OnlyConsume = Table<typeof internalOps, [
+    [args: [request: { op: "approve"; message: "x" }], expected: { ok: false; error: "unknown op 'approve'" }],
+    [args: [request: { op: "list" }], expected: { ok: false; error: "unknown op 'list'" }],
+  ]>;
+}
+
 /** The pusher's questions (root/pusher.ts), on a socket only it reaches: what approval <id>
  *  names, exactly as the person approved it, and revoking it once the push is done. Asking
  *  claims it: one pusher process makes the push it names, once (an approval is claimed at
@@ -255,6 +383,18 @@ const pusherOps = (request: Record<string, unknown>): Record<string, unknown> =>
   return { ok: false, error: `unknown op '${String(request.op)}'` };
 };
 
+declare namespace pusherOps {
+  /** the pusher asks what an approval names; one that is not live names nothing */
+  export type NoApproval = Expect<Invoke<typeof pusherOps, [request: { op: "approval"; id: "mgx1abc-0123456789ab" }]>, "=", { ok: false; error: "no live approval with that id" }>;
+  /** and it may revoke one, which only ever takes capability away */
+  export type Revokes = Expect<Invoke<typeof pusherOps, [request: { op: "revoke"; id: "mgx1abc-0123456789ab" }]>, "=", { ok: true; existed: false }>;
+  /** asking for a challenge or filing an approval is the control socket's, not the pusher's */
+  export type Only = Table<typeof pusherOps, [
+    [args: [request: { op: "challenge"; repo: "acme/app" }], expected: { ok: false; error: "unknown op 'challenge'" }],
+    [args: [request: { op: "approve" }], expected: { ok: false; error: "unknown op 'approve'" }],
+  ]>;
+}
+
 /** The reviewer's one question (root/reviewer.ts), on a socket only it reaches: a read key's
  *  public half, which names the key in the read agent. */
 const reviewerOps = (request: Record<string, unknown>): Record<string, unknown> => {
@@ -267,6 +407,20 @@ const reviewerOps = (request: Record<string, unknown>): Record<string, unknown> 
     return { ok: false, error: `${repoId(repo)} has no read key` };
   }
 };
+
+declare namespace reviewerOps {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a read key's public half, and only a read key's: the write key is never named here */
+  export type ReadKey = Given<
+    [Fresh, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read.pub", text: "ssh-ed25519 AAAA desolate-read:acme/app\n"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write.pub", text: "ssh-ed25519 BBBB desolate-write:acme/app\n"]>],
+    [
+      Expect<Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/app" }]>, "=", { ok: true; pubkey: "ssh-ed25519 AAAA desolate-read:acme/app" }>,
+      Expect<Invoke<typeof reviewerOps, [request: { op: "writekey"; repo: "acme/app" }]>, "=", { ok: false; error: "unknown op 'writekey'" }>,
+      Expect<Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/other" }]>, "=", { ok: false; error: "acme/other has no read key" }>,
+      Expect<Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/../../x" }]>, "=", { ok: false; error: "not a repository" }>,
+    ]
+  >;
+}
 
 const internalOps = (request: Record<string, unknown>): Record<string, unknown> => {
   // The askpass's question, and nothing else: ssh-agent runs it as this user.
@@ -399,6 +553,19 @@ export const keysDirRefusal = (dir: string, uid: number): string | null => {
     if (up === path.dirname(up)) return null;
   }
 };
+
+declare namespace keysDirRefusal {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** the keys directory must be a directory, the keyring's, closed to others, and every
+   *  directory above it root's alone. (That last can be met only as root, in the root VM: a
+   *  test's directories are its user's, so even the closed one is refused, for its parent.) */
+  export type Refuses = Given<Fresh, [
+    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "file"]>, uid: Invoke<typeof myUid>]>, "endsWith", "keys-file is not a directory">,
+    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "closed"]>, uid: 99999]>, "includes", "keys-closed is not the keyring's (owner ">,
+    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "open"]>, uid: Invoke<typeof myUid>]>, "endsWith", "keys-open is open to others (mode 755)">,
+    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "closed"]>, uid: Invoke<typeof myUid>]>, "endsWith", "could be changed by someone other than root">,
+  ]>;
+}
 
 const main = async () => {
   fs.mkdirSync(KEYRING.keys, { recursive: true, mode: 0o700 });

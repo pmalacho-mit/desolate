@@ -25,14 +25,19 @@ export const parseMemory = (value: unknown): number | null => {
 };
 
 declare namespace parseMemory {
+  /** what a person types after --memory: GiB with a g, MiB with an m or nothing; a fraction of
+   *  a GiB is whole MiB; anything else is not a size */
   export type Spellings = Table<typeof parseMemory, [
     [args: [value: "8g"], expected: 8192],
     [args: [value: "8GiB"], expected: 8192],
+    [args: [value: " 8 GB "], expected: 8192],
     [args: [value: "1.5g"], expected: 1536],
     [args: [value: "512m"], expected: 512],
     [args: [value: "4096"], expected: 4096],
     [args: [value: "lots"], expected: null],
     [args: [value: "-4g"], expected: null],
+    [args: [value: "8t"], expected: null],
+    [args: [value: null], expected: null],
   ]>;
 }
 
@@ -41,6 +46,18 @@ export const parseDisk = (value: unknown): number | null => {
   const match = /^\s*(\d+)\s*(g|gb|gib)?\s*$/i.exec(String(value ?? ""));
   return match ? Number(match[1]) : null;
 };
+
+declare namespace parseDisk {
+  /** GiB, whole ones, with or without the unit; no other unit and no fraction */
+  export type Spellings = Table<typeof parseDisk, [
+    [args: [value: "60g"], expected: 60],
+    [args: [value: "60GiB"], expected: 60],
+    [args: [value: 60], expected: 60],
+    [args: [value: "60.5g"], expected: null],
+    [args: [value: "1t"], expected: null],
+    [args: [value: "60m"], expected: null],
+  ]>;
+}
 
 /** A size, checked: each part within its limits, whole numbers. The reason when it is not. */
 export const checkSize = (size: Partial<Size>): string | null => {
@@ -54,11 +71,16 @@ export const checkSize = (size: Partial<Size>): string | null => {
 };
 
 declare namespace checkSize {
+  /** each part given within its limits, else the first that is not, in the person's words;
+   *  a part not given is not checked */
   export type Cases = Table<typeof checkSize, [
     [args: [size: { cpus: 4; memoryMiB: 8192; diskGiB: 60 }], expected: null],
     [args: [size: { cpus: 0 }], expected: "CPUs must be from 1 to 64"],
     [args: [size: { memoryMiB: 512 }], expected: "memory must be from 1 GiB to 256 GiB"],
     [args: [size: { diskGiB: 20 }], expected: "disk must be from 30 GiB to 2048 GiB"],
+    [args: [size: { cpus: 2.5 }], expected: "CPUs must be from 1 to 64"],
+    [args: [size: { cpus: 0; memoryMiB: 512 }], expected: "CPUs must be from 1 to 64"],
+    [args: [size: {}], expected: null],
   ]>;
 }
 
@@ -87,7 +109,10 @@ export const describe = (size: Size): string =>
   `${size.cpus} CPU${size.cpus === 1 ? "" : "s"}, ${size.memoryMiB % 1024 === 0 ? `${size.memoryMiB / 1024} GiB` : `${size.memoryMiB} MiB`} memory, ${size.diskGiB} GiB disk`;
 
 declare namespace describe {
+  /** what `desolate up` and `desolate domain <d> size` print */
   export type Said = Expect<Invoke<typeof describe, [size: { cpus: 4; memoryMiB: 8192; diskGiB: 30 }]>, "=", "4 CPUs, 8 GiB memory, 30 GiB disk">;
+  /** one CPU is one CPU; memory that is not whole GiB is said in MiB */
+  export type Odd = Expect<Invoke<typeof describe, [size: { cpus: 1; memoryMiB: 1536; diskGiB: 60 }]>, "=", "1 CPU, 1536 MiB memory, 60 GiB disk">;
 }
 
 /** Each part, the first that is set: the given ones, then the next. */
@@ -98,5 +123,12 @@ export const merge = (...sizes: (Partial<Size> | null | undefined)[]): Size => {
 };
 
 declare namespace merge {
+  /** the flag, then the domain's size, then the defaults: each part from the first that sets it */
   export type Order = Expect<Invoke<typeof merge, [a: { cpus: 8 }, b: { cpus: 2; memoryMiB: 4096 }, c: { cpus: 1; memoryMiB: 1024; diskGiB: 30 }]>, "=", { cpus: 8; memoryMiB: 4096; diskGiB: 30 }>;
+  /** a domain with no size of its own is skipped; and what no one sets stays unset, so the
+   *  defaults come last */
+  export type Gaps = [
+    Expect<Invoke<typeof merge, [a: null, b: undefined, c: { cpus: 2 }]>["cpus"], "=", 2>,
+    Expect<Invoke<typeof merge, [a: null, b: undefined, c: { cpus: 2 }]>["memoryMiB"], "undefined">,
+  ];
 }

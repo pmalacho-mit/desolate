@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Repo } from "../shared/names.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export const RELEASE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -44,6 +46,13 @@ export const paths = {
   link: (vm: string) => path.join(HOME, "run", vm),
 } as const;
 
+declare namespace paths {
+  /** everything is under the home (DESOLATE_HOME, else ~/.desolate): a mirror by owner and name */
+  export type Mirror = Expect<Invoke<typeof paths.mirror, [repo: { owner: "acme"; name: "widgets" }]>, "endsWith", "/mirrors/acme/widgets.git">;
+  /** a domain's clones, which its workspaces' shares are made of */
+  export type DomainRepos = Expect<Invoke<typeof paths.domainRepos, [domain: "dev"]>, "endsWith", "/domains/dev/repos">;
+}
+
 /** The same places, as every VM sees them. The mirror's path must be identical in every VM,
  *  because a clone's alternates file names it (section 6.2). */
 export const guest = {
@@ -62,3 +71,8 @@ export const guest = {
   gitOut: "/desolate/out",
   gitAnswers: "/desolate/answers",
 } as const;
+
+declare namespace guest {
+  /** the same in every VM, whatever the home on the Mac: a clone's alternates file names it */
+  export type Mirror = Expect<Invoke<typeof guest.mirror, [repo: { owner: "acme"; name: "widgets" }]>, "=", "/desolate/mirrors/acme/widgets.git">;
+}

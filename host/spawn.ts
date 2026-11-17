@@ -16,6 +16,9 @@ import { IDENTITY_FILE, KEY, verify } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
 import { INSTANCE, paths } from "./paths.ts";
 import type { Backend } from "./vm/types.ts";
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, readState, writeState } from "../../tests/nests/home.harness.ts";
+import type { everyVmExists, giveKey, noVmExists, signed } from "../../tests/nests/host-spawn.harness.ts";
 
 const KEYS = () => path.join(paths.state, "workspace-keys");
 const LEDGER = () => path.join(paths.state, "spawn.json");
@@ -86,12 +89,39 @@ export const setMax = (domain: string, max: number | null) => {
   else value.max[domain] = max;
   save(value);
 };
+declare namespace setMax {
+  /** no limit unless a person sets one; a number, 0 (off) included, until it is cleared */
+  export type Limits = Given<
+    Invoke<typeof emptyHome>,
+    [
+      Expect<Invoke<typeof maxFor, [domain: "acme"]>, "=", null>,
+      Given<Invoke<typeof setMax, [domain: "acme", max: 0]>, Expect<Invoke<typeof maxFor, [domain: "acme"]>, "=", 0>>,
+      Given<Invoke<typeof setMax, [domain: "acme", max: 2]>, Expect<Invoke<typeof maxFor, [domain: "acme"]>, "=", 2>>,
+      Given<Invoke<typeof setMax, [domain: "acme", max: null]>, Expect<Invoke<typeof maxFor, [domain: "acme"]>, "=", null>>,
+    ]
+  >;
+}
+
 export const recordStarted = (domain: string, workspace: string, parent: string) => {
   const value = ledger();
   const parentKey = fingerprint(keyOf(workspaceVmName(INSTANCE, domain, parent)));
   value.started[`${domain}/${workspace}`] = { parent, at: new Date().toISOString(), ...(parentKey ? { parentKey } : {}) };
   save(value);
 };
+declare namespace recordStarted {
+  /** who started a workspace is kept, and it goes when the workspace is removed */
+  export type UntilForgotten = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof recordStarted, [domain: "acme", workspace: "helper", parent: "lead"]>],
+    [
+      Expect<Invoke<typeof parentOf, [domain: "acme", workspace: "helper"]>, "=", "lead">,
+      Expect<Invoke<typeof startedIn, [domain: "acme", exists: typeof everyVmExists]>, "=", ["acme/helper"]>,
+      /** one whose VM is gone is not counted */
+      Expect<Invoke<typeof startedIn, [domain: "acme", exists: typeof noVmExists]>, "=", []>,
+      Given<Invoke<typeof forget, [domain: "acme", workspace: "helper"]>, Expect<Invoke<typeof parentOf, [domain: "acme", workspace: "helper"]>, "=", null>>,
+    ]
+  >;
+}
+
 /** Spawns run now, per domain: at most three at once, whatever the limit (a flood of signed
  *  requests started thirty VMs a minute: audit). Counted from the check to the end of up. */
 const running = new Map<string, number>();
@@ -100,6 +130,13 @@ export const begin = (domain: string) => running.set(domain, (running.get(domain
 /** Spawns under way now, every domain's. */
 export const underWay = () => [...running.values()].reduce((a, b) => a + b, 0);
 export const end = (domain: string) => running.set(domain, Math.max(0, (running.get(domain) ?? 1) - 1));
+declare namespace end {
+  /** spawns under way, every domain's; an end with none under way leaves none, not fewer */
+  export type Counts = Given<
+    [Invoke<typeof begin, [domain: "acme"]>, Invoke<typeof begin, [domain: "acme"]>, Invoke<typeof begin, [domain: "beta"]>, Invoke<typeof end, [domain: "beta"]>, Invoke<typeof end, [domain: "beta"]>],
+    Expect<Invoke<typeof underWay>, "=", 2>
+  >;
+}
 export const parentOf = (domain: string, workspace: string): string | null => ledger().started[`${domain}/${workspace}`]?.parent ?? null;
 /** The workspaces of a domain a workspace started that still exist (as VMs this host has). */
 export const startedIn = (domain: string, exists: (vm: string) => boolean) =>
@@ -135,3 +172,99 @@ export const check = (r: Signed & { mac: string }, exists: (vm: string) => boole
   if (r.op === "spawn") begin(r.domain);
   return null;
 };
+
+declare namespace check {
+  type Lead = "1111111111111111111111111111111111111111111111111111111111111111";
+  /** a key the host gave another workspace, or a later workspace given the same name */
+  type Other = "2222222222222222222222222222222222222222222222222222222222222222";
+  type Spawn = { op: "spawn"; domain: "acme"; parent: "lead"; name: "helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "00000000000000000000000000000001" };
+  type Close = { op: "close"; domain: "acme"; parent: "lead"; name: "helper"; at: "2026-11-16T10:00:00.000Z"; nonce: "00000000000000000000000000000002" };
+  /** the same request, said to come from a workspace the host never gave a key */
+  type ForOther = { op: "spawn"; domain: "acme"; parent: "other"; name: "helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "00000000000000000000000000000001" };
+  /** names that would become a path or a VM label */
+  type OutOfItsDomain = { op: "spawn"; domain: "../acme"; parent: "lead"; name: "helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "00000000000000000000000000000001" };
+  type Capitals = { op: "spawn"; domain: "acme"; parent: "lead"; name: "Helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "00000000000000000000000000000001" };
+  /** three more requests, each its own (a nonce of its own) */
+  type SecondOne = { op: "spawn"; domain: "acme"; parent: "lead"; name: "helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "0000000000000000000000000000000a" };
+  type ThirdOne = { op: "spawn"; domain: "acme"; parent: "lead"; name: "helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "0000000000000000000000000000000b" };
+  type FourthOne = { op: "spawn"; domain: "acme"; parent: "lead"; name: "helper"; branch: "task/docs"; checkouts: []; command: ["claude", "-p", "fix the docs"]; at: "2026-11-16T10:00:00.000Z"; nonce: "0000000000000000000000000000000c" };
+  /** a minute after the request was made */
+  type Now = 1794823260000;
+  type Empty = Invoke<typeof emptyHome>;
+  type LeadsKey = Invoke<typeof giveKey, [domain: "acme", workspace: "lead", key: Lead]>;
+  type Keyed = [Empty, LeadsKey];
+
+  /** signed with the parent's own key, fresh: run, and never again (the signature is kept on
+   *  disk, so restarting the daemon does not make it new) */
+  export type RunsOnce = Given<
+    Keyed,
+    [
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", null>,
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", "that request was already run">,
+    ]
+  >;
+  /** what only the parent could have signed, and only lately */
+  export type Refuses = Given<
+    Keyed,
+    [
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Other, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", "the request is not signed by acme/lead">,
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: ForOther]>, exists: typeof noVmExists, now: Now]>, "=", "the host has no key for acme/other: it was not started by this host, or was removed">,
+      /** sixteen minutes old; three minutes ahead of the host's clock */
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: 1794824160000]>, "=", "the request is too old (or from the future): ask again">,
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: 1794823020000]>, "=", "the request is too old (or from the future): ask again">,
+      /** a name that would become a path or a VM label, signed or not */
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: OutOfItsDomain]>, exists: typeof noVmExists, now: Now]>, "=", "not a request desolate makes">,
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Capitals]>, exists: typeof noVmExists, now: Now]>, "=", "not a request desolate makes">,
+    ]
+  >;
+  /** a request an older desolate ran (it kept them in spawn.json) is not run again after the
+   *  upgrade, and spawn.json, which the CLI also writes, no longer holds it */
+  export type RanBeforeTheUpgrade = Given<
+    [Empty, LeadsKey, Invoke<typeof writeState, [name: "spawn.json", text: '{"max":{},"started":{},"used":{"2c83209c4fc7a4f3d1947e14da1b18bc73f6e57935e015a4e353df39e2c42039":1794823200000}}']>],
+    [
+      Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", "that request was already run">,
+      Expect<Invoke<typeof readState, [name: "spawn.json"]>, "=", '{\n  "max": {},\n  "started": {}\n}\n'>,
+    ]
+  >;
+
+  /** the person's limit: 0 turns spawning off; at the limit, those still there count */
+  export type Off = Given<
+    [Empty, LeadsKey, Invoke<typeof setMax, [domain: "acme", max: 0]>],
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", "acme does not let its workspaces start workspaces (on the Mac: desolate domain acme spawn --max none)">
+  >;
+  export type AtTheLimit = Given<
+    [Empty, LeadsKey, Invoke<typeof setMax, [domain: "acme", max: 1]>, Invoke<typeof recordStarted, [domain: "acme", workspace: "first", parent: "lead"]>],
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof everyVmExists, now: Now]>, "=", "acme already has 1 workspace(s) started (or being started) by its workspaces, its limit (desolate domain acme spawn --max <n>)">
+  >;
+  /** one that was removed since frees its place */
+  export type BelowTheLimit = Given<
+    [Empty, LeadsKey, Invoke<typeof setMax, [domain: "acme", max: 1]>, Invoke<typeof recordStarted, [domain: "acme", workspace: "first", parent: "lead"]>],
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", null>
+  >;
+  /** with no limit, still three at once per domain: a burst of signed requests waits */
+  export type ThreeAtOnce = Given<
+    [
+      Empty,
+      LeadsKey,
+      Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: SecondOne]>, exists: typeof noVmExists, now: Now]>,
+      Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: ThirdOne]>, exists: typeof noVmExists, now: Now]>,
+      Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: FourthOne]>, exists: typeof noVmExists, now: Now]>,
+    ],
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, exists: typeof noVmExists, now: Now]>, "=", "acme already has 3 workspaces being started by its workspaces: ask again once one is up">
+  >;
+
+  /** a workspace closes only what it started; what a person started, only a person removes */
+  export type ClosesItsOwn = Given<
+    [Empty, LeadsKey, Invoke<typeof recordStarted, [domain: "acme", workspace: "helper", parent: "lead"]>],
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Close]>, exists: typeof everyVmExists, now: Now]>, "=", null>
+  >;
+  export type NotItsOwn = Given<
+    Keyed,
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Lead, request: Close]>, exists: typeof everyVmExists, now: Now]>, "=", "acme/helper was not started by lead (a person started it: only a person removes it)">
+  >;
+  /** a later workspace that only shares the parent's name (its key is another) closes nothing */
+  export type AnEarlierNamesake = Given<
+    [Empty, LeadsKey, Invoke<typeof recordStarted, [domain: "acme", workspace: "helper", parent: "lead"]>, Invoke<typeof giveKey, [domain: "acme", workspace: "lead", key: Other]>],
+    Expect<Invoke<typeof check, [r: Invoke<typeof signed, [key: Other, request: Close]>, exists: typeof everyVmExists, now: Now]>, "=", "acme/helper was started by an earlier workspace named lead, since removed: only a person removes it now">
+  >;
+}

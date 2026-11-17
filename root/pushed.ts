@@ -16,6 +16,10 @@ import { isBranch, isCommit, pullRequestUrl } from "../shared/names.ts";
 import type { RunResult } from "../shared/run.ts";
 import { forge } from "./git.ts";
 import { ROOT } from "./layout.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aRepoWhere } from "../../tests/nests/root-git.harness.ts";
+import type { emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 export type Pushed = {
   repo: string; branch: string; commit: string;
@@ -66,6 +70,36 @@ export const recordPushed = (entry: { repo: string; branch: string; commit: stri
   });
 };
 
+declare namespace recordPushed {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** each push of a branch replaces what was recorded for it, and keeps the base a pull
+   *  request would go into */
+  export type Records = Given<
+    [
+      Fresh,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" }]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "other"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" }]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "fix"; commit: "89abcdef0123456789abcdef0123456789abcdef"; base: "main" }]>,
+    ],
+    Expect<Invoke<typeof pushedList>, "matches", [
+      { repo: "acme/app"; branch: "other"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" },
+      { repo: "acme/app"; branch: "fix"; commit: "89abcdef0123456789abcdef0123456789abcdef"; base: "main" },
+    ]>
+  >;
+  /** a base that is the branch itself, or not a branch, is no base; a name or commit desolate
+   *  would not carry is not recorded at all */
+  export type Checked = Given<
+    [
+      Fresh,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "fix" }]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "feat"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "--all" }]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "a..b"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" }]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "x"; commit: "HEAD"; base: "main" }]>,
+    ],
+    Expect<Invoke<typeof pushedList>, "matches", [{ branch: "fix"; base: null }, { branch: "feat"; base: null }]>
+  >;
+}
+
 /** After a push that landed: record it, and return GitHub's page for opening its pull
  *  request (null on another forge, or with no base). Never throws: the push has happened,
  *  and a record that could not be written must not make it look as if it had not. */
@@ -82,11 +116,47 @@ export const afterPush = (entry: { repo: string; branch: string; commit: string;
   }
 };
 
+declare namespace afterPush {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Push = { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" };
+  /** pushed to GitHub: recorded, and the page for opening its pull request, in the person's
+   *  own browser */
+  export type GitHub = Given<
+    [Fresh, Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "" }]>],
+    [
+      Expect<Invoke<typeof afterPush, [entry: Push, warn: typeof console.error]>, "=", "https://github.com/acme/app/compare/main...fix?expand=1">,
+      Expect<Invoke<typeof pushedList>, "matches", [{ branch: "fix" }]>,
+    ]
+  >;
+  /** another forge: recorded, and no link (the stand-in has no pull-request page) */
+  export type Elsewhere = Given<
+    [Fresh, Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "stand-in"; ssh: { user: "git"; host: "forge"; port: 2222 }; knownHosts: "" }]>],
+    Expect<Invoke<typeof afterPush, [entry: Push, warn: typeof console.error]>, "=", null>
+  >;
+  /** no forge on record: still recorded (the push happened), and no link */
+  export type NoForge = Given<Fresh, Expect<Invoke<typeof afterPush, [entry: Push, warn: typeof console.error]>, "=", null>>;
+}
+
 /** The base a branch's commit was pushed for and has landed in, or null. */
 export const landedFor = (list: Pushed[], repo: string, branch: string, commit: string): string | null => {
   const p = list.find((e) => e.repo === repo && e.branch === branch && e.commit === commit);
   return p?.landed && p.base ? p.base : null;
 };
+
+declare namespace landedFor {
+  type List = [
+    { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main"; at: "2026-11-16T12:00:00.000Z"; landed: "2026-11-16T13:00:00.000Z" },
+    { repo: "acme/app"; branch: "wip"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main"; at: "2026-11-16T12:00:00.000Z" },
+  ];
+  /** "merged into <base>" for the commit that was pushed and has landed, and only that one: a
+   *  branch moved on since is not marked */
+  export type Marks = Table<typeof landedFor, [
+    [args: [list: List, repo: "acme/app", branch: "fix", commit: "0123456789abcdef0123456789abcdef01234567"], expected: "main"],
+    [args: [list: List, repo: "acme/app", branch: "fix", commit: "89abcdef0123456789abcdef0123456789abcdef"], expected: null],
+    [args: [list: List, repo: "acme/app", branch: "wip", commit: "0123456789abcdef0123456789abcdef01234567"], expected: null],
+    [args: [list: List, repo: "acme/web", branch: "fix", commit: "0123456789abcdef0123456789abcdef01234567"], expected: null],
+  ]>;
+}
 
 type Git = (args: string[]) => Promise<RunResult>;
 
@@ -110,6 +180,32 @@ export const landedIn = async (git: Git, commit: string, base: string): Promise<
   const different = new Set(differs);
   return changed.every((file) => !different.has(file));
 };
+
+declare namespace landedIn {
+  // Each a repository where `work` changed a.txt and b.txt, and main then took...
+  type Merged = Invoke<typeof aRepoWhere, [story: "merged"]>;
+  type Squashed = Invoke<typeof aRepoWhere, [story: "squashed"]>;
+  type ChangedAgain = Invoke<typeof aRepoWhere, [story: "changed-again"]>;
+  type HalfMerged = Invoke<typeof aRepoWhere, [story: "half-merged"]>;
+  type NotMerged = Invoke<typeof aRepoWhere, [story: "not-merged"]>;
+  /** ...all of it, by a merge or a squash: landed */
+  export type Landed = [
+    Expect<Invoke<typeof landedIn, [git: Merged["git"], commit: Merged["commit"], base: "main"]>, "=", true>,
+    Expect<Invoke<typeof landedIn, [git: Squashed["git"], commit: Squashed["commit"], base: "main"]>, "=", true>,
+  ];
+  /** ...part of it, none of it, or all of it and a.txt changed again since: not landed (the
+   *  last is the conservative miss: it is just not marked) */
+  export type NotLanded = [
+    Expect<Invoke<typeof landedIn, [git: HalfMerged["git"], commit: HalfMerged["commit"], base: "main"]>, "=", false>,
+    Expect<Invoke<typeof landedIn, [git: NotMerged["git"], commit: NotMerged["commit"], base: "main"]>, "=", false>,
+    Expect<Invoke<typeof landedIn, [git: ChangedAgain["git"], commit: ChangedAgain["commit"], base: "main"]>, "=", false>,
+  ];
+  /** a base the repository does not have, or a commit it does not hold: not landed */
+  export type Unknown = [
+    Expect<Invoke<typeof landedIn, [git: Merged["git"], commit: Merged["commit"], base: "release"]>, "=", false>,
+    Expect<Invoke<typeof landedIn, [git: Merged["git"], commit: "0123456789abcdef0123456789abcdef01234567", base: "main"]>, "=", false>,
+  ];
+}
 
 /** After the mirror of `repo` was fetched: each push of it not yet seen landed is looked for
  *  in its base. `git` runs in the mirror, whose refs/heads/* are the remote's branches. */
@@ -135,6 +231,25 @@ export const settle = async (repo: string, git: Git): Promise<number> => {
   return found;
 };
 
+declare namespace settle {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Squashed = Invoke<typeof aRepoWhere, [story: "squashed"]>;
+  /** after a fetch, a push whose changes are now in its base is marked landed, once */
+  export type Marks = Given<
+    [Fresh, Squashed, Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "work"; commit: Squashed["commit"]; base: "main" }]>],
+    [
+      Expect<Invoke<typeof settle, [repo: "acme/app", git: Squashed["git"]]>, "=", 1>,
+      Expect<Invoke<typeof landedFor, [list: Invoke<typeof pushedList>, repo: "acme/app", branch: "work", commit: Squashed["commit"]]>, "=", "main">,
+      Expect<Invoke<typeof settle, [repo: "acme/app", git: Squashed["git"]]>, "=", 0>,
+    ]
+  >;
+  /** another repository's pushes are not looked for in this one */
+  export type OnlyItsOwn = Given<
+    [Fresh, Squashed, Invoke<typeof recordPushed, [entry: { repo: "acme/web"; branch: "work"; commit: Squashed["commit"]; base: "main" }]>],
+    Expect<Invoke<typeof settle, [repo: "acme/app", git: Squashed["git"]]>, "=", 0>
+  >;
+}
+
 /** Repositories with a push still waiting to land, pushed in the last 30 days: the root
  *  fetches these now and then, so a pull request merged on the forge shows without anyone
  *  asking. */
@@ -142,3 +257,22 @@ export const waiting = (): string[] => {
   const since = Date.now() - 30 * 24 * 3600_000;
   return [...new Set(pushedList().filter((p) => !p.landed && p.base && Date.parse(p.at) > since).map((p) => p.repo))];
 };
+
+declare namespace waiting {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** the repositories the root fetches now and then: a push not yet landed, for a base, this
+   *  month; not one that landed, one with no base, or one from long ago */
+  export type Repos = Given<
+    [
+      Fresh,
+      Invoke<typeof writeJsonIn, [where: "state", name: "pushed.json", value: [
+        { repo: "acme/landed"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main"; at: "2026-11-16T12:00:00.000Z"; landed: "2026-11-16T13:00:00.000Z" },
+        { repo: "acme/nobase"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: null; at: "2026-11-16T12:00:00.000Z" },
+        { repo: "acme/old"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main"; at: "2020-01-01T00:00:00.000Z" },
+      ]]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" }]>,
+      Invoke<typeof recordPushed, [entry: { repo: "acme/app"; branch: "feat"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "main" }]>,
+    ],
+    Expect<Invoke<typeof waiting>, "=", ["acme/app"]>
+  >;
+}

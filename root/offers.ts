@@ -13,6 +13,9 @@ import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
 import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 /** `base`: the branch a pull request of this one would go into, as the workspace said
  *  (`desolate offer --base`); without it, the repository's default branch. */
@@ -20,6 +23,26 @@ export type Offer = { domain: string; repo: string; branch: string; commit: stri
 const file = (domain: string) => path.join(domainPath(domain), "offers.json");
 export const offersOf = (domain: string): Offer[] => readJson<Offer[]>(file(domain), []);
 export const allOffers = (only?: string): Offer[] => domains().filter((d) => !only || d.slug === only).flatMap((d) => offersOf(d.slug));
+
+declare namespace allOffers {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** every domain's offers, or one domain's; a domain that never offered has none */
+  export type ByDomain = Given<
+    [
+      Fresh,
+      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
+      Invoke<typeof aDomain, [slug: "beta", repos: ["acme/app"]]>,
+      Invoke<typeof aDomain, [slug: "quiet", repos: ["acme/app"]]>,
+      Invoke<typeof writeJsonIn, [where: "domains", name: "acme/offers.json", value: [{ domain: "acme"; repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T12:00:00.000Z" }]]>,
+      Invoke<typeof writeJsonIn, [where: "domains", name: "beta/offers.json", value: [{ domain: "beta"; repo: "acme/app"; branch: "feat"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T12:00:00.000Z" }]]>,
+    ],
+    [
+      Expect<Invoke<typeof allOffers>, "matches", [{ domain: "acme"; branch: "fix" }, { domain: "beta"; branch: "feat" }]>,
+      Expect<Invoke<typeof allOffers, [only: "beta"]>, "matches", [{ domain: "beta" }]>,
+      Expect<Invoke<typeof offersOf, [domain: "quiet"]>, "=", []>,
+    ]
+  >;
+}
 
 const lfsStore = (dir: string, oid: string) => path.join(dir, oid.slice(0, 2), oid.slice(2, 4), oid);
 
@@ -87,6 +110,21 @@ export const take = async (domain: string, request: Record<string, unknown>): Pr
   return { ok: true };
 };
 
+declare namespace take {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>;
+  /** what a workspace's offer must name before the root looks at anything: one of its own
+   *  repositories, a branch the root carries, a whole commit, and a base that is another branch.
+   *  (Taking one that passes brings the branch into the root clone: T2's.) */
+  export type Refuses = Given<[Fresh, Acme], [
+    Expect<Invoke<typeof take, [domain: "acme", request: { repo: "other/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "that repository is not in this domain" }>,
+    Expect<Invoke<typeof take, [domain: "acme", request: { repo: "acme/app"; branch: "--upload-pack=x"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "an offer names a branch and a commit" }>,
+    Expect<Invoke<typeof take, [domain: "acme", request: { repo: "acme/app"; branch: "fix"; commit: "HEAD" }]>, "=", { ok: false; error: "an offer names a branch and a commit" }>,
+    Expect<Invoke<typeof take, [domain: "acme", request: { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "fix" }]>, "=", { ok: false; error: "--base names another branch, the one a pull request would go into" }>,
+    Expect<Invoke<typeof take, [domain: "acme", request: { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; base: "a..b" }]>, "=", { ok: false; error: "--base names another branch, the one a pull request would go into" }>,
+  ]>;
+}
+
 export const withdraw = (domain: string, repo: string, branch: string) => {
   writeJson(file(domain), offersOf(domain).filter((o) => !(o.repo === repo && o.branch === branch)));
 };
@@ -100,6 +138,29 @@ export const dismiss = (domainArg: unknown, repoArg: unknown, branchArg: unknown
   withdraw(domain, repoArg, branchArg);
   return { ok: true };
 };
+
+declare namespace dismiss {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Offered = Invoke<typeof writeJsonIn, [where: "domains", name: "acme/offers.json", value: [
+    { domain: "acme"; repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T12:00:00.000Z" },
+    { domain: "acme"; repo: "acme/app"; branch: "feat"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w2"; lfs: 0; at: "2026-11-16T12:00:00.000Z" },
+  ]]>;
+  /** the person's "not this one": that offer leaves "Needs you", the others stay */
+  export type Dismisses = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>, Offered],
+    [
+      Expect<Invoke<typeof dismiss, [domainArg: "acme", repoArg: "acme/app", branchArg: "fix"]>, "=", { ok: true }>,
+      Expect<Invoke<typeof offersOf, [domain: "acme"]>, "matches", [{ branch: "feat" }]>,
+    ]
+  >;
+  /** an offer is named by its domain, repository and branch, and must be one that was made */
+  export type Refuses = Given<[Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>, Offered], [
+    Expect<Invoke<typeof dismiss, [domainArg: "acme", repoArg: "acme/app", branchArg: "gone"]>, "=", { error: "acme has offered no acme/app gone" }>,
+    Expect<Invoke<typeof dismiss, [domainArg: "../acme", repoArg: "acme/app", branchArg: "fix"]>, "=", { error: "an offer is named by its domain, repository and branch" }>,
+    Expect<Invoke<typeof dismiss, [domainArg: "acme", repoArg: ["acme/app"], branchArg: "fix"]>, "=", { error: "an offer is named by its domain, repository and branch" }>,
+    Expect<Invoke<typeof offersOf, [domain: "acme"]>, "matches", [{ branch: "fix" }, { branch: "feat" }]>,
+  ]>;
+}
 
 const POINTER = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
 
@@ -137,6 +198,17 @@ export type Review = {
  *  which may be ahead of the remote with their merged work). */
 export type Against = "origin" | "domain";
 export const againstOf = (value: unknown): Against => (value === "domain" ? "domain" : "origin");
+declare namespace againstOf {
+  /** what a review compares with: the domain's own copy of the default branch when asked, else
+   *  the remote's (what a push is against) */
+  export type Choices = Table<typeof againstOf, [
+    [args: [value: "domain"], expected: "domain"],
+    [args: [value: "origin"], expected: "origin"],
+    [args: [value: "anything else"], expected: "origin"],
+    [args: [value: null], expected: "origin"],
+  ]>;
+}
+
 export const review = async (domain: string, repoArg: unknown, branch: unknown, againstArg: unknown = "origin"): Promise<Review> => {
   const against = againstOf(againstArg);
   const d = domainOf(domain);

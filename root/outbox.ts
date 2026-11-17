@@ -10,6 +10,9 @@ import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { readPlain } from "../shared/status.ts";
 import { domainPath, ROOT } from "./layout.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, linkIn, pathIn, writeFilledIn, writeIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 export const outbox = (domain: string) => path.join(domainPath(domain), "outbox");
 export const inbox = (domain: string) => path.join(domainPath(domain), "inbox");
@@ -181,6 +184,13 @@ export const listedRefs = (domain: string, repo: string): Record<string, string>
   return out;
 };
 
+declare namespace listedRefs {
+  // (A list that is there is read through openDir, which asks Linux's /proc where an open
+  // directory is: on macOS it finds nothing, so only what is refused before that is here.)
+  /** a repository is named as one, or nothing is read */
+  export type NotARepo = Expect<Invoke<typeof listedRefs, [domain: "acme", repo: "../../state"]>, "=", {}>;
+}
+
 /** `incoming` is the root's own. A copy is deleted by whoever made it, minutes later; one
  *  left by a process that died is removed here, long after anything could be using it. */
 const sweep = (incoming: string) => {
@@ -252,6 +262,34 @@ export const clearRefusal = (domain: string, repo: string) => {
   if (kept.length !== refusalsOf(domain).length) writeJson(refusedFile(domain), kept);
 };
 
+declare namespace noteRefusal {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** what the root refused from a domain is kept, one per repository, the latest; its reason
+   *  (in part the bundle's author's text) printable and short */
+  export type Keeps = Given<
+    [
+      Fresh,
+      Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/app", why: "first"]>,
+      Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/web", why: "hasDotgit: contains '.git'"]>,
+      Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/app", why: "badTree\u001b[2J\u202e"]>,
+    ],
+    Expect<Invoke<typeof refusalsOf, [domain: "acme"]>, "matches", [
+      { domain: "acme"; repo: "acme/web"; why: "hasDotgit: contains '.git'" },
+      { domain: "acme"; repo: "acme/app"; why: "badTree?[2J?" },
+    ]>
+  >;
+  /** once a bundle of that repository is taken, its refusal goes; the others stay */
+  export type Clears = Given<
+    [
+      Fresh,
+      Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/app", why: "x"]>,
+      Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/web", why: "y"]>,
+      Invoke<typeof clearRefusal, [domain: "acme", repo: "acme/app"]>,
+    ],
+    Expect<Invoke<typeof refusalsOf, [domain: "acme"]>, "matches", [{ repo: "acme/web" }]>
+  >;
+}
+
 /** An LFS object the domain staged, taken into `target` only if its content hashes to its
  *  name and its size is what the pointer said (section 6.3). The bytes that are hashed are
  *  the bytes that are kept: they are copied from one open descriptor, and the copy becomes
@@ -276,6 +314,17 @@ export const takeLfs = (domain: string, repo: string, oid: string, size: number,
     fs.rmSync(tmp, { force: true });
   }
 };
+
+declare namespace takeLfs {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** an object is named by its sha256, which is checked before any path is made of it */
+  export type NotAnId = Expect<Invoke<typeof takeLfs, [domain: "acme", repo: "acme/app", oid: "../../../state/registry.json", size: 1, target: "/nowhere"]>, "=", { error: "not an LFS object id" }>;
+  /** one the domain did not stage is said so */
+  export type NotStaged = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>],
+    Expect<Invoke<typeof takeLfs, [domain: "acme", repo: "acme/app", oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", size: 1, target: Invoke<typeof pathIn, [where: "state", name: "lfs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]>]>, "=", { error: "the LFS object aaaaaaaaaaaa is not in the outbox" }>
+  >;
+}
 
 /** Drop a staged LFS object the root already has: its name, in the checked directory. */
 export const dropLfs = (domain: string, repo: string, oid: string) => {
@@ -311,3 +360,33 @@ export const branchesOf = (slug: string, repoList: string[]) => {
   }
   return out;
 };
+
+declare namespace branchesOf {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app", "acme/web"]]>;
+  /** the domain's own list of its branches, read as data: only names desolate carries, and
+   *  whole commits, survive */
+  export type Lists = Given<
+    [Fresh, Acme, Invoke<typeof writeJsonIn, [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", value: { refs: { main: "0123456789abcdef0123456789abcdef01234567"; "feature/login": "0123456789abcdef0123456789abcdef01234567"; "--upload-pack=x": "0123456789abcdef0123456789abcdef01234567"; "a..b": "0123456789abcdef0123456789abcdef01234567"; short: "0123456"; "x@{1}": "0123456789abcdef0123456789abcdef01234567" } }]>],
+    Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", [
+      { repo: "acme/app"; branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" },
+      { repo: "acme/app"; branch: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567" },
+    ]>
+  >;
+  /** a list that is a link (to a file of the root's, say), too large, not JSON, or not a
+   *  record of branches is no list: that repository shows none, the others theirs */
+  export type NotAList = Given<
+    [
+      Fresh, Acme,
+      Invoke<typeof writeJsonIn, [where: "state", name: "secret.json", value: { refs: { main: "0123456789abcdef0123456789abcdef01234567" } }]>,
+      Invoke<typeof linkIn, [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", target: Invoke<typeof pathIn, [where: "state", name: "secret.json"]>]>,
+      Invoke<typeof writeFilledIn, [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", bytes: 300000]>,
+    ],
+    Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", []>
+  >;
+  /** a list that is not JSON, or whose refs are not a record, is none either */
+  export type NotJson = Given<
+    [Fresh, Acme, Invoke<typeof writeIn, [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", text: "{"]>, Invoke<typeof writeJsonIn, [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", value: { refs: ["main"] }]>],
+    Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", []>
+  >;
+}

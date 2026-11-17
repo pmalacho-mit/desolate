@@ -9,6 +9,9 @@ import { domainNameFor, isSlug, parseRepo, repoId } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 import { INSTANCE } from "./paths.ts";
 import { config, ensureProxyUser, rootctl } from "./stack.ts";
+import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../../tests/nests/host-stack.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 type Key = { role: "read" | "write"; pubkey: string };
@@ -104,6 +107,53 @@ export const clone = async (name: string | undefined, options: { push: boolean; 
   out(`next: desolate domain create <slug> --repo ${repo}   (or, to a domain you have: desolate domain <slug> add --repo ${repo}; or clone again with --domain <slug>)`);
 };
 
+declare namespace clone {
+  type Anonymous = { push: false; anonymous: true };
+  type Fetched = { branches: 3; defaultBranch: "main"; lfsObjects: 0 };
+  /** names that become paths and VM labels are checked before the root is asked anything */
+  export type Refuses = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
+    [
+      Expect<Invoke<typeof refusalOf, [run: typeof clone, args: [name: "acme", options: Anonymous, out: typeof collect, json: false]]>, "=", { message: "'acme' is not a repository"; fix: "name it as <owner>/<repo>"; code: 1 }>,
+      Expect<Invoke<typeof refusalOf, [run: typeof clone, args: [name: "acme/web", options: { push: false; anonymous: true; domain: "../acme" }, out: typeof collect, json: false]]>, "matches", { message: "'../acme' is not a domain name"; code: 64 }>,
+      Expect<Invoke<typeof rootAsked>, "=", []>,
+    ]
+  >;
+  /** a repository gets a domain of its own, owner--repo, made for it */
+  export type MakesItsDomain = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "repo.prepare": { pushable: false; anonymous: true; keys: [] }; "repo.fetch": Fetched; "domain.list": []; "domain.create": {}; "domain.add-repo": {} }]>, Invoke<typeof clone, [name: "acme/web", options: Anonymous, out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", [
+      "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only, fetched anonymously.",
+      "domain acme--web: made for acme/web.",
+      "next: desolate up acme--web   (a workspace: a VM with its checkout, its devcontainer and an editor)",
+    ]>
+  >;
+  /** a domain of that name that holds other repositories is not joined: it is another's */
+  export type NameTaken = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "repo.prepare": { pushable: false; anonymous: true; keys: [] }; "repo.fetch": Fetched; "domain.list": [{ slug: "acme--web"; repos: ["acme/other"] }] }]>, Invoke<typeof clone, [name: "acme/web", options: Anonymous, out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", [
+      "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only, fetched anonymously.",
+      "no domain was made: acme--web is a domain already, holding other repositories.",
+      "next: desolate domain create <slug> --repo acme/web   (or, to a domain you have: desolate domain <slug> add --repo acme/web; or clone again with --domain <slug>)",
+    ]>
+  >;
+  /** keys someone else adds: their public halves, until the root can fetch with the read key */
+  export type KeysByHand = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "repo.prepare": { pushable: true; anonymous: false; keys: [{ role: "read"; pubkey: "ssh-ed25519 AAAAread desolate-read" }, { role: "write"; pubkey: "ssh-ed25519 AAAAwrite desolate-write" }] } }]>, Invoke<typeof clone, [name: "acme/web", options: { push: true; anonymous: false; byHand: true }, out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", [
+      "Add these deploy keys to acme/web, then run this command again:",
+      "",
+      "  desolate read: read-only",
+      "  ssh-ed25519 AAAAread desolate-read",
+      "",
+      '  desolate write: tick "Allow write access"',
+      "  ssh-ed25519 AAAAwrite desolate-write",
+      "",
+      "Only public halves are shown: the private ones never leave the root's keyring.",
+    ]>
+  >;
+}
+
 export const fetch = async (name: string | undefined, out: Out, json: boolean) => {
   const repo = repoId(repoArg(name));
   const fetched = await rootctl<Record<string, unknown>>("repo.fetch", { repo });
@@ -135,3 +185,16 @@ export const keys = async (name: string | undefined, out: Out, json: boolean) =>
   for (const key of shown) out(`${repo}  ${key.role} key (a deploy key${key.role === "write" ? " with write access" : ", read-only"}):\n  ${key.pubkey}`);
   out("Only public halves are ever shown: the private halves do not leave the root's keyring.");
 };
+
+declare namespace keys {
+  /** a key's public half, only for a repository the root holds a key for */
+  export type NoneHeld = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "keys.list": [{ repo: "acme/api"; role: "read" }] }]>],
+    Expect<Invoke<typeof refusalOf, [run: typeof keys, args: [name: "acme/web", out: typeof collect, json: false]]>, "=", { message: "the root holds no key for acme/web"; fix: "desolate clone acme/web"; code: 1 }>
+  >;
+  /** which keys the root holds; a write key asks before every push */
+  export type Lists = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "keys.list": [{ repo: "acme/web"; role: "read" }, { repo: "acme/web"; role: "write" }] }]>, Invoke<typeof keys, [name: undefined, out: typeof collect, json: false]>],
+    Expect<Invoke<typeof said>, "=", ["acme/web  read", "acme/web  write  (asks you before every push)", "a key's public half: desolate keys <owner>/<repo>"]>
+  >;
+}

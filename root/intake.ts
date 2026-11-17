@@ -3,6 +3,9 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aBundle } from "../../tests/nests/root-git.harness.ts";
 
 /** Check every object in a bundle BEFORE any of them enters a root clone (`gitDir`): index its
  *  pack, strictly, into a throwaway object directory that borrows that clone's objects.
@@ -52,3 +55,19 @@ export const bundleRefusal = async (copy: string, gitDir: string): Promise<strin
   }
 };
 const CHECK_MS = 8 * 60_000;
+
+declare namespace bundleRefusal {
+  type Clean = Invoke<typeof aBundle, [kind: "clean"]>;
+  type DotGit = Invoke<typeof aBundle, [kind: "dotgit"]>;
+  /** an ordinary commit's bundle passes: every object is one git's own fsck accepts */
+  export type Passes = Expect<Invoke<typeof bundleRefusal, [copy: Clean["copy"], gitDir: Clean["gitDir"]]>, "=", null>;
+  /** a tree with a `.git` in it is refused before any of it enters the clone, and git's own
+   *  words say why */
+  export type DotGitInATree = Expect<Invoke<typeof bundleRefusal, [copy: DotGit["copy"], gitDir: DotGit["gitDir"]]>, "includes", "hasDotgit: contains '.git'">;
+  /** only the format a workspace's git writes: v3 (another hash, objects left out) and what
+   *  is not a bundle at all are refused by their header */
+  export type NotV2 = [
+    Expect<Invoke<typeof bundleRefusal, [copy: Invoke<typeof aBundle, [kind: "v3"]>["copy"], gitDir: "/nowhere"]>, "=", "it is not a bundle a workspace's git writes (v2)">,
+    Expect<Invoke<typeof bundleRefusal, [copy: Invoke<typeof aBundle, [kind: "text"]>["copy"], gitDir: "/nowhere"]>, "=", "it is not a bundle a workspace's git writes (v2)">,
+  ];
+}

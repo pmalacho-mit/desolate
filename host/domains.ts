@@ -3,6 +3,10 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import * as path from "node:path";
 import { guest, paths } from "./paths.ts";
 import { backend, changeSecrets, ensureProxyUser, rootctl } from "./stack.ts";
+import type { Expect, Given, Invoke, Mock, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../../tests/nests/home.harness.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../../tests/nests/host-stack.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 type Out = (line: string) => void;
 
@@ -216,3 +220,54 @@ export const domainCommand = async (args: string[], values: Record<string, unkno
   }
   refuse(`'desolate domain ${first} ${second}' is not a command`, `desolate domain ${first} add --repo <owner>/<repo> | desolate domain ${first} show | desolate domain ${first} secret ...`, EXIT.usage);
 };
+
+declare namespace domainCommand {
+  /** what is refused before the root is asked: each a usage error (exit 64) with its spelling */
+  export type Usage = Table<typeof refusalOf, [
+    [args: [run: typeof domainCommand, args: [args: ["create"], values: {}, out: typeof collect]], expected: { message: "a domain needs a name"; fix: 'desolate domain create <slug> [--title "..."] [--repo <owner>/<repo>]...'; code: 64 }],
+    [args: [run: typeof domainCommand, args: [args: [], values: {}, out: typeof collect]], condition: "matches", expected: { message: "which domain?"; code: 64 }],
+    [args: [run: typeof domainCommand, args: [args: ["acme", "add"], values: {}, out: typeof collect]], condition: "matches", expected: { message: "add what?"; code: 64 }],
+    [args: [run: typeof domainCommand, args: [args: ["acme", "spawn"], values: { max: "-1" }, out: typeof collect]], expected: { message: "--max '-1' is not a number of workspaces"; fix: "desolate domain acme spawn --max 2   (0: none; none: no limit)"; code: 64 }],
+    [args: [run: typeof domainCommand, args: [args: ["acme", "net", "open-everything"], values: {}, out: typeof collect]], condition: "matches", expected: { message: "'net open-everything' is not understood"; code: 64 }],
+    [args: [run: typeof domainCommand, args: [args: ["acme", "frobnicate"], values: {}, out: typeof collect]], condition: "matches", expected: { message: "'desolate domain acme frobnicate' is not a command"; code: 64 }],
+  ]>;
+
+  /** a domain, made with its repositories at once, each added in the order given */
+  export type Creates = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "domain.create": { slug: "acme"; title: "Acme" }; "domain.add-repo": {} }]>, Invoke<typeof domainCommand, [args: ["create", "acme"], values: { title: "Acme"; repo: ["acme/web", "acme/api"] }, out: typeof collect]>],
+    [
+      Expect<Invoke<typeof said>, "=", ['created the domain acme ("Acme") with acme/web, acme/api.', "next: desolate up acme --branch <branch>"]>,
+      Expect<Invoke<typeof rootAsked>, "matches", [{ op: "domain.create" }, { op: "domain.add-repo"; args: { repo: "acme/web" } }, { op: "domain.add-repo"; args: { repo: "acme/api" } }]>,
+    ]
+  >;
+
+  /** the limit on workspaces its workspaces start: none by default, a number, or off */
+  export type SpawnLimit = Given<
+    [Invoke<typeof emptyHome>, Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "domain.spawn": {}; "domain.show": {} }]>],
+    [
+      Given<Invoke<typeof domainCommand, [args: ["acme", "spawn"], values: {}, out: typeof collect]>, Expect<Invoke<typeof said>, "=", ["acme: its workspaces may start workspaces, in acme only, each labelled with who started it, with no limit (desolate domain acme spawn --max <n> sets one; 0 turns it off)"]>>,
+      Given<Invoke<typeof domainCommand, [args: ["acme", "spawn"], values: { max: "2" }, out: typeof collect]>, Expect<Invoke<typeof said>, "=", ["acme: its workspaces may have up to 2 workspace(s) they started at once, in acme only, each labelled with who started it. Each one counts until it is removed."]>>,
+      Given<Invoke<typeof domainCommand, [args: ["acme", "spawn"], values: { max: "0" }, out: typeof collect]>, Expect<Invoke<typeof said>, "=", ["acme: its workspaces cannot start workspaces (desolate domain acme spawn --max none lets them again)"]>>,
+    ]
+  >;
+
+  /** the network rules, as the root holds them */
+  export type Net = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "net.policy": { mode: "enforce"; hosts: ["registry.npmjs.org", "pypi.org"]; internal: ["10.0.0.5"] } }]>, Invoke<typeof domainCommand, [args: ["acme", "net"], values: {}, out: typeof collect]>],
+    Expect<Invoke<typeof said>, "=", ["acme: only these hosts are reachable: registry.npmjs.org, pypi.org", "  internal addresses it may reach: 10.0.0.5"]>
+  >;
+
+  /** secrets by name, where each may be sent, and whether it is switched on */
+  export type Secrets = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "secret.list": [{ name: "ACME-OPENAI-KEY"; hosts: ["api.openai.com"]; headers: ["authorization"]; on: false }, { name: "ACME-NPM-TOKEN"; hosts: ["registry.npmjs.org"]; headers: null; on: true; secondsLeft: 1800 }] }]>, Invoke<typeof domainCommand, [args: ["acme", "secret"], values: {}, out: typeof collect]>],
+    Expect<Invoke<typeof said>, "=", ["ACME-OPENAI-KEY  ->  api.openai.com  (headers: authorization)  [OFF]", "ACME-NPM-TOKEN  ->  registry.npmjs.org  [on for 30 min more]"]>
+  >;
+  /** a time to live is a number and a unit, and only for switching one on */
+  export type Ttl = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
+    [
+      Expect<Invoke<typeof refusalOf, [run: typeof domainCommand, args: [args: ["acme", "secret", "on", "ACME-NPM-TOKEN"], values: { ttl: "forever" }, out: typeof collect]]>, "=", { message: "'forever' is not a time to live"; fix: "desolate domain acme secret on ACME-NPM-TOKEN --ttl 30m   (s, m, h or d)"; code: 64 }>,
+      Expect<Invoke<typeof refusalOf, [run: typeof domainCommand, args: [args: ["acme", "secret", "off", "ACME-NPM-TOKEN"], values: { ttl: "30m" }, out: typeof collect]]>, "matches", { message: "--ttl goes with `secret on`"; code: 64 }>,
+    ]
+  >;
+}

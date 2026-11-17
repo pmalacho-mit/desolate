@@ -18,6 +18,9 @@ import type { Repo } from "../shared/names.ts";
 import { git, gitInvocation } from "./git.ts";
 import { clonePath, PUSHER } from "./layout.ts";
 import { lfsOf } from "./offers.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Call, Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { attemptsThat } from "../../tests/nests/root-retry.harness.ts";
 
 type Failed = { error: string; moved: boolean };
 
@@ -77,6 +80,34 @@ const withPusher = async <T>(attempt: () => Promise<T & { busy?: unknown }>): Pr
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 };
+
+declare namespace withPusher {
+  type Starting = Invoke<typeof attemptsThat, [outcomes: [{ fails: "ENOENT" }, { fails: "ECONNREFUSED" }, { ok: true }]]>;
+  /** a pusher that is starting (no socket yet, or not listening yet) is asked again */
+  export type Starts = Given<
+    Starting,
+    [Expect<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Starting["attempt"]]>, "=", { ok: true }>, Expect<Call<Starting, "calls">, "=", 3>]
+  >;
+  type Occupied = Invoke<typeof attemptsThat, [outcomes: [{ ok: false; busy: true; error: "another push is under way" }, { ok: true }]]>;
+  /** one that is busy with the push before this one is asked again */
+  export type Busy = Given<
+    Occupied,
+    [Expect<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Occupied["attempt"]]>, "=", { ok: true }>, Expect<Call<Occupied, "calls">, "=", 2>]
+  >;
+  type Reached = Invoke<typeof attemptsThat, [outcomes: [{ fails: "ECONNREFUSED"; connected: true }, { ok: true }]]>;
+  /** never once the request reached it: the pusher may have claimed the approval, and each
+   *  approval is pushed once. Said, with what to run */
+  export type NotTwice = Given<
+    Reached,
+    [Throws<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Reached["attempt"]]>, "the pusher: connect ECONNREFUSED; desolate doctor">, Expect<Call<Reached, "calls">, "=", 1>]
+  >;
+  type Denied = Invoke<typeof attemptsThat, [outcomes: [{ fails: "EACCES" }, { ok: true }]]>;
+  /** and a failure that is not "starting" is not waited out */
+  export type NotStarting = Given<
+    Denied,
+    [Throws<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Denied["attempt"]]>, "the pusher: connect EACCES; desolate doctor">, Expect<Call<Denied, "calls">, "=", 1>]
+  >;
+}
 
 /** Returns null when the remote took it, or why it did not. The pusher pushes what the
  *  approval names, whatever this sends; what this sends is what makes that possible: a pack

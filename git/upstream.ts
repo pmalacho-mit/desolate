@@ -28,6 +28,9 @@ import type { Repo } from "../shared/names.ts";
 import { downstreamBranch, gitrepoProblem, GITHUB_DIR, remoteRepo, sameRepo, SUEDE_CORE } from "../shared/suede.ts";
 import type { Gitrepo } from "../shared/suede.ts";
 import { printable } from "../shared/text.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { cwdIs, gitVm, outsideEveryClone, releaseWith } from "../../tests/nests/git-upstream.harness.ts";
 
 export class Stop extends Error {
   fix: string | undefined;
@@ -133,6 +136,51 @@ export const prepare = (asked: Asked, at: Places = GIT_VM): Prepared => {
   return { ...asked, dir, clone, mirror, commit, base, branch };
 };
 
+// The checks run in this order, each before anything is run in the clone; a test of one
+// passes the ones before it, and the next check's refusal is how it shows it passed.
+declare namespace prepare {
+  /** the dependency's directory becomes a path in the clone and an argument to git and to
+   *  suede's script: a relative path inside the repository, and nothing that could leave it */
+  export type RefusesTheDirectory = Table<typeof prepare, [
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "../lib"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "'../lib' is not a directory in the repository" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/../../etc"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a directory in the repository" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "/etc"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a directory in the repository" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "-c"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a directory in the repository" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "."; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a directory in the repository" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/./lib"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a directory in the repository" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor lib"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a directory in the repository" }],
+  ]>;
+  /** written as a person might (`./vendor/lib/`), it is the same directory: past this check,
+   *  the next is whether the clone is here */
+  export type TakesTheDirectory = Throws<Invoke<typeof prepare, [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "./vendor/lib/"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: [], mirrors: []]>]>, { instanceOf: Stop; message: "no clone of acme/app here" }>;
+  /** the consumer's clone, then the dependency's mirror: both are desolate's, made on the Mac */
+  export type NeedsCloneAndMirror = [
+    Throws<Invoke<typeof prepare, [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: [], mirrors: []]>]>, { instanceOf: Stop; message: "no clone of acme/app here" }>,
+    Throws<Invoke<typeof prepare, [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: null; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/other"]]>]>, { instanceOf: Stop; message: "desolate holds no mirror of acme/lib" }>,
+  ];
+  /** suede's `--remote` may only say again where the push goes: the dependency named. Never
+   *  another repository, a local path or a transport helper */
+  export type RefusesAnotherRemote = Table<typeof prepare, [
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: null; remote: "https://github.com/acme/other.git" }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "--remote https://github.com/acme/other.git is not acme/lib" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: null; remote: "/desolate/mirrors/acme/lib.git" }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not acme/lib" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: null; remote: "ext::sh -c touch% /tmp/x" }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not acme/lib" }],
+  ]>;
+  /** `--from` becomes a git argument: a branch, `<domain>/<branch>` or a commit, never an
+   *  option, a range or a reflog entry */
+  export type RefusesTheRef = Table<typeof prepare, [
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: "--upload-pack=touch /tmp/x"; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "'--upload-pack=touch /tmp/x' is not a branch or a commit" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: "main..evil"; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a branch or a commit" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: "main@{1}"; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a branch or a commit" }],
+    [args: [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: ""; remote: null }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>], condition: "throws", expected: { instanceOf: Stop; message: "is not a branch or a commit" }],
+  ]>;
+  /** controls for the two above: the dependency's own address, in any spelling and case, and
+   *  a branch name, pass; the branch is then looked for in the clone (which, here, has none) */
+  export type TakesTheRemoteAndTheRef = [
+    Throws<Invoke<typeof prepare, [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: "a..b"; remote: "git@github.com:ACME/lib.git" }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>]>, { instanceOf: Stop; message: "'a..b' is not a branch or a commit" }>,
+    Throws<Invoke<typeof prepare, [asked: { consumer: { owner: "acme"; name: "app" }; dependency: { owner: "acme"; name: "lib" }; dir: "vendor/lib"; from: "feature/fix"; remote: "https://github.com/acme/lib" }, at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/lib"]]>]>, { instanceOf: Stop; message: "acme/app has no feature/fix here" }>,
+  ];
+}
+
 /** The pinned upstream.sh, refused unless it is the one pins.env names. */
 export const pinnedScript = (at: Places = GIT_VM) => {
   const pins = fs.readFileSync(path.join(at.release, "pins.env"), "utf8");
@@ -142,6 +190,22 @@ export const pinnedScript = (at: Places = GIT_VM) => {
   if (!want || have !== want) stop("desolate's copy of suede's upstream does not hash to its pin", "reinstall desolate (release/git/suede-upstream.sh, release/pins.env)");
   return script;
 };
+
+declare namespace pinnedScript {
+  /** the script whose sha256 pins.env names, and only that one, is run */
+  export type Pinned = Expect<
+    Invoke<typeof pinnedScript, [at: Invoke<typeof releaseWith, [pins: "SUEDE_COMMIT=0123456789ab\nSUEDE_UPSTREAM_SHA256=5ec1314036be1a6df38fd0886fbcbbdb6d402a35bbaa92ada273ab2b3996f563\n", script: "#!/bin/bash\necho upstream\n"]>]>,
+    "endsWith",
+    "/git/suede-upstream.sh"
+  >;
+  /** one byte more in the script; a pin in capitals, indented, or missing: not run */
+  export type Refuses = Table<typeof pinnedScript, [
+    [args: [at: Invoke<typeof releaseWith, [pins: "SUEDE_UPSTREAM_SHA256=5ec1314036be1a6df38fd0886fbcbbdb6d402a35bbaa92ada273ab2b3996f563\n", script: "#!/bin/bash\necho upstream \n"]>], condition: "throws", expected: { instanceOf: Stop; message: "desolate's copy of suede's upstream does not hash to its pin" }],
+    [args: [at: Invoke<typeof releaseWith, [pins: "SUEDE_UPSTREAM_SHA256=5EC1314036BE1A6DF38FD0886FBCBBDB6D402A35BBAA92ADA273AB2B3996F563\n", script: "#!/bin/bash\necho upstream\n"]>], condition: "throws", expected: { instanceOf: Stop; message: "does not hash to its pin" }],
+    [args: [at: Invoke<typeof releaseWith, [pins: "  SUEDE_UPSTREAM_SHA256=5ec1314036be1a6df38fd0886fbcbbdb6d402a35bbaa92ada273ab2b3996f563\n", script: "#!/bin/bash\necho upstream\n"]>], condition: "throws", expected: { instanceOf: Stop; message: "does not hash to its pin" }],
+    [args: [at: Invoke<typeof releaseWith, [pins: "SUEDE_COMMIT=0123456789ab\n", script: "#!/bin/bash\necho upstream\n"]>], condition: "throws", expected: { instanceOf: Stop; message: "does not hash to its pin" }],
+  ]>;
+}
 
 /** Step 2: suede's upstream, in a scratch clone, its push caught. Returns the scratch clone and
  *  the commit suede would have pushed. */
@@ -248,3 +312,28 @@ export const upstream = async (argv: string[], cwdRepo: () => string): Promise<n
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 };
+
+// The command line, refused before anything is looked at. A command that parses goes on to
+// prepare(), against the real git VM's places, which on a test machine have no clone: that
+// refusal is how a test here shows the command line was taken.
+declare namespace upstream {
+  /** `<dependency-dir> <owner/repo>` in a clone, the consumer being the clone's repository;
+   *  or the consumer named first, and then the current directory is not asked */
+  export type Parses = [
+    Throws<Invoke<typeof upstream, [argv: ["vendor/lib", "acme/lib", "--no-wait"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>]>, { instanceOf: Stop; message: "no clone of acme/app here" }>,
+    Throws<Invoke<typeof upstream, [argv: ["acme/app", "vendor/lib", "acme/lib"], cwdRepo: typeof outsideEveryClone]>, { instanceOf: Stop; message: "no clone of acme/app here" }>,
+  ];
+  export type Refuses = Table<typeof upstream, [
+    [args: [argv: ["vendor/lib", "acme/lib", "--force"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "unknown flag: --force" }],
+    /** a flag is shown as text: what a terminal would act on is replaced */
+    [args: [argv: ["vendor/lib", "acme/lib", "--\u001b[2J"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "unknown flag: --?[2J" }],
+    [args: [argv: ["vendor/lib", "acme/lib", "--from"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "--from names a ref" }],
+    [args: [argv: ["vendor/lib", "acme/lib", "-r"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "--remote names an address" }],
+    [args: [argv: ["vendor/lib"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "upstream what?" }],
+    [args: [argv: ["acme/app", "vendor/lib", "acme/lib", "acme/more"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "upstream what?" }],
+    [args: [argv: ["acme app", "vendor/lib", "acme/lib"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "'acme app' is not a repository" }],
+    [args: [argv: ["vendor/lib", "lib"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "'lib' is not a repository" }],
+    /** a proposal goes to another repository: never back into the consumer, in any case */
+    [args: [argv: ["vendor/lib", "ACME/App"], cwdRepo: Invoke<typeof cwdIs, [repo: "acme/app"]>], condition: "throws", expected: { instanceOf: Stop; message: "the consumer and the dependency are the same repository" }],
+  ]>;
+}

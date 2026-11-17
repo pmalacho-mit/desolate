@@ -12,6 +12,10 @@ import type { Checkout, WorkspacePlan } from "../shared/plan.ts";
 import { git, gitOk } from "./git.ts";
 import { clonePath, domainPath, mirrorPath, ROOT } from "./layout.ts";
 import { recordOf, registry } from "./repos.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { aDomain, aWorkspace, emptyRoot, namesIn, readJsonIn, writeVmIn } from "../../tests/nests/root-state.harness.ts";
 
 /** `env`: the repository whose devcontainer.json is the domain's environment (section 4.5,
  *  way 1). Unset: the first checkout that has one. */
@@ -26,8 +30,24 @@ const workspaceFile = (slug: string, name: string) => path.join(workspacesDir(sl
 export const slugOf = (value: unknown, what: string): string =>
   isSlug(value) ? value : refuse(`'${String(value)}' is not a ${what} name`, `a ${what} name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit`, EXIT.usage);
 
+declare namespace slugOf {
+  /** a name that becomes a VM label, a hostname and a path, or a refusal that says what one is */
+  export type Accepts = Expect<Invoke<typeof slugOf, [value: "acme", what: "domain"]>, "=", "acme">;
+  /** a name that climbs, or has capitals, is a usage error (64) with the rule as its fix */
+  export type Refuses = [
+    Expect<Invoke<typeof refusalOf, [f: typeof slugOf, args: [value: "../w1", what: "workspace"]]>, "=", { message: "'../w1' is not a workspace name"; fix: "a workspace name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit"; code: 64 }>,
+    Throws<Invoke<typeof slugOf, [value: "Acme", what: "domain"]>, "'Acme' is not a domain name">,
+  ];
+}
+
 export const domain = (slug: string): Domain =>
   readJson<Domain | null>(file(slug), null) ?? refuse(`there is no domain '${slug}'`, `desolate domain create ${slug}`);
+
+declare namespace domain {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** one that was never made is a refusal that says how to make it */
+  export type None = Given<Fresh, Expect<Invoke<typeof refusalOf, [f: typeof domain, args: [slug: "acme"]]>, "=", { message: "there is no domain 'acme'"; fix: "desolate domain create acme"; code: 1 }>>;
+}
 
 export const domains = (): Domain[] => {
   try {
@@ -50,6 +70,33 @@ export const create = (slugArg: unknown, title: unknown) => {
   return value;
 };
 
+declare namespace create {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a domain: its record, and the directories its VMs share with the root */
+  export type Makes = Given<
+    [Fresh, Invoke<typeof create, [slugArg: "acme", title: "  Acme's widgets  "]>],
+    [
+      Expect<Invoke<typeof domain, [slug: "acme"]>, "matches", { slug: "acme"; title: "Acme's widgets"; repos: [] }>,
+      Expect<Invoke<typeof namesIn, [where: "domains", dir: "acme"]>, "=", ["domain.json", "inbox", "outbox", "repos", "workspaces"]>,
+    ]
+  >;
+  /** no title: the slug is its title */
+  export type Untitled = Given<Fresh, Expect<Invoke<typeof create, [slugArg: "acme", title: undefined]>, "matches", { title: "acme" }>>;
+  /** `origin` and `root` are remotes in every clone already, and a domain is one too */
+  export type Reserved = Given<Fresh, [
+    Throws<Invoke<typeof create, [slugArg: "origin", title: undefined]>, "a domain cannot be called 'origin'">,
+    Throws<Invoke<typeof create, [slugArg: "root", title: undefined]>, "a domain cannot be called 'root'">,
+  ]>;
+  /** made once: a second is refused, the first left as it was */
+  export type Exists = Given<
+    [Fresh, Invoke<typeof create, [slugArg: "acme", title: "first"]>],
+    [
+      Expect<Invoke<typeof refusalOf, [f: typeof create, args: [slugArg: "acme", title: "second"]]>, "=", { message: "the domain 'acme' already exists"; fix: "desolate domain acme show"; code: 1 }>,
+      Expect<Invoke<typeof domain, [slug: "acme"]>, "matches", { title: "first" }>,
+    ]
+  >;
+}
+
 /** `desolate domain <d> env [--from <owner/repo>]`: which repository's spec this domain's
  *  workspaces are built from. Written here, by the root, outside every repository. */
 /** The size this domain's new workspaces get (shared/size.ts): set, cleared (null), or
@@ -71,6 +118,29 @@ export const setSize = (slugArg: unknown, sizeArg: unknown) => {
   return { domain: d.slug, size: d.size ?? null };
 };
 
+declare namespace setSize {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>;
+  /** set part by part, each part kept until it is set again; cleared with null; only read without one */
+  export type Parts = Given<
+    [Fresh, Acme],
+    [
+      Expect<Invoke<typeof setSize, [slugArg: "acme", sizeArg: { cpus: 4 }]>, "=", { domain: "acme"; size: { cpus: 4 } }>,
+      Expect<Invoke<typeof setSize, [slugArg: "acme", sizeArg: { memoryMiB: 8192 }]>, "=", { domain: "acme"; size: { cpus: 4; memoryMiB: 8192 } }>,
+      Expect<Invoke<typeof setSize, [slugArg: "acme", sizeArg: undefined]>, "=", { domain: "acme"; size: { cpus: 4; memoryMiB: 8192 } }>,
+      Expect<Invoke<typeof setSize, [slugArg: "acme", sizeArg: null]>, "=", { domain: "acme"; size: null }>,
+    ]
+  >;
+  /** a size desolate does not make is refused, and what was set is kept */
+  export type OutOfRange = Given<
+    [Fresh, Acme, Invoke<typeof setSize, [slugArg: "acme", sizeArg: { cpus: 4 }]>],
+    [
+      Expect<Invoke<typeof refusalOf, [f: typeof setSize, args: [slugArg: "acme", sizeArg: { cpus: 0 }]]>, "=", { message: "CPUs must be from 1 to 64"; fix: "desolate domain acme size --cpus <n> --memory <8g> --disk <60g>"; code: 64 }>,
+      Expect<Invoke<typeof domain, [slug: "acme"]>, "matches", { size: { cpus: 4 } }>,
+    ]
+  >;
+}
+
 export const setSpawn = (slugArg: unknown, maxArg: unknown) => {
   const d = domain(slugOf(slugArg, "domain"));
   // null (or absent): no limit, the default. 0: its workspaces start none.
@@ -82,6 +152,27 @@ export const setSpawn = (slugArg: unknown, maxArg: unknown) => {
   return { domain: d.slug, max };
 };
 
+declare namespace setSpawn {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>;
+  /** how many workspaces its workspaces may start: a number, none (0), or no limit (null) */
+  export type Limits = Given<
+    [Fresh, Acme],
+    [
+      Expect<Invoke<typeof setSpawn, [slugArg: "acme", maxArg: 2]>, "=", { domain: "acme"; max: 2 }>,
+      Expect<Invoke<typeof setSpawn, [slugArg: "acme", maxArg: 0]>, "=", { domain: "acme"; max: 0 }>,
+      Expect<Invoke<typeof domain, [slug: "acme"]>, "matches", { spawnMax: 0 }>,
+      Expect<Invoke<typeof setSpawn, [slugArg: "acme", maxArg: null]>, "=", { domain: "acme"; max: null }>,
+    ]
+  >;
+  /** and nothing that is not a whole number of workspaces */
+  export type Refuses = Given<[Fresh, Acme], [
+    Expect<Invoke<typeof refusalOf, [f: typeof setSpawn, args: [slugArg: "acme", maxArg: -1]]>, "=", { message: "'-1' is not a number of workspaces"; fix: "desolate domain acme spawn --max 2"; code: 64 }>,
+    Throws<Invoke<typeof setSpawn, [slugArg: "acme", maxArg: 1.5]>, "'1.5' is not a number of workspaces">,
+    Throws<Invoke<typeof setSpawn, [slugArg: "acme", maxArg: "lots"]>, "'lots' is not a number of workspaces">,
+  ]>;
+}
+
 export const setEnv = (slugArg: unknown, repoArg: unknown) => {
   const d = domain(slugOf(slugArg, "domain"));
   if (repoArg !== undefined) {
@@ -92,6 +183,21 @@ export const setEnv = (slugArg: unknown, repoArg: unknown) => {
   }
   return { domain: d.slug, env: d.env ?? null, repos: d.repos };
 };
+
+declare namespace setEnv {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/api", "acme/web"]]>;
+  /** the repository whose devcontainer is the domain's environment: one of its own */
+  export type Sets = Given<
+    [Fresh, Acme],
+    [
+      Expect<Invoke<typeof setEnv, [slugArg: "acme", repoArg: undefined]>, "=", { domain: "acme"; env: null; repos: ["acme/api", "acme/web"] }>,
+      Expect<Invoke<typeof setEnv, [slugArg: "acme", repoArg: "acme/web"]>, "matches", { env: "acme/web" }>,
+    ]
+  >;
+  /** another domain's repository is not this one's environment: the fix adds it */
+  export type NotItsOwn = Given<[Fresh, Acme], Expect<Invoke<typeof refusalOf, [f: typeof setEnv, args: [slugArg: "acme", repoArg: "other/web"]]>, "=", { message: "other/web is not in the domain acme"; fix: "desolate domain acme add --repo other/web"; code: 1 }>>;
+}
 
 export const addRepo = async (slugArg: unknown, repoArg: unknown) => {
   const d = domain(slugOf(slugArg, "domain"));
@@ -137,6 +243,17 @@ const authorOf = (value: unknown): { name: string; email: string } | undefined =
   const name = clean(v?.name), email = clean(v?.email);
   return name && /^[^\s@]+@[^\s@]+$/.test(email) ? { name, email } : undefined;
 };
+
+declare namespace authorOf {
+  /** a git identity as the host read it: printable, short, with an address; or none */
+  export type Identities = Table<typeof authorOf, [
+    [args: [value: { name: " Ada Lovelace "; email: "ada@example.com" }], expected: { name: "Ada Lovelace"; email: "ada@example.com" }],
+    [args: [value: { name: "Ada\u001b[2J"; email: "ada@example.com" }], expected: { name: "Ada[2J"; email: "ada@example.com" }],
+    [args: [value: { name: "Ada"; email: "not an address" }], expected: undefined],
+    [args: [value: { name: ""; email: "ada@example.com" }], expected: undefined],
+    [args: [value: null], expected: undefined],
+  ]>;
+}
 
 export const plan = (args: { instance: string; domain: unknown; name: unknown; checkouts: unknown; base: unknown; fetch: unknown; size?: unknown; author?: unknown; startedBy?: unknown; env?: unknown }): Workspace => {
   const d = domain(slugOf(args.domain, "domain"));
@@ -222,6 +339,89 @@ export const plan = (args: { instance: string; domain: unknown; name: unknown; c
   writeJson(path.join(domainPath(d.slug), "inbox", "workspaces", `${workspaceName}.json`), value);
   return value;
 };
+
+declare namespace plan {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>;
+  /** the first workspace: named w1, with the main checkout on the default branch; the plan
+   *  is kept, and put where the workspace's own init reads it */
+  export type First = Given<
+    [Fresh, Acme],
+    [
+      Expect<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: undefined; checkouts: []; base: undefined; fetch: false }]>, "matches", {
+        domain: "acme"; workspace: "w1"; vm: "dsl-t-ddb30a57cc"; state: "planned"; fetch: false;
+        checkouts: [{ repo: "acme/app"; kind: "main"; name: ""; branch: "main"; base: "main"; path: "/workspaces/acme/app" }];
+      }>,
+      Expect<Invoke<typeof readJsonIn, [where: "domains", name: "acme/inbox/workspaces/w1.json"]>, "matches", { workspace: "w1" }>,
+    ]
+  >;
+  /** the main checkout is held by w1: the next gets a worktree of its own, named for it */
+  export type Second = Given<
+    [Fresh, Acme, Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: undefined; checkouts: []; base: undefined; fetch: false }]>],
+    Expect<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: undefined; checkouts: []; base: undefined; fetch: false }]>, "matches", {
+      workspace: "w2"; checkouts: [{ kind: "worktree"; name: "w2"; branch: "w2"; base: "main"; path: "/workspaces/acme/app/.worktrees/w2" }];
+    }>
+  >;
+  /** a branch named for the worktree, from the base asked for: its directory has no slashes */
+  export type Worktree = Given<
+    [Fresh, Acme],
+    Expect<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "issue-12"; checkouts: ["acme/app=worktree:task/web"]; base: "origin/main"; fetch: true }]>, "matches", {
+      workspace: "issue-12"; fetch: true; checkouts: [{ kind: "worktree"; name: "task-web"; branch: "task/web"; base: "origin/main" }];
+    }>
+  >;
+  /** one working tree, one workspace: the main checkout or a worktree another holds is refused,
+   *  and says which workspace holds it */
+  export type Held = Given<
+    [Fresh, Acme, Invoke<typeof aWorkspace, [domain: "acme", name: "w1", checkouts: ["acme/app=main"]]>, Invoke<typeof aWorkspace, [domain: "acme", name: "w2", checkouts: ["acme/app=worktree:task-web"]]>],
+    [
+      Expect<Invoke<typeof refusalOf, [f: typeof plan, args: [args: { instance: "t"; domain: "acme"; name: "w3"; checkouts: ["acme/app=main"]; base: undefined; fetch: false }]]>, "=", { message: "the main checkout of acme/app is held by the workspace 'acme/w1'. Two editors and two agents in one working tree is a corruption, not a feature"; fix: "take a worktree instead: --checkout acme/app=worktree:<branch>"; code: 75 }>,
+      Expect<Invoke<typeof refusalOf, [f: typeof plan, args: [args: { instance: "t"; domain: "acme"; name: "w3"; checkouts: ["acme/app=worktree:task/web"]; base: undefined; fetch: false }]]>, "=", { message: "the worktree 'task-web' of acme/app is held by the workspace 'acme/w2'"; fix: "use another branch, or desolate rm acme/w2"; code: 75 }>,
+    ]
+  >;
+  /** what was not named gets its main checkout if free, and nothing otherwise: no empty
+   *  branch in a repository the work is not about */
+  export type OnlyNamed = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/api", "acme/web"]]>, Invoke<typeof aWorkspace, [domain: "acme", name: "w1", checkouts: ["acme/api=main", "acme/web=main"]]>],
+    Expect<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w2"; checkouts: ["acme/web=worktree:fix"]; base: undefined; fetch: false }]>, "matches", {
+      checkouts: [{ repo: "acme/web"; kind: "worktree"; branch: "fix" }];
+    }>
+  >;
+  /** what the person typed is checked before anything is planned */
+  export type Refuses = Given<[Fresh, Acme], [
+    Expect<Invoke<typeof refusalOf, [f: typeof plan, args: [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: ["acme/app"]; base: undefined; fetch: false }]]>, "=", { message: "--checkout 'acme/app' is not understood"; fix: "use --checkout <owner>/<repo>=main or --checkout <owner>/<repo>=worktree:<branch>"; code: 64 }>,
+    Throws<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: ["other/app=main"]; base: undefined; fetch: false }]>, "other/app is not in the domain 'acme'">,
+    Throws<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: ["acme/app=worktree:--upload-pack=x"]; base: undefined; fetch: false }]>, "'--upload-pack=x' is not a branch name desolate will carry">,
+    Throws<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: []; base: "--orphan"; fetch: false }]>, "--base '--orphan' is not a branch">,
+    Throws<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "W 1"; checkouts: []; base: undefined; fetch: false }]>, "'W 1' is not a workspace name">,
+    Throws<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: []; base: undefined; fetch: false; size: { cpus: 2; memoryMiB: 512; diskGiB: 30 } }]>, "the size is not one desolate makes: memory must be from 1 GiB to 256 GiB">,
+    Throws<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: []; base: undefined; fetch: false; size: { cpus: 2 } }]>, "the size is not one desolate makes: a part is missing">,
+    Expect<Invoke<typeof namesIn, [where: "domains", dir: "acme/workspaces"]>, "=", []>,
+  ]>;
+  /** a name already taken, and a domain with nothing to check out */
+  export type Taken = Given<
+    [Fresh, Acme, Invoke<typeof aWorkspace, [domain: "acme", name: "w1", checkouts: ["acme/app=main"]]>, Invoke<typeof aDomain, [slug: "empty", repos: []]>],
+    [
+      Expect<Invoke<typeof refusalOf, [f: typeof plan, args: [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: []; base: undefined; fetch: false }]]>, "=", { message: "the workspace 'acme/w1' already exists"; fix: "desolate up acme --name <another>, or desolate rm acme/w1"; code: 1 }>,
+      Expect<Invoke<typeof refusalOf, [f: typeof plan, args: [args: { instance: "t"; domain: "empty"; name: "w1"; checkouts: []; base: undefined; fetch: false }]]>, "=", { message: "the domain 'empty' has no repositories yet"; fix: "desolate domain empty add --repo <owner>/<repo>"; code: 1 }>,
+    ]
+  >;
+  /** a VM name is a hash of the domain and the workspace: one already another domain's is
+   *  refused, never shared */
+  export type VmTaken = Given<
+    [Fresh, Acme, Invoke<typeof aDomain, [slug: "other", repos: []]>, Invoke<typeof writeVmIn, [domain: "other", workspace: "x", vm: "dsl-t-ddb30a57cc"]>],
+    Expect<Invoke<typeof refusalOf, [f: typeof plan, args: [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: []; base: undefined; fetch: false }]]>, "=", { message: "the VM name dsl-t-ddb30a57cc is already other's"; fix: "desolate up acme --name <another name>"; code: 75 }>
+  >;
+  /** who started it, kept only in the shape the host gives it; a size, and a git identity */
+  export type Labels = Given<
+    [Fresh, Acme],
+    [
+      Expect<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w1"; checkouts: []; base: undefined; fetch: false; startedBy: { workspace: "lead"; createdAt: "2026-11-16T12:00:00.000Z" }; size: { cpus: 2; memoryMiB: 4096; diskGiB: 30 }; author: { name: "Ada"; email: "ada@example.com" } }]>, "matches", {
+        startedBy: { workspace: "lead"; createdAt: "2026-11-16T12:00:00.000Z" }; size: { cpus: 2; memoryMiB: 4096; diskGiB: 30 }; author: { name: "Ada"; email: "ada@example.com" };
+      }>,
+      Expect<Invoke<typeof plan, [args: { instance: "t"; domain: "acme"; name: "w2"; checkouts: []; base: undefined; fetch: false; startedBy: { workspace: "../lead"; createdAt: "yesterday" } }]>["startedBy"], "=", undefined>,
+    ]
+  >;
+}
 
 export const setState = (slug: string, name: string, state: Workspace["state"]) => {
   const w = workspace(slug, name);

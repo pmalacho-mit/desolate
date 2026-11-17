@@ -1,6 +1,8 @@
 // The root VM's own layout. Keys and secrets live on the root VM's disk, never on a share:
 // nothing on the host and nothing in a workspace has a path to them (P3).
 import type { Repo } from "../shared/names.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export const ROOT = {
   mirrors: "/desolate/mirrors",
@@ -28,6 +30,16 @@ export const HOST_QUEUE = `${ROOT.state}/host-queue`;
 export const mirrorPath = (repo: Repo) => `${ROOT.mirrors}/${repo.owner}/${repo.name}.git`;
 export const clonePath = (repo: Repo) => `${ROOT.clones}/${repo.owner}/${repo.name}`;
 export const domainPath = (domain: string) => `${ROOT.domains}/${domain}`;
+
+declare namespace mirrorPath {
+  /** one bare mirror per repository: what the remote published, which every clone borrows */
+  export type Where = Expect<Invoke<typeof mirrorPath, [repo: { owner: "acme"; name: "app" }]>, "=", "/desolate/mirrors/acme/app.git">;
+}
+
+declare namespace clonePath {
+  /** and the root's own clone of it, the person's: on the share the host and the git VM see */
+  export type Where = Expect<Invoke<typeof clonePath, [repo: { owner: "acme"; name: "app" }]>, "=", "/desolate/root/acme/app">;
+}
 
 export const KEYRING = {
   keys: `${ROOT.sys}/keyring`,

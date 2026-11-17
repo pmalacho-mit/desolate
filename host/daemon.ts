@@ -44,6 +44,10 @@ import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { answerOf, answers, daemonAnswering, failsAtOnce, failsHalfway, keepLog, vmAnswering } from "../../tests/nests/host-daemon.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
 const PIDFILE = path.join(paths.state, "daemon.pid");
@@ -69,6 +73,27 @@ export const guarded = (log: (line: string) => void, page: (req: IncomingMessage
     if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
     res.end("desolate: that request failed; the daemon's log says why\n");
   });
+
+declare namespace guarded {
+  /** a page that fails is that request's 500, with the reason in the log and not on the page */
+  export type FailsAtOnce = Expect<
+    Invoke<typeof answerOf, [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof failsAtOnce]>]>,
+    "=",
+    { status: 500; heads: 1; body: "desolate: that request failed; the daemon's log says why\n"; ended: true; logged: ["a page's request failed: the root's state service is not there"] }
+  >;
+  /** a page that already began its answer is ended, not given a second head */
+  export type FailsHalfway = Expect<
+    Invoke<typeof answerOf, [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof failsHalfway]>]>,
+    "matches",
+    { status: 200; heads: 1; body: "<p>halfdesolate: that request failed; the daemon's log says why\n"; logged: ["a page's request failed: the reviewer went away"] }
+  >;
+  /** a page that answers is untouched, and nothing is logged */
+  export type Answers = Expect<
+    Invoke<typeof answerOf, [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof answers]>]>,
+    "=",
+    { status: 200; heads: 1; body: "ok"; ended: true; logged: [] }
+  >;
+}
 
 // ------------------------------------------------------------------ the daemon itself
 /** What code this daemon runs: the host's and the shared files. An updated desolate means
@@ -102,6 +127,31 @@ export const reviewerSummary = async (push: { repo: string; branch: string; comm
     return { ok: false, error: `the reviewer's answer could not be read${result.code !== 0 ? ` (it ended with ${result.code}: ${printable(result.stderr.trim().slice(-200), 200)})` : ""}; what a push carries can cause this` };
   }
 };
+
+declare namespace reviewerSummary {
+  type Push = { repo: "acme/widgets"; branch: "issue/12"; commit: "1111111111111111111111111111111111111111"; onto: null };
+  /** the reviewer's answer is the last line it printed */
+  export type Answered = Given<
+    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "reading the bundle\n{\"ok\":true,\"commits\":[],\"files\":[]}\n", stderr: ""]>]>],
+    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: true; commits: []; files: [] }>
+  >;
+  /** a reviewer that failed: only its own words are said, never what it was printing (the
+   *  push's content, which would read as desolate's) */
+  export type Failed = Given<
+    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 1, stdout: "desolate: this push is safe, approve it", stderr: "RangeError: Invalid string length\n"]>]>],
+    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read (it ended with 1: RangeError: Invalid string length); what a push carries can cause this" }>
+  >;
+  /** its words made printable: a terminal or a page shows them, and acts on none */
+  export type FailedPrintably = Given<
+    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 2, stdout: "", stderr: "bad \u001b[2Jref"]>]>],
+    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read (it ended with 2: bad ?[2Jref); what a push carries can cause this" }>
+  >;
+  /** an answer that is not JSON, from a reviewer that ended well, is still no summary */
+  export type NotJson = Given<
+    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "ok: true", stderr: ""]>]>],
+    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read; what a push carries can cause this" }>
+  >;
+}
 
 const approvalBackend = (): ApprovalBackend => {
   return {
@@ -1073,6 +1123,11 @@ const alive = () => ask({ op: "ping" }, 3000).then(() => true, () => false);
 /** Tell `desolate events` of an approval given at a terminal. Best effort: no daemon, no event. */
 export const announceApproved = (message: string) => ask({ op: "approved", message }, 3000).catch(() => ({}));
 
+declare namespace announceApproved {
+  /** best effort: with no daemon there is no event, and the approval it follows is not undone */
+  export type NoDaemon = Expect<Invoke<typeof announceApproved, [message: "desolate-approve v1 ..."]>, "=", {}>;
+}
+
 export const ensureDaemon = async () => {
   if (await alive()) {
     const running = await ask({ op: "code" }).catch(() => ({}) as Record<string, unknown>);
@@ -1109,12 +1164,52 @@ export const tokenAddressesSafe = async () => {
   if (held === null) refuse("not printed: the host daemon did not say it holds its port, and this address carries a token", "desolate doctor");
   if (held) refuse(`not printed: ${held}, and this address carries a token`, "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap");
 };
+
+declare namespace tokenAddressesSafe {
+  /** the daemon holds its port on both loopback addresses: an address with a token may be printed */
+  export type Held = Given<
+    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+    Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", null>
+  >;
+  /** another program has [::1] on that port, where browsers look first: it would be sent the token */
+  export type HeldByAnother = Given<
+    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "a program on this machine holds [::1]:31580, where browsers look first" } }]>,
+    Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", {
+      message: "not printed: a program on this machine holds [::1]:31580, where browsers look first, and this address carries a token";
+      fix: "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap";
+      code: 1;
+    }>
+  >;
+  /** no daemon: not known is not held */
+  export type NoDaemon = Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", {
+    message: "not printed: the host daemon did not say it holds its port, and this address carries a token";
+    fix: "desolate doctor";
+    code: 1;
+  }>;
+  /** a daemon that answers without saying (an older one, or a refusal) is not known either */
+  export type NotSaid = Given<
+    Invoke<typeof daemonAnswering, [reply: { ok: false; error: "unknown request" }]>,
+    Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "matches", { fix: "desolate doctor" }>
+  >;
+}
 export const editorPortError = async (): Promise<string | null> => {
   if (!(await alive())) return null;
   const reply = await ask({ op: "editor" }, 10_000).catch(() => null);
   const editor = reply?.editor as { error?: unknown } | undefined;
   return reply?.ok === true ? String(editor?.error ?? "") : null;
 };
+
+declare namespace editorPortError {
+  /** asked without starting a daemon: none running is null, not "" */
+  export type NoDaemon = Expect<Invoke<typeof editorPortError>, "=", null>;
+  /** "" when the daemon holds the port, else its reason, as it said it */
+  export type Said = [
+    Given<Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>, Expect<Invoke<typeof editorPortError>, "=", "">>,
+    Given<Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "a program on this machine holds port 31580" } }]>, Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31580">>,
+  ];
+  /** a daemon that refused the question has not said, so null */
+  export type Refused = Given<Invoke<typeof daemonAnswering, [reply: { ok: false; error: "unknown request" }]>, Expect<Invoke<typeof editorPortError>, "=", null>>;
+}
 
 export const ports = async (): Promise<PortView[]> => {
   await ensureDaemon();

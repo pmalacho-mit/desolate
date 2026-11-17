@@ -31,6 +31,10 @@ import { landedFor, pushedList } from "./pushed.ts";
 import * as proxy from "./proxy/manage.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { emptyRoot, namesIn, readIn, readJsonIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 type Log = (line: string) => void;
 export type Op = (args: Record<string, unknown>, log: Log) => Promise<unknown>;
@@ -455,3 +459,51 @@ export const ops: Record<string, Op> = {
     return checks;
   },
 };
+
+declare namespace ops {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Quiet = typeof console.error;
+  /** the forge the host gives at bootstrap: kept for fetching, its host keys pinned */
+  export type ForgeSet = Given<
+    [Fresh, Invoke<(typeof ops)["forge.set"], [args: { forge: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "github.com ssh-ed25519 AAAA\n\n" } }, log: Quiet]>],
+    [
+      Expect<Invoke<typeof readJsonIn, [where: "state", name: "forge.json"]>, "matches", { kind: "github"; ssh: { host: "github.com" } }>,
+      Expect<Invoke<typeof readIn, [where: "state", name: "known_hosts"]>, "=", "github.com ssh-ed25519 AAAA\n">,
+    ]
+  >;
+  /** a forge that is not GitHub or the stand-in, or an address ssh would read as more than
+   *  an address, is not kept */
+  export type ForgeRefused = Given<Fresh, [
+    Throws<Invoke<(typeof ops)["forge.set"], [args: { forge: { kind: "gitlab"; ssh: { user: "git"; host: "gitlab.com"; port: 22 }; knownHosts: "x" } }, log: Quiet]>, "forge.set needs {kind, ssh:{user,host,port}, knownHosts}">,
+    Throws<Invoke<(typeof ops)["forge.set"], [args: { forge: { kind: "github"; ssh: { user: "git"; host: "github.com -oProxyCommand=sh"; port: 22 }; knownHosts: "x" } }, log: Quiet]>, "forge.set: bad ssh user, host or port">,
+    Throws<Invoke<(typeof ops)["forge.set"], [args: { forge: { kind: "github"; ssh: { user: "-oProxyCommand=sh"; host: "github.com"; port: 22 }; knownHosts: "x" } }, log: Quiet]>, "forge.set: bad ssh user, host or port">,
+    Throws<Invoke<(typeof ops)["forge.set"], [args: { forge: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: "22" }; knownHosts: "x" } }, log: Quiet]>, "forge.set: bad ssh user, host or port">,
+    Expect<Invoke<typeof namesIn, [where: "state", dir: ""]>, "excludes", "forge.json">,
+  ]>;
+  /** a push from the git VM names a branch, a whole commit and a bundle by the name the host
+   *  gives it, never a path; checked before any file is looked at */
+  export type GitPush = [
+    Throws<Invoke<(typeof ops)["git.push"], [args: { repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; bundle: "../../state/registry.json" }, log: Quiet]>, "git.push names a branch, a commit, and a bundle the host left">,
+    Throws<Invoke<(typeof ops)["git.push"], [args: { repo: "acme/app"; branch: "fix"; commit: "0000000000000000000000000000000000000000"; bundle: "0123456789abcdef.bundle" }, log: Quiet]>, "git.push names a branch, a commit, and a bundle the host left">,
+    Throws<Invoke<(typeof ops)["git.push"], [args: { repo: "acme/app"; branch: "-x"; commit: "0123456789abcdef0123456789abcdef01234567"; bundle: "0123456789abcdef.bundle" }, log: Quiet]>, "git.push names a branch, a commit, and a bundle the host left">,
+    Throws<Invoke<(typeof ops)["git.push"], [args: { repo: "acme"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567"; bundle: "0123456789abcdef.bundle" }, log: Quiet]>, "not a repository name (owner/repo): acme">,
+  ];
+  /** the approval page's Refuse: the waiting push leaves the list (the `git push` that asked
+   *  then gives up); text that is not a push approval refuses nothing */
+  export type Refuse = Given<
+    [Fresh, Invoke<typeof writeJsonIn, [where: "state", name: "approvals/00112233445566778899aabbccddeeff.json", value: { message: "x" }]>],
+    [
+      Expect<Invoke<(typeof ops)["approvals.refuse"], [args: { message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n" }, log: Quiet]>, "=", { refused: "00112233445566778899aabbccddeeff" }>,
+      Expect<Invoke<typeof namesIn, [where: "state", dir: "approvals"]>, "=", []>,
+      Throws<Invoke<(typeof ops)["approvals.refuse"], [args: { message: "../../registry" }, log: Quiet]>, "not a push approval">,
+    ]
+  >;
+  /** commits are named whole, before git is asked anything */
+  export type SuedeChanged = Throws<Invoke<(typeof ops)["suede.changed"], [args: { repo: "acme/app"; to: "HEAD" }, log: Quiet]>, "suede.changed names commits by their full ids">;
+  /** what the host asks after an issue that is not there, or an offer never made, is a
+   *  refusal that says where to look */
+  export type Refusals = Given<Fresh, [
+    Expect<Invoke<typeof refusalOf, [f: (typeof ops)["issue.done"], args: [args: { id: "mgx1abc-01234567" }, log: Quiet]]>, "=", { message: "there is no such issue"; fix: "desolate issues"; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: (typeof ops)["offers.dismiss"], args: [args: { domain: "acme"; repo: "acme/app"; branch: "fix" }, log: Quiet]]>, "=", { message: "acme has offered no acme/app fix"; fix: "desolate offers   (what is offered, by domain, repository and branch)"; code: 1 }>,
+  ]>;
+}

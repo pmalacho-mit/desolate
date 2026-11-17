@@ -35,6 +35,8 @@ import { run } from "../shared/run.ts";
 import { SUEDE_CORE } from "../shared/suede.ts";
 import { ask } from "./keyring-client.ts";
 import { GITCONFIG, KEYRING, PINNED_FORGE, REVIEWER } from "./layout.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 const LIMIT = { header: 64 * 1024, bundle: 2 * 1024 ** 3, refs: 2000, commits: 50, files: 200, idleMs: 60_000, submitMs: 600_000 } as const;
 const log = (message: string) => console.error(`${new Date().toISOString()} reviewer: ${message}`);
@@ -49,6 +51,51 @@ export const shown = (text: string, max: number) =>
  *  machinery (`.suede/core/`, which every consumer of a dependency runs): always listed
  *  (first), however many files a push changes. */
 export const SENSITIVE = /(^|\/)(\.github\/|\.gitlab-ci\.yml$|\.gitmodules$|\.gitattributes$|\.lfsconfig$|\.gitignore$|\.circleci\/|Jenkinsfile$|\.devcontainer\/|devcontainer\.json$|\.husky\/|\.pre-commit-config\.yaml$|CODEOWNERS$|\.suede\/core\/)/;
+declare namespace shown {
+  /** what an agent wrote, as the approval page may show it: as written, unless it would
+   *  read as something else */
+  export type AsWritten = Table<typeof shown, [
+    [args: [text: "Fix the login loop", max: 200], expected: "Fix the login loop"],
+    [args: [text: "cafe\u0301", max: 200], expected: "caf\u00e9"],
+  ]>;
+  /** controls, a right-to-left override that makes a name read backwards, invisible spaces
+   *  and variation selectors: each one a question mark */
+  export type Hides = Table<typeof shown, [
+    [args: [text: "evil\u001b[31m red", max: 200], expected: "evil?[31m red"],
+    [args: [text: "invoice\u202efdp.exe", max: 200], expected: "invoice?fdp.exe"],
+    [args: [text: "pay\u200bpal", max: 200], expected: "pay?pal"],
+    [args: [text: "ok\ufe0f", max: 200], expected: "ok?"],
+    [args: [text: "line\u2028break", max: 200], expected: "line?break"],
+  ]>;
+  /** cut at `max` characters, never inside one */
+  export type Cut = Table<typeof shown, [
+    [args: [text: "abcdef", max: 3], expected: "abc"],
+    [args: [text: "\u{1f600}\u{1f600}\u{1f600}", max: 2], expected: "\u{1f600}\u{1f600}"],
+  ]>;
+}
+
+declare namespace SENSITIVE {
+  /** what runs on the forge, steers git, or is suede's own machinery: listed first, always */
+  export type Listed = Table<typeof SENSITIVE.test, [
+    [args: [string: ".github/workflows/ci.yml"], expected: true],
+    [args: [string: "packages/api/.github/dependabot.yml"], expected: true],
+    [args: [string: ".gitmodules"], expected: true],
+    [args: [string: ".gitattributes"], expected: true],
+    [args: [string: ".lfsconfig"], expected: true],
+    [args: [string: ".devcontainer/devcontainer.json"], expected: true],
+    [args: [string: ".husky/pre-commit"], expected: true],
+    [args: [string: "docs/CODEOWNERS"], expected: true],
+    [args: [string: "vendor/x/.suede/core/sync.sh"], expected: true],
+  ]>;
+  /** and ordinary files are not, however close their names */
+  export type NotListed = Table<typeof SENSITIVE.test, [
+    [args: [string: "src/github/client.ts"], expected: false],
+    [args: [string: "docs/gitmodules.md"], expected: false],
+    [args: [string: ".suede/nests/README.md"], expected: false],
+    [args: [string: "README.md"], expected: false],
+  ]>;
+}
+
 const POINTER = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
 
 const repoDir = (repo: Repo) => path.join(REVIEWER.home, "repos", repo.owner, `${repo.name}.git`);
@@ -130,6 +177,20 @@ const receive = (socket: Socket, first: Buffer, count: number, file: string): Pr
   });
 
 const BUNDLE_REF = /^refs\/(desolate\/review\/[0-9a-f]{16}|remotes\/origin\/[A-Za-z0-9._/-]{1,200})$/;
+
+declare namespace BUNDLE_REF {
+  /** a review bundle carries the clone's review ref and its origin/* refs, and nothing else */
+  export type Refs = Table<typeof BUNDLE_REF.test, [
+    [args: [string: "refs/desolate/review/0123456789abcdef"], expected: true],
+    [args: [string: "refs/remotes/origin/main"], expected: true],
+    [args: [string: "refs/remotes/origin/feature/login"], expected: true],
+    [args: [string: "refs/heads/main"], expected: false],
+    [args: [string: "refs/desolate/review/xyz"], expected: false],
+    [args: [string: "refs/remotes/origin/a b"], expected: false],
+    [args: [string: "refs/remotes/other/main"], expected: false],
+    [args: [string: "refs/tags/v1"], expected: false],
+  ]>;
+}
 
 const submit = async (socket: Socket, repo: Repo, size: number, rest: Buffer) => {
   if (!Number.isInteger(size) || size < 1 || size > LIMIT.bundle) return { ok: false, error: "a bundle is a whole number of bytes, at most 2 GiB" };

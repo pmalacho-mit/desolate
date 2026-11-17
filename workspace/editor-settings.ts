@@ -9,6 +9,8 @@
 // devcontainer itself, and its terminal is the container's own shell.
 import * as fs from "node:fs";
 import * as path from "node:path";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 export const HELD: Record<string, unknown> = {
   // The workspace VM is the boundary (P1): everything in it is as trusted as anything else
@@ -41,6 +43,44 @@ export const hold = (text: string | undefined, terminal: "enter" | "plain" | und
   if (terminal === "plain" && settings["terminal.integrated.defaultProfile.linux"] === "desolate") for (const key of Object.keys(TERMINAL)) delete settings[key];
   return JSON.stringify({ ...settings, ...HELD }, null, 2) + "\n";
 };
+
+// Read back with JSON.parse: the file is JSON, and what matters is what it says.
+declare namespace hold {
+  /** a new editor: what desolate holds, and nothing else */
+  export type Fresh = Expect<Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: undefined]>]>, "=", { "security.workspace.trust.enabled": false; "extensions.autoCheckUpdates": false; "extensions.autoUpdate": false; "update.mode": "none"; "telemetry.telemetryLevel": "off"; "terminal.integrated.macOptionClickForcesSelection": true }>;
+  /** the person's settings stay; one of desolate's they changed is put back */
+  export type PutBack = Expect<
+    Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: '{"editor.fontSize": 15, "telemetry.telemetryLevel": "all", "update.mode": "default"}']>]>,
+    "=",
+    { "editor.fontSize": 15; "security.workspace.trust.enabled": false; "extensions.autoCheckUpdates": false; "extensions.autoUpdate": false; "update.mode": "none"; "telemetry.telemetryLevel": "off"; "terminal.integrated.macOptionClickForcesSelection": true }
+  >;
+  /** a file hand-edited into something that is not a settings object starts again from what
+   *  is held, rather than failing the editor's start */
+  export type Unreadable = [
+    Expect<Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: '{"editor.fontSize": 15,']>]>, "=", { "security.workspace.trust.enabled": false; "extensions.autoCheckUpdates": false; "extensions.autoUpdate": false; "update.mode": "none"; "telemetry.telemetryLevel": "off"; "terminal.integrated.macOptionClickForcesSelection": true }>,
+    Expect<Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: "[15]"]>]>, "=", { "security.workspace.trust.enabled": false; "extensions.autoCheckUpdates": false; "extensions.autoUpdate": false; "update.mode": "none"; "telemetry.telemetryLevel": "off"; "terminal.integrated.macOptionClickForcesSelection": true }>,
+  ];
+  /** "enter": the editor's server is in the VM, so its terminals enter the devcontainer */
+  export type Enter = Expect<
+    Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: "{}", terminal: "enter"]>]>,
+    "matches",
+    { "terminal.integrated.profiles.linux": { desolate: { path: "/desolate/release/workspace/enter.sh"; args: ["--here", "--", "bash", "-l"] } }; "terminal.integrated.defaultProfile.linux": "desolate" }
+  >;
+  /** "plain": the server is in the container, and desolate's terminal profile goes, but only
+   *  when it is desolate's: a default profile of the person's own is theirs */
+  export type Plain = [
+    Expect<
+      Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: '{"terminal.integrated.profiles.linux": {"desolate": {}}, "terminal.integrated.defaultProfile.linux": "desolate"}', terminal: "plain"]>]>,
+      "=",
+      { "security.workspace.trust.enabled": false; "extensions.autoCheckUpdates": false; "extensions.autoUpdate": false; "update.mode": "none"; "telemetry.telemetryLevel": "off"; "terminal.integrated.macOptionClickForcesSelection": true }
+    >,
+    Expect<
+      Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: '{"terminal.integrated.defaultProfile.linux": "zsh"}', terminal: "plain"]>]>,
+      "=",
+      { "terminal.integrated.defaultProfile.linux": "zsh"; "security.workspace.trust.enabled": false; "extensions.autoCheckUpdates": false; "extensions.autoUpdate": false; "update.mode": "none"; "telemetry.telemetryLevel": "off"; "terminal.integrated.macOptionClickForcesSelection": true }
+    >,
+  ];
+}
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const file = process.argv[2];

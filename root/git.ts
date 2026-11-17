@@ -7,6 +7,9 @@ import { parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { readJson } from "../shared/json.ts";
 import { FORGE, GITCONFIG, KEYRING, ROOT } from "./layout.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke, Mock, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { emptyRoot, linkIn, makeDirIn, mirrorsAndClonesHere, pathIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
 
 /** Which forge the root reaches. GitHub in real use; a stand-in in tests (section 13.2). */
 export type Forge = {
@@ -22,8 +25,27 @@ export const forge = (): Forge => {
   return value;
 };
 
+declare namespace forge {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** the forge the host gave at bootstrap (ops.ts, `forge.set`), as it was written */
+  export type Reads = Given<
+    [Fresh, Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "github.com ssh-ed25519 AAAA" }]>],
+    Expect<Invoke<typeof forge>, "matches", { kind: "github"; ssh: { host: "github.com" } }>
+  >;
+  /** none on record is a refusal that says what to run, never a default forge */
+  export type None = Given<Fresh, Throws<Invoke<typeof forge>, "the root has no forge configured; run `desolate bootstrap` again">>;
+}
+
 export const remoteUrl = (repo: Repo, f: Forge = forge()) =>
   `ssh://${f.ssh.user}@${f.ssh.host}:${f.ssh.port}/${repo.owner}/${repo.name}.git`;
+
+declare namespace remoteUrl {
+  /** where a repository is on the forge: GitHub's address, or a stand-in's on its own port */
+  export type Addresses = Table<typeof remoteUrl, [
+    [args: [repo: { owner: "acme"; name: "app" }, f: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "" }], expected: "ssh://git@github.com:22/acme/app.git"],
+    [args: [repo: { owner: "acme"; name: "app" }, f: { kind: "stand-in"; ssh: { user: "git"; host: "forge"; port: 2222 }; knownHosts: "" }], expected: "ssh://git@forge:2222/acme/app.git"],
+  ]>;
+}
 
 const KNOWN_HOSTS = `${ROOT.state}/known_hosts`;
 
@@ -39,6 +61,23 @@ export const sshCommand = (repo: Repo, role: "read" | "write") =>
     "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${KNOWN_HOSTS}`,
     "-o", "ConnectTimeout=20",
   ].join(" ");
+
+declare namespace sshCommand {
+  // (Where the agents and public keys are depends on the root's layout: only the words that
+  // decide what ssh may do are checked.)
+  type Read = Invoke<typeof sshCommand, [repo: { owner: "acme"; name: "app" }, role: "read"]>;
+  /** one key, from one agent, to a host whose key is pinned: no config, no prompt, no other identity */
+  export type ReadOnly = [
+    Expect<Read, "startsWith", "ssh -F /dev/null -o IdentityAgent=">,
+    Expect<Read, "includes", "/keyring/read-agent.sock -o IdentityFile=">,
+    Expect<Read, "includes", "/acme/app/read.pub -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=">,
+  ];
+  /** the write role names the write agent and the write key, which only the pusher reaches */
+  export type Write = [
+    Expect<Invoke<typeof sshCommand, [repo: { owner: "acme"; name: "app" }, role: "write"]>, "includes", "/keyring-write/write-agent.sock">,
+    Expect<Invoke<typeof sshCommand, [repo: { owner: "acme"; name: "app" }, role: "write"]>, "includes", "/acme/app/write.pub">,
+  ];
+}
 
 export const writeKnownHosts = (f: Forge) => fs.writeFileSync(KNOWN_HOSTS, f.knownHosts.trim() + "\n", { mode: 0o644 });
 
@@ -64,6 +103,32 @@ export const ownedByRoot = (dir: string): boolean => {
   return real.startsWith(`${ROOT.mirrors}/`) || real.startsWith(`${ROOT.clones}/`);
 };
 
+declare namespace ownedByRoot {
+  // The mirrors and root clones are /desolate/mirrors and /desolate/root, which only the root
+  // VM has: these tests put them under the test's own root instead.
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a mirror and a root clone are the root's to run git in */
+  export type Owned = Given<
+    [Mock<"./layout.ts", typeof mirrorsAndClonesHere>, Fresh, Invoke<typeof makeDirIn, [where: "mirrors", name: "acme/app.git"]>, Invoke<typeof makeDirIn, [where: "clones", name: "acme/app"]>],
+    [
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "mirrors", name: "acme/app.git"]>]>, "=", true>,
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "clones", name: "acme/app"]>]>, "=", true>,
+    ]
+  >;
+  /** anything else is not: a domain's directory, a path that climbs out, a link under the
+   *  clones that leads into a domain (the real path is what counts), nothing at all */
+  export type NotOwned = Given<
+    [Mock<"./layout.ts", typeof mirrorsAndClonesHere>, Fresh, Invoke<typeof makeDirIn, [where: "domains", name: "acme/repos/acme/app"]>, Invoke<typeof linkIn, [where: "clones", name: "acme/app", target: Invoke<typeof pathIn, [where: "domains", name: "acme/repos/acme/app"]>]>],
+    [
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "domains", name: "acme/repos/acme/app"]>]>, "=", false>,
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "clones", name: "../domains/acme/repos/acme/app"]>]>, "=", false>,
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "clones", name: "acme/app"]>]>, "=", false>,
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "clones", name: "acme/missing"]>]>, "=", false>,
+      Expect<Invoke<typeof ownedByRoot, [dir: Invoke<typeof pathIn, [where: "clones", name: ""]>]>, "=", false>,
+    ]
+  >;
+}
+
 /** git's ownership check, answered for the one repository desolate is running git in (and
  *  only that one; it reaches git's children through the environment). On vz a file in a
  *  share reports as owned by whichever user last asked, so the check would refuse the
@@ -80,6 +145,16 @@ export const git = (dir: string, args: string[], options: RunOptions = {}): Prom
   const where = real.startsWith(`${ROOT.mirrors}/`) ? ["--git-dir", dir] : ["-C", dir];
   return run("git", [...safeIn(real), ...where, ...args], { ...options, env: { ...baseEnv(), ...(options.env ?? {}) } });
 };
+
+declare namespace git {
+  /** git is never run anywhere but a mirror or a root clone: refused before anything runs */
+  export type Refuses = Throws<Invoke<typeof git, [dir: "/tmp", args: ["status"]]>, "the root does not run git in /tmp: it is not a mirror or a root clone (P4)">;
+}
+
+declare namespace safeIn {
+  /** git's ownership check, answered for the one repository named and no other */
+  export type One = Expect<Invoke<typeof safeIn, [real: "/desolate/root/acme/app"]>, "=", ["-c", "safe.directory=/desolate/root/acme/app"]>;
+}
 
 /** For a git whose output is bytes (a pack): its leading arguments and environment, with
  *  the same check as `git`. */
@@ -104,3 +179,13 @@ export const repoOf = (value: unknown): Repo => {
   if (!repo) throw new Error(`not a repository name (owner/repo): ${String(value)}`);
   return repo;
 };
+
+declare namespace repoOf {
+  /** owner/name, or a refusal that quotes what was given */
+  export type Accepts = Expect<Invoke<typeof repoOf, [value: "acme/app"]>, "=", { owner: "acme"; name: "app" }>;
+  /** a path that climbs, and nothing at all, are not repositories */
+  export type Refuses = [
+    Throws<Invoke<typeof repoOf, [value: "../app"]>, "not a repository name (owner/repo): ../app">,
+    Throws<Invoke<typeof repoOf, [value: undefined]>, "not a repository name (owner/repo): undefined">,
+  ];
+}
