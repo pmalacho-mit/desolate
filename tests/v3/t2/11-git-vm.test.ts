@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import { request as httpRequest } from "node:http";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { findChrome, openBrowser } from "../lib/browser.ts";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
@@ -270,6 +271,39 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.equal(none.status, 401, `no cookie: ${none.body}`);
     const other = client("dev-w1-abc123.localhost", port);
     assert.notEqual((await other.post("/session", {})).status, 200, "another name");
+  });
+
+  it("the dashboard's Open in git, a link from another site, opens the terminal in a real browser", async () => {
+    // What the dashboard's button does: a page on another site sends the browser to the git
+    // page, with no token (the root, which serves the dashboard, does not hold it). It was
+    // refused as "a request another site started"; once let in, a browser without the page's
+    // cookie showed a cursor and nothing else (dogfooding, 2026-11-17). A data: URL is
+    // another site to every other.
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const port = Number(stack.env.DESOLATE_EDITOR_PORT);
+    const link = `http://desolate-git.localhost:${port}/?repo=acme/widgets`;
+    const fromElsewhere = `data:text/html,<script>location.href=${encodeURIComponent(JSON.stringify(link))}</script>`;
+    const shown = /desolate git --open|desolate's git VM|refused/;
+    // A browser that never opened `desolate git`'s address: told, in the terminal, what to run.
+    const stranger = await openBrowser(
+      chrome,
+      fs.mkdtempSync(path.join(stack.work, "chrome-git-new-")),
+    );
+    after(() => stranger.close());
+    const told = await stranger.load(fromElsewhere, { until: shown, ms: 60_000 });
+    assert.doesNotMatch(told.stdout, /refused/, told.stdout.slice(0, 300));
+    assert.match(told.stdout, /desolate git --open/, told.stdout.slice(-600));
+    // The person's browser, which opened that address once: the button opens a shell.
+    const person = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-git-")));
+    after(() => person.close());
+    const address = /(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!;
+    await person.load(address, { until: /desolate's git VM/, ms: 60_000 });
+    const opened = await person.load(fromElsewhere, {
+      until: /desolate's git VM|desolate git --open|refused/,
+      ms: 60_000,
+    });
+    assert.match(opened.stdout, /desolate's git VM/, opened.stdout.slice(-600));
   });
 
   it("a link in the out-box is not followed: the host neither reads, moves nor writes what it names", async () => {

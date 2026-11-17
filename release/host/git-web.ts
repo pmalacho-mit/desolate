@@ -143,7 +143,17 @@ export const handler = (
   };
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    const refused = refusal(GIT_HOSTNAME, req.headers);
+    // The page itself, opened from anywhere: the dashboard's "Open in git" is another site
+    // (each *.localhost name is its own), and was refused, so the button opened a refusal
+    // (dogfooding, 2026-11-17). The page is static; everything it does is a request of its own
+    // origin that needs this stack's cookie, which only `desolate git`'s address gives.
+    const url = new URL(req.url ?? "/", `http://${GIT_HOSTNAME}`);
+    const toThePage =
+      req.method === "GET" &&
+      url.pathname === "/" &&
+      req.headers["sec-fetch-mode"] === "navigate" &&
+      req.headers["sec-fetch-dest"] === "document";
+    const refused = refusal(GIT_HOSTNAME, req.headers, toThePage);
     // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
     if (refused)
       return send(
@@ -154,7 +164,6 @@ export const handler = (
       );
     const token = gitToken();
     const name = cookieName(token);
-    const url = new URL(req.url ?? "/", `http://${GIT_HOSTNAME}`);
     const given = url.searchParams.get("tkn");
     if (req.method === "GET" && url.pathname === "/" && given !== null) {
       if (!sameSecret(given, token))
@@ -371,6 +380,97 @@ declare namespace handler {
         text: "desolate: refused this is the git terminal at desolate-git.localhost; open it by that name (`desolate git` prints the address)\n";
       }
     >
+  >;
+  /** the dashboard's "Open in git", a navigation from another site: the page opens; anything
+   *  else another site starts, a frame or a fetch of the page included, is refused */
+  export type OpensFromTheDashboard = Given<
+    HasToken,
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?repo=acme/web";
+              headers: {
+                host: "desolate-git.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 200 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/";
+              headers: {
+                host: "desolate-git.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "iframe";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/approvals-frame";
+              headers: {
+                host: "desolate-git.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+                cookie: Cookie;
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "POST";
+              url: "/session";
+              headers: {
+                host: "desolate-git.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+                cookie: Cookie;
+                "content-type": "application/json";
+              };
+              body: {};
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+    ]
   >;
   /** a shell is opened only by the page's own script: signed in, same-origin, this origin, JSON */
   export type OnlyThePage = Given<
