@@ -1,0 +1,11 @@
+{
+  // TypeScript is formatted by Prettier when saved: in the editor, and by
+  // suede.vsix.format-on-save's command line for files changed outside it
+  // (`make format`). Prettier's version is the one in package.json, and its
+  // settings are .prettierrc.json.
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": true
+  },
+  "prettier.requireConfig": true
+}

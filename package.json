@@ -28,6 +28,7 @@
     "es-module-lexer": "^2.3.2",
     "esbuild": "0.28.2",
     "picomatch": "^4.0.7",
+    "prettier": "3.10.1",
     "typescript": "^5.7.2",
     "vite": "^8.3.8",
     "vitest": "5.0.3"
