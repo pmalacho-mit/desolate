@@ -491,13 +491,11 @@ const summary = async (
     .split("\x00\n")
     .filter(Boolean)
     .map((entry) => entry.replace(/^\n/, "").split("\x00"));
-  const commits = fields
-    .slice(0, LIMIT.commits)
-    .map(([id, author, subject]) => ({
-      commit: id!,
-      author: shown(author ?? "", 80),
-      subject: shown(subject ?? "", 200),
-    }));
+  const commits = fields.slice(0, LIMIT.commits).map(([id, author, subject]) => ({
+    commit: id!,
+    author: shown(author ?? "", 80),
+    subject: shown(subject ?? "", 200),
+  }));
   const counted =
     Number(
       (await gitOk(dir, ["rev-list", "--count", commit, ...known.map((id) => `^${id}`)])).trim(),

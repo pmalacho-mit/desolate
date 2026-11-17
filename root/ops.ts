@@ -237,15 +237,13 @@ export const ops: Record<string, Op> = {
       .flatMap((d) => {
         const offered = offers.offersOf(d.slug);
         const reposDir = path.join(domainPath(d.slug), "repos");
-        const heads = domains
-          .workspaces(d.slug)
-          .flatMap((w) =>
-            w.checkouts.map((c) => ({
-              workspace: w.workspace,
-              repo: c.repo,
-              head: readHead(reposDir, c),
-            })),
-          );
+        const heads = domains.workspaces(d.slug).flatMap((w) =>
+          w.checkouts.map((c) => ({
+            workspace: w.workspace,
+            repo: c.repo,
+            head: readHead(reposDir, c),
+          })),
+        );
         const pushed = pushedList();
         return branchesOf(d.slug, d.repos).map((b) => ({
           domain: d.slug,
