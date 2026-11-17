@@ -94,7 +94,8 @@ workspace, the network rules, upgrading with `git pull` and `desolate bootstrap`
 - installing on a Mac other than the one desolate was developed on;
 - a real Claude subscription token with `recipes/claude.sh` (it was tried with a stand-in token
   only), and any agent other than Claude;
-- `recipes/issues.sh` and `recipes/suede.sh`;
+- `recipes/issues.sh` and `recipes/suede.sh` on real work (each has run once, with the
+  stand-in agent);
 - the Touch ID approver (`DESOLATE_APPROVER=touchid`): leave it alone for now;
 - more than a handful of workspaces on one Mac, and weeks of uptime.
 
