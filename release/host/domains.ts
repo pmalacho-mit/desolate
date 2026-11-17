@@ -2,7 +2,7 @@
 import { EXIT, refuse } from "../shared/exit.ts";
 import * as path from "node:path";
 import { guest, paths } from "./paths.ts";
-import { backend, changeSecrets, ensureProxyUser, rootctl } from "./stack.ts";
+import { backend, changeSecrets, ensureProxyUser, revealSecret, rootctl } from "./stack.ts";
 import type {
   Expect,
   Given,
@@ -328,7 +328,7 @@ export const domainCommand = async (
       on: boolean;
       secondsLeft?: number;
     };
-    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME>`;
+    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME> | show <NAME>`;
     const left = (seconds: number) =>
       seconds >= 7200
         ? `${Math.round(seconds / 3600)} h`
@@ -370,6 +370,19 @@ export const domainCommand = async (
           ? `${name} is ${stateOf(switched)}${switched.secondsLeft !== undefined ? ", then off" : ""}.`
           : `${name} is OFF: its value goes nowhere, and a request that carries its name toward ${switched.hosts.join(", ")} is refused. To switch it on: desolate domain ${first} secret on ${name} [--ttl 30m]`,
       );
+    }
+    if (action === "show") {
+      // Its value, to this terminal: the one way back out of the root's store, for the person
+      // on the Mac (who controls the root VM anyway). Only the value goes to stdout, so
+      // `$(desolate domain <d> secret show <NAME>)` is the value itself.
+      if (!name) refuse("which secret?", usage, EXIT.usage);
+      const value = await revealSecret(first, name);
+      if (json) return out(JSON.stringify({ name, value }));
+      if (process.stderr.isTTY)
+        process.stderr.write(
+          `the value of ${name}, held in the root for the domain ${first} (shown here only):\n`,
+        );
+      return out(value);
     }
     if (action === "copy") {
       // desolate domain <d> secret copy <NAME> --from <other>: the value stays in the root.

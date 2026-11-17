@@ -26,6 +26,10 @@ const show = (secrets) => {
     const what = el("div", undefined, "what");
     what.append(el("div", s.name, "mono name"));
     what.append(el("div", `to ${s.hosts.join(", ")}${s.headers ? `, in ${s.headers.join(", ")} only` : ""}`, "hint"));
+    // Its value is never sent to a page. The person's own terminal can have it.
+    const see = el("div", "To see its value, in a terminal on your Mac: ", "hint");
+    see.append(el("code", `desolate domain ${domain} secret show ${s.name}`));
+    what.append(see);
     const state = el("span", !s.on ? "off" : s.secondsLeft !== undefined ? `on, ${Math.round(s.secondsLeft / 60)} min left` : "on", `pill ${s.on ? "on" : "off"}`);
     const buttons = el("div", undefined, "buttons");
     const toggle = el("button", s.on ? "Switch off" : "Switch on");
