@@ -13,6 +13,8 @@ import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
 import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
+import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
+import { readHead } from "../shared/status.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aDomain, emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
@@ -118,6 +120,68 @@ export const fetchDomain = async (domain: string, repo: Repo) => {
     throw new Error(
       `could not bring ${domain}'s branches of ${repo.owner}/${repo.name} into the root clone: ${result.stderr.trim().slice(-400)}`,
     );
+};
+
+/** Each checkout of a workspace against the remote: the commits its HEAD has that no branch of
+ *  origin has, counted in the root clone after the domain's branches are brought in (git in
+ *  the root's own clone, never in the domain's: P4). The HEAD is read as data. For the
+ *  dashboard's Delete, and `desolate rm --if-pushed`. */
+export const unpushedOf = async (domain: string, w: WorkspacePlan): Promise<Unpushed[]> => {
+  const reposDir = path.join(domainPath(domain), "repos");
+  const fetched = new Set<string>();
+  const out: Unpushed[] = [];
+  for (const c of w.checkouts) {
+    const head = readHead(reposDir, c);
+    const repo = parseRepo(c.repo);
+    const branch = head?.branch ?? null;
+    if (!repo) continue;
+    if (!head?.commit) {
+      out.push({
+        repo: c.repo,
+        branch,
+        commit: null,
+        count: null,
+        why: "its HEAD could not be read",
+      });
+      continue;
+    }
+    const clone = clonePath(repo);
+    if (!fetched.has(c.repo)) {
+      fetched.add(c.repo);
+      await fetchDomain(domain, repo).catch(() => {});
+    }
+    if ((await git(clone, ["cat-file", "-e", `${head.commit}^{commit}`])).code !== 0) {
+      out.push({
+        repo: c.repo,
+        branch,
+        commit: head.commit,
+        count: null,
+        why: "its latest commit has not reached the root yet (a commit there is written out within seconds)",
+      });
+      continue;
+    }
+    const counted = await git(clone, [
+      "rev-list",
+      "--count",
+      head.commit,
+      "--not",
+      "--remotes=origin",
+    ]);
+    const count = counted.code === 0 ? Number(counted.stdout.trim()) : null;
+    out.push({
+      repo: c.repo,
+      branch,
+      commit: head.commit,
+      count,
+      why:
+        count === null
+          ? "its commits could not be counted against the remote"
+          : count > 0
+            ? `${count} commit(s) on ${branch ?? "a detached HEAD"} that the remote does not have`
+            : null,
+    });
+  }
+  return out;
 };
 
 export const take = async (

@@ -174,6 +174,10 @@ export const ops: Record<string, Op> = {
       domains.slugOf(args.name, "workspace"),
     );
   },
+  async "workspace.unpushed"(args) {
+    const slug = domains.slugOf(args.domain, "domain");
+    return offers.unpushedOf(slug, domains.workspace(slug, domains.slugOf(args.name, "workspace")));
+  },
   async "workspace.remove"(args) {
     return domains.removeWorkspace(
       domains.slugOf(args.domain, "domain"),

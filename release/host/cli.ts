@@ -24,6 +24,7 @@ Every day: a workspace, your work in it, and its push:
                                                                  (or in the VM itself: when it has none, or --vm)
   desolate ports [<domain>/<workspace>] [--json]                 what is forwarded, at which URL; what is reserved
   desolate stop | start | rm <domain>/<workspace>
+  desolate rm <domain>/<workspace> --if-clean [--if-pushed]      only if nothing in it would be lost (and its commits are on the remote)
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open] [--json]                                  the dashboard's address, for your browser
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
@@ -351,11 +352,14 @@ const main = async (argv: string[]): Promise<number> => {
   if (verb === "stop" || verb === "start" || verb === "rm") {
     const { values, positionals } = flags(
       rest,
-      verb === "rm" ? { "if-clean": { type: "boolean" } } : {},
+      verb === "rm" ? { "if-clean": { type: "boolean" }, "if-pushed": { type: "boolean" } } : {},
     );
     const workspaces = await import("./workspaces.ts");
     if (verb === "rm")
-      await workspaces.remove(positionals[0], out, { ifClean: values["if-clean"] === true });
+      await workspaces.remove(positionals[0], out, {
+        ifClean: values["if-clean"] === true,
+        ifPushed: values["if-pushed"] === true,
+      });
     else await (verb === "stop" ? workspaces.stop : workspaces.start)(positionals[0], out);
     return EXIT.ok;
   }

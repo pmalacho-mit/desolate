@@ -15,7 +15,7 @@ import {
   workspaceVmName,
 } from "../shared/names.ts";
 import { outlived } from "../shared/plan.ts";
-import type { WorkspacePlan } from "../shared/plan.ts";
+import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
 import {
   checkSize,
@@ -43,7 +43,7 @@ import type { setEnv } from "../.harness/env.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
-type Workspace = WorkspacePlan & { state: string };
+export type Workspace = WorkspacePlan & { state: string };
 type DomainView = { slug: string; title: string; repos: string[]; workspaces: Workspace[] };
 
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
@@ -906,7 +906,12 @@ export const stop = async (target: string | undefined, out: Out) => {
   const { disconnectWorkspace } = await import("./daemon.ts");
   // The VM first: its link's port is let go only once nothing in a VM can still dial it (a
   // freed port is anyone's on this machine to take; shared/link.ts).
-  if ((await b.info(w.vm)).status === "running") await b.stop(w.vm);
+  if ((await b.info(w.vm)).status === "running") {
+    // What it holds, seen once more before it stops: what the dashboard's Delete goes by
+    // while it is stopped. A look that fails says so, and Delete stays off.
+    await look(w, true).catch(() => {});
+    await b.stop(w.vm);
+  }
   await disconnectWorkspace(w.vm);
   await rootctl("proxy.stop", { vm: w.vm }, { quiet: true }).catch(() => {});
   await rootctl(
@@ -921,6 +926,7 @@ export const stop = async (target: string | undefined, out: Out) => {
 
 export const start = async (target: string | undefined, out: Out) => {
   const w = await find(target);
+  forget(w.vm);
   const b = backend();
   const started = Date.now();
   const info = await b.info(w.vm);
@@ -967,13 +973,13 @@ export const start = async (target: string | undefined, out: Out) => {
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
  *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
  *  its branches are written out for the root. What the VM says is its word about itself. */
-const unsaved = async (w: Workspace): Promise<string[]> => {
+const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
   const b = backend();
   if ((await b.info(w.vm)).status !== "running")
     return [
       "it is not running, so what it holds cannot be looked at (a person removes it: desolate rm)",
     ];
-  const script = `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"
+  const script = `${sync ? `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"` : ""}
 for p in "$@"; do
   s=$(git -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
   [ -z "$s" ] || echo "UNCOMMITTED $p"
@@ -1003,10 +1009,35 @@ done`;
     .map((m) => `${say[m![1]!]}${m![2] ? ` ${m![2]}` : ""}`);
 };
 
+/** What a workspace held that a remove would lose, as last looked at, kept on the host for the
+ *  dashboard's Delete: the daemon looks while the workspace runs, and `stop` looks once more
+ *  just before its VM stops, so a stopped workspace's answer is the one from its stop (its
+ *  files change only while it runs). `start` forgets it. */
+export type Looked = { at: string; atStop: boolean; lost: string[] };
+const lookedFile = (vm: string) => path.join(paths.state, "unsaved", `${vm}.json`);
+export const lookedAt = (vm: string): Looked | null => {
+  try {
+    const value = JSON.parse(fs.readFileSync(lookedFile(vm), "utf8")) as Looked;
+    return typeof value.at === "string" && Array.isArray(value.lost) ? value : null;
+  } catch {
+    return null;
+  }
+};
+export const look = async (w: Workspace, atStop = false): Promise<Looked> => {
+  const looked: Looked = { at: new Date().toISOString(), atStop, lost: await unsaved(w, false) };
+  fs.mkdirSync(path.dirname(lookedFile(w.vm)), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(lookedFile(w.vm), JSON.stringify(looked));
+  return looked;
+};
+const forget = (vm: string) => fs.rmSync(lookedFile(vm), { force: true });
+
+/** `--if-clean`: only if nothing in it would be lost (looked at now, or at its stop).
+ *  `--if-pushed`: and every checkout's commits are on the remote, as the root sees them (the
+ *  dashboard's Delete asks for both). */
 export const remove = async (
   target: string | undefined,
   out: Out,
-  options: { ifClean?: boolean } = {},
+  options: { ifClean?: boolean; ifPushed?: boolean } = {},
 ) => {
   if (target && !target.includes("/")) {
     const result = await rootctl<{ domain: string; kept: string }>(
@@ -1020,13 +1051,32 @@ export const remove = async (
     return out(`removed the domain ${result.domain}; ${result.kept}.`);
   }
   const w = await find(target);
-  // --if-clean (a workspace closing one it started): only if nothing would be lost.
-  if (options.ifClean) {
-    const lost = await unsaved(w);
+  // --if-clean (a workspace closing one it started, or the dashboard's Delete): only if
+  // nothing would be lost. A stopped one is judged by what was seen as it stopped.
+  if (options.ifClean || options.ifPushed) {
+    const running = (await backend().info(w.vm)).status === "running";
+    const kept = running ? null : lookedAt(w.vm);
+    const lost = !options.ifClean
+      ? []
+      : running
+        ? await unsaved(w)
+        : kept?.atStop
+          ? kept.lost
+          : [
+              "it is stopped, and was not looked at as it stopped (start it, or remove it yourself)",
+            ];
+    if (options.ifPushed) {
+      const pushed = await rootctl<Unpushed[]>(
+        "workspace.unpushed",
+        { domain: w.domain, name: w.workspace },
+        { quiet: true },
+      );
+      for (const c of pushed) if (c.why) lost.push(`${c.repo}: ${c.why}`);
+    }
     if (lost.length > 0)
       refuse(
         `${w.domain}/${w.workspace} was not removed: ${lost.join("; ")}`,
-        `commit or discard it there first (desolate exec ${w.domain}/${w.workspace} -- git status), or remove it yourself: desolate rm ${w.domain}/${w.workspace}`,
+        `commit, push or discard it there first (desolate exec ${w.domain}/${w.workspace} -- git status), or remove it yourself: desolate rm ${w.domain}/${w.workspace}`,
         EXIT.busy,
       );
   }
@@ -1037,6 +1087,7 @@ export const remove = async (
   fs.rmSync(paths.link(w.vm), { recursive: true, force: true });
   await rootctl("workspace.remove", { domain: w.domain, name: w.workspace }, { quiet: true });
   (await import("./spawn.ts")).forget(w.domain, w.workspace);
+  forget(w.vm);
   out(
     `removed ${w.domain}/${w.workspace}. Its branches and worktrees stay in the domain's clones.`,
   );

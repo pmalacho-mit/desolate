@@ -20,14 +20,39 @@
     <ul id="needs-list" class="rows"></ul>
   </section>
   <section id="issue" hidden></section>
-  <section id="review" hidden></section>
   <section id="first-run" hidden></section>
-  <section id="domains"></section>
-  <section id="activity" hidden>
-    <h2>What the dashboard ran</h2>
-    <ul id="activity-list" class="rows"></ul>
+  <section id="domains-section" class="foldable" data-fold-key="section:domains">
+    <div class="section-head">
+      <button type="button" class="fold" data-fold="section:domains" aria-label="hide or show the domains"></button>
+      <h2>Domains</h2>
+      <span id="domain-count" class="pill gray"></span>
+      <span class="grow"></span>
+      <input type="search" id="domain-filter" class="filter" placeholder="Filter: a domain or a repository" aria-label="filter the domains by name or repository">
+      <button type="button" id="new-domain-open" class="quiet" title="A domain of your own: one or more repositories whose workspaces share secrets and network rules">New domain</button>
+    </div>
+    <div class="section-body">
+      <div id="new-domain" hidden></div>
+      <div id="domains"></div>
+    </div>
+  </section>
+  <section id="activity" class="foldable" data-fold-key="section:activity" hidden>
+    <div class="section-head">
+      <button type="button" class="fold" data-fold="section:activity" aria-label="hide or show what the dashboard ran"></button>
+      <h2>What the dashboard ran</h2>
+      <span id="activity-count" class="pill gray"></span>
+      <span class="grow"></span>
+      <input type="search" id="activity-filter" class="filter" placeholder="Filter: a command" aria-label="filter what the dashboard ran by its command">
+    </div>
+    <div class="section-body">
+      <ul id="activity-list" class="rows"></ul>
+    </div>
   </section>
 </main>
+<!-- The review: a panel on the right, the window's height, as wide as the person drags it. -->
+<aside id="review" hidden>
+  <div class="resizer" title="Drag to make the review wider or narrower"></div>
+  <div id="review-body"></div>
+</aside>
 <script src="/highlight.js"></script>
 <script src="/markdown.js"></script>
 <script src="/ui.js"></script>
