@@ -427,7 +427,8 @@ describe("T2 phase 4: a domain's secrets", () => {
       log("two").every((e) => e.via === undefined && e.verdict !== "substituted"),
       "the other domain's connections never went near a secrets proxy",
     );
-    const shown = stack.desolate("net", "log", "dev");
+    // Each request is logged by the workspace's proxy and the secrets proxy, whichever first.
+    const shown = stack.unordered("net", "log", "dev");
     assert.doesNotMatch(shown.stdout + JSON.stringify(entries), new RegExp(`${VALUE}|${TOKEN}`));
     const logs = stack.inRoot([
       "bash",
@@ -536,7 +537,10 @@ describe("T2 phase 4: a domain's secrets", () => {
         (e) => e.verdict === "refused" && /secrets proxy is not running/.test(e.reason ?? ""),
       );
     for (let i = 0; i < 20 && !onRecord(); i++) await new Promise((r) => setTimeout(r, 250));
-    assert.ok(onRecord(), "refused, with the reason on record");
+    assert.ok(
+      onRecord(),
+      `refused, with the reason on record; the log's last entries: ${JSON.stringify(log("dev").slice(-4))}`,
+    );
     assert.equal(
       upstream().length,
       count,
