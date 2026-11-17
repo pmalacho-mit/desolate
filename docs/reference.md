@@ -264,6 +264,16 @@ way out, only over TLS, only toward the hosts the secret names, only in the head
 Connections to those hosts are the only ones whose TLS the root terminates (the workspace
 trusts its domain's CA for that); everything else stays end to end.
 
+Set one with `desolate domain <d> secret set <NAME> --hosts ...` (the value on stdin), or on
+the **secrets page**: "Add a secret..." on a domain's card opens it. It is the Mac's own page,
+on the approval page's origin and cookie (open `desolate approve --web --open` once), not the
+dashboard's: the dashboard is served by the root's ordinary user, which never sees a value.
+There you add a secret, replace its value, switch it off or on, or remove it; a value is sent
+there once and never to a page again. To see a value, in a terminal on the Mac:
+`desolate domain <d> secret show <NAME>` (only the value goes to stdout). It is read by the
+host's own way into the root VM, as root, as a set is: nothing in a VM, and not the dashboard,
+can ask for it.
+
 ## On a Mac: if macOS asks about `limactl` and incoming connections
 
 With the macOS firewall on, you may see this dialog (the wording on macOS 14.5, from the

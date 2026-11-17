@@ -557,6 +557,20 @@ const main = async () => {
   } catch {
     /* none yet */
   }
+  // `reveal`: one value, to the person on the Mac (`desolate domain <d> secret show <NAME>`).
+  // Only the host's own way in runs this file, as root: the root's ordinary user, the
+  // dashboard it serves, and every workspace cannot; and the Mac's user, who can, already
+  // controls this VM. Nothing is changed.
+  if (op === "reveal") {
+    const secret = current.secrets[String(input.name ?? "")];
+    if (!secret)
+      refuse(
+        `the domain ${domain} has no secret named ${String(input.name ?? "")}`,
+        `desolate domain ${domain} secret list`,
+      );
+    process.stdout.write(JSON.stringify({ ok: true, value: secret!.value }) + "\n");
+    return;
+  }
   // `copy`: another domain's secret, value and all, without the value leaving root (one
   // subscription token for every domain, set once). Then checked like any set.
   if (op === "copy") {
