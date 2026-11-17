@@ -126,8 +126,12 @@ This VM has no route to anything. Its one way out is a proxy that belongs to thi
   other workspaces; ICMP. Do not retry these or work around them: say what you needed.
 - Names resolve to a placeholder address (`198.18.0.1`) here. That is expected: the proxy
   resolves the real name. Do not "fix" `/etc/resolv.conf`.
-- A refusal comes back as `403` with a line starting `desolate:` that says why. "Not on the
-  domain's allowlist" means the person has limited this domain to listed hosts: ask them.
+- **A refusal over HTTPS is a dropped connection**, not an answer: TLS is end to end, so the
+  proxy cannot say anything inside it. curl reports `SSL_ERROR_SYSCALL`, node "socket
+  disconnected before secure TLS connection was established". To learn why, ask the same
+  host over plain HTTP (`curl -s http://<host>/`): the rule is per host, and over HTTP a
+  refusal is a `403` with a line starting `desolate:` that says why. "Not on the domain's
+  allowlist" means the person has limited this domain to listed hosts: ask them.
 - Every request is logged with this workspace's name.
 
 ## Dev servers
