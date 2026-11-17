@@ -149,6 +149,14 @@ describe("T2 phase 4: a domain's secrets", () => {
       set.stdout,
       /MYAPP-API-KEY is held in the root for the domain dev\. Its workspaces send the name; the value is put in its place on the way to: api\.example\.test \(in the header authorization only\)\./,
     );
+    // The person on the Mac can have the value back, and only to stdout (secret show); a name
+    // the domain does not hold is refused. (Not recorded in the transcript: it is a value.)
+    const shown = stack.quiet("domain", "dev", "secret", "show", "MYAPP-API-KEY");
+    assert.equal(shown.code, 0, shown.stderr);
+    assert.equal(shown.stdout, `${VALUE}\n`);
+    const unknown = stack.quiet("domain", "dev", "secret", "show", "MYAPP-NO-SUCH-KEY");
+    assert.notEqual(unknown.code, 0);
+    assert.match(unknown.stderr, /the domain dev has no secret named MYAPP-NO-SUCH-KEY/);
     assert.match(
       withStdin(
         `${TOKEN}\n`,

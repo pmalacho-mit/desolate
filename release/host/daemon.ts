@@ -42,6 +42,7 @@ import {
   ROOT_UI,
 } from "../shared/names.ts";
 import { handler as approvePage } from "./approve-web.ts";
+import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
 import { ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
@@ -389,6 +390,7 @@ declare namespace reviewerSummary {
 
 const approvalBackend = (): ApprovalBackend => {
   return {
+    secrets: secretOps,
     pending: async () =>
       (
         await rootctl<{ message: string; at: string }[]>(
@@ -3098,6 +3100,7 @@ const serve = async () => {
         approver: kind(),
         rootHostname: ROOT_HOSTNAME,
         gitHostname: GIT_HOSTNAME,
+        approveHostname: APPROVE_HOSTNAME,
         mac,
       },
       workspaces,

@@ -172,6 +172,7 @@ type HostFacts = {
     approver: string | null;
     rootHostname?: string;
     gitHostname?: string;
+    approveHostname?: string;
     mac?: { cpus: number; memoryMiB: number };
   };
   workspaces?: Record<

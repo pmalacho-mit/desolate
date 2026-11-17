@@ -42,9 +42,17 @@ import type { Issue } from "../shared/issues.ts";
 import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, isSlug } from "../shared/names.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
+import type { SecretOps } from "./domains.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
-import type { approved, ask, quiet, waiting } from "../.harness/host-web.ts";
+import type {
+  approved,
+  ask,
+  quiet,
+  secretsSet,
+  waiting,
+  withSecrets,
+} from "../.harness/host-web.ts";
 
 export const TOKEN_FILE = path.join(paths.state, "approve-token");
 const UI = path.join(RELEASE_DIR, "host", "approve-ui");
@@ -148,6 +156,8 @@ const STATIC: Record<string, [string, string]> = {
   "/": ["approve.html", "text/html; charset=utf-8"],
   "/approve.js": ["approve.js", "text/javascript; charset=utf-8"],
   "/approve.css": ["approve.css", "text/css; charset=utf-8"],
+  "/secrets": ["secrets.html", "text/html; charset=utf-8"],
+  "/secrets.js": ["secrets.js", "text/javascript; charset=utf-8"],
   // Syntax colour for the diff (shared/ui/highlight.js says how it is kept to colour).
   "/highlight.js": ["../../shared/ui/highlight.js", "text/javascript; charset=utf-8"],
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],
@@ -189,6 +199,8 @@ export type Backend = {
   publishIssue: (issue: Issue) => Promise<string>;
   /** Not now: back to a draft on the dashboard. */
   refuseIssue: (issue: Issue) => Promise<void>;
+  /** A domain's secrets, for /secrets (domains.ts secretOps): absent, the page has none. */
+  secrets?: SecretOps;
 };
 
 const readBody = (req: IncomingMessage, limit = 4096): Promise<string | null> =>
@@ -246,7 +258,14 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       url.pathname === "/embed" &&
       url.search === "" &&
       req.headers["sec-fetch-dest"] === "iframe";
-    const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame);
+    // The secrets page itself, opened from the dashboard (another site): static, and all it
+    // does is a request of its own origin with this page's cookie (as the git page).
+    const toSecrets =
+      req.method === "GET" &&
+      url.pathname === "/secrets" &&
+      req.headers["sec-fetch-mode"] === "navigate" &&
+      req.headers["sec-fetch-dest"] === "document";
+    const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame || toSecrets);
     // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
     if (refused)
       return text(
@@ -312,6 +331,73 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     // Below, every request is this page's own script's: the same origin, said by the browser.
     if (String(req.headers["sec-fetch-site"] ?? "") !== "same-origin")
       return json(res, 403, { error: "a request this page did not make" });
+
+    // A domain's secrets: by this page's cookie only (not the key of the frame beside the git
+    // terminal). The value of one comes in here and goes to the root's store, and is never
+    // sent back: a list names each secret and where it goes.
+    if (url.pathname.startsWith("/secrets/")) {
+      const ops = backend.secrets;
+      if (!ops) return json(res, 404, { error: "no secrets here" });
+      if (cookie === undefined || !sameSecret(cookie, token))
+        return json(res, 401, {
+          error:
+            "open the approval page at the address `desolate approve --web` prints once: its cookie opens the secrets too",
+        });
+      const domain = url.searchParams.get("domain") ?? "";
+      if (req.method === "GET" && url.pathname === "/secrets/list") {
+        try {
+          const domains = await ops.domains();
+          const secrets = isSlug(domain) && domains.includes(domain) ? await ops.list(domain) : [];
+          return json(res, 200, { domains, secrets });
+        } catch (error) {
+          return json(res, 502, { error: (error as Error).message });
+        }
+      }
+      if (req.method !== "POST") return json(res, 404, { error: "no such thing" });
+      if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? "")))
+        return json(res, 415, { error: "JSON only" });
+      if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
+        return json(res, 403, { error: "a request from another origin" });
+      let asked: Record<string, unknown>;
+      try {
+        asked = JSON.parse((await readBody(req, 70_000)) ?? "") as Record<string, unknown>;
+      } catch {
+        return json(res, 400, { error: "not JSON" });
+      }
+      if (!isSlug(asked.domain)) return json(res, 400, { error: "which domain?" });
+      const name = String(asked.name ?? "");
+      const list = (value: unknown) =>
+        Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+      try {
+        if (url.pathname === "/secrets/set") {
+          const value = String(asked.value ?? "");
+          // One line, as the terminal takes it (readSecretLine): no line breaks inside.
+          if (!value || /[\r\n]/.test(value) || value.length > 65_536)
+            return json(res, 400, { error: "a value is one line, of at most 64 KiB" });
+          const listed = await ops.set(asked.domain, {
+            name,
+            value,
+            hosts: list(asked.hosts),
+            headers: list(asked.headers),
+          });
+          log(`secrets page: set ${name} for the domain ${asked.domain}`);
+          return json(res, 200, { secrets: listed });
+        }
+        if (url.pathname === "/secrets/switch") {
+          const listed = await ops.switch(asked.domain, name, asked.on === true);
+          log(`secrets page: ${name} of ${asked.domain} ${asked.on === true ? "on" : "off"}`);
+          return json(res, 200, { secrets: listed });
+        }
+        if (url.pathname === "/secrets/remove") {
+          const listed = await ops.remove(asked.domain, name);
+          log(`secrets page: removed ${name} of ${asked.domain}`);
+          return json(res, 200, { secrets: listed });
+        }
+      } catch (error) {
+        return json(res, 400, { error: (error as Error).message });
+      }
+      return json(res, 404, { error: "no such thing" });
+    }
 
     if (req.method === "GET" && url.pathname === "/pending") {
       const out = [];
@@ -472,6 +558,169 @@ declare namespace handler {
     cookie: Cookie;
     "content-type": "application/json";
   };
+
+  type Secrets = Invoke<typeof handler, [backend: Invoke<typeof withSecrets>, log: typeof quiet]>;
+  /** the secrets page opens from the dashboard (another site); what it does needs the cookie,
+   *  this origin and JSON; a value reaches the host, and only names come back */
+  export type Secrets_ = Given<
+    HasToken,
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/secrets?domain=acme";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 200 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/secrets/list?domain=acme";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+                cookie: Cookie;
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/secrets/list?domain=acme";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 401 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/secrets/list?domain=acme";
+              headers: Script;
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 200;
+          json: {
+            domains: ["acme"];
+            secrets: [{ name: "NPM-TOKEN"; hosts: ["registry.npmjs.org"]; on: true }];
+          };
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "POST";
+              url: "/secrets/set";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+                origin: "http://acme-web-0a1b2c.localhost:31581";
+                cookie: Cookie;
+                "content-type": "application/json";
+              };
+              body: { domain: "acme"; name: "API"; value: "v"; hosts: ["api.example.com"] };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "POST";
+              url: "/secrets/set";
+              headers: Script;
+              body: { domain: "acme"; name: "API"; value: "one\ntwo"; hosts: ["api.example.com"] };
+            },
+          ]
+        >,
+        "matches",
+        { status: 400; json: { error: "a value is one line, of at most 64 KiB" } }
+      >,
+    ]
+  >;
+  type SetApi = Invoke<
+    typeof ask,
+    [
+      handler: Secrets,
+      request: {
+        method: "POST";
+        url: "/secrets/set";
+        headers: Script;
+        body: {
+          domain: "acme";
+          name: "API";
+          value: "s3cret";
+          hosts: ["api.example.com"];
+          headers: [];
+        };
+      },
+    ]
+  >;
+  /** set: what comes back names each secret and where it goes, never a value */
+  export type ShowsNames = Given<
+    HasToken,
+    Expect<
+      SetApi,
+      "matches",
+      { status: 200; json: { secrets: [{ name: "NPM-TOKEN" }, { name: "API"; on: true }] } }
+    >
+  >;
+  /** and the value went to the host's secret store (here, written down), as it was typed */
+  export type SetsOne = Given<
+    [HasToken, SetApi],
+    Expect<
+      Invoke<typeof secretsSet>,
+      "=",
+      [{ domain: "acme"; name: "API"; value: "s3cret"; hosts: ["api.example.com"]; headers: [] }]
+    >
+  >;
 
   /** the address's token is traded for a cookie a script cannot read and another site never sends */
   export type SignsIn = Given<

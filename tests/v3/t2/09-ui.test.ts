@@ -200,6 +200,7 @@ describe("T2 section 4.8: the root UI", () => {
       approver: "terminal",
       rootHostname: "desolate.localhost",
       gitHostname: "desolate-git.localhost",
+      approveHostname: "desolate-approve.localhost",
       mac: { cpus: os.cpus().length, memoryMiB: Math.floor(os.totalmem() / 1048576) },
     });
     // The first-run steps, done from the dashboard; each records the command it ran.

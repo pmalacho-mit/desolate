@@ -94,3 +94,25 @@ export const quiet = (_line: string) => {};
 export const gitVmDown = async (_repo: string | null) => {
   throw new Error("it did not start");
 };
+
+/** The approval page's backend with a domain's secrets: `acme` holds NPM-TOKEN; a set keeps
+ *  what it was given in `secretsSet` (the value included, to show it reached the host). */
+let given: Record<string, unknown>[] = [];
+export const withSecrets = (): Backend => {
+  given = [];
+  const held = [{ name: "NPM-TOKEN", hosts: ["registry.npmjs.org"], headers: null, on: true }];
+  return {
+    ...waiting([]),
+    secrets: {
+      domains: async () => ["acme"],
+      list: async () => held,
+      set: async (domain, secret) => {
+        given.push({ domain, ...secret });
+        return [...held, { name: secret.name, hosts: secret.hosts, headers: null, on: true }];
+      },
+      switch: async () => held,
+      remove: async () => [],
+    },
+  };
+};
+export const secretsSet = () => given;

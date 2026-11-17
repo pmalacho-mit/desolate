@@ -2,7 +2,7 @@
 import { EXIT, refuse } from "../shared/exit.ts";
 import * as path from "node:path";
 import { guest, paths } from "./paths.ts";
-import { backend, changeSecrets, ensureProxyUser, rootctl } from "./stack.ts";
+import { backend, changeSecrets, ensureProxyUser, revealSecret, rootctl } from "./stack.ts";
 import type {
   Expect,
   Given,
@@ -70,6 +70,37 @@ const trustCa = async (domain: string) => {
 /** --repo, given once or more. */
 const repoList = (value: unknown): string[] =>
   Array.isArray(value) ? value.map(String) : typeof value === "string" ? [value] : [];
+
+/** A domain's secrets as the root lists them: names and where each goes, never a value. */
+export type SecretListed = {
+  name: string;
+  hosts: string[];
+  headers: string[] | null;
+  on: boolean;
+  secondsLeft?: number;
+};
+/** What the secrets page (approve-web.ts) does, as the CLI's `domain <d> secret ...` does:
+ *  through the root's control socket, from the host. The value goes from here to the root's
+ *  secret store, and nowhere else: not the dashboard, which the root's ordinary user serves. */
+export const secretOps = {
+  domains: async () =>
+    (await rootctl<{ slug: string }[]>("domain.list", {}, { quiet: true })).map((d) => d.slug),
+  list: (domain: string) => rootctl<SecretListed[]>("secret.list", { domain }, { quiet: true }),
+  set: async (
+    domain: string,
+    secret: { name: string; value: string; hosts: string[]; headers: string[] },
+  ) => {
+    await ensureProxyUser(domain);
+    const listed = await changeSecrets<SecretListed[]>(domain, "set", secret);
+    await trustCa(domain);
+    return listed;
+  },
+  switch: (domain: string, name: string, on: boolean) =>
+    changeSecrets<SecretListed[]>(domain, "switch", { name, on }),
+  remove: (domain: string, name: string) =>
+    changeSecrets<SecretListed[]>(domain, "remove", { name }),
+};
+export type SecretOps = typeof secretOps;
 
 export const domainCommand = async (
   args: string[],
@@ -297,7 +328,7 @@ export const domainCommand = async (
       on: boolean;
       secondsLeft?: number;
     };
-    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME>`;
+    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME> | show <NAME>`;
     const left = (seconds: number) =>
       seconds >= 7200
         ? `${Math.round(seconds / 3600)} h`
@@ -339,6 +370,19 @@ export const domainCommand = async (
           ? `${name} is ${stateOf(switched)}${switched.secondsLeft !== undefined ? ", then off" : ""}.`
           : `${name} is OFF: its value goes nowhere, and a request that carries its name toward ${switched.hosts.join(", ")} is refused. To switch it on: desolate domain ${first} secret on ${name} [--ttl 30m]`,
       );
+    }
+    if (action === "show") {
+      // Its value, to this terminal: the one way back out of the root's store, for the person
+      // on the Mac (who controls the root VM anyway). Only the value goes to stdout, so
+      // `$(desolate domain <d> secret show <NAME>)` is the value itself.
+      if (!name) refuse("which secret?", usage, EXIT.usage);
+      const value = await revealSecret(first, name);
+      if (json) return out(JSON.stringify({ name, value }));
+      if (process.stderr.isTTY)
+        process.stderr.write(
+          `the value of ${name}, held in the root for the domain ${first} (shown here only):\n`,
+        );
+      return out(value);
     }
     if (action === "copy") {
       // desolate domain <d> secret copy <NAME> --from <other>: the value stays in the root.
