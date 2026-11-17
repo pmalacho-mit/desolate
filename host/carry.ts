@@ -15,9 +15,9 @@ import { isSlug } from "../shared/names.ts";
 import { paths } from "./paths.ts";
 import { backend, ROOT_VM } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome } from "../../tests/nests/home.harness.ts";
-import type { carried, keptBefore, rootVm } from "../../tests/nests/host-carry.harness.ts";
+import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../.harness/home.ts";
+import type { carried, keptBefore, rootVm } from "../.harness/host-carry.ts";
 
 type Out = (line: string) => void;
 

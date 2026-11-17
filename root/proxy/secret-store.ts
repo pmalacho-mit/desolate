@@ -24,8 +24,8 @@ import { normalizeName } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import { proxyUserOf } from "./as-proxy.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../../tests/nests/refusal.harness.ts";
+import type { Expect, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../.harness/refusal.ts";
 
 /** `off`: switched off until switched on. `until` (seconds since the epoch): on until then. */
 export type Secret = { value: string; hosts: string[]; headers?: string[]; off?: boolean; until?: number };

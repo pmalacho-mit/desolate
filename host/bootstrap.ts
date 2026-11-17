@@ -11,8 +11,8 @@ import { INSTANCE, paths, RELEASE_DIR, guest } from "./paths.ts";
 import { backend, backendKind, config, ensureHome, pinForge, ROOT_VM, rootctl, rootSpec, saveConfig } from "./stack.ts";
 import type { Config, ForgeConfig } from "./stack.ts";
 import type { Check } from "./vm/types.ts";
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 

@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { parseRepo } from "../shared/names.ts";
-import type { Expect, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { printed } from "../../tests/nests/host-cli.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { printed } from "../.harness/host-cli.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 const HELP = `desolate: develop in VMs of their own. A workspace per task, an editor inside it, every push through you.
 

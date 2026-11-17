@@ -1,8 +1,8 @@
 // Running other programs: always an argv, never a shell string.
 import { spawn } from "node:child_process";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { never, throwsUntil, trueOnCall } from "../../tests/nests/shared-probe.harness.ts";
+import type { Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { never, throwsUntil, trueOnCall } from "../.harness/shared-probe.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = {

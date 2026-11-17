@@ -29,8 +29,8 @@ import { downstreamBranch, gitrepoProblem, GITHUB_DIR, remoteRepo, sameRepo, SUE
 import type { Gitrepo } from "../shared/suede.ts";
 import { printable } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { cwdIs, gitVm, outsideEveryClone, releaseWith } from "../../tests/nests/git-upstream.harness.ts";
+import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { cwdIs, gitVm, outsideEveryClone, releaseWith } from "../.harness/git-upstream.ts";
 
 export class Stop extends Error {
   fix: string | undefined;

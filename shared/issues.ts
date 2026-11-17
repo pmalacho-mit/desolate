@@ -10,7 +10,7 @@
 import { createHash } from "node:crypto";
 import { parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export const LIMIT = { title: 256, body: 65_536, labels: 20, label: 50, waiting: 50 } as const;
 export const ID = /^[0-9a-z]{6,12}-[0-9a-f]{8}$/;

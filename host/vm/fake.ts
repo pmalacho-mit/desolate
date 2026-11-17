@@ -21,7 +21,7 @@ import { INSTANCE } from "../paths.ts";
 import { GUEST_USER } from "./types.ts";
 import { socatAddress } from "./types.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
-import type { Expect, Invoke } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
 const IMAGE = process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest";
 const LABEL = "desolate.instance";

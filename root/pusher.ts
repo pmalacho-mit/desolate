@@ -50,9 +50,9 @@ import { run } from "../shared/run.ts";
 import { ask } from "./keyring-client.ts";
 import { GITCONFIG, KEYRING, PINNED_FORGE, PUSHER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aBrokenPack, aPack, forgeSaying } from "../../tests/nests/root-forge.harness.ts";
-import type { emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Call, Expect, Given, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aBrokenPack, aPack, forgeSaying } from "../.harness/root-forge.ts";
+import type { emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
 const LIMIT = { header: 1024 * 1024, pack: 2 * 1024 ** 3, lfs: 5 * 1024 ** 3, objects: 2000, advertised: 64 * 1024 * 1024, idleMs: 60_000 } as const;
 const ZERO = "0".repeat(40);

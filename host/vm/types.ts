@@ -12,7 +12,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Duplex } from "node:stream";
 import type { RunResult } from "../../shared/run.ts";
-import type { Invoke, Table, Throws } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Invoke, Table, Throws } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
 export type Share = { host: string; guest: string; writable: boolean };
 

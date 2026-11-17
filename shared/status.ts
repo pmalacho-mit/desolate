@@ -8,8 +8,8 @@ import * as path from "node:path";
 import { isBranch, isCommit } from "./names.ts";
 import type { WorkspacePlan } from "./plan.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { dirScratch, emptyScratch, fifoScratch, linkScratch, readScratch, scratch, writeScratch } from "../../tests/nests/shared-files.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { dirScratch, emptyScratch, fifoScratch, linkScratch, readScratch, scratch, writeScratch } from "../.harness/shared-files.ts";
 
 export type Status = { color: string; message: string; updated: string };
 export const COLORS = ["gray", "blue", "green", "yellow", "orange", "red"];

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import { ask } from "./keyring-client.ts";
 import { KEYRING } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** The repository a signature is for, from ssh-agent's prompt, which carries the key's
  *  comment (keyring.ts, commentOf); null when the key is not one of desolate's write keys. */

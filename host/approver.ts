@@ -24,12 +24,12 @@ import * as path from "node:path";
 import { formatApproval, parseApproval } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
-import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome } from "../../tests/nests/home.harness.ts";
-import type { keyringTakes, modeOf, writeInHome } from "../../tests/nests/host-approver.harness.ts";
-import type { setEnv } from "../../tests/nests/env.harness.ts";
-import type { collect } from "../../tests/nests/host-stack.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../.harness/home.ts";
+import type { keyringTakes, modeOf, writeInHome } from "../.harness/host-approver.ts";
+import type { setEnv } from "../.harness/env.ts";
+import type { collect } from "../.harness/host-stack.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 export type Kind = "touchid" | "terminal";
 const DIR = path.join(paths.home, "approver");

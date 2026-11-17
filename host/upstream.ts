@@ -17,9 +17,9 @@ import { ensureGitClone, ensureGitVm, GIT_VM } from "./git-vm.ts";
 import { guest } from "./paths.ts";
 import { backend, config, rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { pullWaitedFor, upstreamSays } from "../../tests/nests/host-upstream.harness.ts";
-import type { vmAnswering } from "../../tests/nests/host-daemon.harness.ts";
+import type { Call, Expect, Given, Invoke, Mock, Mocked } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { pullWaitedFor, upstreamSays } from "../.harness/host-upstream.ts";
+import type { vmAnswering } from "../.harness/host-daemon.ts";
 
 type Out = (line: string) => void;
 const USAGE = "desolate upstream <consumer> <dependency-dir> <owner/repo> [--from <domain>/<branch>] [--no-wait] [--remote <url>]";

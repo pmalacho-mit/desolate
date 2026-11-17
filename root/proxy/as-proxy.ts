@@ -20,8 +20,8 @@ import * as fs from "node:fs";
 import type { ChildProcess } from "node:child_process";
 import { ROOT } from "../layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyRoot, makeDirIn, readIn, textIn, writeIn } from "../../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyRoot, makeDirIn, readIn, textIn, writeIn } from "../../.harness/root-state.ts";
 
 /** A domain's proxies' user: what root/proxy-user.sh makes for it. */
 export const proxyUserOf = (domain: string) => `dsp-${createHash("sha256").update(domain).digest("hex").slice(0, 10)}`;

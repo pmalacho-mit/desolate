@@ -17,9 +17,9 @@ import { open as openLink, parseLink } from "../../shared/link.ts";
 import { sniffSocket } from "../../shared/sniff.ts";
 import type { Sniffed } from "../../shared/sniff.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { bytes } from "../../../tests/nests/shared-bytes.harness.ts";
-import type { throughEgress } from "../../../tests/nests/workspace-egress.harness.ts";
+import type { Expect, Invoke, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { bytes } from "../../.harness/shared-bytes.ts";
+import type { throughEgress } from "../../.harness/workspace-egress.ts";
 
 type Link = NonNullable<ReturnType<typeof parseLink>>;
 

@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Repo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export const RELEASE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 

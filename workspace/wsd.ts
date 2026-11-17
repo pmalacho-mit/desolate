@@ -22,7 +22,7 @@ import { run, sleep } from "../shared/run.ts";
 import { tick as bridgeTick } from "./bridge.ts";
 import { branches, domainRepos, importDeliveries, syncRepo } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const SOCKET = "/run/desolate/wsd.sock";
 /** desolate's own listeners in the VM: never offered for forwarding. */

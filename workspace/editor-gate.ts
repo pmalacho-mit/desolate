@@ -42,8 +42,8 @@ import { connect } from "node:net";
 import type { Socket } from "node:net";
 import { openedWithToken, refusal } from "../shared/gate.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { throughGate } from "../../tests/nests/workspace-gate.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { throughGate } from "../.harness/workspace-gate.ts";
 
 export { openedWithToken, refusal } from "../shared/gate.ts";
 

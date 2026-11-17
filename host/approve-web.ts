@@ -42,9 +42,9 @@ import type { Issue } from "../shared/issues.ts";
 import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, isSlug } from "../shared/names.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { writeState } from "../../tests/nests/home.harness.ts";
-import type { approved, ask, quiet, waiting } from "../../tests/nests/host-web.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { writeState } from "../.harness/home.ts";
+import type { approved, ask, quiet, waiting } from "../.harness/host-web.ts";
 
 export const TOKEN_FILE = path.join(paths.state, "approve-token");
 const UI = path.join(RELEASE_DIR, "host", "approve-ui");

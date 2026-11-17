@@ -7,7 +7,7 @@
 // keyring itself issued, so a signature seen once approves nothing later.
 import { isBranch, isCommit, parseRepo, repoId } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** `onto`: what the remote's branch is now, as the root last saw it (`null`: the branch is
  *  new). The push is a compare-and-swap on the remote: the branch moves from exactly `onto`

@@ -1,6 +1,6 @@
 // Exit codes a harness can rely on (section 9.1). v2's, kept.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Construct, Expect, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Construct, Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export const EXIT = {
   ok: 0,

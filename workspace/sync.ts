@@ -9,8 +9,8 @@ import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Mock, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { gitAnswers, scriptedGit } from "../../tests/nests/workspace-git.harness.ts";
+import type { Expect, Given, Invoke, Mock, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { gitAnswers, scriptedGit } from "../.harness/workspace-git.ts";
 
 export const OUTBOX = "/desolate/outbox";
 export const INBOX = "/desolate/inbox";

@@ -45,11 +45,11 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Mock, Mocked, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { answerOf, answers, asked, askedTls, daemonAnswering, failsAtOnce, failsHalfway, heldByColima, helloTo, keepLog, nameOf, rawOwners, said, setOf, shown, sixGiB, vmAnswering, wire, ws } from "../../tests/nests/host-daemon.harness.ts";
-import type { emptyHome, writeState } from "../../tests/nests/home.harness.ts";
-import type { repeated } from "../../tests/nests/shared-bytes.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Call, Expect, Given, Invoke, Mock, Mocked, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { answerOf, answers, asked, askedTls, daemonAnswering, failsAtOnce, failsHalfway, heldByColima, helloTo, keepLog, nameOf, rawOwners, said, setOf, shown, sixGiB, vmAnswering, wire, ws } from "../.harness/host-daemon.ts";
+import type { emptyHome, writeState } from "../.harness/home.ts";
+import type { repeated } from "../.harness/shared-bytes.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
 const PIDFILE = path.join(paths.state, "daemon.pid");

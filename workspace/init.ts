@@ -14,7 +14,7 @@ import type { Checkout, WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
 import { urlRules } from "./git-urls.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 // (DESOLATE_MIRROR_FRESH: a `--fetch` here follows the host's own refresh of the mirror.)
 const git = async (dir: string | null, args: string[]) => {

@@ -14,8 +14,8 @@ import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aDomain, emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
 /** `base`: the branch a pull request of this one would go into, as the workspace said
  *  (`desolate offer --base`); without it, the repository's default branch. */

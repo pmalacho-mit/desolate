@@ -10,8 +10,8 @@
 // tmux used to stand between the two, interpreting all of it itself; with the agent's terminal
 // streamed straight through, this does that part of tmux's job.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { byteByByte, inChunks, repeat } from "../../tests/nests/shared-terminal.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { byteByByte, inChunks, repeat } from "../.harness/shared-terminal.ts";
 
 const ESC = 0x1b;
 const BEL = 0x07;

@@ -4,8 +4,8 @@ import { connect } from "node:net";
 import type { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { wsctlAsking } from "../../tests/nests/workspace-socket.harness.ts";
+import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { wsctlAsking } from "../.harness/workspace-socket.ts";
 
 /** Send `input` to the daemon at `socket` as one line, and hand its reply to `write`; a
  *  daemon that is not there is a reply too, a JSON refusal, so the host always reads JSON. */

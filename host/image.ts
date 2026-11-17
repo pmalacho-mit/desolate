@@ -7,8 +7,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { RELEASE_DIR } from "./paths.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { releaseWith } from "../../tests/nests/host-image.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { releaseWith } from "../.harness/host-image.ts";
 
 const files = (dir: string): string[] =>
   fs.readdirSync(dir, { withFileTypes: true })

@@ -16,9 +16,9 @@ import { IDENTITY_FILE, KEY, verify } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
 import { INSTANCE, paths } from "./paths.ts";
 import type { Backend } from "./vm/types.ts";
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome, readState, writeState } from "../../tests/nests/home.harness.ts";
-import type { everyVmExists, giveKey, noVmExists, signed } from "../../tests/nests/host-spawn.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, readState, writeState } from "../.harness/home.ts";
+import type { everyVmExists, giveKey, noVmExists, signed } from "../.harness/host-spawn.ts";
 
 const KEYS = () => path.join(paths.state, "workspace-keys");
 const LEDGER = () => path.join(paths.state, "spawn.json");

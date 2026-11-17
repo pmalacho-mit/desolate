@@ -14,8 +14,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { paths } from "./paths.ts";
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome, readState, stateFiles, writeState } from "../../tests/nests/home.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, readState, stateFiles, writeState } from "../.harness/home.ts";
 
 const file = () => path.join(paths.state, "tokens-retired");
 

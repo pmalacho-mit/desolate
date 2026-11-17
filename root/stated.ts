@@ -60,8 +60,8 @@ import { landedFor, pushedList } from "./pushed.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aDomain, emptyRoot, pathIn, writeIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, pathIn, writeIn, writeJsonIn } from "../.harness/root-state.ts";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
 const TOKEN_FILE = "/etc/desolate/host-token";

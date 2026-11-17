@@ -19,8 +19,8 @@ import { git, gitInvocation } from "./git.ts";
 import { clonePath, PUSHER } from "./layout.ts";
 import { lfsOf } from "./offers.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { attemptsThat } from "../../tests/nests/root-retry.harness.ts";
+import type { Call, Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { attemptsThat } from "../.harness/root-retry.ts";
 
 type Failed = { error: string; moved: boolean };
 

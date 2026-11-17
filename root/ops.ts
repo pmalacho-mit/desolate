@@ -32,9 +32,9 @@ import * as proxy from "./proxy/manage.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
-import type { emptyRoot, namesIn, readIn, readJsonIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
+import type { emptyRoot, namesIn, readIn, readJsonIn, writeJsonIn } from "../.harness/root-state.ts";
 
 type Log = (line: string) => void;
 export type Op = (args: Record<string, unknown>, log: Log) => Promise<unknown>;

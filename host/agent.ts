@@ -17,9 +17,9 @@ import { terminalFilter } from "../shared/terminal-filter.ts";
 import { printable } from "../shared/text.ts";
 import { guest } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
-import type { Expect, Given, Invoke, Mock, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { collect, fakeStack, rootAnswers, rootAsked, said, vmAnswers } from "../../tests/nests/host-stack.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Mock, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said, vmAnswers } from "../.harness/host-stack.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 type Workspace = { domain: string; workspace: string; vm: string; checkouts: { repo: string; path: string }[] };

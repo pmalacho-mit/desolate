@@ -29,7 +29,7 @@ import { ROOT } from "../layout.ts";
 import type { Running } from "./secrets.ts";
 import { listenerUid } from "./as-proxy.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
 const [, , socketArg, domain, workspace] = process.argv;
 /** Run as a proxy (manage.ts starts one: node with this file's path), not imported. */
