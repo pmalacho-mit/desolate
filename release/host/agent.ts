@@ -202,7 +202,9 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
   return "agent";
 };
 
-export const list = async (only: string | undefined, out: Out, json: boolean) => {
+/** Every agent in the running workspaces (of `only`: a domain, or domain/workspace), as each
+ *  workspace's VM tells it, checked. */
+export const agents = async (only?: string) => {
   const [domain, workspace] = String(only ?? "").split("/");
   const all = await rootctl<{ slug: string; workspaces: Workspace[] }[]>(
     "domain.list",
@@ -261,6 +263,11 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
       ),
   );
   rows.sort((a, b2) => a.workspace.localeCompare(b2.workspace) || a.name.localeCompare(b2.name));
+  return rows;
+};
+
+export const list = async (only: string | undefined, out: Out, json: boolean) => {
+  const rows = await agents(only);
   if (json) return out(JSON.stringify(rows));
   if (rows.length === 0)
     return out("no agents. Start one: desolate agent start <domain>/<workspace> -- <command...>");
@@ -358,6 +365,61 @@ export const log = async (where: string | undefined, options: { name?: string })
   process.stdout.write(
     process.stdout.isTTY ? terminalFilter()(Buffer.from(shown.stdout, "utf8")) : shown.stdout,
   );
+};
+
+/** What an agent printed from byte `from` of its log on (a megabyte at most; `from` below 0,
+ *  or past the end, starts at its last 256 KiB), kept to what a screen needs: for a page that
+ *  draws it in a terminal of its own (agents-web.ts). `next` is where the next read starts. */
+export const output = async (
+  where: string,
+  name: string | undefined,
+  from: number,
+): Promise<{ data: Buffer; next: number }> => {
+  const w = await target(where);
+  const agent = nameOf(name);
+  const read = await backend().exec(
+    w.vm,
+    [
+      "bash",
+      "-c",
+      'f="$HOME/.desolate-agents/$1.log"; s=$(stat -c %s "$f") || exit 3; from=$2; ' +
+        'if [ "$from" -lt 0 ] || [ "$from" -gt "$s" ]; then from=$(( s > 262144 ? s - 262144 : 0 )); fi; ' +
+        'echo "$from"; tail -c +$(( from + 1 )) "$f" | head -c 1048576 | base64 -w0',
+      "_",
+      agent,
+      String(Math.trunc(from)),
+    ],
+    { timeoutMs: 30_000 },
+  );
+  if (read.code !== 0)
+    refuse(
+      `no agent '${agent}' in ${w.domain}/${w.workspace}`,
+      `desolate agent list ${w.domain}/${w.workspace}`,
+    );
+  const [start = "0", data = ""] = read.stdout.split("\n");
+  const raw = Buffer.from(data, "base64");
+  return { data: terminalFilter()(raw), next: Number(start) + raw.length };
+};
+
+/** Type into an agent's terminal, as `attach` would, without staying: the bytes, then let go.
+ *  (A line ends with "\r", as a terminal's Enter sends it.) */
+export const say = async (where: string, name: string | undefined, bytes: Buffer) => {
+  const w = await target(where);
+  const agent = nameOf(name);
+  if (bytes.length === 0 || bytes.length > 64 * 1024)
+    refuse(
+      "say takes up to 64 KiB of text",
+      `desolate agent say ${w.domain}/${w.workspace} -- <text>`,
+      EXIT.usage,
+    );
+  const child = backend().spawn(w.vm, [...HOLDER(), "attach", agent]);
+  child.stdout?.resume();
+  child.stdin!.end(`i ${bytes.toString("base64")}\n`);
+  // The holder passes the line on as it reads it; then this client is let go (an attach that
+  // sends nothing more keeps streaming until it is ended).
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+  child.kill();
 };
 
 /** Your terminal, attached: raw, its size passed on, Ctrl-] to let go. */

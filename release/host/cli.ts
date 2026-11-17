@@ -80,6 +80,7 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
                                                                  a watcher, a coding agent), with its terminal; no tmux
   desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   your terminal on it; Ctrl-] detaches
   desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
+  desolate agent say <domain>/<workspace> [--name <n>] -- <text>  type a line into it (and Enter), without attaching
 
 Hearing about it, and scripting it:
   desolate notify [--ntfy <https://ntfy.sh/topic>]              notifications on this Mac: a push waiting, an offer,
@@ -547,10 +548,13 @@ const main = async (argv: string[]): Promise<number> => {
       if ("refused" in on) refuse(on.refused, on.fix);
       const { ui } = await import("./daemon.ts");
       const token = new URL((await ui()).dashboard).searchParams.get("tkn") ?? "";
+      const { agentsToken } = await import("./agents-web.ts");
       out(
-        `the dashboard is on your tailnet, for ${on.login}'s devices only:\n  ${phone.phoneAddress(on, token)}\n` +
-          "open it once on your phone: it carries the dashboard's token, so keep it to yourself.\n" +
-          "Pushes are still approved here, on the Mac. desolate phone off takes it off the tailnet.",
+        `on your tailnet, for ${on.login}'s devices only:\n` +
+          `  dashboard  ${phone.phoneAddress(on, token)}\n` +
+          `  agents     ${phone.phoneAddress({ ...on, httpsPort: on.httpsPort + 1 }, agentsToken())}\n` +
+          "open each once on your phone: they carry their pages' tokens, so keep them to yourself.\n" +
+          "Pushes are still approved here, on the Mac. desolate phone off takes both off the tailnet.",
       );
       return EXIT.ok;
     }
@@ -752,10 +756,24 @@ const main = async (argv: string[]): Promise<number> => {
     else if (sub === "stop")
       await agents.stop(where, { name: values.name as string | undefined }, out);
     else if (sub === "log") await agents.log(where, { name: values.name as string | undefined });
-    else
+    else if (sub === "say") {
+      // A line typed into it, as at its terminal, ended with Enter: for a phone, or a script.
+      if (command.length === 0)
+        refuse(
+          "say what?",
+          `desolate agent say ${where ?? "<domain>/<workspace>"} -- <text>`,
+          EXIT.usage,
+        );
+      await agents.say(
+        where!,
+        values.name as string | undefined,
+        Buffer.from(`${command.join(" ")}\r`),
+      );
+      out("said.");
+    } else
       refuse(
         "desolate agent what?",
-        "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]",
+        "desolate agent start|attach|list|log|say|stop <domain>/<workspace> [--name <n>]",
         EXIT.usage,
       );
     return EXIT.ok;
@@ -968,7 +986,7 @@ declare namespace main {
     "=",
     {
       message: "desolate agent what?";
-      fix: "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]";
+      fix: "desolate agent start|attach|list|log|say|stop <domain>/<workspace> [--name <n>]";
       code: 64;
     }
   >;

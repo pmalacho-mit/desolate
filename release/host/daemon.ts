@@ -46,7 +46,8 @@ import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
-import { servePhone } from "./phone.ts";
+import { phonePort, servePhone } from "./phone.ts";
+import { serveAgents } from "./agents-web.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
@@ -2728,6 +2729,8 @@ const serve = async () => {
   // The dashboard for your phone, over Tailscale Serve (phone.ts): on 127.0.0.1 only, and it
   // refuses everything until `desolate phone on`.
   servePhone(log);
+  // Your agents, from your phone (agents-web.ts): the next port, an origin of its own.
+  serveAgents(log, phonePort() + 1);
 
   const reconcile = () => {
     const wanted = new Set<number>();

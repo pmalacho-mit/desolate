@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>desolate agents</title>
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/agents.css">
+</head>
+<body>
+<header>
+  <h1>Agents</h1>
+  <span id="status" class="sub" role="status"></span>
+  <button id="refresh" type="button" class="quiet">Refresh</button>
+</header>
+<main>
+  <section id="list">
+    <ul id="agents" class="rows"></ul>
+    <p id="none" class="sub" hidden>No agents are running. Start one on the Mac: <code>desolate agent start &lt;domain&gt;/&lt;workspace&gt; -- &lt;command&gt;</code></p>
+  </section>
+  <section id="agent" hidden>
+    <div class="top">
+      <button id="back" type="button" class="quiet">All agents</button>
+      <h2 id="title"></h2>
+    </div>
+    <div id="screen"><div id="terminal"></div></div>
+    <form id="say" autocomplete="off">
+      <input id="line" name="line" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Type a reply, then Send" aria-label="A line to type into the agent">
+      <button type="submit">Send</button>
+    </form>
+    <div class="keys" aria-label="Keys a phone keyboard does not have">
+      <button type="button" data-key="enter">Enter</button>
+      <button type="button" data-key="up" aria-label="Up">&#8593;</button>
+      <button type="button" data-key="down" aria-label="Down">&#8595;</button>
+      <button type="button" data-key="tab">Tab</button>
+      <button type="button" data-key="escape">Esc</button>
+      <button type="button" data-key="ctrl-c">Ctrl-C</button>
+    </div>
+    <p class="sub">What it shows is its terminal, as it draws it. What you send is typed into it, as at its keyboard.</p>
+  </section>
+</main>
+<script src="/vendor/xterm.js"></script>
+<script src="/agents.js"></script>
+</body>
+</html>

@@ -71,16 +71,17 @@ const hostOf = (value: string | undefined) => {
 const printable = (text: string) => text.slice(0, 80).replace(/[^\x20-\x7e]/g, "?");
 
 /** One request from the phone: refused (and why), or the headers it is passed on with. */
-export const phoneRequest = (
+/** What every request over the tailnet must be, the dashboard's and the agents page's: from
+ *  the login `desolate phone on` recorded, through Tailscale Serve, for this Mac's name. */
+export const tailnetRequest = (
   phone: Phone | null,
   headers: IncomingHttpHeaders,
-  pagesPort: number,
-): { refused: { status: number; text: string } } | { headers: OutgoingHttpHeaders } => {
+): { refused: { status: number; text: string } } | { phone: Phone } => {
   if (!phone)
     return {
       refused: {
         status: 404,
-        text: "the dashboard is not on the tailnet: `desolate phone on`, on the Mac",
+        text: "desolate is not on the tailnet: `desolate phone on`, on the Mac",
       },
     };
   const login = headers["tailscale-user-login"];
@@ -95,19 +96,35 @@ export const phoneRequest = (
     return {
       refused: {
         status: 403,
-        text: `this dashboard is ${phone.login}'s; ${printable(login)} is not`,
+        text: `this is ${phone.login}'s desolate; ${printable(login)} is not`,
       },
     };
   if (hostOf(headers.host) !== phone.name.toLowerCase())
-    return {
-      refused: { status: 421, text: `this dashboard answers at ${phone.name} only` },
-    };
+    return { refused: { status: 421, text: `this answers at ${phone.name} only` } };
+  return { phone };
+};
+
+/** One request for the dashboard from the phone: refused (and why), or the headers it is
+ *  passed on with. */
+export const phoneRequest = (
+  phone: Phone | null,
+  headers: IncomingHttpHeaders,
+  pagesPort: number,
+): { refused: { status: number; text: string } } | { headers: OutgoingHttpHeaders } => {
+  const checked = tailnetRequest(phone, headers);
+  if ("refused" in checked) return checked;
   const own = `${ROOT_HOSTNAME}:${pagesPort}`;
   const passed: OutgoingHttpHeaders = { ...headers, host: own };
   // The phone's own origin becomes the dashboard's; any other is passed on, and refused there.
-  if (typeof headers.origin === "string" && hostOf(headers.origin) === phone.name.toLowerCase())
+  if (
+    typeof headers.origin === "string" &&
+    hostOf(headers.origin) === checked.phone.name.toLowerCase()
+  )
     passed.origin = `http://${own}`;
-  if (typeof headers.referer === "string" && hostOf(headers.referer) === phone.name.toLowerCase())
+  if (
+    typeof headers.referer === "string" &&
+    hostOf(headers.referer) === checked.phone.name.toLowerCase()
+  )
     passed.referer = `http://${own}${new URL(headers.referer).pathname}`;
   for (const name of Object.keys(passed)) if (name.startsWith("x-forwarded-")) delete passed[name];
   return { headers: passed };
@@ -166,7 +183,7 @@ declare namespace phoneRequest {
         expected: {
           refused: {
             status: 404;
-            text: "the dashboard is not on the tailnet: `desolate phone on`, on the Mac";
+            text: "desolate is not on the tailnet: `desolate phone on`, on the Mac";
           };
         },
       ],
@@ -192,7 +209,7 @@ declare namespace phoneRequest {
         expected: {
           refused: {
             status: 403;
-            text: "this dashboard is you@example.com's; them@example.com is not";
+            text: "this is you@example.com's desolate; them@example.com is not";
           };
         },
       ],
@@ -203,7 +220,7 @@ declare namespace phoneRequest {
           pagesPort: 31581,
         ],
         expected: {
-          refused: { status: 421; text: "this dashboard answers at mac.tail1234.ts.net only" };
+          refused: { status: 421; text: "this answers at mac.tail1234.ts.net only" };
         },
       ],
     ]
@@ -336,16 +353,24 @@ export const phoneOn = async (): Promise<Phone | { refused: string; fix: string 
   if ("refused" in self)
     return { refused: self.refused, fix: "tailscale up, then: desolate phone on" };
   const httpsPort = phoneHttpsPort();
-  const serve = await run(
-    tailscale(),
-    ["serve", "--bg", `--https=${httpsPort}`, `http://127.0.0.1:${phonePort()}`],
-    { timeoutMs: 30_000 },
-  );
-  if (serve.code !== 0)
-    return {
-      refused: `tailscale serve refused: ${printable(serve.stderr.trim() || serve.stdout.trim())}`,
-      fix: "turn on HTTPS for your tailnet (the admin console's DNS page), then: desolate phone on",
-    };
+  // The dashboard at httpsPort, the agents page (agents-web.ts) at the next: two origins.
+  for (const [https, local] of [
+    [httpsPort, phonePort()],
+    [httpsPort + 1, phonePort() + 1],
+  ] as const) {
+    const serve = await run(
+      tailscale(),
+      ["serve", "--bg", `--https=${https}`, `http://127.0.0.1:${local}`],
+      {
+        timeoutMs: 30_000,
+      },
+    );
+    if (serve.code !== 0)
+      return {
+        refused: `tailscale serve refused: ${printable(serve.stderr.trim() || serve.stdout.trim())}`,
+        fix: "turn on HTTPS for your tailnet (the admin console's DNS page), then: desolate phone on",
+      };
+  }
   const phone: Phone = { ...self, httpsPort };
   fs.mkdirSync(paths.state, { recursive: true });
   fs.writeFileSync(STATE(), `${JSON.stringify(phone)}\n`, { mode: 0o600 });
@@ -356,11 +381,11 @@ export const phoneOn = async (): Promise<Phone | { refused: string; fix: string 
 export const phoneOff = async (): Promise<void> => {
   const phone = readPhone();
   fs.rmSync(STATE(), { force: true });
-  await run(tailscale(), ["serve", `--https=${phone?.httpsPort ?? phoneHttpsPort()}`, "off"], {
-    timeoutMs: 15_000,
-  });
+  const https = phone?.httpsPort ?? phoneHttpsPort();
+  for (const port of [https, https + 1])
+    await run(tailscale(), ["serve", `--https=${port}`, "off"], { timeoutMs: 15_000 });
 };
 
-/** The phone's address for the dashboard, its token in it (opened once on the phone). */
+/** The phone's addresses, each with its page's token (opened once on the phone). */
 export const phoneAddress = (phone: Phone, token: string) =>
   `https://${phone.name}${phone.httpsPort === 443 ? "" : `:${phone.httpsPort}`}/?tkn=${token}`;
