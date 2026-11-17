@@ -25,9 +25,9 @@ import type { Repo } from "../shared/names.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
-import type { Expect, Given, Invoke, Skip, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { emptyHome, readState, writeState } from "../../tests/nests/home.harness.ts";
-import type { answerTo, leave, leaveLink, outbox } from "../../tests/nests/host-git-out.harness.ts";
+import type { answerTo, inHome, leave, leaveLink, linkInHome, outbox } from "../../tests/nests/host-git-out.harness.ts";
 import type { collect } from "../../tests/nests/host-stack.harness.ts";
 
 export const GIT_VM = gitVmName(INSTANCE);
@@ -164,12 +164,36 @@ export const ensureGitClone = async (repo: Repo) => {
 const GIT_IN = path.join(paths.rootClones, ".git-in");
 const LIMIT = { request: 64 * 1024, bundle: 2 * 1024 ** 3, lfs: 5 * 1024 ** 3, objects: 2000 } as const;
 /** A directory the host made, in a share the root's user can write: a real directory, not
- *  a link it left there. */
+ *  a link it left there, at its name or anywhere on the way to it from the home. A link above
+ *  the home is the Mac's own (macOS's /var is one) and is not refused: every push from the git
+ *  VM failed with a home under one (found by the in-source tests). */
 const ownDirectory = (dir: string) => {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stat = fs.lstatSync(dir);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(dir) !== path.resolve(dir)) throw new Error(`${dir} is not the host's own directory`);
+  const real = path.join(fs.realpathSync(paths.home), path.relative(paths.home, path.resolve(dir)));
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(dir) !== real) throw new Error(`${dir} is not the host's own directory`);
 };
+
+declare namespace ownDirectory {
+  /** the host's own directory in the root's share: made, and taken */
+  export type Made = Given<Invoke<typeof emptyHome>, Expect<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>, "=", undefined>>;
+  /** a link the root's user left there, at its name or at the share above it, or a way to it
+   *  through a link inside the home: refused, though each leads to a directory of the home's */
+  export type Refuses = [
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof linkInHome, [name: "root/.git-in", target: "state"]>],
+      Throws<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>, "is not the host's own directory">
+    >,
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof linkInHome, [name: "root", target: "state"]>],
+      Throws<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>, "is not the host's own directory">
+    >,
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof linkInHome, [name: "again", target: "."]>],
+      Throws<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "again/root/.git-in"]>]>, "is not the host's own directory">
+    >,
+  ];
+}
 
 /** The answer the git VM's helper waits for: in the host's own directory. */
 const answerFile = (id: string) => path.join(paths.gitAnswers, `${id}.json`);
@@ -294,27 +318,20 @@ declare namespace take {
     [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>, Invoke<typeof leaveLink, [name: "0123456789abcdef.json", target: "state/ui-token"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
     [Expect<Invoke<typeof answerTo, [id: Id]>, "=", null>, Expect<Invoke<typeof outbox>, "=", []>, Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">]
   >;
-  /** (A copy of what is taken goes in a directory of the host's own, in the root's share.) */
-  export type HomeBehindALink = Todo<"bug: ownDirectory compares realpath with path.resolve for the whole path, so a DESOLATE_HOME with a link anywhere above it (macOS's /var/folders, where a test's home is) makes every push from the git VM fail with 'is not the host's own directory'; only the link inside the share is what it is for">;
-  /** nor a bundle that is a link */
-  export type TheBundleIsAPlainFile = Skip<
-    Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567"}']>, Invoke<typeof leaveLink, [name: "0123456789abcdef.bundle", target: "state/ui-token"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      [
-        Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the push's bundle is not a plain file of at most 2 GiB" }>,
-        Expect<Invoke<typeof outbox>, "=", []>,
-        Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">,
-      ]
-    >,
-    "ownDirectory refuses any home whose path has a link in it, as this test's has on macOS (see HomeBehindALink)"
+  /** nor a bundle that is a link. (This and the next could not run on macOS until ownDirectory
+   *  let the home be under a link: a test's home is under /var, which is one.) */
+  export type TheBundleIsAPlainFile = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567"}']>, Invoke<typeof leaveLink, [name: "0123456789abcdef.bundle", target: "state/ui-token"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
+    [
+      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the push's bundle is not a plain file of at most 2 GiB" }>,
+      Expect<Invoke<typeof outbox>, "=", []>,
+      Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">,
+    ]
   >;
   /** an LFS object is taken only if it is what its name says it is */
-  export type LfsByItsHash = Skip<
-    Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","lfs":["0000000000000000000000000000000000000000000000000000000000000000"]}']>, Invoke<typeof leave, [name: "0123456789abcdef.bundle", text: "a bundle"]>, Invoke<typeof leave, [name: "0123456789abcdef.0000000000000000000000000000000000000000000000000000000000000000.lfs", text: "not that object"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      [Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the LFS object 000000000000 does not hash to its name" }>, Expect<Invoke<typeof outbox>, "=", []>]
-    >,
-    "ownDirectory refuses any home whose path has a link in it, as this test's has on macOS (see HomeBehindALink)"
+  export type LfsByItsHash = Given<
+    [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","lfs":["0000000000000000000000000000000000000000000000000000000000000000"]}']>, Invoke<typeof leave, [name: "0123456789abcdef.bundle", text: "a bundle"]>, Invoke<typeof leave, [name: "0123456789abcdef.0000000000000000000000000000000000000000000000000000000000000000.lfs", text: "not that object"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
+    [Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the LFS object 000000000000 does not hash to its name" }>, Expect<Invoke<typeof outbox>, "=", []>]
   >;
 }
 

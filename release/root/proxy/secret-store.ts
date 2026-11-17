@@ -23,6 +23,9 @@ import { Refusal, refuse } from "../../shared/exit.ts";
 import { normalizeName } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import { proxyUserOf } from "./as-proxy.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Invoke } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../../../tests/nests/refusal.harness.ts";
 
 /** `off`: switched off until switched on. `until` (seconds since the epoch): on until then. */
 export type Secret = { value: string; hosts: string[]; headers?: string[]; off?: boolean; until?: number };
@@ -81,8 +84,74 @@ export const change = (store: Store, domain: string, op: string, input: Record<s
   return next;
 };
 
+declare namespace change {
+  type Empty = { domain: "acme"; secrets: {} };
+  type Usage = "desolate domain acme secret set <NAME> --hosts <host>[,<host>...] [--headers <header>[,...]]   (the value on stdin)";
+  /** a secret: its value (one line, the trailing newline of a pipe dropped), the hosts it may
+   *  be sent to and, if named, the only headers it is substituted in: each lowercased, sorted,
+   *  once */
+  export type Sets = Expect<
+    Invoke<typeof change, [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "sk-live-123\n"; hosts: ["API.openai.com", "*.Example.com", "api.openai.com"]; headers: ["Authorization", "x-api-key"] }]>,
+    "=",
+    { domain: "acme"; secrets: { "MYAPP-OPENAI-KEY": { value: "sk-live-123"; hosts: ["*.example.com", "api.openai.com"]; headers: ["authorization", "x-api-key"] } } }
+  >;
+  /** a placeholder is a name a workspace can send and the proxy can find: not one that is
+   *  short, lowercase, or could be part of ordinary text */
+  export type BadName = Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "key"; value: "v"; hosts: ["api.example.com"] }]]>, "=", {
+    message: "'key' is not a placeholder name"; fix: "8 to 64 of A-Z, 0-9, _ and -, starting with a letter: for example MYAPP-OPENAI-KEY. It is what workspaces send in place of the value"; code: 1;
+  }>;
+  /** a value that is empty, more than one line, or that contains its name or is in it (the
+   *  swap could not be undone, or would swap itself) */
+  export type BadValue = [
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: ""; hosts: ["api.example.com"] }]]>, "=", { message: "a secret's value is one line, and not empty"; fix: Usage; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "a\nb"; hosts: ["api.example.com"] }]]>, "=", { message: "a secret's value is one line, and not empty"; fix: Usage; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "x-MYAPP-OPENAI-KEY-x"; hosts: ["api.example.com"] }]]>, "=", { message: "the value and its placeholder overlap"; fix: "choose another name"; code: 1 }>,
+  ];
+  /** the hosts pin a destination: none at all, a whole top-level domain, a pattern that
+   *  matches more than it says, a port, an address that is not a name */
+  export type BadHosts = [
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: [] }]]>, "=", { message: "a secret names the hosts it may be sent to: with none it would have no allowlist"; fix: Usage; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: ["*.com"] }]]>, "matches", { message: "'*.com' does not pin a destination" }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: ["*foo.com"] }]]>, "matches", { message: "'*foo.com' does not pin a destination" }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: ["*"] }]]>, "matches", { message: "'*' does not pin a destination" }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: ["api.example.com:8443"] }]]>, "=", { message: "'api.example.com:8443' does not pin a destination"; fix: "name the hosts the secret may be sent to: api.example.com, or *.example.com"; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: ["api.[a-z].com"] }]]>, "matches", { message: "'api.[a-z].com' does not pin a destination" }>,
+  ];
+  /** a header is a header's name */
+  export type BadHeader = Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: Empty, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY"; value: "v"; hosts: ["api.example.com"]; headers: ["x-key: other"] }]]>, "matches", { message: "'x-key: other' is not a header name" }>;
+  /** two names one of which contains the other could not be told apart in what is sent */
+  export type Overlap = Expect<
+    Invoke<typeof refusalOf, [f: typeof change, args: [store: { domain: "acme"; secrets: { "MYAPP-OPENAI-KEY": { value: "a"; hosts: ["api.openai.com"] } } }, domain: "acme", op: "set", input: { name: "MYAPP-OPENAI-KEY-2"; value: "b"; hosts: ["api.openai.com"] }]]>,
+    "=", { message: "MYAPP-OPENAI-KEY-2 and MYAPP-OPENAI-KEY overlap (one contains the other), so neither could be substituted unambiguously"; fix: "choose a name that does not contain, and is not contained in, another secret's"; code: 1 }
+  >;
+  // One secret, switched on.
+  type One = { domain: "acme"; secrets: { "MYAPP-OPENAI-KEY": { value: "a"; hosts: ["api.openai.com"]; until: 1 } } };
+  /** switched off until switched on; on again (and any time to live it had is gone); removed */
+  export type Switches = [
+    Expect<Invoke<typeof change, [store: One, domain: "acme", op: "switch", input: { name: "MYAPP-OPENAI-KEY"; on: false }]>, "=", { domain: "acme"; secrets: { "MYAPP-OPENAI-KEY": { value: "a"; hosts: ["api.openai.com"]; off: true } } }>,
+    Expect<Invoke<typeof change, [store: One, domain: "acme", op: "switch", input: { name: "MYAPP-OPENAI-KEY"; on: true }]>, "=", { domain: "acme"; secrets: { "MYAPP-OPENAI-KEY": { value: "a"; hosts: ["api.openai.com"] } } }>,
+    Expect<Invoke<typeof change, [store: One, domain: "acme", op: "remove", input: { name: "MYAPP-OPENAI-KEY" }]>, "=", { domain: "acme"; secrets: {} }>,
+  ];
+  /** a switch of a secret the domain does not have, a time to live past a year, a change
+   *  that is not one of these */
+  export type BadChange = [
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: One, domain: "acme", op: "switch", input: { name: "OTHER-SECRET"; on: true }]]>, "=", { message: "the domain acme has no secret named OTHER-SECRET"; fix: "desolate domain acme secret list"; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: One, domain: "acme", op: "switch", input: { name: "MYAPP-OPENAI-KEY"; on: true; ttlSeconds: 40000000 }]]>, "=", { message: "a time to live is between a second and a year"; fix: "desolate domain acme secret on MYAPP-OPENAI-KEY --ttl 30m"; code: 1 }>,
+    Expect<Invoke<typeof refusalOf, [f: typeof change, args: [store: One, domain: "acme", op: "show", input: {}]]>, "=", { message: "'show' is not a change to a domain's secrets"; fix: "set, switch, remove"; code: 1 }>,
+  ];
+}
+
 export const indexOf = (store: Store): Indexed[] =>
   Object.entries(store.secrets).map(([name, { value: _value, ...rest }]) => ({ name, ...rest })).sort((a, b) => a.name.localeCompare(b.name));
+
+declare namespace indexOf {
+  /** what the root's user may read of a domain's secrets: everything but the value */
+  export type NoValue = Expect<
+    Invoke<typeof indexOf, [store: { domain: "acme"; secrets: { "ZETA-SECRET": { value: "z"; hosts: ["z.example.com"]; off: true }; "ALPHA-SECRET": { value: "a"; hosts: ["a.example.com"]; headers: ["authorization"] } } }]>,
+    "=",
+    [{ name: "ALPHA-SECRET"; hosts: ["a.example.com"]; headers: ["authorization"] }, { name: "ZETA-SECRET"; hosts: ["z.example.com"]; off: true }]
+  >;
+}
 
 /** Write a root-owned file atomically, with this group and mode. */
 const writeRoot = (file: string, text: string, gid: number, mode: number) => {

@@ -6,6 +6,11 @@ import { createServer } from "node:net";
 import * as path from "node:path";
 import { onTestFinished } from "vitest";
 import type { backend } from "../../release/host/stack.ts";
+import { INSTANCE } from "../../release/host/paths.ts";
+import { devHostname, editorHostname, HOSTNAME_SUFFIX, workspaceVmName } from "../../release/shared/names.ts";
+import { sniff } from "../../release/shared/sniff.ts";
+import type { Sniffed } from "../../release/shared/sniff.ts";
+import { clientHello } from "./shared-bytes.harness.ts";
 
 // ------------------------------------------------------------------ a stand-in daemon
 /** Stands in for a running host daemon: a socket where the real one keeps its own
@@ -84,3 +89,69 @@ export const answerOf = async (handler: (req: IncomingMessage, res: ServerRespon
   await done;
   return answer;
 };
+
+// ------------------------------------------------------------------ the forwarder's inputs
+// Workspaces' names carry a hex of the stack's instance and end in its suffix (shared/names.ts),
+// which another environment may set otherwise. So a test writes `dev-w1-HEX.localhost` for
+// workspace w1 of domain dev (`dev-w1-editor-HEX.localhost` for its editor), and these turn
+// that into this stack's name, and this stack's names back into that. (A domain and a
+// workspace written so have no dash of their own.)
+const SUFFIX = HOSTNAME_SUFFIX.replace(/\./g, "\\.");
+const named = (text: string) =>
+  text.replace(/([a-z0-9]+)-([a-z0-9]+)-(editor-)?HEX\.localhost|\.localhost\b/g, (whole, domain?: string, workspace?: string, editor?: string) =>
+    domain === undefined ? `.${HOSTNAME_SUFFIX}` : (editor ? editorHostname : devHostname)(INSTANCE, domain, workspace!));
+const unnamed = (text: string) => text.replace(new RegExp(`-[0-9a-f]{6}\\.${SUFFIX}|\\.${SUFFIX}`, "g"), (whole) => (whole.startsWith("-") ? "-HEX.localhost" : ".localhost"));
+
+/** A workspace as the daemon keeps it (`at`: "domain/workspace"), listening on `listening`. */
+export const ws = (at: string, listening: number[], more: { reserved?: number[]; editorTokenEpoch?: number } = {}) => {
+  const [domain = "", workspace = ""] = at.split("/");
+  return { vm: workspaceVmName(INSTANCE, domain, workspace), domain, workspace, listeners: new Set(listening), reserved: new Set(more.reserved ?? []), editorTokenEpoch: more.editorTokenEpoch ?? 0 };
+};
+
+/** What a connection said first, as sniffSocket hands it over: `text` (names written as above)
+ *  as bytes, and what they are. `undecided`: the wait ran out, or the client left, first. */
+export const said = (text: string, undecided = false) => {
+  const head = Buffer.from(named(text), "latin1");
+  if (undecided) return { sniffed: { kind: "raw" } as Sniffed, head, undecided: true };
+  const sniffed = sniff(head);
+  if (sniffed.kind === "more") throw new Error(`the harness: ${JSON.stringify(text)} is not all of a first message`);
+  return { sniffed, head };
+};
+/** A TLS ClientHello with `name` (written as above) as its server name, or none. */
+export const helloTo = (name: string | null) => {
+  const head = clientHello(name === null ? null : named(name));
+  return { sniffed: sniff(head), head };
+};
+/** Only what the bytes are (shared/sniff.ts), as the pages server reads them. */
+export const asked = (text: string) => said(text).sniffed;
+/** `text`, its names written as above, as bytes. */
+export const wire = (text: string) => Buffer.from(named(text), "latin1");
+
+/** A set, which a type cannot write. */
+export const setOf = (items: any[]): Set<any> => new Set(items);
+/** Which workspace (`at`) had each raw port first, as the daemon keeps it: by VM. */
+export const rawOwners = (owners: Record<string, string>) =>
+  new Map(Object.entries(owners).map(([port, at]) => [Number(port), ws(at, []).vm]));
+/** What lsof would say holds a port. */
+export const heldByColima = () => "colima, pid 812";
+/** The stack's default memory for a workspace, in MiB. */
+export const sixGiB = () => 6144;
+
+/** A decision as a reader would check it: a workspace kept by the daemon as "domain/workspace",
+ *  a set as its items, an error as its message, and this stack's names as written above. */
+export const shown = (value: unknown): any => {
+  if (typeof value === "string") return unnamed(value);
+  if (value instanceof Error) return { error: value.message };
+  if (value instanceof Set) return [...value].map(shown);
+  if (Array.isArray(value)) return value.map(shown);
+  if (value !== null && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    if (typeof o.vm === "string" && typeof o.domain === "string" && typeof o.workspace === "string" && o.listeners instanceof Set) return `${o.domain}/${o.workspace}`;
+    return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, shown(v)]));
+  }
+  return value;
+};
+/** A name, written as above, as this stack spells it. */
+export const nameOf = (text: string) => named(text);
+/** Only what a TLS ClientHello to `name` is, as the pages server reads it. */
+export const askedTls = (name: string | null) => helloTo(name).sniffed;

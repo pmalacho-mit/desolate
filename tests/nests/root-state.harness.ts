@@ -138,3 +138,14 @@ export const writeVmIn = (domain: string, workspace: string, vm: string) =>
  *  order a test should rely on: names made of a time and a random part.) */
 export const jsonFilesIn = (where: Where, dir: string): Record<string, unknown>[] =>
   namesIn(where, dir).filter((name) => name.endsWith(".json")).map((name) => readJsonIn(where, `${dir}/${name}`)!);
+
+/** A file under one of the root's directories as text, "" when there is none: for a test of
+ *  its length or what it holds. */
+export const textIn = (where: Where, name: string): string => readIn(where, name) ?? "";
+
+/** A JSON file under one of the root's directories that holds a list, parsed; null when there
+ *  is none. */
+export const jsonListIn = (where: Where, name: string): unknown[] | null => {
+  const text = readIn(where, name);
+  return text === null ? null : (JSON.parse(text) as unknown[]);
+};

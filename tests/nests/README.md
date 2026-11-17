@@ -74,5 +74,16 @@ checks both on a copy of `release/` taken out of the checkout, each beside a con
 - **Leave out what needs a VM, Docker, the network or a real git remote.** That is T1's and
   T2's (`tests/v3`), whose node:test files stay where they are. An in-source test runs in
   milliseconds, on any machine, and touches nothing outside the test file's home.
-- **Do not change what the code does to make it testable.** Testing a private helper is fine;
-  moving code around only for a test is not.
+- **Make code testable without changing what it does.** The printer serves a test the whole
+  module's top-level code, so a script that runs as soon as it is imported (a loop, stdin,
+  `process.exit`) cannot be tested until its running is guarded:
+
+  ```ts
+  if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+  ```
+
+  (`realpathSync`: several are run through a link or a wrapper.) A decision buried in a
+  closure (a request's route, a token check) is lifted to a top-level function of what it
+  decides on, and the closure calls it. Neither changes behaviour, and the tiers that run the
+  real thing (T2, and T4 for a boundary) say so. A refactor that changes behaviour is a
+  change of its own, never a test's.

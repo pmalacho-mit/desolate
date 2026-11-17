@@ -32,6 +32,9 @@ import { drain, inbox, outbox } from "./outbox.ts";
 import { waiting } from "./pushed.ts";
 import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aDomain, aWorkspace, emptyRoot, jsonFilesIn } from "../../tests/nests/root-state.harness.ts";
 
 const RATE = { perMinute: 30 } as const;
 const recent = new Map<string, number[]>();
@@ -109,6 +112,63 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
   return { ok: true, workspace: r.name };
 };
 
+declare namespace signed {
+  // The domain acme: w1 holds both main checkouts; w2 was started by w1, in a worktree "w2".
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/api", "acme/web"]]>;
+  type W1 = Invoke<typeof aWorkspace, [domain: "acme", name: "w1", checkouts: ["acme/api=main", "acme/web=main"]]>;
+  type W2 = Invoke<typeof aWorkspace, [domain: "acme", name: "w2", checkouts: ["acme/api=worktree:w2", "acme/web=worktree:w2"], startedBy: "w1"]>;
+  // Each request is signed as shared/spawn.ts makes it (`at`, `nonce`, `mac`): the root cannot
+  // check the signature (it has no key, by design; the host does).
+
+  /** a spawn the root can say nothing against is queued for the host, for the domain whose
+   *  outbox it came from, whatever the request says its domain is */
+  export type Queues = Given<
+    [Fresh, Acme, W1],
+    [
+      Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; domain: "other"; parent: "w1"; name: "helper"; checkouts: ["acme/web=worktree:task/web"]; command: ["claude", "-p", "fix it"] }]>, "=", { ok: true; workspace: "helper" }>,
+      Expect<Invoke<typeof jsonFilesIn, [where: "state", dir: "host-queue"]>, "matches", [{
+        kind: "workspace.spawn";
+        args: { domain: "acme"; workspace: "helper"; parent: "w1"; branch: ""; checkouts: '["acme/web=worktree:task/web"]'; command: '["claude","-p","fix it"]'; mac: "abababababababababababababababababababababababababababababababab" };
+      }]>,
+    ]
+  >;
+  /** a spawn waiting in the queue holds its name already */
+  export type PendingHoldsItsName = Given<
+    [Fresh, Acme, W1, Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "helper"; checkouts: ["acme/web=worktree:a"] }]>],
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "helper"; checkouts: ["acme/web=worktree:b"] }]>, "=", { ok: false; error: "acme already has a workspace 'helper'"; fix: "desolate spawn --name <another>" }>
+  >;
+  /** what is refused at once, to the workspace that asked, in its terms; nothing is queued */
+  export type Refuses = Given<[Fresh, Acme, W1, W2], [
+    Expect<Invoke<typeof signed, [domain: "acme", request: { op: "spawn"; parent: "w1"; name: "helper" }]>, "=", { ok: false; error: "that is not a request desolate makes (desolate spawn --help)" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w9"; name: "helper" }]>, "=", { ok: false; error: "acme has no workspace 'w9'" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "template" }]>, "=", { ok: false; error: "'template' is the name of the domain's template build"; fix: "desolate spawn --name <another>" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "w2" }]>, "=", { ok: false; error: "acme already has a workspace 'w2'"; fix: "desolate spawn --name <another>" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "helper"; checkouts: ["other/x=main"] }]>, "=", { ok: false; error: "other/x is not in the domain acme"; fix: "desolate spawn --checkout <one of: acme/api, acme/web>=worktree:<branch>" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w2"; name: "helper"; checkouts: ["acme/api=main"] }]>, "=", { ok: false; error: "the main checkout of acme/api is checked out in acme/w1"; fix: "desolate spawn --name helper --checkout acme/api=worktree:<a branch of its own>" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "helper"; branch: "w2" }]>, "matches", { ok: false; error: "the branch 'w2' is checked out in acme/w2 (a workspace you start gets that branch in each repository you do not name with --checkout)" }>,
+    Expect<Invoke<typeof jsonFilesIn, [where: "state", dir: "host-queue"]>, "=", []>,
+  ]>;
+  /** the person's limit on what its workspaces may start: none at all, or a number */
+  export type Limit = [
+    Given<
+      [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/api"], extra: { spawnMax: 0 }]>, W1],
+      Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "helper" }]>, "=", { ok: false; error: "acme's workspaces cannot start workspaces: the person turned it off"; fix: "on the Mac: desolate domain acme spawn --max none" }>
+    >,
+    Given<
+      [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/api", "acme/web"], extra: { spawnMax: 1 }]>, W1, W2],
+      Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "spawn"; parent: "w1"; name: "helper"; checkouts: ["acme/web=worktree:x"] }]>, "=", { ok: false; error: "acme already has 1 workspace(s) started by its workspaces, its limit of 1"; fix: "close one you started (desolate close <name>), or ask the person to raise the limit" }>
+    >,
+  ];
+  /** a workspace closes only one it started */
+  export type Close = Given<[Fresh, Acme, W1, W2, Invoke<typeof aWorkspace, [domain: "acme", name: "w3", checkouts: []]>], [
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "close"; parent: "w3"; name: "w2" }]>, "=", { ok: false; error: "acme/w2 was not started by w3: only the workspace that started it can close it"; fix: "ask the person: desolate rm on the Mac" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "close"; parent: "w1"; name: "gone" }]>, "=", { ok: false; error: "acme has no workspace 'gone'" }>,
+    Expect<Invoke<typeof signed, [domain: "acme", request: { at: "2026-11-16T12:00:00.000Z"; nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"; mac: "abababababababababababababababababababababababababababababababab"; op: "close"; parent: "w1"; name: "w2" }]>, "=", { ok: true; workspace: "w2" }>,
+    Expect<Invoke<typeof jsonFilesIn, [where: "state", dir: "host-queue"]>, "matches", [{ kind: "workspace.close"; args: { domain: "acme"; workspace: "w2"; parent: "w1" } }]>,
+  ]>;
+}
+
 const handle = async (domain: string, repoList: string[], request: Record<string, unknown>): Promise<Record<string, unknown>> => {
   if (request.op === "spawn" || request.op === "close") return signed(domain, request);
   const repo = parseRepo(request.repo);
@@ -122,6 +182,55 @@ const handle = async (domain: string, repoList: string[], request: Record<string
   if (request.op === "issue") return issues.offer(domain, repoList, workspaces(domain).map((w) => w.workspace), request);
   return { ok: false, error: "the root takes 'fetch', 'offer', 'issue', 'spawn' and 'close' from a workspace, and nothing else" };
 };
+
+declare namespace handle {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a workspace asks only of its own domain's repositories, and only for what is on the list */
+  export type Refuses = Given<[Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>], [
+    Expect<Invoke<typeof handle, [domain: "acme", repoList: ["acme/app"], request: { op: "fetch"; repo: "other/app" }]>, "=", { ok: false; error: "that repository is not in this domain" }>,
+    Expect<Invoke<typeof handle, [domain: "acme", repoList: ["acme/app"], request: { op: "fetch"; repo: "acme/app/../../other" }]>, "=", { ok: false; error: "that repository is not in this domain" }>,
+    Expect<Invoke<typeof handle, [domain: "acme", repoList: ["acme/app"], request: { op: "push"; repo: "acme/app"; branch: "main" }]>, "=", { ok: false; error: "the root takes 'fetch', 'offer', 'issue', 'spawn' and 'close' from a workspace, and nothing else" }>,
+  ]>;
+  /** an issue offered, kept for the person */
+  export type Issue = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>],
+    Expect<Invoke<typeof handle, [domain: "acme", repoList: ["acme/app"], request: { op: "issue"; repo: "acme/app"; title: "Login loops" }]>, "matches", { ok: true }>
+  >;
+}
+
+/** The reply to one request a domain left in its outbox: what it asked, if it is a request,
+ *  and the domain has not asked too often; a failure on the way is a refusal, not a crash. */
+const answer = async (domain: string, repoList: string[], request: Record<string, unknown> | null): Promise<Record<string, unknown>> => {
+  let reply: Record<string, unknown>;
+  if (!request || typeof request.op !== "string") reply = { ok: false, error: "not a request" };
+  else if (!allowed(domain)) reply = { ok: false, error: `this domain has made ${RATE.perMinute} requests in a minute; wait and ask again` };
+  else
+    try {
+      reply = await handle(domain, repoList, request);
+    } catch (error) {
+      reply = { ok: false, error: error instanceof Error ? error.message.slice(0, 500) : "the root failed" };
+    }
+  return reply;
+};
+
+declare namespace answer {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** what is not a request is answered as such, and nothing is done */
+  export type NotARequest = [
+    Expect<Invoke<typeof answer, [domain: "acme", repoList: ["acme/app"], request: null]>, "=", { ok: false; error: "not a request" }>,
+    Expect<Invoke<typeof answer, [domain: "acme", repoList: ["acme/app"], request: { op: 7 }]>, "=", { ok: false; error: "not a request" }>,
+  ];
+  /** a request that fails on the way is a refusal with the reason, and the daemon goes on */
+  export type FailsAsARefusal = Given<
+    Fresh,
+    Expect<Invoke<typeof answer, [domain: "gone", repoList: ["acme/app"], request: { op: "offer"; repo: "acme/app"; branch: "fix"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "there is no domain 'gone'" }>
+  >;
+  /** a request that passes is handled (an issue offered, here) */
+  export type Handled = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>],
+    Expect<Invoke<typeof answer, [domain: "acme", repoList: ["acme/app"], request: { op: "issue"; repo: "acme/app"; title: "Login loops" }]>, "matches", { ok: true }>
+  >;
+}
 
 const log = (line: string) => process.stderr.write(`${new Date().toISOString()} rootd: ${line}\n`);
 
@@ -172,6 +281,7 @@ const checkLanded = () => {
   });
 };
 
+const main = async () => {
 log("up");
 for (;;) {
   checkLanded();
@@ -180,15 +290,7 @@ for (;;) {
     // Each request is read once and removed, by name, in a directory that was checked to be
     // the outbox's own (outbox.ts): never through a path a workspace could have redirected.
     for (const { name, data: request } of drain<Record<string, unknown>>(path.join(outbox(d.slug), "requests"), /^[0-9a-z-]{1,60}\.json$/, 50)) {
-      let reply: Record<string, unknown>;
-      if (!request || typeof request.op !== "string") reply = { ok: false, error: "not a request" };
-      else if (!allowed(d.slug)) reply = { ok: false, error: `this domain has made ${RATE.perMinute} requests in a minute; wait and ask again` };
-      else
-        try {
-          reply = await handle(d.slug, d.repos, request);
-        } catch (error) {
-          reply = { ok: false, error: error instanceof Error ? error.message.slice(0, 500) : "the root failed" };
-        }
+      const reply = await answer(d.slug, d.repos, request);
       log(`${d.slug} ${String(request?.op)} ${String(request?.repo ?? request?.name)} -> ${reply.ok === true ? "ok" : `refused: ${String(reply.error)}`}`);
       writeJson(path.join(inbox(d.slug), "replies", name), reply);
     }
@@ -202,3 +304,7 @@ for (;;) {
   }
   await sleep(250);
 }
+};
+
+// Run by start.sh (`kept rootd rootd.ts`: node with this file's path); imported, it does nothing.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname) await main();
