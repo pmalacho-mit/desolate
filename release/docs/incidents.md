@@ -402,6 +402,15 @@ on it and let it go as text. The terminal, reading the same bytes by the DEC par
 out the control and finishes the sequence. The filter now reads a CSI as that parser does.
 (`release/shared/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
 
+**`desolate status` broken in every running devcontainer after an upgrade.** A devcontainer
+got `desolate`, `/desolate/status` and the two git remote helpers as binds of single files
+from the release share. When an upgrade replaced `status`, each running container went on
+reading a mix of the old file and the new one, cut short: `/desolate/status: 103: Syntax
+error`. Reproduced under Colima's virtiofs: after a `git checkout` of the release, the bind
+read 102 lines of the 118. The four are now binds of `release/workspace/entry`, a file that
+never changes and runs the release's script of its own name. A container made before this
+keeps its old binds until it is made again. (`release/workspace/devcontainer.ts`, `overrideOf`)
+
 ## The rules these left
 
 - **A negative check needs a positive control.** A probe that failed to run is
@@ -415,6 +424,8 @@ out the control and finishes the sequence. The filter now reads a CSI as that pa
   built on it, and two fixes changed shape because of what was measured.
 - **Test with what real use sends.** A pipe's buffer, a browser's preconnect, a merge on the
   forge an hour ago: each passed every test and failed in the first night of real use.
+- **What a running thing holds must survive an upgrade.** A bind of one file holds that file
+  as it was; a folder's bind sees the folder as it is. Bind what never changes.
 - **A fix to a router is a change to a boundary.** It gets the boundary's review and T4
   before it is believed, however small.
 - **The input a safe command reads is the boundary, not the command.**

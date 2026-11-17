@@ -175,10 +175,10 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
     bind(`${home}/.desolate-editor`, "/desolate/editor-data"),
     bind("/etc/ssl/certs", "/desolate/ca", true),
     bind("/usr/local/bin/node", "/desolate/bin/node", true),
-    bind("/desolate/release/workspace/desolate", "/usr/local/bin/desolate", true),
-    bind("/desolate/release/workspace/git-remote-desolate-offer", "/usr/local/bin/git-remote-desolate-offer", true),
-    bind("/desolate/release/workspace/git-remote-desolate-mirror", "/usr/local/bin/git-remote-desolate-mirror", true),
-    bind("/desolate/release/workspace/status", "/desolate/status", true),
+    // Each runs the release's script of its own name, through one file that never changes:
+    // a bind of a single file from the release share goes stale when an upgrade replaces
+    // that file (workspace/entry says how).
+    ...["/usr/local/bin/desolate", "/usr/local/bin/git-remote-desolate-offer", "/usr/local/bin/git-remote-desolate-mirror", "/desolate/status"].map((target) => bind("/desolate/release/workspace/entry", target, true)),
     ...(cache ? [bind("/desolate/cache", "/desolate/cache")] : []),
     // The VM's own disk, at the same path (start.sh): binds for docker-outside-of-docker.
     bind("/desolate/scratch", "/desolate/scratch"),
@@ -233,10 +233,10 @@ declare namespace overrideOf {
         "source=/home/acme/.desolate-editor,target=/desolate/editor-data,type=bind",
         "source=/etc/ssl/certs,target=/desolate/ca,type=bind,readonly",
         "source=/usr/local/bin/node,target=/desolate/bin/node,type=bind,readonly",
-        "source=/desolate/release/workspace/desolate,target=/usr/local/bin/desolate,type=bind,readonly",
-        "source=/desolate/release/workspace/git-remote-desolate-offer,target=/usr/local/bin/git-remote-desolate-offer,type=bind,readonly",
-        "source=/desolate/release/workspace/git-remote-desolate-mirror,target=/usr/local/bin/git-remote-desolate-mirror,type=bind,readonly",
-        "source=/desolate/release/workspace/status,target=/desolate/status,type=bind,readonly",
+        "source=/desolate/release/workspace/entry,target=/usr/local/bin/desolate,type=bind,readonly",
+        "source=/desolate/release/workspace/entry,target=/usr/local/bin/git-remote-desolate-offer,type=bind,readonly",
+        "source=/desolate/release/workspace/entry,target=/usr/local/bin/git-remote-desolate-mirror,type=bind,readonly",
+        "source=/desolate/release/workspace/entry,target=/desolate/status,type=bind,readonly",
         "source=/desolate/cache,target=/desolate/cache,type=bind",
         "source=/desolate/scratch,target=/desolate/scratch,type=bind",
       ];
@@ -296,10 +296,10 @@ declare namespace overrideOf {
         "source=/home/acme/.desolate-editor,target=/desolate/editor-data,type=bind",
         "source=/etc/ssl/certs,target=/desolate/ca:ro,type=bind",
         "source=/usr/local/bin/node,target=/desolate/bin/node:ro,type=bind",
-        "source=/desolate/release/workspace/desolate,target=/usr/local/bin/desolate:ro,type=bind",
-        "source=/desolate/release/workspace/git-remote-desolate-offer,target=/usr/local/bin/git-remote-desolate-offer:ro,type=bind",
-        "source=/desolate/release/workspace/git-remote-desolate-mirror,target=/usr/local/bin/git-remote-desolate-mirror:ro,type=bind",
-        "source=/desolate/release/workspace/status,target=/desolate/status:ro,type=bind",
+        "source=/desolate/release/workspace/entry,target=/usr/local/bin/desolate:ro,type=bind",
+        "source=/desolate/release/workspace/entry,target=/usr/local/bin/git-remote-desolate-offer:ro,type=bind",
+        "source=/desolate/release/workspace/entry,target=/usr/local/bin/git-remote-desolate-mirror:ro,type=bind",
+        "source=/desolate/release/workspace/entry,target=/desolate/status:ro,type=bind",
         "source=/desolate/scratch,target=/desolate/scratch,type=bind",
         "source=/workspaces,target=/workspaces,type=bind",
       ];
