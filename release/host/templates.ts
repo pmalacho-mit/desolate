@@ -39,7 +39,9 @@ import type { collect, fakeStack, noBuilder, rootAnswers, said } from "../.harne
 type EnvKey = { repo: string; spec: string; id: string };
 export type Builder = {
   specOf: (plan: WorkspacePlan, repos: string[]) => VmSpec;
-  startServices: (plan: WorkspacePlan) => Promise<{ devcontainer: string; editorDown: string | null }>;
+  startServices: (
+    plan: WorkspacePlan,
+  ) => Promise<{ devcontainer: string; editorDown: string | null }>;
 };
 
 const hashOf = (...parts: string[]) => createHash("sha256").update(parts.join("\n")).digest("hex");
@@ -52,26 +54,59 @@ const released = (file: string) => {
 };
 /** The template's key: the spec, and what the VM it is built in is made of. */
 export const keyOf = (env: EnvKey) =>
-  hashOf(env.repo, env.spec, env.id, imageFingerprint(), released("workspace/devcontainer.ts"), released("workspace/editor.sh")).slice(0, 16);
+  hashOf(
+    env.repo,
+    env.spec,
+    env.id,
+    imageFingerprint(),
+    released("workspace/devcontainer.ts"),
+    released("workspace/editor.sh"),
+  ).slice(0, 16);
 /** `dsl-<instance>-t<9 hex>`: as long as a workspace's VM name (the socket-path check counts
  *  on it), and never one ("t" is not hex). */
-export const templateVm = (domain: string, key: string) => `dsl-${INSTANCE}-t${hashOf(domain, key).slice(0, 9)}`;
+export const templateVm = (domain: string, key: string) =>
+  `dsl-${INSTANCE}-t${hashOf(domain, key).slice(0, 9)}`;
 
 declare namespace keyOf {
-  type Env = { repo: "acme/web"; spec: ".devcontainer"; id: "0123456789abcdef0123456789abcdef01234567" };
+  type Env = {
+    repo: "acme/web";
+    spec: ".devcontainer";
+    id: "0123456789abcdef0123456789abcdef01234567";
+  };
   /** sixteen hex digits, the same for the same environment, another for any change to its spec */
   export type Keys = [
     Expect<Invoke<typeof keyOf, [env: Env]>, "matches", "^[0-9a-f]{16}$">,
     Expect<Invoke<typeof keyOf, [env: Env]>, "=", Invoke<typeof keyOf, [env: Env]>>,
-    Expect<Invoke<typeof keyOf, [env: Env]>, "!=", Invoke<typeof keyOf, [env: { repo: "acme/web"; spec: ".devcontainer"; id: "1111111111111111111111111111111111111111" }]>>,
+    Expect<
+      Invoke<typeof keyOf, [env: Env]>,
+      "!=",
+      Invoke<
+        typeof keyOf,
+        [
+          env: {
+            repo: "acme/web";
+            spec: ".devcontainer";
+            id: "1111111111111111111111111111111111111111";
+          },
+        ]
+      >
+    >,
   ];
 }
 declare namespace templateVm {
   /** as long as a workspace's VM name (dsl-<instance>- and ten more), and never one: "t" is
    *  not hex; one domain's template is never another's */
   export type Names = [
-    Expect<Invoke<typeof templateVm, [domain: "acme", key: "0123456789abcdef"]>, "matches", "^dsl-main-t[0-9a-f]{9}$">,
-    Expect<Invoke<typeof templateVm, [domain: "acme", key: "0123456789abcdef"]>, "!=", Invoke<typeof templateVm, [domain: "beta", key: "0123456789abcdef"]>>,
+    Expect<
+      Invoke<typeof templateVm, [domain: "acme", key: "0123456789abcdef"]>,
+      "matches",
+      "^dsl-main-t[0-9a-f]{9}$"
+    >,
+    Expect<
+      Invoke<typeof templateVm, [domain: "acme", key: "0123456789abcdef"]>,
+      "!=",
+      Invoke<typeof templateVm, [domain: "beta", key: "0123456789abcdef"]>
+    >,
   ];
 }
 
@@ -87,13 +122,21 @@ sync`;
 /** The domain's template for its environment as published now: present, or built now.
  *  null when the domain has no spec, or the build did not come up (the workspace is then made
  *  from desolate's base, as before, and `say` says why). */
-export const ensure = async (domain: string, repos: string[], build: Builder, say: (line: string) => void, envRepo?: string): Promise<string | null> => {
+export const ensure = async (
+  domain: string,
+  repos: string[],
+  build: Builder,
+  say: (line: string) => void,
+  envRepo?: string,
+): Promise<string | null> => {
   // A template only makes a start faster: nothing about one may stop a workspace being made
   // (two `up`s at once in a domain: the second finds the first's build under way).
   try {
     return await ensureOrThrow(domain, repos, build, say, envRepo);
   } catch (error) {
-    say(`  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`);
+    say(
+      `  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`,
+    );
     return null;
   }
 };
@@ -101,9 +144,19 @@ export const ensure = async (domain: string, repos: string[], build: Builder, sa
 declare namespace ensure {
   /** a domain with no devcontainer spec has no template, and nothing is said */
   export type NoSpec = Given<
-    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "domain.env-key": null }]>],
     [
-      Expect<Invoke<typeof ensure, [domain: "acme", repos: ["acme/web"], build: typeof noBuilder, say: typeof collect]>, "=", null>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.env-key": null }]>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof ensure,
+          [domain: "acme", repos: ["acme/web"], build: typeof noBuilder, say: typeof collect]
+        >,
+        "=",
+        null
+      >,
       Expect<Invoke<typeof said>, "=", []>,
     ]
   >;
@@ -112,32 +165,79 @@ declare namespace ensure {
   export type NeverStopsAWorkspace = Given<
     [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
     [
-      Expect<Invoke<typeof ensure, [domain: "acme", repos: ["acme/web"], build: typeof noBuilder, say: typeof collect]>, "=", null>,
-      Expect<Invoke<typeof said>, "=", ["  no template: the root did not answer 'domain.env-key'. This workspace is made from desolate's base."]>,
+      Expect<
+        Invoke<
+          typeof ensure,
+          [domain: "acme", repos: ["acme/web"], build: typeof noBuilder, say: typeof collect]
+        >,
+        "=",
+        null
+      >,
+      Expect<
+        Invoke<typeof said>,
+        "=",
+        [
+          "  no template: the root did not answer 'domain.env-key'. This workspace is made from desolate's base.",
+        ]
+      >,
     ]
   >;
 }
 
-const ensureOrThrow = async (domain: string, repos: string[], build: Builder, say: (line: string) => void, envRepo?: string): Promise<string | null> => {
+const ensureOrThrow = async (
+  domain: string,
+  repos: string[],
+  build: Builder,
+  say: (line: string) => void,
+  envRepo?: string,
+): Promise<string | null> => {
   const b = backend();
-  const env = await rootctl<EnvKey | null>("domain.env-key", { slug: domain, ...(envRepo ? { repo: envRepo } : {}) }, { quiet: true });
+  const env = await rootctl<EnvKey | null>(
+    "domain.env-key",
+    { slug: domain, ...(envRepo ? { repo: envRepo } : {}) },
+    { quiet: true },
+  );
   if (!env) return null;
   const key = keyOf(env);
   const name = templateVm(domain, key);
   const info = await b.info(name);
-  if (info.status === "stopped" && info.labels.template === key && info.labels.domain === domain) return name;
+  if (info.status === "stopped" && info.labels.template === key && info.labels.domain === domain)
+    return name;
   // A template of this domain for this environment, made from an older spec, is stale; one
   // half made is no use. Another environment's is not: a domain with a python repository and a
   // node one keeps a template for each (one made before templates were labelled with their
   // environment counts as stale).
   for (const vm of await b.list())
-    if (vm.labels.domain === domain && vm.labels.template && vm.name !== name && (vm.labels.env ?? env.repo) === env.repo) await b.destroy(vm.name);
+    if (
+      vm.labels.domain === domain &&
+      vm.labels.template &&
+      vm.name !== name &&
+      (vm.labels.env ?? env.repo) === env.repo
+    )
+      await b.destroy(vm.name);
   if (info.status !== "missing") await b.destroy(name);
 
-  say(`  building ${domain}'s environment once (${env.repo}, ${env.spec} ${env.id.slice(0, 12)}): later workspaces start from it`);
-  const plan = await rootctl<WorkspacePlan>("workspace.plan", { instance: INSTANCE, domain, name: "template", checkouts: [], base: null, fetch: false, env: env.repo }, { quiet: true });
+  say(
+    `  building ${domain}'s environment once (${env.repo}, ${env.spec} ${env.id.slice(0, 12)}): later workspaces start from it`,
+  );
+  const plan = await rootctl<WorkspacePlan>(
+    "workspace.plan",
+    {
+      instance: INSTANCE,
+      domain,
+      name: "template",
+      checkouts: [],
+      base: null,
+      fetch: false,
+      env: env.repo,
+    },
+    { quiet: true },
+  );
   const builder: WorkspacePlan = { ...plan, vm: name };
-  const spec: VmSpec = { ...build.specOf(builder, repos), labels: { title: `${domain} template`, domain, template: key, env: env.repo } };
+  const spec: VmSpec = {
+    ...build.specOf(builder, repos),
+    labels: { title: `${domain} template`, domain, template: key, env: env.repo },
+  };
   const { disconnectWorkspace } = await import("./daemon.ts");
   let made = false;
   // A line per phase, with its time: a first `up` sat on the line above for 200 s on the M1,
@@ -147,19 +247,29 @@ const ensureOrThrow = async (domain: string, repos: string[], build: Builder, sa
   try {
     await b.create(spec);
     await b.start(name);
-    say(`  its VM is up (${took()}); now the project's devcontainer: its image, features and setup commands, usually the longest part`);
+    say(
+      `  its VM is up (${took()}); now the project's devcontainer: its image, features and setup commands, usually the longest part`,
+    );
     const { devcontainer } = await build.startServices(builder);
-    if (!devcontainer.startsWith("up")) throw new Error(`its devcontainer did not come up: ${devcontainer}`);
+    if (!devcontainer.startsWith("up"))
+      throw new Error(`its devcontainer did not come up: ${devcontainer}`);
     say(`  devcontainer up (${took()}); keeping it as ${domain}'s template`);
     const scrubbed = await b.exec(name, ["bash", "-c", SCRUB], { root: true, timeoutMs: 120_000 });
-    if (scrubbed.code !== 0) throw new Error(`it could not be emptied of what was the builder's: ${scrubbed.stderr.trim().slice(-200)}`);
+    if (scrubbed.code !== 0)
+      throw new Error(
+        `it could not be emptied of what was the builder's: ${scrubbed.stderr.trim().slice(-200)}`,
+      );
     made = true;
   } catch (error) {
-    say(`  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`);
+    say(
+      `  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`,
+    );
   } finally {
     await disconnectWorkspace(name).catch(() => {});
     await rootctl("proxy.stop", { vm: name }, { quiet: true }).catch(() => {});
-    await rootctl("workspace.remove", { domain, name: "template" }, { quiet: true }).catch(() => {});
+    await rootctl("workspace.remove", { domain, name: "template" }, { quiet: true }).catch(
+      () => {},
+    );
     if (made) await b.stop(name).catch(() => {});
     else await b.destroy(name).catch(() => {});
   }
@@ -169,5 +279,6 @@ const ensureOrThrow = async (domain: string, repos: string[], build: Builder, sa
 /** Every template a domain has (when the domain is removed). */
 export const removeAll = async (domain: string) => {
   const b = backend();
-  for (const vm of await b.list()) if (vm.labels.domain === domain && vm.labels.template) await b.destroy(vm.name);
+  for (const vm of await b.list())
+    if (vm.labels.domain === domain && vm.labels.template) await b.destroy(vm.name);
 };

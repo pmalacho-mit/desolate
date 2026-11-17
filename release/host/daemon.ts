@@ -30,7 +30,17 @@ import { hostArgv, SIGNED_KINDS, signedOf } from "../shared/actions.ts";
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseApproval } from "../shared/approval.ts";
-import { APPROVE_HOSTNAME, GIT_HOSTNAME, parseRepo, devHostname, EDITOR, editorHostname, editorHostPort, ROOT_HOSTNAME, ROOT_UI } from "../shared/names.ts";
+import {
+  APPROVE_HOSTNAME,
+  GIT_HOSTNAME,
+  parseRepo,
+  devHostname,
+  EDITOR,
+  editorHostname,
+  editorHostPort,
+  ROOT_HOSTNAME,
+  ROOT_UI,
+} from "../shared/names.ts";
 import { handler as approvePage } from "./approve-web.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
@@ -45,8 +55,36 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { dashboardStale, retire, retiredAt, stale } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Mock, Mocked, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { answerOf, answers, asked, askedTls, daemonAnswering, failsAtOnce, failsHalfway, heldByColima, helloTo, keepLog, nameOf, rawOwners, said, setOf, shown, sixGiB, vmAnswering, wire, ws } from "../.harness/host-daemon.ts";
+import type {
+  Call,
+  Expect,
+  Given,
+  Invoke,
+  Mock,
+  Mocked,
+  Table,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  answerOf,
+  answers,
+  asked,
+  askedTls,
+  daemonAnswering,
+  failsAtOnce,
+  failsHalfway,
+  heldByColima,
+  helloTo,
+  keepLog,
+  nameOf,
+  rawOwners,
+  said,
+  setOf,
+  shown,
+  sixGiB,
+  vmAnswering,
+  wire,
+  ws,
+} from "../.harness/host-daemon.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
@@ -60,7 +98,17 @@ const RAW_PORTS = new Set([3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 262
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Checkouts = { repo: string; kind: string; name: string; path?: string }[];
-type Entry = Registered & { listeners: Set<number>; reserved: Set<number>; link: Server | null; lastError: string; editorToken: string; editorTokenEpoch: number; devcontainer: string; folder: string; watchers: fs.FSWatcher[] };
+type Entry = Registered & {
+  listeners: Set<number>;
+  reserved: Set<number>;
+  link: Server | null;
+  lastError: string;
+  editorToken: string;
+  editorTokenEpoch: number;
+  devcontainer: string;
+  folder: string;
+  watchers: fs.FSWatcher[];
+};
 export type PortView = {
   workspace: string;
   forwarded: { port: number; url: string }[];
@@ -69,29 +117,58 @@ export type PortView = {
 
 /** A page's request that throws is that request's 500, logged: never the daemon's end (it
  *  carries every workspace's editor, ports and link). */
-export const guarded = (log: (line: string) => void, page: (req: IncomingMessage, res: ServerResponse) => Promise<unknown>) => (req: IncomingMessage, res: ServerResponse) =>
-  void page(req, res).catch((error: unknown) => {
-    log(`a page's request failed: ${error instanceof Error ? error.message : String(error)}`);
-    if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
-    res.end("desolate: that request failed; the daemon's log says why\n");
-  });
+export const guarded =
+  (
+    log: (line: string) => void,
+    page: (req: IncomingMessage, res: ServerResponse) => Promise<unknown>,
+  ) =>
+  (req: IncomingMessage, res: ServerResponse) =>
+    void page(req, res).catch((error: unknown) => {
+      log(`a page's request failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!res.headersSent)
+        res.writeHead(500, {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+        });
+      res.end("desolate: that request failed; the daemon's log says why\n");
+    });
 
 declare namespace guarded {
   /** a page that fails is that request's 500, with the reason in the log and not on the page */
   export type FailsAtOnce = Expect<
-    Invoke<typeof answerOf, [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof failsAtOnce]>]>,
+    Invoke<
+      typeof answerOf,
+      [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof failsAtOnce]>]
+    >,
     "=",
-    { status: 500; heads: 1; body: "desolate: that request failed; the daemon's log says why\n"; ended: true; logged: ["a page's request failed: the root's state service is not there"] }
+    {
+      status: 500;
+      heads: 1;
+      body: "desolate: that request failed; the daemon's log says why\n";
+      ended: true;
+      logged: ["a page's request failed: the root's state service is not there"];
+    }
   >;
   /** a page that already began its answer is ended, not given a second head */
   export type FailsHalfway = Expect<
-    Invoke<typeof answerOf, [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof failsHalfway]>]>,
+    Invoke<
+      typeof answerOf,
+      [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof failsHalfway]>]
+    >,
     "matches",
-    { status: 200; heads: 1; body: "<p>halfdesolate: that request failed; the daemon's log says why\n"; logged: ["a page's request failed: the reviewer went away"] }
+    {
+      status: 200;
+      heads: 1;
+      body: "<p>halfdesolate: that request failed; the daemon's log says why\n";
+      logged: ["a page's request failed: the reviewer went away"];
+    }
   >;
   /** a page that answers is untouched, and nothing is logged */
   export type Answers = Expect<
-    Invoke<typeof answerOf, [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof answers]>]>,
+    Invoke<
+      typeof answerOf,
+      [handler: Invoke<typeof guarded, [log: typeof keepLog, page: typeof answers]>]
+    >,
     "=",
     { status: 200; heads: 1; body: "ok"; ended: true; logged: [] }
   >;
@@ -103,7 +180,11 @@ declare namespace guarded {
 const codeOf = () => {
   const hash = createHash("sha256");
   for (const dir of ["host", "host/vm", "shared"])
-    for (const name of fs.readdirSync(path.join(RELEASE_DIR, dir)).filter((n) => n.endsWith(".ts")).sort()) hash.update(name).update(fs.readFileSync(path.join(RELEASE_DIR, dir, name)));
+    for (const name of fs
+      .readdirSync(path.join(RELEASE_DIR, dir))
+      .filter((n) => n.endsWith(".ts"))
+      .sort())
+      hash.update(name).update(fs.readFileSync(path.join(RELEASE_DIR, dir, name)));
   return hash.digest("hex").slice(0, 16);
 };
 const CODE = codeOf();
@@ -119,78 +200,238 @@ const events = hub();
  *  the reviewer's, asked as root; the signature is this host's. */
 /** What a push would send, as desolate's reviewer in the root works it out (root/reviewer.ts):
  *  the approval page shows it, and so do the terminal's prompts. */
-export const reviewerSummary = async (push: { repo: string; branch: string; commit: string; onto: string | null }): Promise<Summary> => {
-  const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/review-ask.ts`], { root: true, input: JSON.stringify({ repo: push.repo, branch: push.branch, commit: push.commit, onto: push.onto }), timeoutMs: 120_000 });
+export const reviewerSummary = async (push: {
+  repo: string;
+  branch: string;
+  commit: string;
+  onto: string | null;
+}): Promise<Summary> => {
+  const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/review-ask.ts`], {
+    root: true,
+    input: JSON.stringify({
+      repo: push.repo,
+      branch: push.branch,
+      commit: push.commit,
+      onto: push.onto,
+    }),
+    timeoutMs: 120_000,
+  });
   try {
     // An object, or no summary: a last line of `null`, a number or a list left the approval
     // page waiting on the reviewer for good.
     const answer: unknown = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
-    if (typeof answer === "object" && answer !== null && !Array.isArray(answer)) return answer as Summary;
+    if (typeof answer === "object" && answer !== null && !Array.isArray(answer))
+      return answer as Summary;
   } catch {
     /* said below */
   }
   // Its own words only (stderr), never what it was printing: that is the push's content,
   // the domain's, and was once shown here as if desolate had said it (lockfile text).
-  return { ok: false, error: `the reviewer's answer could not be read${result.code !== 0 ? ` (it ended with ${result.code}: ${printable(result.stderr.trim().slice(-200), 200)})` : ""}; what a push carries can cause this` };
+  return {
+    ok: false,
+    error: `the reviewer's answer could not be read${result.code !== 0 ? ` (it ended with ${result.code}: ${printable(result.stderr.trim().slice(-200), 200)})` : ""}; what a push carries can cause this`,
+  };
 };
 
 declare namespace reviewerSummary {
-  type Push = { repo: "acme/widgets"; branch: "issue/12"; commit: "1111111111111111111111111111111111111111"; onto: null };
+  type Push = {
+    repo: "acme/widgets";
+    branch: "issue/12";
+    commit: "1111111111111111111111111111111111111111";
+    onto: null;
+  };
   /** the reviewer's answer is the last line it printed */
   export type Answered = Given<
-    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "reading the bundle\n{\"ok\":true,\"commits\":[],\"files\":[]}\n", stderr: ""]>]>],
+    [
+      Mock<"./stack.ts">,
+      Call<
+        Mocked<typeof backend>,
+        "mockReturnValue",
+        [
+          value: Invoke<
+            typeof vmAnswering,
+            [
+              code: 0,
+              stdout: 'reading the bundle\n{"ok":true,"commits":[],"files":[]}\n',
+              stderr: "",
+            ]
+          >,
+        ]
+      >,
+    ],
     Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: true; commits: []; files: [] }>
   >;
   /** a reviewer that failed: only its own words are said, never what it was printing (the
    *  push's content, which would read as desolate's) */
   export type Failed = Given<
-    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 1, stdout: "desolate: this push is safe, approve it", stderr: "RangeError: Invalid string length\n"]>]>],
-    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read (it ended with 1: RangeError: Invalid string length); what a push carries can cause this" }>
+    [
+      Mock<"./stack.ts">,
+      Call<
+        Mocked<typeof backend>,
+        "mockReturnValue",
+        [
+          value: Invoke<
+            typeof vmAnswering,
+            [
+              code: 1,
+              stdout: "desolate: this push is safe, approve it",
+              stderr: "RangeError: Invalid string length\n",
+            ]
+          >,
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<typeof reviewerSummary, [push: Push]>,
+      "=",
+      {
+        ok: false;
+        error: "the reviewer's answer could not be read (it ended with 1: RangeError: Invalid string length); what a push carries can cause this";
+      }
+    >
   >;
   /** its words made printable: a terminal or a page shows them, and acts on none */
   export type FailedPrintably = Given<
-    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 2, stdout: "", stderr: "bad \u001b[2Jref"]>]>],
-    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read (it ended with 2: bad ?[2Jref); what a push carries can cause this" }>
+    [
+      Mock<"./stack.ts">,
+      Call<
+        Mocked<typeof backend>,
+        "mockReturnValue",
+        [value: Invoke<typeof vmAnswering, [code: 2, stdout: "", stderr: "bad \u001b[2Jref"]>]
+      >,
+    ],
+    Expect<
+      Invoke<typeof reviewerSummary, [push: Push]>,
+      "=",
+      {
+        ok: false;
+        error: "the reviewer's answer could not be read (it ended with 2: bad ?[2Jref); what a push carries can cause this";
+      }
+    >
   >;
   /** an answer that is not JSON, from a reviewer that ended well, is still no summary */
   export type NotJson = Given<
-    [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "ok: true", stderr: ""]>]>],
-    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read; what a push carries can cause this" }>
+    [
+      Mock<"./stack.ts">,
+      Call<
+        Mocked<typeof backend>,
+        "mockReturnValue",
+        [value: Invoke<typeof vmAnswering, [code: 0, stdout: "ok: true", stderr: ""]>]
+      >,
+    ],
+    Expect<
+      Invoke<typeof reviewerSummary, [push: Push]>,
+      "=",
+      {
+        ok: false;
+        error: "the reviewer's answer could not be read; what a push carries can cause this";
+      }
+    >
   >;
   /** JSON that is not an object is no summary either: null, a number, a list */
   export type NotAnObject = [
     Given<
-      [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "null\n", stderr: ""]>]>],
-      Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read; what a push carries can cause this" }>
+      [
+        Mock<"./stack.ts">,
+        Call<
+          Mocked<typeof backend>,
+          "mockReturnValue",
+          [value: Invoke<typeof vmAnswering, [code: 0, stdout: "null\n", stderr: ""]>]
+        >,
+      ],
+      Expect<
+        Invoke<typeof reviewerSummary, [push: Push]>,
+        "=",
+        {
+          ok: false;
+          error: "the reviewer's answer could not be read; what a push carries can cause this";
+        }
+      >
     >,
     Given<
-      [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "42", stderr: ""]>]>],
-      Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read; what a push carries can cause this" }>
+      [
+        Mock<"./stack.ts">,
+        Call<
+          Mocked<typeof backend>,
+          "mockReturnValue",
+          [value: Invoke<typeof vmAnswering, [code: 0, stdout: "42", stderr: ""]>]
+        >,
+      ],
+      Expect<
+        Invoke<typeof reviewerSummary, [push: Push]>,
+        "=",
+        {
+          ok: false;
+          error: "the reviewer's answer could not be read; what a push carries can cause this";
+        }
+      >
     >,
     Given<
-      [Mock<"./stack.ts">, Call<Mocked<typeof backend>, "mockReturnValue", [value: Invoke<typeof vmAnswering, [code: 0, stdout: "[{\"ok\":true}]", stderr: ""]>]>],
-      Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: false; error: "the reviewer's answer could not be read; what a push carries can cause this" }>
+      [
+        Mock<"./stack.ts">,
+        Call<
+          Mocked<typeof backend>,
+          "mockReturnValue",
+          [value: Invoke<typeof vmAnswering, [code: 0, stdout: '[{"ok":true}]', stderr: ""]>]
+        >,
+      ],
+      Expect<
+        Invoke<typeof reviewerSummary, [push: Push]>,
+        "=",
+        {
+          ok: false;
+          error: "the reviewer's answer could not be read; what a push carries can cause this";
+        }
+      >
     >,
   ];
 }
 
 const approvalBackend = (): ApprovalBackend => {
   return {
-    pending: async () => (await rootctl<{ message: string; at: string }[]>("approvals.pending", {}, { quiet: true, timeoutMs: 30_000 })).map((p) => ({ message: p.message, at: p.at })),
+    pending: async () =>
+      (
+        await rootctl<{ message: string; at: string }[]>(
+          "approvals.pending",
+          {},
+          { quiet: true, timeoutMs: 30_000 },
+        )
+      ).map((p) => ({ message: p.message, at: p.at })),
     summary: reviewerSummary,
     approve: async (message) => {
       if (!parseApproval(message)) throw new Error("not a push approval");
       const { signClicked } = await import("./approver.ts");
-      await rootctl("approvals.answer", { message, signature: signClicked(message) }, { quiet: true, timeoutMs: 60_000 });
+      await rootctl(
+        "approvals.answer",
+        { message, signature: signClicked(message) },
+        { quiet: true, timeoutMs: 60_000 },
+      );
       const push = parseApproval(message)!;
-      events.publish(events.host("approved", { repo: push.repo, branch: push.branch, commit: push.commit, onto: push.onto }));
+      events.publish(
+        events.host("approved", {
+          repo: push.repo,
+          branch: push.branch,
+          commit: push.commit,
+          onto: push.onto,
+        }),
+      );
     },
     refuse: async (message) => {
       await rootctl("approvals.refuse", { message }, { quiet: true, timeoutMs: 30_000 });
       const push = parseApproval(message);
-      if (push) events.publish(events.host("refused", { repo: push.repo, branch: push.branch, commit: push.commit }));
+      if (push)
+        events.publish(
+          events.host("refused", { repo: push.repo, branch: push.branch, commit: push.commit }),
+        );
     },
-    issues: async () => (await rootctl<unknown[]>("issue.list", { waiting: true }, { quiet: true, timeoutMs: 30_000 })).filter((i) => (i as { state?: unknown }).state === "approving"),
+    issues: async () =>
+      (
+        await rootctl<unknown[]>(
+          "issue.list",
+          { waiting: true },
+          { quiet: true, timeoutMs: 30_000 },
+        )
+      ).filter((i) => (i as { state?: unknown }).state === "approving"),
     publishIssue: async (issue) => {
       const url = await (await import("./issues.ts")).publish(issue);
       events.publish(events.host("issue-published", { repo: issue.repo, id: issue.id, url }));
@@ -213,13 +454,27 @@ type Heard = { sniffed: Sniffed; head: Buffer; undecided?: boolean };
  *  a comma list, for a server that speaks first on another port). Nothing learns a port is
  *  raw from traffic: anyone could teach it that. */
 const rawPortsOf = (extra: string | undefined) =>
-  new Set([...RAW_PORTS, ...(extra ?? "").split(",").map(Number).filter((p) => Number.isInteger(p) && p >= 1024 && p <= 65535)]);
+  new Set([
+    ...RAW_PORTS,
+    ...(extra ?? "")
+      .split(",")
+      .map(Number)
+      .filter((p) => Number.isInteger(p) && p >= 1024 && p <= 65535),
+  ]);
 
 declare namespace rawPortsOf {
   /** the databases and queues known to speak without a name, and the person's own from 1024 up */
   export type Known = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: undefined]>]>, "=", [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257]>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: "4000, 80,x,70000"]>]>, "=", [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257, 4000]>,
+    Expect<
+      Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: undefined]>]>,
+      "=",
+      [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257]
+    >,
+    Expect<
+      Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: "4000, 80,x,70000"]>]>,
+      "=",
+      [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257, 4000]
+    >,
   ];
 }
 
@@ -227,94 +482,199 @@ declare namespace rawPortsOf {
 const holderIn = (found: string) => {
   const pid = /^p(\d+)/m.exec(found)?.[1];
   const command = /^c(.+)/m.exec(found)?.[1];
-  return pid && command ? `${printable(command, 40)}, pid ${pid}` : "not a program of yours: another user's, or the system's";
+  return pid && command
+    ? `${printable(command, 40)}, pid ${pid}`
+    : "not a program of yours: another user's, or the system's";
 };
 
 declare namespace holderIn {
   /** lsof sees only this user's programs: one it cannot name is another user's, or the
    *  system's. A program's name is shown as text */
-  export type Holders = Table<typeof holderIn, [
-    [args: [found: "p4242\ncnode\n"], expected: "node, pid 4242"],
-    [args: [found: ""], expected: "not a program of yours: another user's, or the system's"],
-    [args: [found: "p1\nc\u001b[31mevil\n"], expected: "?[31mevil, pid 1"],
-  ]>;
+  export type Holders = Table<
+    typeof holderIn,
+    [
+      [args: [found: "p4242\ncnode\n"], expected: "node, pid 4242"],
+      [args: [found: ""], expected: "not a program of yours: another user's, or the system's"],
+      [args: [found: "p1\nc\u001b[31mevil\n"], expected: "?[31mevil, pid 1"],
+    ]
+  >;
 }
 
 /** The workspace a name belongs to, and which of its surfaces: its dev servers or its editor. */
-const byName = <E extends { domain: string; workspace: string }>(workspaces: Iterable<E>, name: string): { entry: E; surface: "dev" | "editor" } | null => {
+const byName = <E extends { domain: string; workspace: string }>(
+  workspaces: Iterable<E>,
+  name: string,
+): { entry: E; surface: "dev" | "editor" } | null => {
   for (const entry of workspaces) {
     const dev = devHostname(INSTANCE, entry.domain, entry.workspace);
     // A name under a workspace's dev name is that workspace's too: a desolate stack run in
     // it, developing desolate, names its pages so (shared/names.ts, HOSTNAME_SUFFIX).
     if (name === dev || name.endsWith(`.${dev}`)) return { entry, surface: "dev" };
-    if (name === editorHostname(INSTANCE, entry.domain, entry.workspace)) return { entry, surface: "editor" };
+    if (name === editorHostname(INSTANCE, entry.domain, entry.workspace))
+      return { entry, surface: "editor" };
   }
   return null;
 };
 
 declare namespace byName {
-  type Running = [Invoke<typeof ws, [at: "dev/w1", listening: [5173]]>, Invoke<typeof ws, [at: "dev/w2", listening: [5173]]>];
+  type Running = [
+    Invoke<typeof ws, [at: "dev/w1", listening: [5173]]>,
+    Invoke<typeof ws, [at: "dev/w2", listening: [5173]]>,
+  ];
   /** a workspace's dev name, and the names under it (a stack developing desolate, run inside it) */
   export type Dev = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w2-HEX.localhost"]>]>]>, "=", { entry: "dev/w2"; surface: "dev" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "desolate.dev-w1-HEX.localhost"]>]>]>, "=", { entry: "dev/w1"; surface: "dev" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof byName,
+            [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w2-HEX.localhost"]>]
+          >,
+        ]
+      >,
+      "=",
+      { entry: "dev/w2"; surface: "dev" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof byName,
+            [
+              workspaces: Running,
+              name: Invoke<typeof nameOf, [text: "desolate.dev-w1-HEX.localhost"]>,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { entry: "dev/w1"; surface: "dev" }
+    >,
   ];
   /** its editor's name is another surface, never its dev servers' */
-  export type Editor = Expect<Invoke<typeof shown, [value: Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w1-editor-HEX.localhost"]>]>]>, "=", { entry: "dev/w1"; surface: "editor" }>;
+  export type Editor = Expect<
+    Invoke<
+      typeof shown,
+      [
+        value: Invoke<
+          typeof byName,
+          [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w1-editor-HEX.localhost"]>]
+        >,
+      ]
+    >,
+    "=",
+    { entry: "dev/w1"; surface: "editor" }
+  >;
   /** a name that only looks like one: another stack's hex, a workspace not running, the name
    *  with more after it or before it */
   export type NoOne = [
-    Expect<Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w1-000000.localhost"]>]>, "=", null>,
-    Expect<Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w9-HEX.localhost"]>]>, "=", null>,
-    Expect<Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w1-HEX.localhost.evil.test"]>]>, "=", null>,
-    Expect<Invoke<typeof byName, [workspaces: Running, name: Invoke<typeof nameOf, [text: "evildev-w1-HEX.localhost"]>]>, "=", null>,
+    Expect<
+      Invoke<
+        typeof byName,
+        [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w1-000000.localhost"]>]
+      >,
+      "=",
+      null
+    >,
+    Expect<
+      Invoke<
+        typeof byName,
+        [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w9-HEX.localhost"]>]
+      >,
+      "=",
+      null
+    >,
+    Expect<
+      Invoke<
+        typeof byName,
+        [workspaces: Running, name: Invoke<typeof nameOf, [text: "dev-w1-HEX.localhost.evil.test"]>]
+      >,
+      "=",
+      null
+    >,
+    Expect<
+      Invoke<
+        typeof byName,
+        [workspaces: Running, name: Invoke<typeof nameOf, [text: "evildev-w1-HEX.localhost"]>]
+      >,
+      "=",
+      null
+    >,
   ];
 }
 
 /** The path of the request a connection opened with, for a redirect: printable ASCII and
  *  starting with "/", or "/". */
 const requestPath = (head: Buffer) => {
-  const path = /^[A-Z]{3,10} (\S{1,2048}) HTTP\/1\.[01]\r?\n/.exec(head.toString("latin1"))?.[1] ?? "/";
+  const path =
+    /^[A-Z]{3,10} (\S{1,2048}) HTTP\/1\.[01]\r?\n/.exec(head.toString("latin1"))?.[1] ?? "/";
   return /^\/[\x21-\x7e]*$/.test(path) ? path : "/";
 };
 
 declare namespace requestPath {
   /** where a redirect sends the browser on: the request's own path, if it is plain */
-  export type Paths = Table<typeof requestPath, [
-    [args: [head: Invoke<typeof wire, [text: "GET /app/?q=1 HTTP/1.1\r\nHost: localhost\r\n\r\n"]>], expected: "/app/?q=1"],
-    [args: [head: Invoke<typeof wire, [text: "GET //evil.test/ HTTP/1.1\r\n\r\n"]>], expected: "//evil.test/"],
-    [args: [head: Invoke<typeof wire, [text: "GET http://evil.test/ HTTP/1.1\r\n\r\n"]>], expected: "/"],
-    [args: [head: Invoke<typeof wire, [text: "GET /caf\u00e9 HTTP/1.1\r\n\r\n"]>], expected: "/"],
-    [args: [head: Invoke<typeof wire, [text: "GET / HTTP/2\r\n\r\n"]>], expected: "/"],
-  ]>;
+  export type Paths = Table<
+    typeof requestPath,
+    [
+      [
+        args: [
+          head: Invoke<typeof wire, [text: "GET /app/?q=1 HTTP/1.1\r\nHost: localhost\r\n\r\n"]>,
+        ],
+        expected: "/app/?q=1",
+      ],
+      [
+        args: [head: Invoke<typeof wire, [text: "GET //evil.test/ HTTP/1.1\r\n\r\n"]>],
+        expected: "//evil.test/",
+      ],
+      [
+        args: [head: Invoke<typeof wire, [text: "GET http://evil.test/ HTTP/1.1\r\n\r\n"]>],
+        expected: "/",
+      ],
+      [args: [head: Invoke<typeof wire, [text: "GET /caf\u00e9 HTTP/1.1\r\n\r\n"]>], expected: "/"],
+      [args: [head: Invoke<typeof wire, [text: "GET / HTTP/2\r\n\r\n"]>], expected: "/"],
+    ]
+  >;
 }
 
 const REQUEST_LINE = /^[A-Z]{1,16} \S+ HTTP\/\d/;
 /** The start of TLS or of an HTTP request, cut off before its line ended. */
-const cutOff = (head: Buffer) => head.length > 0 && (head[0] === 0x16 || REQUEST_LINE.test(head.toString("latin1")) || (/^[A-Z]{1,16}( |$)/.test(head.toString("latin1")) && !head.includes(0x0a)));
+const cutOff = (head: Buffer) =>
+  head.length > 0 &&
+  (head[0] === 0x16 ||
+    REQUEST_LINE.test(head.toString("latin1")) ||
+    (/^[A-Z]{1,16}( |$)/.test(head.toString("latin1")) && !head.includes(0x0a)));
 /** A short line that merely looks like HTTP (Redis's `SET k v`), not a request line, and not
  *  a head that ran to LIMIT: on a raw port, that protocol's. */
-const nameless = (head: Buffer) => head.length < LIMIT && !REQUEST_LINE.test(head.toString("latin1"));
+const nameless = (head: Buffer) =>
+  head.length < LIMIT && !REQUEST_LINE.test(head.toString("latin1"));
 
 declare namespace cutOff {
   /** what a browser's first bytes look like when the wait ran out before they ended */
-  export type Starts = Table<typeof cutOff, [
-    [args: [head: Invoke<typeof wire, [text: "GET / HT"]>], expected: true],
-    [args: [head: Invoke<typeof wire, [text: "GET"]>], expected: true],
-    [args: [head: Invoke<typeof wire, [text: "\u0016\u0003\u0001"]>], expected: true],
-    [args: [head: Invoke<typeof wire, [text: "SET k v\n"]>], expected: false],
-    [args: [head: Invoke<typeof wire, [text: "\u0000\u0000\u0000\u0008"]>], expected: false],
-    [args: [head: Invoke<typeof wire, [text: ""]>], expected: false],
-  ]>;
+  export type Starts = Table<
+    typeof cutOff,
+    [
+      [args: [head: Invoke<typeof wire, [text: "GET / HT"]>], expected: true],
+      [args: [head: Invoke<typeof wire, [text: "GET"]>], expected: true],
+      [args: [head: Invoke<typeof wire, [text: "\u0016\u0003\u0001"]>], expected: true],
+      [args: [head: Invoke<typeof wire, [text: "SET k v\n"]>], expected: false],
+      [args: [head: Invoke<typeof wire, [text: "\u0000\u0000\u0000\u0008"]>], expected: false],
+      [args: [head: Invoke<typeof wire, [text: ""]>], expected: false],
+    ]
+  >;
 }
 
 declare namespace nameless {
   /** a short line that only looks like HTTP is a raw protocol's; a request line never is */
-  export type Lines = Table<typeof nameless, [
-    [args: [head: Invoke<typeof wire, [text: "SET k v\r\n"]>], expected: true],
-    [args: [head: Invoke<typeof wire, [text: "GET / HTTP/1.1\r\n\r\n"]>], expected: false],
-    [args: [head: Invoke<typeof repeated, [text: "SET k v ", count: 2048]>], expected: false],
-  ]>;
+  export type Lines = Table<
+    typeof nameless,
+    [
+      [args: [head: Invoke<typeof wire, [text: "SET k v\r\n"]>], expected: true],
+      [args: [head: Invoke<typeof wire, [text: "GET / HTTP/1.1\r\n\r\n"]>], expected: false],
+      [args: [head: Invoke<typeof repeated, [text: "SET k v ", count: 2048]>], expected: false],
+    ]
+  >;
 }
 
 /** Where an inbound connection goes: closed, told where to go, refused with an HTTP answer,
@@ -329,7 +689,13 @@ type InboundRoute<E> =
 
 /** The route of a connection to `port`, from what it said first. `raw`: the port is known to
  *  speak a protocol with no name. `rawOwner`: the workspace that had the port first. */
-const inboundRoute = <E extends Routable>(port: number, heard: Heard, raw: boolean, workspaces: E[], rawOwner: E | undefined): InboundRoute<E> => {
+const inboundRoute = <E extends Routable>(
+  port: number,
+  heard: Heard,
+  raw: boolean,
+  workspaces: E[],
+  rawOwner: E | undefined,
+): InboundRoute<E> => {
   let { sniffed } = heard;
   const { head, undecided } = heard;
   // Not known to be raw, and its bytes never said what they were (silence, or half a line,
@@ -339,7 +705,8 @@ const inboundRoute = <E extends Routable>(port: number, heard: Heard, raw: boole
   // On a raw port, one short line that merely looks like HTTP (Redis's `SET k v`) is that
   // protocol's. A real request line, or a head that ran to LIMIT, is HTTP: refused or sent
   // on below by its name, never to the port's first workspace (audit of the fixes).
-  if (raw && sniffed.kind === "http" && sniffed.name === null && nameless(head)) sniffed = { kind: "raw" };
+  if (raw && sniffed.kind === "http" && sniffed.name === null && nameless(head))
+    sniffed = { kind: "raw" };
   if (sniffed.kind === "http" || sniffed.kind === "tls") {
     const target = sniffed.name ? byName(workspaces, sniffed.name) : null;
     if (!target) {
@@ -351,20 +718,31 @@ const inboundRoute = <E extends Routable>(port: number, heard: Heard, raw: boole
       // is ever served at bare localhost, so no two workspaces, and no workspace and its
       // editor, share an origin, and what the request carried (its cookies) reaches no
       // server. (TLS cannot be answered so: it names no certificate this could present.)
-      const serving = sniffed.name === "localhost" || sniffed.name === "127.0.0.1" ? workspaces.filter((e) => e.listeners.has(port)) : [];
+      const serving =
+        sniffed.name === "localhost" || sniffed.name === "127.0.0.1"
+          ? workspaces.filter((e) => e.listeners.has(port))
+          : [];
       const at = (e: E) => `http://${devHostname(INSTANCE, e.domain, e.workspace)}:${port}`;
-      if (serving.length === 1) return { to: "redirect", location: `${at(serving[0]!)}${requestPath(head)}` };
+      if (serving.length === 1)
+        return { to: "redirect", location: `${at(serving[0]!)}${requestPath(head)}` };
       return {
         to: "refuse",
         status: "421 Misdirected Request",
-        text: serving.length > 1
-          ? `desolate: port ${port} is served by more than one workspace, each at its own address:\n${serving.map((e) => `  ${e.domain}/${e.workspace}  ${at(e)}/\n`).join("")}`
-          : "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n",
+        text:
+          serving.length > 1
+            ? `desolate: port ${port} is served by more than one workspace, each at its own address:\n${serving.map((e) => `  ${e.domain}/${e.workspace}  ${at(e)}/\n`).join("")}`
+            : "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n",
       };
     }
     // A workspace's editor name answers for its editor only, and its dev name never for it.
     if (target.surface === "editor" || !target.entry.listeners.has(port))
-      return sniffed.kind === "http" ? { to: "refuse", status: "502 Bad Gateway", text: `desolate: nothing is listening on port ${port} in ${target.entry.domain}/${target.entry.workspace}.\n` } : { to: "close" };
+      return sniffed.kind === "http"
+        ? {
+            to: "refuse",
+            status: "502 Bad Gateway",
+            text: `desolate: nothing is listening on port ${port} in ${target.entry.domain}/${target.entry.workspace}.\n`,
+          }
+        : { to: "close" };
     return { to: "pipe", entry: target.entry };
   }
   // No name in the protocol (bytes that cannot be HTTP or TLS: shared/sniff.ts): on a port
@@ -388,77 +766,658 @@ declare namespace inboundRoute {
   type Both = [W1, W2];
   /** HTTP goes to the workspace its Host names, on the port it came to; so does TLS by its SNI */
   export type ByName = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w1-HEX.localhost:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "pipe"; entry: "dev/w1" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "pipe"; entry: "dev/w2" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof helloTo, [name: "dev-w2-HEX.localhost"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "pipe"; entry: "dev/w2" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w1-HEX.localhost:5173\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "pipe"; entry: "dev/w1" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:5173\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "pipe"; entry: "dev/w2" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<typeof helloTo, [name: "dev-w2-HEX.localhost"]>,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "pipe"; entry: "dev/w2" }
+    >,
   ];
   /** a Host for another workspace reaches that workspace or nothing, never the one listening:
    *  w1 has nothing on 8080. Nor is a workspace's editor reached by a dev port */
   export type AnotherWorkspace = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w1-HEX.localhost:8080\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "refuse"; status: "502 Bad Gateway"; text: "desolate: nothing is listening on port 8080 in dev/w1.\n" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w1-editor-HEX.localhost:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "refuse"; status: "502 Bad Gateway"; text: "desolate: nothing is listening on port 5173 in dev/w1.\n" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 8080,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w1-HEX.localhost:8080\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      {
+        to: "refuse";
+        status: "502 Bad Gateway";
+        text: "desolate: nothing is listening on port 8080 in dev/w1.\n";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w1-editor-HEX.localhost:5173\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      {
+        to: "refuse";
+        status: "502 Bad Gateway";
+        text: "desolate: nothing is listening on port 5173 in dev/w1.\n";
+      }
+    >,
   ];
   /** a request that names no workspace reaches nothing: a workspace not running, an address,
    *  no Host at all, a name with more after it, a Host after the head */
   export type NamesNoOne = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w9-HEX.localhost:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "refuse"; status: "421 Misdirected Request"; text: "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: 192.168.1.20:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: [::1]:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.0\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w1-HEX.localhost.evil.test\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "POST / HTTP/1.1\r\nContent-Length: 34\r\n\r\nHost: dev-w1-HEX.localhost\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w9-HEX.localhost:5173\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      {
+        to: "refuse";
+        status: "421 Misdirected Request";
+        text: "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: 192.168.1.20:5173\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: [::1]:5173\r\n\r\n"]>,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<typeof said, [text: "GET / HTTP/1.0\r\n\r\n"]>,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w1-HEX.localhost.evil.test\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<
+                typeof said,
+                [
+                  text: "POST / HTTP/1.1\r\nContent-Length: 34\r\n\r\nHost: dev-w1-HEX.localhost\r\n\r\n",
+                ]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
   ];
   /** TLS that names no one, or names a workspace not listening there, is closed: there is no
    *  certificate to answer it with */
   export type TlsNamesNoOne = [
-    Expect<Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof helloTo, [name: null]>, raw: false, workspaces: Both, rawOwner: undefined]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof helloTo, [name: "dev-w9-HEX.localhost"]>, raw: false, workspaces: Both, rawOwner: undefined]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof helloTo, [name: "dev-w1-HEX.localhost"]>, raw: false, workspaces: Both, rawOwner: undefined]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof helloTo, [name: "dev-w1-editor-HEX.localhost"]>, raw: false, workspaces: Both, rawOwner: undefined]>, "=", { to: "close" }>,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5173,
+          heard: Invoke<typeof helloTo, [name: null]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: undefined,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5173,
+          heard: Invoke<typeof helloTo, [name: "dev-w9-HEX.localhost"]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: undefined,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 8080,
+          heard: Invoke<typeof helloTo, [name: "dev-w1-HEX.localhost"]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: undefined,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5173,
+          heard: Invoke<typeof helloTo, [name: "dev-w1-editor-HEX.localhost"]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: undefined,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
   ];
   /** bare localhost (a dev server's own "Local:" link, clicked) is told where to go, never
    *  served: to the one workspace serving the port, at its own name, with the same path */
   export type Localhost = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof said, [text: "GET /app/?q=1 HTTP/1.1\r\nHost: localhost:8080\r\nCookie: s=1\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "redirect"; location: "http://dev-w2-HEX.localhost:8080/app/?q=1" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", { to: "redirect"; location: "http://dev-w2-HEX.localhost:8080/" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 8080,
+              heard: Invoke<
+                typeof said,
+                [text: "GET /app/?q=1 HTTP/1.1\r\nHost: localhost:8080\r\nCookie: s=1\r\n\r\n"]
+              >,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "redirect"; location: "http://dev-w2-HEX.localhost:8080/app/?q=1" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 8080,
+              heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: 127.0.0.1:8080\r\n\r\n"]>,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "redirect"; location: "http://dev-w2-HEX.localhost:8080/" }
+    >,
   ];
   /** several serve it: each one's address, and the choice is the person's. None: nothing */
   export type LocalhostShared = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5173, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: localhost:5173\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "=", {
-      to: "refuse";
-      status: "421 Misdirected Request";
-      text: "desolate: port 5173 is served by more than one workspace, each at its own address:\n  dev/w1  http://dev-w1-HEX.localhost:5173/\n  dev/w2  http://dev-w2-HEX.localhost:5173/\n";
-    }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 3000, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: localhost:3000\r\n\r\n"]>, raw: false, workspaces: Both, rawOwner: undefined]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request"; text: "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof helloTo, [name: "localhost"]>, raw: false, workspaces: Both, rawOwner: undefined]>, "=", { to: "close" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5173,
+              heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: localhost:5173\r\n\r\n"]>,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      {
+        to: "refuse";
+        status: "421 Misdirected Request";
+        text: "desolate: port 5173 is served by more than one workspace, each at its own address:\n  dev/w1  http://dev-w1-HEX.localhost:5173/\n  dev/w2  http://dev-w2-HEX.localhost:5173/\n";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 3000,
+              heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: localhost:3000\r\n\r\n"]>,
+              raw: false,
+              workspaces: Both,
+              rawOwner: undefined,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      {
+        to: "refuse";
+        status: "421 Misdirected Request";
+        text: "desolate: this address names no workspace. Open a workspace's own URL: see `desolate ports`.\n";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 8080,
+          heard: Invoke<typeof helloTo, [name: "localhost"]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: undefined,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
   ];
   /** a port not known to be raw takes nothing without a name: silence until the wait ran
    *  out, half a request line, bytes of no protocol with names */
   export type NotRaw = [
-    Expect<Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof said, [text: "", undecided: true]>, raw: false, workspaces: Both, rawOwner: W2]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof said, [text: "GET / HT", undecided: true]>, raw: false, workspaces: Both, rawOwner: W2]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 8080, heard: Invoke<typeof said, [text: "\u0000\u0000\u0000\u0008\u0004\u00d2\u0016/"]>, raw: false, workspaces: Both, rawOwner: W2]>, "=", { to: "close" }>,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 8080,
+          heard: Invoke<typeof said, [text: "", undecided: true]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: W2,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 8080,
+          heard: Invoke<typeof said, [text: "GET / HT", undecided: true]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: W2,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 8080,
+          heard: Invoke<typeof said, [text: "\u0000\u0000\u0000\u0008\u0004\u00d2\u0016/"]>,
+          raw: false,
+          workspaces: Both,
+          rawOwner: W2,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
   ];
   /** a raw port: what has no name goes to the workspace that had the port first, and a client
    *  still silent is handed to it with its greeting held back (spokeAsBrowser, greetingGoes) */
   export type Raw = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "\u0000\u0000\u0000\u0008\u0004\u00d2\u0016/"]>, raw: true, workspaces: Both, rawOwner: W1]>]>, "=", { to: "pipe"; entry: "dev/w1" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "SET k v\r\n"]>, raw: true, workspaces: Both, rawOwner: W1]>]>, "=", { to: "pipe"; entry: "dev/w1" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "", undecided: true]>, raw: true, workspaces: Both, rawOwner: W1]>]>, "=", { to: "greet"; entry: "dev/w1" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5432,
+              heard: Invoke<typeof said, [text: "\u0000\u0000\u0000\u0008\u0004\u00d2\u0016/"]>,
+              raw: true,
+              workspaces: Both,
+              rawOwner: W1,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "pipe"; entry: "dev/w1" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5432,
+              heard: Invoke<typeof said, [text: "SET k v\r\n"]>,
+              raw: true,
+              workspaces: Both,
+              rawOwner: W1,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "pipe"; entry: "dev/w1" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5432,
+              heard: Invoke<typeof said, [text: "", undecided: true]>,
+              raw: true,
+              workspaces: Both,
+              rawOwner: W1,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { to: "greet"; entry: "dev/w1" }
+    >,
   ];
   /** HTTP on a raw port is routed by its name like any, never to the port's first workspace:
    *  a Host for w2, which has nothing there; no Host; a request line cut off by the wait; TLS */
   export type RawSpeaksHttp = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:5432\r\n\r\n"]>, raw: true, workspaces: Both, rawOwner: W1]>]>, "=", { to: "refuse"; status: "502 Bad Gateway"; text: "desolate: nothing is listening on port 5432 in dev/w2.\n" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\n\r\n"]>, raw: true, workspaces: Both, rawOwner: W1]>]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "GET /a HTTP/1.1\r\nHost: dev-w1-HE", undecided: true]>, raw: true, workspaces: Both, rawOwner: W1]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "\u0016\u0003\u0001\u0002", undecided: true]>, raw: true, workspaces: Both, rawOwner: W1]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof helloTo, [name: null]>, raw: true, workspaces: Both, rawOwner: W1]>, "=", { to: "close" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5432,
+              heard: Invoke<
+                typeof said,
+                [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:5432\r\n\r\n"]
+              >,
+              raw: true,
+              workspaces: Both,
+              rawOwner: W1,
+            ]
+          >,
+        ]
+      >,
+      "=",
+      {
+        to: "refuse";
+        status: "502 Bad Gateway";
+        text: "desolate: nothing is listening on port 5432 in dev/w2.\n";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof inboundRoute,
+            [
+              port: 5432,
+              heard: Invoke<typeof said, [text: "GET / HTTP/1.1\r\n\r\n"]>,
+              raw: true,
+              workspaces: Both,
+              rawOwner: W1,
+            ]
+          >,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5432,
+          heard: Invoke<typeof said, [text: "GET /a HTTP/1.1\r\nHost: dev-w1-HE", undecided: true]>,
+          raw: true,
+          workspaces: Both,
+          rawOwner: W1,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5432,
+          heard: Invoke<typeof said, [text: "\u0016\u0003\u0001\u0002", undecided: true]>,
+          raw: true,
+          workspaces: Both,
+          rawOwner: W1,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5432,
+          heard: Invoke<typeof helloTo, [name: null]>,
+          raw: true,
+          workspaces: Both,
+          rawOwner: W1,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
   ];
   /** a raw port whose first workspace no longer listens there, or has none, reaches nothing */
   export type RawOwnerGone = [
-    Expect<Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "\u0000\u0000\u0000\u0008\u0004\u00d2\u0016/"]>, raw: true, workspaces: Both, rawOwner: W2]>, "=", { to: "close" }>,
-    Expect<Invoke<typeof inboundRoute, [port: 5432, heard: Invoke<typeof said, [text: "", undecided: true]>, raw: true, workspaces: Both, rawOwner: undefined]>, "=", { to: "close" }>,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5432,
+          heard: Invoke<typeof said, [text: "\u0000\u0000\u0000\u0008\u0004\u00d2\u0016/"]>,
+          raw: true,
+          workspaces: Both,
+          rawOwner: W2,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
+    Expect<
+      Invoke<
+        typeof inboundRoute,
+        [
+          port: 5432,
+          heard: Invoke<typeof said, [text: "", undecided: true]>,
+          raw: true,
+          workspaces: Both,
+          rawOwner: undefined,
+        ]
+      >,
+      "=",
+      { to: "close" }
+    >,
   ];
 }
 
@@ -467,23 +1426,46 @@ declare namespace inboundRoute {
  *  on a socket it preconnected and would use for a request naming another workspace, with
  *  that workspace's cookies (third review). Both ends are closed then. */
 const spokeAsBrowser = (first: Heard) =>
-  first.sniffed.kind === "tls" || REQUEST_LINE.test(first.head.toString("latin1")) || (first.sniffed.kind === "http" && !nameless(first.head)) || (first.undecided === true && cutOff(first.head));
+  first.sniffed.kind === "tls" ||
+  REQUEST_LINE.test(first.head.toString("latin1")) ||
+  (first.sniffed.kind === "http" && !nameless(first.head)) ||
+  (first.undecided === true && cutOff(first.head));
 
 declare namespace spokeAsBrowser {
   /** a browser's socket, used now: TLS, a request, HTTP too long for one line, the start of one */
-  export type Browser = Table<typeof spokeAsBrowser, [
-    [args: [first: Invoke<typeof helloTo, [name: "dev-w2-HEX.localhost"]>], expected: true],
-    [args: [first: Invoke<typeof said, [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:5432\r\n\r\n"]>], expected: true],
-    [args: [first: Invoke<typeof said, [text: "GET / HTTP/1.1\r\n", undecided: true]>], expected: true],
-    [args: [first: Invoke<typeof said, [text: "GET / H", undecided: true]>], expected: true],
-  ]>;
+  export type Browser = Table<
+    typeof spokeAsBrowser,
+    [
+      [args: [first: Invoke<typeof helloTo, [name: "dev-w2-HEX.localhost"]>], expected: true],
+      [
+        args: [
+          first: Invoke<
+            typeof said,
+            [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:5432\r\n\r\n"]
+          >,
+        ],
+        expected: true,
+      ],
+      [
+        args: [first: Invoke<typeof said, [text: "GET / HTTP/1.1\r\n", undecided: true]>],
+        expected: true,
+      ],
+      [args: [first: Invoke<typeof said, [text: "GET / H", undecided: true]>], expected: true],
+    ]
+  >;
   /** a database's client answering its server: a short line, binary, or nothing more */
-  export type Client = Table<typeof spokeAsBrowser, [
-    [args: [first: Invoke<typeof said, [text: "SET k v\r\n"]>], expected: false],
-    [args: [first: Invoke<typeof said, [text: "*1\r\n$4\r\nPING\r\n"]>], expected: false],
-    [args: [first: Invoke<typeof said, [text: "\u0000\u0000\u0001", undecided: true]>], expected: false],
-    [args: [first: Invoke<typeof said, [text: "", undecided: true]>], expected: false],
-  ]>;
+  export type Client = Table<
+    typeof spokeAsBrowser,
+    [
+      [args: [first: Invoke<typeof said, [text: "SET k v\r\n"]>], expected: false],
+      [args: [first: Invoke<typeof said, [text: "*1\r\n$4\r\nPING\r\n"]>], expected: false],
+      [
+        args: [first: Invoke<typeof said, [text: "\u0000\u0000\u0001", undecided: true]>],
+        expected: false,
+      ],
+      [args: [first: Invoke<typeof said, [text: "", undecided: true]>], expected: false],
+    ]
+  >;
 }
 
 /** What is done with what a raw port's first workspace says before its client has spoken: it
@@ -498,15 +1480,24 @@ const greetingGoes = (greeting: Buffer): "close" | "hold" | "send" => {
 
 declare namespace greetingGoes {
   /** a greeting that starts like an HTTP or ICY answer is closed; one that still could, held */
-  export type Greetings = Table<typeof greetingGoes, [
-    [args: [greeting: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\n"]>], expected: "close"],
-    [args: [greeting: Invoke<typeof wire, [text: "\r\nhttp/1.0 200"]>], expected: "close"],
-    [args: [greeting: Invoke<typeof wire, [text: "ICY 200 OK\r\n"]>], expected: "close"],
-    [args: [greeting: Invoke<typeof wire, [text: "HT"]>], expected: "hold"],
-    [args: [greeting: Invoke<typeof wire, [text: "  IC"]>], expected: "hold"],
-    [args: [greeting: Invoke<typeof wire, [text: "220 mail.example ESMTP\r\n"]>], expected: "send"],
-    [args: [greeting: Invoke<typeof wire, [text: "J\u0000\u0000\u0000\n8.0.36\u0000"]>], expected: "send"],
-  ]>;
+  export type Greetings = Table<
+    typeof greetingGoes,
+    [
+      [args: [greeting: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\n"]>], expected: "close"],
+      [args: [greeting: Invoke<typeof wire, [text: "\r\nhttp/1.0 200"]>], expected: "close"],
+      [args: [greeting: Invoke<typeof wire, [text: "ICY 200 OK\r\n"]>], expected: "close"],
+      [args: [greeting: Invoke<typeof wire, [text: "HT"]>], expected: "hold"],
+      [args: [greeting: Invoke<typeof wire, [text: "  IC"]>], expected: "hold"],
+      [
+        args: [greeting: Invoke<typeof wire, [text: "220 mail.example ESMTP\r\n"]>],
+        expected: "send",
+      ],
+      [
+        args: [greeting: Invoke<typeof wire, [text: "J\u0000\u0000\u0000\n8.0.36\u0000"]>],
+        expected: "send",
+      ],
+    ]
+  >;
 }
 
 /** Where a connection to the pages' port (the editors', the dashboard's, the approval page's
@@ -519,7 +1510,10 @@ type PagesRoute<E> =
   | { to: "refuse"; status: string; text: string }
   | { to: "close" };
 
-const pagesRoute = <E extends { domain: string; workspace: string; editorTokenEpoch: number }>(sniffed: Sniffed, workspaces: Iterable<E>): PagesRoute<E> => {
+const pagesRoute = <E extends { domain: string; workspace: string; editorTokenEpoch: number }>(
+  sniffed: Sniffed,
+  workspaces: Iterable<E>,
+): PagesRoute<E> => {
   if (sniffed.kind === "http" && sniffed.name === GIT_HOSTNAME) return { to: "git" };
   if (sniffed.kind === "http" && sniffed.name === APPROVE_HOSTNAME) return { to: "approvals" };
   // The root's one surface: the dashboard. The state service checks the name and the
@@ -527,65 +1521,266 @@ const pagesRoute = <E extends { domain: string; workspace: string; editorTokenEp
   if (sniffed.kind === "http" && sniffed.name === ROOT_HOSTNAME) {
     // Its token was retired (retired.ts): the cookie a tab still has may be another
     // program's now, and the root still takes it until bootstrap gives it a new one.
-    if (dashboardStale()) return { to: "refuse", status: "503 Service Unavailable", text: "desolate: the dashboard's token was retired (another program held [::1] on this port). Run `desolate bootstrap`, then `desolate ui` for its new address.\n" };
+    if (dashboardStale())
+      return {
+        to: "refuse",
+        status: "503 Service Unavailable",
+        text: "desolate: the dashboard's token was retired (another program held [::1] on this port). Run `desolate bootstrap`, then `desolate ui` for its new address.\n",
+      };
     return { to: "dashboard" };
   }
   const target = sniffed.kind === "http" && sniffed.name ? byName(workspaces, sniffed.name) : null;
   if (!target || target.surface !== "editor")
-    return sniffed.kind === "http" ? { to: "refuse", status: "421 Misdirected Request", text: "desolate: this port answers to a workspace's editor hostname only. `desolate editor <domain>/<workspace>` prints it.\n" } : { to: "close" };
-  if (stale(target.entry.editorTokenEpoch)) return { to: "refuse", status: "503 Service Unavailable", text: `desolate: this editor's token was retired (another program held [::1] on this port). Run \`desolate bootstrap\` (or start the workspace), then \`desolate editor ${target.entry.domain}/${target.entry.workspace}\` for its new address.\n` };
+    return sniffed.kind === "http"
+      ? {
+          to: "refuse",
+          status: "421 Misdirected Request",
+          text: "desolate: this port answers to a workspace's editor hostname only. `desolate editor <domain>/<workspace>` prints it.\n",
+        }
+      : { to: "close" };
+  if (stale(target.entry.editorTokenEpoch))
+    return {
+      to: "refuse",
+      status: "503 Service Unavailable",
+      text: `desolate: this editor's token was retired (another program held [::1] on this port). Run \`desolate bootstrap\` (or start the workspace), then \`desolate editor ${target.entry.domain}/${target.entry.workspace}\` for its new address.\n`,
+    };
   return { to: "editor", entry: target.entry };
 };
 
 declare namespace pagesRoute {
-  type Old = Invoke<typeof ws, [at: "dev/w1", listening: [], more: { editorTokenEpoch: 1763200000000 }]>;
-  type New = Invoke<typeof ws, [at: "dev/w2", listening: [], more: { editorTokenEpoch: 1763300000000 }]>;
+  type Old = Invoke<
+    typeof ws,
+    [at: "dev/w1", listening: [], more: { editorTokenEpoch: 1763200000000 }]
+  >;
+  type New = Invoke<
+    typeof ws,
+    [at: "dev/w2", listening: [], more: { editorTokenEpoch: 1763300000000 }]
+  >;
   type Both = [Old, New];
   /** each page by its own name: the git terminal, the approval page, the dashboard, an editor */
   export type Pages = Given<
     Invoke<typeof emptyHome>,
     [
-      Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: desolate-git.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", { to: "git" }>,
-      Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: desolate-approve.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", { to: "approvals" }>,
-      Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: desolate.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", { to: "dashboard" }>,
-      Expect<Invoke<typeof shown, [value: Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: dev-w2-editor-HEX.localhost:31581\r\n\r\n"]>, workspaces: Both]>]>, "=", { to: "editor"; entry: "dev/w2" }>,
+      Expect<
+        Invoke<
+          typeof pagesRoute,
+          [
+            sniffed: Invoke<
+              typeof asked,
+              [text: "GET / HTTP/1.1\r\nHost: desolate-git.localhost:31581\r\n\r\n"]
+            >,
+            workspaces: Both,
+          ]
+        >,
+        "=",
+        { to: "git" }
+      >,
+      Expect<
+        Invoke<
+          typeof pagesRoute,
+          [
+            sniffed: Invoke<
+              typeof asked,
+              [text: "GET / HTTP/1.1\r\nHost: desolate-approve.localhost:31581\r\n\r\n"]
+            >,
+            workspaces: Both,
+          ]
+        >,
+        "=",
+        { to: "approvals" }
+      >,
+      Expect<
+        Invoke<
+          typeof pagesRoute,
+          [
+            sniffed: Invoke<
+              typeof asked,
+              [text: "GET / HTTP/1.1\r\nHost: desolate.localhost:31581\r\n\r\n"]
+            >,
+            workspaces: Both,
+          ]
+        >,
+        "=",
+        { to: "dashboard" }
+      >,
+      Expect<
+        Invoke<
+          typeof shown,
+          [
+            value: Invoke<
+              typeof pagesRoute,
+              [
+                sniffed: Invoke<
+                  typeof asked,
+                  [text: "GET / HTTP/1.1\r\nHost: dev-w2-editor-HEX.localhost:31581\r\n\r\n"]
+                >,
+                workspaces: Both,
+              ]
+            >,
+          ]
+        >,
+        "=",
+        { to: "editor"; entry: "dev/w2" }
+      >,
     ]
   >;
   /** this port is the editors': a workspace's dev name, a name of no one, no name, an
    *  address, are refused; TLS, which no page here speaks, is closed */
   export type WrongHost = [
-    Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", { to: "refuse"; status: "421 Misdirected Request"; text: "desolate: this port answers to a workspace's editor hostname only. `desolate editor <domain>/<workspace>` prints it.\n" }>,
-    Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: dev-w9-editor-HEX.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.0\r\n\r\n"]>, workspaces: Both]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: 127.0.0.1:31581\r\n\r\n"]>, workspaces: Both]>, "matches", { to: "refuse"; status: "421 Misdirected Request" }>,
-    Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof askedTls, [name: "desolate.localhost"]>, workspaces: Both]>, "=", { to: "close" }>,
+    Expect<
+      Invoke<
+        typeof pagesRoute,
+        [
+          sniffed: Invoke<
+            typeof asked,
+            [text: "GET / HTTP/1.1\r\nHost: dev-w2-HEX.localhost:31581\r\n\r\n"]
+          >,
+          workspaces: Both,
+        ]
+      >,
+      "=",
+      {
+        to: "refuse";
+        status: "421 Misdirected Request";
+        text: "desolate: this port answers to a workspace's editor hostname only. `desolate editor <domain>/<workspace>` prints it.\n";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof pagesRoute,
+        [
+          sniffed: Invoke<
+            typeof asked,
+            [text: "GET / HTTP/1.1\r\nHost: dev-w9-editor-HEX.localhost:31581\r\n\r\n"]
+          >,
+          workspaces: Both,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof pagesRoute,
+        [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.0\r\n\r\n"]>, workspaces: Both]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof pagesRoute,
+        [
+          sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: 127.0.0.1:31581\r\n\r\n"]>,
+          workspaces: Both,
+        ]
+      >,
+      "matches",
+      { to: "refuse"; status: "421 Misdirected Request" }
+    >,
+    Expect<
+      Invoke<
+        typeof pagesRoute,
+        [sniffed: Invoke<typeof askedTls, [name: "desolate.localhost"]>, workspaces: Both]
+      >,
+      "=",
+      { to: "close" }
+    >,
   ];
   /** an editor's token made before the last retiring is not served (a tab's cookie may be
    *  another program's now); one made after it is */
   export type EditorRetired = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>],
     [
-      Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: dev-w1-editor-HEX.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", {
-        to: "refuse";
-        status: "503 Service Unavailable";
-        text: "desolate: this editor's token was retired (another program held [::1] on this port). Run `desolate bootstrap` (or start the workspace), then `desolate editor dev/w1` for its new address.\n";
-      }>,
-      Expect<Invoke<typeof shown, [value: Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: dev-w2-editor-HEX.localhost:31581\r\n\r\n"]>, workspaces: Both]>]>, "=", { to: "editor"; entry: "dev/w2" }>,
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof pagesRoute,
+          [
+            sniffed: Invoke<
+              typeof asked,
+              [text: "GET / HTTP/1.1\r\nHost: dev-w1-editor-HEX.localhost:31581\r\n\r\n"]
+            >,
+            workspaces: Both,
+          ]
+        >,
+        "=",
+        {
+          to: "refuse";
+          status: "503 Service Unavailable";
+          text: "desolate: this editor's token was retired (another program held [::1] on this port). Run `desolate bootstrap` (or start the workspace), then `desolate editor dev/w1` for its new address.\n";
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof shown,
+          [
+            value: Invoke<
+              typeof pagesRoute,
+              [
+                sniffed: Invoke<
+                  typeof asked,
+                  [text: "GET / HTTP/1.1\r\nHost: dev-w2-editor-HEX.localhost:31581\r\n\r\n"]
+                >,
+                workspaces: Both,
+              ]
+            >,
+          ]
+        >,
+        "=",
+        { to: "editor"; entry: "dev/w2" }
+      >,
     ]
   >;
   /** the dashboard's likewise, until bootstrap has given the root a new one */
   export type DashboardRetired = [
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>],
-      Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: desolate.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", {
-        to: "refuse";
-        status: "503 Service Unavailable";
-        text: "desolate: the dashboard's token was retired (another program held [::1] on this port). Run `desolate bootstrap`, then `desolate ui` for its new address.\n";
-      }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>,
+      ],
+      Expect<
+        Invoke<
+          typeof pagesRoute,
+          [
+            sniffed: Invoke<
+              typeof asked,
+              [text: "GET / HTTP/1.1\r\nHost: desolate.localhost:31581\r\n\r\n"]
+            >,
+            workspaces: Both,
+          ]
+        >,
+        "=",
+        {
+          to: "refuse";
+          status: "503 Service Unavailable";
+          text: "desolate: the dashboard's token was retired (another program held [::1] on this port). Run `desolate bootstrap`, then `desolate ui` for its new address.\n";
+        }
+      >
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>, Invoke<typeof writeState, [name: "ui-token", text: "u"]>, Invoke<typeof writeState, [name: "ui-token.epoch", text: "1763300000000"]>],
-      Expect<Invoke<typeof pagesRoute, [sniffed: Invoke<typeof asked, [text: "GET / HTTP/1.1\r\nHost: desolate.localhost:31581\r\n\r\n"]>, workspaces: Both]>, "=", { to: "dashboard" }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>,
+        Invoke<typeof writeState, [name: "ui-token", text: "u"]>,
+        Invoke<typeof writeState, [name: "ui-token.epoch", text: "1763300000000"]>,
+      ],
+      Expect<
+        Invoke<
+          typeof pagesRoute,
+          [
+            sniffed: Invoke<
+              typeof asked,
+              [text: "GET / HTTP/1.1\r\nHost: desolate.localhost:31581\r\n\r\n"]
+            >,
+            workspaces: Both,
+          ]
+        >,
+        "=",
+        { to: "dashboard" }
+      >
     >,
   ];
 }
@@ -597,11 +1792,14 @@ const rawOwnerFor = (current: string | undefined, holders: { vm: string }[]) =>
 
 declare namespace rawOwnerFor {
   /** the first to have it keeps it while it listens; then the next that does */
-  export type Owner = Table<typeof rawOwnerFor, [
-    [args: [current: undefined, holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-a"],
-    [args: [current: "vm-b", holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-b"],
-    [args: [current: "vm-c", holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-a"],
-  ]>;
+  export type Owner = Table<
+    typeof rawOwnerFor,
+    [
+      [args: [current: undefined, holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-a"],
+      [args: [current: "vm-b", holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-b"],
+      [args: [current: "vm-c", holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-a"],
+    ]
+  >;
 }
 
 /** The ports a workspace is asked to keep taken, so its servers move on: a raw port another
@@ -610,10 +1808,16 @@ declare namespace rawOwnerFor {
  *  (dogfooding: an API meant only for its own workspace's Vite proxy could not have 3000,
  *  which another macOS user held; Express 5 said "listening" while every request was reset,
  *  depending on which started first). Such a port is reported as not forwarded instead.) */
-const reservedFor = (entry: { vm: string; listeners: ReadonlySet<number> }, forwarded: Iterable<number>, knownRaw: ReadonlySet<number>, rawOwner: { get(port: number): string | undefined }) => {
+const reservedFor = (
+  entry: { vm: string; listeners: ReadonlySet<number> },
+  forwarded: Iterable<number>,
+  knownRaw: ReadonlySet<number>,
+  rawOwner: { get(port: number): string | undefined },
+) => {
   const reserve = new Set<number>();
   for (const port of forwarded)
-    if (!entry.listeners.has(port) && knownRaw.has(port) && rawOwner.get(port) !== entry.vm) reserve.add(port);
+    if (!entry.listeners.has(port) && knownRaw.has(port) && rawOwner.get(port) !== entry.vm)
+      reserve.add(port);
   return reserve;
 };
 
@@ -621,12 +1825,20 @@ declare namespace reservedFor {
   /** kept taken: a raw port another workspace had first. Not its own raw port, not one it
    *  listens on, not a port with names (those are shared by name) */
   export type Reserved = Expect<
-    Invoke<typeof shown, [value: Invoke<typeof reservedFor, [
-      entry: Invoke<typeof ws, [at: "dev/w2", listening: [8080]]>,
-      forwarded: [5173, 5432, 6379, 8080],
-      knownRaw: Invoke<typeof rawPortsOf, [extra: undefined]>,
-      rawOwner: Invoke<typeof rawOwners, [owners: { "5432": "dev/w1"; "6379": "dev/w2" }]>,
-    ]>]>,
+    Invoke<
+      typeof shown,
+      [
+        value: Invoke<
+          typeof reservedFor,
+          [
+            entry: Invoke<typeof ws, [at: "dev/w2", listening: [8080]]>,
+            forwarded: [5173, 5432, 6379, 8080],
+            knownRaw: Invoke<typeof rawPortsOf, [extra: undefined]>,
+            rawOwner: Invoke<typeof rawOwners, [owners: { "5432": "dev/w1"; "6379": "dev/w2" }]>,
+          ]
+        >,
+      ]
+    >,
     "=",
     [5432]
   >;
@@ -634,53 +1846,93 @@ declare namespace reservedFor {
 
 // What a workspace's own daemon says, checked (sync). Shown as text and built into an
 // address: a token is 48 hex, the rest is cut to a line.
-const editorTokenOf = (value: unknown) => (typeof value === "string" && /^[0-9a-f]{48}$/.test(value) ? value : "");
-const tokenEpochOf = (value: unknown) => (typeof value === "number" && Number.isSafeInteger(value) ? value : 0);
+const editorTokenOf = (value: unknown) =>
+  typeof value === "string" && /^[0-9a-f]{48}$/.test(value) ? value : "";
+const tokenEpochOf = (value: unknown) =>
+  typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
 /** The folder the editor opens: the workspace's word, if it is a path under /workspaces and
  *  the folder is not the workspace file register chose. */
 const folderFrom = (current: string, value: unknown) =>
-  !current.startsWith("workspace:") && typeof value === "string" && /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(value) ? value : current;
+  !current.startsWith("workspace:") &&
+  typeof value === "string" &&
+  /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(value)
+    ? value
+    : current;
 /** Fail closed on what the VM says: integers, 1024 and up, and a sane number of them.
  *  The editor's two in-VM ports are never dev-server ports: a dev hostname must not
  *  reach the editor, and nothing may reach its server around its gate. Nor any port
  *  desolate itself uses on this machine (`ours`: a VM's ssh, a link): a workspace
  *  listening there must not get the host to bind it. */
 const listenersFrom = (ports: number[], ours: ReadonlySet<number>) =>
-  new Set(ports.filter((port) => Number.isInteger(port) && port >= 1024 && port <= 65535 && port !== EDITOR.server && port !== EDITOR.gate && port !== editorHostPort() && !ours.has(port)).slice(0, 256));
+  new Set(
+    ports
+      .filter(
+        (port) =>
+          Number.isInteger(port) &&
+          port >= 1024 &&
+          port <= 65535 &&
+          port !== EDITOR.server &&
+          port !== EDITOR.gate &&
+          port !== editorHostPort() &&
+          !ours.has(port),
+      )
+      .slice(0, 256),
+  );
 
 declare namespace editorTokenOf {
   /** a token is 48 hex and nothing else: it is built into an address the dashboard shows */
-  export type Tokens = Table<typeof editorTokenOf, [
-    [args: [value: "0123456789abcdef0123456789abcdef0123456789abcdef"], expected: "0123456789abcdef0123456789abcdef0123456789abcdef"],
-    [args: [value: "0123456789abcdef0123456789abcdef0123456789abcde"], expected: ""],
-    [args: [value: "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"], expected: ""],
-    [args: [value: "0123456789abcdef0123456789abcdef0123456789abcde&"], expected: ""],
-    [args: [value: "0123456789abcdef0123456789abcdef0123456789abcdef\n"], expected: ""],
-    [args: [value: 7], expected: ""],
-  ]>;
+  export type Tokens = Table<
+    typeof editorTokenOf,
+    [
+      [
+        args: [value: "0123456789abcdef0123456789abcdef0123456789abcdef"],
+        expected: "0123456789abcdef0123456789abcdef0123456789abcdef",
+      ],
+      [args: [value: "0123456789abcdef0123456789abcdef0123456789abcde"], expected: ""],
+      [args: [value: "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"], expected: ""],
+      [args: [value: "0123456789abcdef0123456789abcdef0123456789abcde&"], expected: ""],
+      [args: [value: "0123456789abcdef0123456789abcdef0123456789abcdef\n"], expected: ""],
+      [args: [value: 7], expected: ""],
+    ]
+  >;
 }
 
 declare namespace tokenEpochOf {
   /** the retiring the token was made after: a whole number, else 0 (made before any: stale) */
-  export type Epochs = Table<typeof tokenEpochOf, [
-    [args: [value: 1763300000000], expected: 1763300000000],
-    [args: [value: "1763300000000"], expected: 0],
-    [args: [value: 1.5], expected: 0],
-    [args: [value: 9007199254740992], expected: 0],
-    [args: [value: undefined], expected: 0],
-  ]>;
+  export type Epochs = Table<
+    typeof tokenEpochOf,
+    [
+      [args: [value: 1763300000000], expected: 1763300000000],
+      [args: [value: "1763300000000"], expected: 0],
+      [args: [value: 1.5], expected: 0],
+      [args: [value: 9007199254740992], expected: 0],
+      [args: [value: undefined], expected: 0],
+    ]
+  >;
 }
 
 declare namespace folderFrom {
   /** a plain path under /workspaces, from the workspace; never in place of the workspace file */
-  export type Folders = Table<typeof folderFrom, [
-    [args: [current: "", value: "/workspaces/acme/widgets"], expected: "/workspaces/acme/widgets"],
-    [args: [current: "", value: "/etc"], expected: ""],
-    [args: [current: "", value: "/workspaces/a b"], expected: ""],
-    [args: [current: "", value: "/workspaces/x\"><script>"], expected: ""],
-    [args: [current: "/workspaces/old", value: 7], expected: "/workspaces/old"],
-    [args: [current: "workspace:/workspaces/.desolate/w1.code-workspace", value: "/workspaces/acme/widgets"], expected: "workspace:/workspaces/.desolate/w1.code-workspace"],
-  ]>;
+  export type Folders = Table<
+    typeof folderFrom,
+    [
+      [
+        args: [current: "", value: "/workspaces/acme/widgets"],
+        expected: "/workspaces/acme/widgets",
+      ],
+      [args: [current: "", value: "/etc"], expected: ""],
+      [args: [current: "", value: "/workspaces/a b"], expected: ""],
+      [args: [current: "", value: '/workspaces/x"><script>'], expected: ""],
+      [args: [current: "/workspaces/old", value: 7], expected: "/workspaces/old"],
+      [
+        args: [
+          current: "workspace:/workspaces/.desolate/w1.code-workspace",
+          value: "/workspaces/acme/widgets",
+        ],
+        expected: "workspace:/workspaces/.desolate/w1.code-workspace",
+      ],
+    ]
+  >;
 }
 
 declare namespace listenersFrom {
@@ -688,7 +1940,18 @@ declare namespace listenersFrom {
    *  number, not the editor's ports (its server, its gate, the host's editors' port), not a
    *  port desolate itself uses here */
   export type Listeners = Expect<
-    Invoke<typeof shown, [value: Invoke<typeof listenersFrom, [ports: [5173, 80, 1023, 65536, 3000.5, 31580, 31581, 2222, 8080], ours: Invoke<typeof setOf, [items: [2222]]>]>]>,
+    Invoke<
+      typeof shown,
+      [
+        value: Invoke<
+          typeof listenersFrom,
+          [
+            ports: [5173, 80, 1023, 65536, 3000.5, 31580, 31581, 2222, 8080],
+            ours: Invoke<typeof setOf, [items: [2222]]>,
+          ]
+        >,
+      ]
+    >,
     "=",
     [5173, 8080]
   >;
@@ -698,76 +1961,260 @@ declare namespace listenersFrom {
  *  prints it, or, with more than one, the workspace file with all of them (workspace/init.ts). */
 const folderFor = (checkouts: Checkouts, workspace: string) => {
   let folder = "";
-  if (typeof checkouts[0]?.path === "string" && /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(checkouts[0].path)) folder = checkouts[0].path;
+  if (
+    typeof checkouts[0]?.path === "string" &&
+    /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(checkouts[0].path)
+  )
+    folder = checkouts[0].path;
   if (checkouts.length > 1) folder = `workspace:/workspaces/.desolate/${workspace}.code-workspace`;
   return folder;
 };
 
 declare namespace folderFor {
   /** the one checkout, or the workspace file with all of them; nothing for a path it cannot use */
-  export type Folders = Table<typeof folderFor, [
-    [args: [checkouts: [{ repo: "acme/widgets"; kind: "main"; name: "main"; path: "/workspaces/acme/widgets" }], workspace: "w1"], expected: "/workspaces/acme/widgets"],
-    [args: [checkouts: [{ repo: "acme/widgets"; kind: "main"; name: "main"; path: "/workspaces/acme/widgets" }, { repo: "acme/lib"; kind: "main"; name: "main"; path: "/workspaces/acme/lib" }], workspace: "w1"], expected: "workspace:/workspaces/.desolate/w1.code-workspace"],
-    [args: [checkouts: [{ repo: "acme/widgets"; kind: "main"; name: "main"; path: "/home/x" }], workspace: "w1"], expected: ""],
-    [args: [checkouts: [], workspace: "w1"], expected: ""],
-  ]>;
+  export type Folders = Table<
+    typeof folderFor,
+    [
+      [
+        args: [
+          checkouts: [
+            { repo: "acme/widgets"; kind: "main"; name: "main"; path: "/workspaces/acme/widgets" },
+          ],
+          workspace: "w1",
+        ],
+        expected: "/workspaces/acme/widgets",
+      ],
+      [
+        args: [
+          checkouts: [
+            { repo: "acme/widgets"; kind: "main"; name: "main"; path: "/workspaces/acme/widgets" },
+            { repo: "acme/lib"; kind: "main"; name: "main"; path: "/workspaces/acme/lib" },
+          ],
+          workspace: "w1",
+        ],
+        expected: "workspace:/workspaces/.desolate/w1.code-workspace",
+      ],
+      [
+        args: [
+          checkouts: [{ repo: "acme/widgets"; kind: "main"; name: "main"; path: "/home/x" }],
+          workspace: "w1",
+        ],
+        expected: "",
+      ],
+      [args: [checkouts: [], workspace: "w1"], expected: ""],
+    ]
+  >;
 }
 
 /** A workspace's editor's address, with its token, for the dashboard: only while the editors'
  *  port is this daemon's, and the token was made after the last retiring. */
-const editorAddress = (entry: { domain: string; workspace: string; editorToken: string; editorTokenEpoch: number; folder: string }, port: number, editorError: string) =>
-  entry.editorToken && !editorError && !stale(entry.editorTokenEpoch) ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}` : undefined;
+const editorAddress = (
+  entry: {
+    domain: string;
+    workspace: string;
+    editorToken: string;
+    editorTokenEpoch: number;
+    folder: string;
+  },
+  port: number,
+  editorError: string,
+) =>
+  entry.editorToken && !editorError && !stale(entry.editorTokenEpoch)
+    ? `http://${editorHostname(INSTANCE, entry.domain, entry.workspace)}:${port}/?tkn=${entry.editorToken}${entry.folder.startsWith("workspace:") ? `&workspace=${encodeURIComponent(entry.folder.slice(10))}` : entry.folder ? `&folder=${encodeURIComponent(entry.folder)}` : ""}`
+    : undefined;
 
 declare namespace editorAddress {
-  type Fresh = { domain: "dev"; workspace: "w1"; editorToken: "0123456789abcdef0123456789abcdef0123456789abcdef"; editorTokenEpoch: 1763300000000; folder: "/workspaces/acme/widgets" };
+  type Fresh = {
+    domain: "dev";
+    workspace: "w1";
+    editorToken: "0123456789abcdef0123456789abcdef0123456789abcdef";
+    editorTokenEpoch: 1763300000000;
+    folder: "/workspaces/acme/widgets";
+  };
   /** the editor's own name and the port, its token, and the folder it opens */
-  export type Address = Given<Invoke<typeof emptyHome>, [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof editorAddress, [entry: Fresh, port: 31581, editorError: ""]>]>, "=", "http://dev-w1-editor-HEX.localhost:31581/?tkn=0123456789abcdef0123456789abcdef0123456789abcdef&folder=%2Fworkspaces%2Facme%2Fwidgets">,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof editorAddress, [entry: { domain: "dev"; workspace: "w1"; editorToken: "0123456789abcdef0123456789abcdef0123456789abcdef"; editorTokenEpoch: 0; folder: "workspace:/workspaces/.desolate/w1.code-workspace" }, port: 31581, editorError: ""]>]>, "=", "http://dev-w1-editor-HEX.localhost:31581/?tkn=0123456789abcdef0123456789abcdef0123456789abcdef&workspace=%2Fworkspaces%2F.desolate%2Fw1.code-workspace">,
-  ]>;
+  export type Address = Given<
+    Invoke<typeof emptyHome>,
+    [
+      Expect<
+        Invoke<
+          typeof shown,
+          [value: Invoke<typeof editorAddress, [entry: Fresh, port: 31581, editorError: ""]>]
+        >,
+        "=",
+        "http://dev-w1-editor-HEX.localhost:31581/?tkn=0123456789abcdef0123456789abcdef0123456789abcdef&folder=%2Fworkspaces%2Facme%2Fwidgets"
+      >,
+      Expect<
+        Invoke<
+          typeof shown,
+          [
+            value: Invoke<
+              typeof editorAddress,
+              [
+                entry: {
+                  domain: "dev";
+                  workspace: "w1";
+                  editorToken: "0123456789abcdef0123456789abcdef0123456789abcdef";
+                  editorTokenEpoch: 0;
+                  folder: "workspace:/workspaces/.desolate/w1.code-workspace";
+                },
+                port: 31581,
+                editorError: "",
+              ]
+            >,
+          ]
+        >,
+        "=",
+        "http://dev-w1-editor-HEX.localhost:31581/?tkn=0123456789abcdef0123456789abcdef0123456789abcdef&workspace=%2Fworkspaces%2F.desolate%2Fw1.code-workspace"
+      >,
+    ]
+  >;
   /** none while the port is another program's (the token would be sent to it), with no
    *  token, or with one from before the last retiring; one made since is shown again */
   export type None = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>],
     [
-      Expect<Invoke<typeof editorAddress, [entry: Fresh, port: 31581, editorError: "a program on this machine holds [::1]:31581, where browsers look first"]>, "=", undefined>,
-      Expect<Invoke<typeof editorAddress, [entry: { domain: "dev"; workspace: "w1"; editorToken: ""; editorTokenEpoch: 1763300000000; folder: "" }, port: 31581, editorError: ""]>, "=", undefined>,
-      Expect<Invoke<typeof editorAddress, [entry: { domain: "dev"; workspace: "w1"; editorToken: "0123456789abcdef0123456789abcdef0123456789abcdef"; editorTokenEpoch: 1763200000000; folder: "" }, port: 31581, editorError: ""]>, "=", undefined>,
-      Expect<Invoke<typeof shown, [value: Invoke<typeof editorAddress, [entry: Fresh, port: 31581, editorError: ""]>]>, "startsWith", "http://dev-w1-editor-HEX.localhost:31581/?tkn=">,
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "tokens-retired", text: "1763300000000"]>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof editorAddress,
+          [
+            entry: Fresh,
+            port: 31581,
+            editorError: "a program on this machine holds [::1]:31581, where browsers look first",
+          ]
+        >,
+        "=",
+        undefined
+      >,
+      Expect<
+        Invoke<
+          typeof editorAddress,
+          [
+            entry: {
+              domain: "dev";
+              workspace: "w1";
+              editorToken: "";
+              editorTokenEpoch: 1763300000000;
+              folder: "";
+            },
+            port: 31581,
+            editorError: "",
+          ]
+        >,
+        "=",
+        undefined
+      >,
+      Expect<
+        Invoke<
+          typeof editorAddress,
+          [
+            entry: {
+              domain: "dev";
+              workspace: "w1";
+              editorToken: "0123456789abcdef0123456789abcdef0123456789abcdef";
+              editorTokenEpoch: 1763200000000;
+              folder: "";
+            },
+            port: 31581,
+            editorError: "",
+          ]
+        >,
+        "=",
+        undefined
+      >,
+      Expect<
+        Invoke<
+          typeof shown,
+          [value: Invoke<typeof editorAddress, [entry: Fresh, port: 31581, editorError: ""]>]
+        >,
+        "startsWith",
+        "http://dev-w1-editor-HEX.localhost:31581/?tkn="
+      >,
     ]
   >;
 }
 
 /** `desolate ports`: each workspace's forwarded ports, and those it cannot have, with why. */
-const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(workspaces: E[], hostHeld: { has(port: number): boolean }, rawOwner: { get(port: number): string | undefined }, holderOf: (port: number) => string): PortView[] =>
-  workspaces.map((entry) => ({
-    workspace: `${entry.domain}/${entry.workspace}`,
-    forwarded: [...entry.listeners].sort((a, b) => a - b).filter((port) => !hostHeld.has(port)).map((port) => ({ port, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}` })),
-    reserved: [
-      ...[...entry.reserved].sort((a, b) => a - b).map((port) => ({ port, why: hostHeld.has(port) ? `a program on this machine holds it (${holderOf(port)})` : `no name in its protocol, and ${workspaces.find((e) => e.vm === (rawOwner.get(port) ?? ""))?.workspace ?? "another workspace"} had it first` })),
-      ...[...entry.listeners].filter((port) => hostHeld.has(port)).map((port) => ({ port, why: `listening in the workspace, but a program on this Mac holds port ${port} (${holderOf(port)}): not forwarded, and the workspace's address on port ${port} reaches that program instead. Run it on another port` })),
-    ],
-  })).sort((a, b) => a.workspace.localeCompare(b.workspace));
+const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
+  workspaces: E[],
+  hostHeld: { has(port: number): boolean },
+  rawOwner: { get(port: number): string | undefined },
+  holderOf: (port: number) => string,
+): PortView[] =>
+  workspaces
+    .map((entry) => ({
+      workspace: `${entry.domain}/${entry.workspace}`,
+      forwarded: [...entry.listeners]
+        .sort((a, b) => a - b)
+        .filter((port) => !hostHeld.has(port))
+        .map((port) => ({
+          port,
+          url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}`,
+        })),
+      reserved: [
+        ...[...entry.reserved]
+          .sort((a, b) => a - b)
+          .map((port) => ({
+            port,
+            why: hostHeld.has(port)
+              ? `a program on this machine holds it (${holderOf(port)})`
+              : `no name in its protocol, and ${workspaces.find((e) => e.vm === (rawOwner.get(port) ?? ""))?.workspace ?? "another workspace"} had it first`,
+          })),
+        ...[...entry.listeners]
+          .filter((port) => hostHeld.has(port))
+          .map((port) => ({
+            port,
+            why: `listening in the workspace, but a program on this Mac holds port ${port} (${holderOf(port)}): not forwarded, and the workspace's address on port ${port} reaches that program instead. Run it on another port`,
+          })),
+      ],
+    }))
+    .sort((a, b) => a.workspace.localeCompare(b.workspace));
 
 declare namespace portsView {
   /** each workspace's ports at its own address; one held on the Mac, and one another workspace
    *  had first, said with why. In order of name */
   export type View = Expect<
-    Invoke<typeof shown, [value: Invoke<typeof portsView, [
-      workspaces: [Invoke<typeof ws, [at: "dev/w2", listening: [5173, 3000], more: { reserved: [5432] }]>, Invoke<typeof ws, [at: "dev/w1", listening: [5432, 5173]]>],
-      hostHeld: Invoke<typeof setOf, [items: [3000]]>,
-      rawOwner: Invoke<typeof rawOwners, [owners: { "5432": "dev/w1" }]>,
-      holderOf: typeof heldByColima,
-    ]>]>,
+    Invoke<
+      typeof shown,
+      [
+        value: Invoke<
+          typeof portsView,
+          [
+            workspaces: [
+              Invoke<
+                typeof ws,
+                [at: "dev/w2", listening: [5173, 3000], more: { reserved: [5432] }]
+              >,
+              Invoke<typeof ws, [at: "dev/w1", listening: [5432, 5173]]>,
+            ],
+            hostHeld: Invoke<typeof setOf, [items: [3000]]>,
+            rawOwner: Invoke<typeof rawOwners, [owners: { "5432": "dev/w1" }]>,
+            holderOf: typeof heldByColima,
+          ]
+        >,
+      ]
+    >,
     "=",
     [
-      { workspace: "dev/w1"; forwarded: [{ port: 5173; url: "http://dev-w1-HEX.localhost:5173" }, { port: 5432; url: "http://dev-w1-HEX.localhost:5432" }]; reserved: [] },
+      {
+        workspace: "dev/w1";
+        forwarded: [
+          { port: 5173; url: "http://dev-w1-HEX.localhost:5173" },
+          { port: 5432; url: "http://dev-w1-HEX.localhost:5432" },
+        ];
+        reserved: [];
+      },
       {
         workspace: "dev/w2";
         forwarded: [{ port: 5173; url: "http://dev-w2-HEX.localhost:5173" }];
         reserved: [
           { port: 5432; why: "no name in its protocol, and w1 had it first" },
-          { port: 3000; why: "listening in the workspace, but a program on this Mac holds port 3000 (colima, pid 812): not forwarded, and the workspace's address on port 3000 reaches that program instead. Run it on another port" },
+          {
+            port: 3000;
+            why: "listening in the workspace, but a program on this Mac holds port 3000 (colima, pid 812): not forwarded, and the workspace's address on port 3000 reaches that program instead. Run it on another port";
+          },
         ];
       },
     ]
@@ -775,20 +2222,43 @@ declare namespace portsView {
 }
 
 /** The memory given to running workspaces: each one's size, else the stack's. */
-const memoryGiven = (domains: { workspaces: { vm: string; size?: Partial<Size> }[] }[], running: ReadonlySet<string>, defaultMiB: () => number) => {
+const memoryGiven = (
+  domains: { workspaces: { vm: string; size?: Partial<Size> }[] }[],
+  running: ReadonlySet<string>,
+  defaultMiB: () => number,
+) => {
   let given = 0;
-  for (const d of domains) for (const w of d.workspaces) if (running.has(w.vm)) given += Number(w.size?.memoryMiB ?? defaultMiB()) || 0;
+  for (const d of domains)
+    for (const w of d.workspaces)
+      if (running.has(w.vm)) given += Number(w.size?.memoryMiB ?? defaultMiB()) || 0;
   return given;
 };
 /** Why one more workspace would not fit on this Mac, or null: what is given and coming within
  *  85% of the Mac's memory. */
 const roomVerdict = (given: number, coming: number, next: number, mac: number) =>
-  given + coming > mac * 0.85 ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)` : null;
+  given + coming > mac * 0.85
+    ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)`
+    : null;
 
 declare namespace memoryGiven {
   /** running workspaces only, each at its own size, else the stack's */
   export type Running = Expect<
-    Invoke<typeof memoryGiven, [domains: [{ workspaces: [{ vm: "a"; size: { memoryMiB: 8192 } }, { vm: "b" }, { vm: "c"; size: { memoryMiB: 4096 } }] }], running: Invoke<typeof setOf, [items: ["a", "b"]]>, defaultMiB: typeof sixGiB]>,
+    Invoke<
+      typeof memoryGiven,
+      [
+        domains: [
+          {
+            workspaces: [
+              { vm: "a"; size: { memoryMiB: 8192 } },
+              { vm: "b" },
+              { vm: "c"; size: { memoryMiB: 4096 } },
+            ];
+          },
+        ],
+        running: Invoke<typeof setOf, [items: ["a", "b"]]>,
+        defaultMiB: typeof sixGiB,
+      ]
+    >,
     "=",
     14336
   >;
@@ -796,11 +2266,17 @@ declare namespace memoryGiven {
 
 declare namespace roomVerdict {
   /** what is given and coming, within 85% of the Mac's memory; past it, said in GiB */
-  export type Room = Table<typeof roomVerdict, [
-    [args: [given: 16384, coming: 8192, next: 8192, mac: 32768], expected: null],
-    [args: [given: 34816, coming: 0, next: 8192, mac: 40960], expected: null],
-    [args: [given: 28672, coming: 8192, next: 8192, mac: 40960], expected: "this Mac has no room for another workspace: 28 GiB of its 40 GiB are given to running workspaces, and one more needs 8 GiB (close one first, or ask the person)"],
-  ]>;
+  export type Room = Table<
+    typeof roomVerdict,
+    [
+      [args: [given: 16384, coming: 8192, next: 8192, mac: 32768], expected: null],
+      [args: [given: 34816, coming: 0, next: 8192, mac: 40960], expected: null],
+      [
+        args: [given: 28672, coming: 8192, next: 8192, mac: 40960],
+        expected: "this Mac has no room for another workspace: 28 GiB of its 40 GiB are given to running workspaces, and one more needs 8 GiB (close one first, or ask the person)",
+      ],
+    ]
+  >;
 }
 
 /** The root's state service's answer, once it is all there: complete when its Content-Length
@@ -813,26 +2289,85 @@ const stateAnswer = (data: Buffer): { status: number; body: string } | Error | n
   const head = data.subarray(0, split).toString("latin1");
   const status = Number(/^HTTP\/1\.1 (\d+)/.exec(head)?.[1] ?? 0);
   const length = Number(/\r\ncontent-length: (\d+)/i.exec(head)?.[1] ?? -1);
-  if (status === 0 || length < 0) return new Error("the root's state service sent something that is not an answer");
-  if (data.length >= split + 4 + length) return { status, body: data.subarray(split + 4, split + 4 + length).toString("utf8") };
+  if (status === 0 || length < 0)
+    return new Error("the root's state service sent something that is not an answer");
+  if (data.length >= split + 4 + length)
+    return { status, body: data.subarray(split + 4, split + 4 + length).toString("utf8") };
   return null;
 };
 
 declare namespace stateAnswer {
   /** an answer, once its body has all arrived, and no more of it than it said */
   export type Answers = [
-    Expect<Invoke<typeof stateAnswer, [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"]>]>, "=", { status: 200; body: "{}" }>,
-    Expect<Invoke<typeof stateAnswer, [data: Invoke<typeof wire, [text: "HTTP/1.1 401 Unauthorized\r\ncontent-length: 3\r\n\r\nno!and more"]>]>, "=", { status: 401; body: "no!" }>,
+    Expect<
+      Invoke<
+        typeof stateAnswer,
+        [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"]>]
+      >,
+      "=",
+      { status: 200; body: "{}" }
+    >,
+    Expect<
+      Invoke<
+        typeof stateAnswer,
+        [
+          data: Invoke<
+            typeof wire,
+            [text: "HTTP/1.1 401 Unauthorized\r\ncontent-length: 3\r\n\r\nno!and more"]
+          >,
+        ]
+      >,
+      "=",
+      { status: 401; body: "no!" }
+    >,
   ];
   /** not all there yet */
   export type Incomplete = [
-    Expect<Invoke<typeof stateAnswer, [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"]>]>, "=", null>,
-    Expect<Invoke<typeof stateAnswer, [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{}"]>]>, "=", null>,
+    Expect<
+      Invoke<
+        typeof stateAnswer,
+        [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"]>]
+      >,
+      "=",
+      null
+    >,
+    Expect<
+      Invoke<
+        typeof stateAnswer,
+        [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{}"]>]
+      >,
+      "=",
+      null
+    >,
   ];
   /** a head without its length, or not HTTP/1.1's, is not an answer, and waiting will not make it one */
   export type NotAnAnswer = [
-    Expect<Invoke<typeof shown, [value: Invoke<typeof stateAnswer, [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\n\r\n{}"]>]>]>, "=", { error: "the root's state service sent something that is not an answer" }>,
-    Expect<Invoke<typeof shown, [value: Invoke<typeof stateAnswer, [data: Invoke<typeof wire, [text: "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\n{}"]>]>]>, "=", { error: "the root's state service sent something that is not an answer" }>,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof stateAnswer,
+            [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\n\r\n{}"]>]
+          >,
+        ]
+      >,
+      "=",
+      { error: "the root's state service sent something that is not an answer" }
+    >,
+    Expect<
+      Invoke<
+        typeof shown,
+        [
+          value: Invoke<
+            typeof stateAnswer,
+            [data: Invoke<typeof wire, [text: "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\n{}"]>]
+          >,
+        ]
+      >,
+      "=",
+      { error: "the root's state service sent something that is not an answer" }
+    >,
   ];
 }
 
@@ -842,12 +2377,15 @@ const sinceTag = (next: string) => (/^[0-9a-f]{16}$/.test(next) ? next : "");
 
 declare namespace sinceTag {
   /** 16 hex, or none: nothing else of the root's user's word goes into the request line */
-  export type Tags = Table<typeof sinceTag, [
-    [args: [next: "0123456789abcdef"], expected: "0123456789abcdef"],
-    [args: [next: "0123456789ABCDEF"], expected: ""],
-    [args: [next: "0123456789abcdef HTTP/1.1\r\nX: y"], expected: ""],
-    [args: [next: ""], expected: ""],
-  ]>;
+  export type Tags = Table<
+    typeof sinceTag,
+    [
+      [args: [next: "0123456789abcdef"], expected: "0123456789abcdef"],
+      [args: [next: "0123456789ABCDEF"], expected: ""],
+      [args: [next: "0123456789abcdef HTTP/1.1\r\nX: y"], expected: ""],
+      [args: [next: ""], expected: ""],
+    ]
+  >;
 }
 
 /** Where the pusher's log was read to (its file's identity, and an offset), and what one look
@@ -862,30 +2400,66 @@ const pusherLogRead = (where: LogAt, stdout: string): { where: LogAt; lines: str
   const size = Number(sizeText);
   if (!/^\d+$/.test(inode) || !Number.isInteger(size)) return { where, lines: [] };
   if (!where) return { where: { inode, offset: size }, lines: [] };
-  if (where.inode !== inode || size < where.offset) return { where: { inode, offset: 0 }, lines: [] };
+  if (where.inode !== inode || size < where.offset)
+    return { where: { inode, offset: 0 }, lines: [] };
   const bytes = Buffer.from(body, "base64");
   const end = bytes.lastIndexOf(10);
   if (end < 0) return { where, lines: [] };
-  return { where: { inode, offset: where.offset + end + 1 }, lines: bytes.subarray(0, end).toString("utf8").split("\n") };
+  return {
+    where: { inode, offset: where.offset + end + 1 },
+    lines: bytes.subarray(0, end).toString("utf8").split("\n"),
+  };
 };
 
 declare namespace pusherLogRead {
   /** the first look starts where the log is now: what was pushed before is not news */
-  export type First = Expect<Invoke<typeof pusherLogRead, [where: null, stdout: "1234 500\n"]>, "=", { where: { inode: "1234"; offset: 500 }; lines: [] }>;
+  export type First = Expect<
+    Invoke<typeof pusherLogRead, [where: null, stdout: "1234 500\n"]>,
+    "=",
+    { where: { inode: "1234"; offset: 500 }; lines: [] }
+  >;
   /** the whole lines read; a line not yet ended is read next time */
   export type Lines = Expect<
-    Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 500 }, stdout: "1234 522\nbGluZSBvbmUKbGluZSB0d28KcGFydA=="]>,
+    Invoke<
+      typeof pusherLogRead,
+      [where: { inode: "1234"; offset: 500 }, stdout: "1234 522\nbGluZSBvbmUKbGluZSB0d28KcGFydA=="]
+    >,
     "=",
     { where: { inode: "1234"; offset: 518 }; lines: ["line one", "line two"] }
   >;
-  export type NoWholeLine = Expect<Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "1234 522\ncGFydA=="]>, "=", { where: { inode: "1234"; offset: 518 }; lines: [] }>;
+  export type NoWholeLine = Expect<
+    Invoke<
+      typeof pusherLogRead,
+      [where: { inode: "1234"; offset: 518 }, stdout: "1234 522\ncGFydA=="]
+    >,
+    "=",
+    { where: { inode: "1234"; offset: 518 }; lines: [] }
+  >;
   /** a new file, or one cut shorter: read from its start */
   export type Rotated = [
-    Expect<Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "5678 40\n"]>, "=", { where: { inode: "5678"; offset: 0 }; lines: [] }>,
-    Expect<Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "1234 40\n"]>, "=", { where: { inode: "1234"; offset: 0 }; lines: [] }>,
+    Expect<
+      Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "5678 40\n"]>,
+      "=",
+      { where: { inode: "5678"; offset: 0 }; lines: [] }
+    >,
+    Expect<
+      Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "1234 40\n"]>,
+      "=",
+      { where: { inode: "1234"; offset: 0 }; lines: [] }
+    >,
   ];
   /** a look that did not say where the file stands changes nothing */
-  export type Unread = Expect<Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "stat: cannot statx '/var/lib/desolate-root/pusher.log'\n"]>, "=", { where: { inode: "1234"; offset: 518 }; lines: [] }>;
+  export type Unread = Expect<
+    Invoke<
+      typeof pusherLogRead,
+      [
+        where: { inode: "1234"; offset: 518 },
+        stdout: "stat: cannot statx '/var/lib/desolate-root/pusher.log'\n",
+      ]
+    >,
+    "=",
+    { where: { inode: "1234"; offset: 518 }; lines: [] }
+  >;
 }
 
 const serve = async () => {
@@ -907,9 +2481,14 @@ const serve = async () => {
   const holderOf = (port: number) => {
     if (!heldBy.has(port)) {
       heldBy.set(port, "a program on this Mac");
-      execFile("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"], { encoding: "utf8", timeout: 3000 }, (_error, found) => {
-        if (heldBy.has(port)) heldBy.set(port, holderIn(found ?? ""));
-      });
+      execFile(
+        "lsof",
+        ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"],
+        { encoding: "utf8", timeout: 3000 },
+        (_error, found) => {
+          if (heldBy.has(port)) heldBy.set(port, holderIn(found ?? ""));
+        },
+      );
     }
     return heldBy.get(port)!;
   };
@@ -939,10 +2518,14 @@ const serve = async () => {
 
   const redirectHttp = (client: Socket, location: string) => {
     const text = `desolate: served at ${location}\n`;
-    client.end(`HTTP/1.1 307 Temporary Redirect\r\nLocation: ${location}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
+    client.end(
+      `HTTP/1.1 307 Temporary Redirect\r\nLocation: ${location}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
+    );
   };
   const refuseHttp = (client: Socket, status: string, text: string) => {
-    client.end(`HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`);
+    client.end(
+      `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
+    );
   };
 
   const onInbound = async (port: number, client: Socket) => {
@@ -971,7 +2554,13 @@ const serve = async () => {
     const { head } = sniffedHead;
     // Where it goes is decided by inboundRoute, from what it said and nothing else.
     const owner = rawOwner.get(port);
-    const route = inboundRoute(port, sniffedHead, raw, [...entries.values()], owner ? entries.get(owner) : undefined);
+    const route = inboundRoute(
+      port,
+      sniffedHead,
+      raw,
+      [...entries.values()],
+      owner ? entries.get(owner) : undefined,
+    );
     if (route.to === "close") return void client.destroy();
     if (route.to === "redirect") return redirectHttp(client, route.location);
     if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
@@ -1029,19 +2618,30 @@ const serve = async () => {
   const approvals = createHttpServer(guarded(log, approvePage(approvalBackend(), log)));
   // The git terminal (git-web.ts): a shell in the git VM, and what the git VM hands over.
   const gitReady = new Set<string>();
-  const gitTerminals = createHttpServer(guarded(log, gitPage((argv) => b.spawn(GIT_VM, argv), log, async (repo) => {
-    // A shell asked for from a link (the dashboard's "Open in git"): the VM and the clone
-    // are made on the way, as `desolate git <repo>` would.
-    if (!gitReady.has("")) {
-      await ensureGitVm();
-      gitReady.add("");
-    }
-    if (repo && !gitReady.has(repo)) {
-      await ensureGitClone(parseRepo(repo)!);
-      gitReady.add(repo);
-    }
-  })));
-  watchGitOut(log, (fields) => events.publish(events.host(fields.domain ? "git-delivery-handed" : "git-push-handed", fields)));
+  const gitTerminals = createHttpServer(
+    guarded(
+      log,
+      gitPage(
+        (argv) => b.spawn(GIT_VM, argv),
+        log,
+        async (repo) => {
+          // A shell asked for from a link (the dashboard's "Open in git"): the VM and the clone
+          // are made on the way, as `desolate git <repo>` would.
+          if (!gitReady.has("")) {
+            await ensureGitVm();
+            gitReady.add("");
+          }
+          if (repo && !gitReady.has(repo)) {
+            await ensureGitClone(parseRepo(repo)!);
+            gitReady.add(repo);
+          }
+        },
+      ),
+    ),
+  );
+  watchGitOut(log, (fields) =>
+    events.publish(events.host(fields.domain ? "git-delivery-handed" : "git-push-handed", fields)),
+  );
   const onPagesClient = (client: Socket) => {
     client.on("error", () => client.destroy());
     void sniffSocket(client, 400).then(({ sniffed, head }) => {
@@ -1078,19 +2678,27 @@ const serve = async () => {
   const editors = createServer(onPagesClient);
   const editors6 = createServer(onPagesClient);
   editors.on("error", (error: NodeJS.ErrnoException) => {
-    editorError = error.code === "EADDRINUSE" ? `a program on this machine holds port ${editorHostPort()}` : error.message;
+    editorError =
+      error.code === "EADDRINUSE"
+        ? `a program on this machine holds port ${editorHostPort()}`
+        : error.message;
     log(`editors on port ${editorHostPort()}: ${error.message}`);
   });
   editors6.on("error", (error: NodeJS.ErrnoException) => {
-    if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return;   // no IPv6 here: nothing to look at there
-    editorError = error.code === "EADDRINUSE" ? `a program on this machine holds [::1]:${editorHostPort()}, where browsers look first` : `[::1]: ${error.message}`;
+    if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return; // no IPv6 here: nothing to look at there
+    editorError =
+      error.code === "EADDRINUSE"
+        ? `a program on this machine holds [::1]:${editorHostPort()}, where browsers look first`
+        : `[::1]: ${error.message}`;
     log(`editors on [::1]:${editorHostPort()}: ${error.message}`);
     editors.close();
     // A tab already open on these pages, reloaded, sends its cookie there, and the cookie is
     // the token: the tokens are retired (retired.ts says how each is made again).
     if (error.code === "EADDRINUSE") retire();
   });
-  editors.on("listening", () => editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }));
+  editors.on("listening", () =>
+    editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }),
+  );
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
 
   const reconcile = () => {
@@ -1104,7 +2712,8 @@ const serve = async () => {
         forwards6.delete(port);
         rawOwner.delete(port);
       }
-    for (const port of hostHeld.keys()) if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
+    for (const port of hostHeld.keys())
+      if (!wanted.has(port)) (hostHeld.delete(port), heldBy.delete(port));
     for (const port of wanted) {
       const holders = [...entries.values()].filter((entry) => entry.listeners.has(port));
       const owner = rawOwner.get(port);
@@ -1126,7 +2735,8 @@ const serve = async () => {
         six.on("listening", () => hostHeld.delete(port));
         six.on("error", (error: NodeJS.ErrnoException) => {
           if (forwards6.get(port) === six) forwards6.delete(port);
-          if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return void hostHeld.delete(port);
+          if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT")
+            return void hostHeld.delete(port);
           // Something else answers on [::1]:<port> (or it could not be held): a browser may go
           // there with a workspace's name and cookies. Not forwarded at all, then, and said so.
           if (forwards.get(port) === server) forwards.delete(port);
@@ -1140,23 +2750,38 @@ const serve = async () => {
       // 127.0.0.1 only, never a wildcard: nothing on the LAN reaches a workspace.
       server.listen({ port, host: "127.0.0.1", exclusive: true });
     }
-    for (const entry of entries.values()) entry.reserved = reservedFor(entry, forwards.keys(), knownRaw, rawOwner);
+    for (const entry of entries.values())
+      entry.reserved = reservedFor(entry, forwards.keys(), knownRaw, rawOwner);
   };
 
   const sync = async (entry: Entry) => {
     try {
-      const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], { input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }), timeoutMs: 15_000 });
-      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as { ok?: boolean; listeners?: number[]; error?: string; editorToken?: unknown; editorTokenEpoch?: unknown; devcontainer?: unknown; folder?: unknown };
+      const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], {
+        input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }),
+        timeoutMs: 15_000,
+      });
+      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as {
+        ok?: boolean;
+        listeners?: number[];
+        error?: string;
+        editorToken?: unknown;
+        editorTokenEpoch?: unknown;
+        devcontainer?: unknown;
+        folder?: unknown;
+      };
       // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
       // rest is cut to a line.
       entry.editorToken = editorTokenOf(reply.editorToken);
       entry.editorTokenEpoch = tokenEpochOf(reply.editorTokenEpoch);
       // A VM still running an older wsd says nothing of it (it is restarted only with the VM):
       // asked directly, and only once tokens have been retired (review of the final fixes).
-      if (reply.editorTokenEpoch === undefined && retiredAt() > 0) entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
-      entry.devcontainer = typeof reply.devcontainer === "string" ? printable(reply.devcontainer, 400, " ") : "";
+      if (reply.editorTokenEpoch === undefined && retiredAt() > 0)
+        entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
+      entry.devcontainer =
+        typeof reply.devcontainer === "string" ? printable(reply.devcontainer, 400, " ") : "";
       entry.folder = folderFrom(entry.folder, reply.folder);
-      if (!reply.ok || !Array.isArray(reply.listeners)) throw new Error(reply.error ?? `exit ${result.code}`);
+      if (!reply.ok || !Array.isArray(reply.listeners))
+        throw new Error(reply.error ?? `exit ${result.code}`);
       // Fail closed on what the VM says (listenersFrom).
       const ours = b.hostPorts?.() ?? new Set<number>();
       entry.listeners = listenersFrom(reply.listeners, ours);
@@ -1208,7 +2833,11 @@ const serve = async () => {
       let closed = false;
       tcp.on("error", (error: NodeJS.ErrnoException) => {
         log(`link ${entry.vm} on port ${hostPort}: ${error.message}`);
-        if (error.code === "EADDRINUSE" && !closed) setTimeout(() => !closed && tcp.listen({ port: hostPort, host: "127.0.0.1", exclusive: true }), 2000);
+        if (error.code === "EADDRINUSE" && !closed)
+          setTimeout(
+            () => !closed && tcp.listen({ port: hostPort, host: "127.0.0.1", exclusive: true }),
+            2000,
+          );
       });
       tcp.listen({ port: hostPort, host: "127.0.0.1", exclusive: true });
       server.on("close", () => {
@@ -1224,7 +2853,21 @@ const serve = async () => {
       existing.proxy = r.proxy;
       return;
     }
-    const entry: Entry = { vm: r.vm, domain: r.domain, workspace: r.workspace, proxy: r.proxy, listeners: new Set(), reserved: new Set(), link: null, lastError: "", editorToken: "", editorTokenEpoch: 0, devcontainer: "", folder: "", watchers: [] };
+    const entry: Entry = {
+      vm: r.vm,
+      domain: r.domain,
+      workspace: r.workspace,
+      proxy: r.proxy,
+      listeners: new Set(),
+      reserved: new Set(),
+      link: null,
+      lastError: "",
+      editorToken: "",
+      editorTokenEpoch: 0,
+      devcontainer: "",
+      folder: "",
+      watchers: [],
+    };
     entries.set(r.vm, entry);
     // A status set in the workspace is a file changing in a share. A VM gets no events for
     // a share, so the host watches (the directory, for a change: it reads nothing) and
@@ -1239,7 +2882,11 @@ const serve = async () => {
         // The domain's own tree: a directory there may be a link anywhere on the Mac, which
         // a watch (recursive above all) would follow. Nothing is read through one, but
         // only a real directory inside the domain's tree is watched.
-        if (!fs.lstatSync(dir).isDirectory() || fs.realpathSync(dir) !== path.join(fs.realpathSync(base), path.relative(base, dir))) return;
+        if (
+          !fs.lstatSync(dir).isDirectory() ||
+          fs.realpathSync(dir) !== path.join(fs.realpathSync(base), path.relative(base, dir))
+        )
+          return;
         const watcher = fs.watch(dir, { recursive }, (_event, file) => {
           if (wanted(file === null ? null : String(file))) nudge();
         });
@@ -1256,7 +2903,11 @@ const serve = async () => {
     for (const c of checkouts) {
       // Its status or note, or what it has checked out (HEAD: a `git switch`, a commit on a
       // detached HEAD, a rebase starting or ending).
-      watch(statusDir(base, c), false, (file) => file === null || file.startsWith("desolate-") || file === "HEAD");
+      watch(
+        statusDir(base, c),
+        false,
+        (file) => file === null || file.startsWith("desolate-") || file === "HEAD",
+      );
       repos.add(c.repo);
     }
     // A commit moves a branch: a file under refs/heads (or packed-refs). A share's files are
@@ -1271,12 +2922,16 @@ const serve = async () => {
         watch(common, false, (file) => file === null || file === "packed-refs");
       }
     openLink(entry);
-    events.publish(events.host("workspace-up", { domain: r.domain, workspace: r.workspace, vm: r.vm }));
+    events.publish(
+      events.host("workspace-up", { domain: r.domain, workspace: r.workspace, vm: r.vm }),
+    );
   };
   const unregister = (vm: string) => {
     const entry = entries.get(vm);
     if (!entry) return;
-    events.publish(events.host("workspace-down", { domain: entry.domain, workspace: entry.workspace, vm }));
+    events.publish(
+      events.host("workspace-down", { domain: entry.domain, workspace: entry.workspace, vm }),
+    );
     entry.link?.close();
     for (const watcher of entry.watchers) watcher.close();
     entries.delete(vm);
@@ -1284,7 +2939,6 @@ const serve = async () => {
   };
 
   const view = (): PortView[] => portsView([...entries.values()], hostHeld, rawOwner, holderOf);
-
 
   // ---------------------------------------------------------------- the root UI's host side
   // The root's state service cannot see the host, and cannot ask: no VM can open a
@@ -1326,7 +2980,12 @@ const serve = async () => {
     return item.stream;
   };
   setInterval(stock, 5000).unref();
-  const rootHttp = (method: string, pathname: string, body?: unknown, timeoutMs = 15_000): Promise<{ status: number; body: string }> =>
+  const rootHttp = (
+    method: string,
+    pathname: string,
+    body?: unknown,
+    timeoutMs = 15_000,
+  ): Promise<{ status: number; body: string }> =>
     new Promise((resolve, reject) => {
       let token = "";
       try {
@@ -1337,7 +2996,10 @@ const serve = async () => {
       const payload = body === undefined ? "" : JSON.stringify(body);
       const stream = toStateService();
       let data = Buffer.alloc(0);
-      const timer = setTimeout(() => settle(new Error("the root's state service did not answer")), timeoutMs);
+      const timer = setTimeout(
+        () => settle(new Error("the root's state service did not answer")),
+        timeoutMs,
+      );
       let settled = false;
       const settle = (result: { status: number; body: string } | Error) => {
         if (settled) return;
@@ -1358,12 +3020,15 @@ const serve = async () => {
       stream.on("data", (chunk: Buffer) => {
         data = Buffer.concat([data, chunk]);
         // What the root's user's service says is bounded: it parses what domains send.
-        if (data.length > 16 * 1024 * 1024) return settle(new Error("the root's state service said too much"));
+        if (data.length > 16 * 1024 * 1024)
+          return settle(new Error("the root's state service said too much"));
         complete();
       });
       stream.on("error", (error) => settle(error));
       stream.on("close", () => settle(new Error("the root's state service is not there")));
-      stream.write(`${method} ${pathname} HTTP/1.1\r\nHost: root\r\nAuthorization: Bearer ${token}\r\nConnection: close\r\n${payload ? `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n` : ""}\r\n${payload}`);
+      stream.write(
+        `${method} ${pathname} HTTP/1.1\r\nHost: root\r\nAuthorization: Bearer ${token}\r\nConnection: close\r\n${payload ? `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n` : ""}\r\n${payload}`,
+      );
     });
 
   let nudging: NodeJS.Timeout | null = null;
@@ -1373,11 +3038,14 @@ const serve = async () => {
   let nudgedAt = 0;
   const nudge = () => {
     if (nudging) return;
-    nudging = setTimeout(() => {
-      nudging = null;
-      nudgedAt = Date.now();
-      rootHttp("POST", "/host/nudge", {}).catch(() => {});
-    }, Math.max(60, 500 - (Date.now() - nudgedAt)));
+    nudging = setTimeout(
+      () => {
+        nudging = null;
+        nudgedAt = Date.now();
+        rootHttp("POST", "/host/nudge", {}).catch(() => {});
+      },
+      Math.max(60, 500 - (Date.now() - nudgedAt)),
+    );
   };
 
   let sentFacts = "";
@@ -1393,21 +3061,44 @@ const serve = async () => {
       const entry = entries.get(vm.name);
       workspaces[vm.name] = {
         status: vm.status,
-        ...(entry ? {
-          devcontainer: entry.devcontainer || undefined,
-          editor: editorAddress(entry, port, editorError),
-          ports: [...entry.listeners].sort((x, y) => x - y).filter((p) => !hostHeld.has(p)).map((p) => ({ port: p, url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}` })),
-          // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
-          // address on that port reaches the Mac's program (the dashboard says so).
-          heldOnMac: [...entry.listeners].sort((x, y) => x - y).filter((p) => hostHeld.has(p)).map((p) => ({ port: p, by: holderOf(p) })),
-        } : {}),
+        ...(entry
+          ? {
+              devcontainer: entry.devcontainer || undefined,
+              editor: editorAddress(entry, port, editorError),
+              ports: [...entry.listeners]
+                .sort((x, y) => x - y)
+                .filter((p) => !hostHeld.has(p))
+                .map((p) => ({
+                  port: p,
+                  url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}`,
+                })),
+              // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
+              // address on that port reaches the Mac's program (the dashboard says so).
+              heldOnMac: [...entry.listeners]
+                .sort((x, y) => x - y)
+                .filter((p) => hostHeld.has(p))
+                .map((p) => ({ port: p, by: holderOf(p) })),
+            }
+          : {}),
       };
     }
     const { kind } = await import("./approver.ts");
     // This Mac's size, for a domain's workspaces to know where they run (desolate domain stats).
     // (Not its free memory: macOS counts its caches as used, and it changes every second.)
     const mac = { cpus: os.cpus().length, memoryMiB: Math.floor(os.totalmem() / 1048576) };
-    const facts = { stack: { instance: INSTANCE, backend: b.kind, isolated: b.isolated, editorPort: port, approver: kind(), rootHostname: ROOT_HOSTNAME, gitHostname: GIT_HOSTNAME, mac }, workspaces };
+    const facts = {
+      stack: {
+        instance: INSTANCE,
+        backend: b.kind,
+        isolated: b.isolated,
+        editorPort: port,
+        approver: kind(),
+        rootHostname: ROOT_HOSTNAME,
+        gitHostname: GIT_HOSTNAME,
+        mac,
+      },
+      workspaces,
+    };
     const text = JSON.stringify(facts);
     // Said when it changes, and now and then regardless, so the service knows the host is there.
     if (text === sentFacts && Date.now() - sentAt < 45_000) return;
@@ -1423,8 +3114,12 @@ const serve = async () => {
     try {
       const { stackDefaults } = await import("./workspaces.ts");
       const { merge } = await import("../shared/size.ts");
-      const all = await rootctl<{ slug: string; size?: Partial<Size>; workspaces: { vm: string; size?: Partial<Size> }[] }[]>("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
-      const up = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+      const all = await rootctl<
+        { slug: string; size?: Partial<Size>; workspaces: { vm: string; size?: Partial<Size> }[] }[]
+      >("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
+      const up = new Set(
+        (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
+      );
       const given = memoryGiven(all, up, () => stackDefaults().memoryMiB);
       const next = merge(all.find((d) => d.slug === domain)?.size, stackDefaults()).memoryMiB;
       // Every spawn under way (this one among them) counts as a VM of that size: they are not
@@ -1441,12 +3136,20 @@ const serve = async () => {
     let spawning: string | null = null;
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
-    const report = (lines: string[], done?: number) => rootHttp("POST", "/host/progress", { id: action.id, lines, ...(done === undefined ? {} : { done: true, code: done }) }).catch(() => {});
+    const report = (lines: string[], done?: number) =>
+      rootHttp("POST", "/host/progress", {
+        id: action.id,
+        lines,
+        ...(done === undefined ? {} : { done: true, code: done }),
+      }).catch(() => {});
     if (!argv) return void report(["the host does not do that"], 64);
     // A workspace's own request (spawn, close): run only if the workspace it names signed it,
     // with the key only it and this host have (shared/spawn.ts says why not the root's word).
     if (SIGNED_KINDS.has(String(action.kind))) {
-      const signed = signedOf(action.kind === "workspace.spawn" ? "spawn" : "close", action.args as Record<string, string>);
+      const signed = signedOf(
+        action.kind === "workspace.spawn" ? "spawn" : "close",
+        action.args as Record<string, string>,
+      );
       const { check } = await import("./spawn.ts");
       const vms = new Set((await b.list()).map((vm) => vm.name));
       const why = signed ? check(signed, (vm) => vms.has(vm)) : "not a request desolate makes";
@@ -1476,7 +3179,18 @@ const serve = async () => {
     log(`dashboard: desolate ${argv.join(" ")}`);
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", path.join(RELEASE_DIR, "host", "cli.ts"), ...argv], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" } });
+      child = spawn(
+        process.execPath,
+        [
+          "--disable-warning=ExperimentalWarning",
+          path.join(RELEASE_DIR, "host", "cli.ts"),
+          ...argv,
+        ],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, DESOLATE_PROGRESS: "1", NO_COLOR: "1" },
+        },
+      );
     } catch (error) {
       ended();
       return void report([`could not run: ${printable((error as Error).message, 200)}`], 1);
@@ -1488,7 +3202,12 @@ const serve = async () => {
     let pending: string[] = [];
     let flushing: NodeJS.Timeout | null = null;
     const take = (chunk: Buffer) => {
-      pending.push(...chunk.toString().split("\n").filter((line) => line.trim() !== ""));
+      pending.push(
+        ...chunk
+          .toString()
+          .split("\n")
+          .filter((line) => line.trim() !== ""),
+      );
       flushing ??= setTimeout(() => {
         flushing = null;
         void report(pending.splice(0));
@@ -1511,7 +3230,11 @@ const serve = async () => {
       try {
         const reply = await rootHttp("GET", "/host/requests", undefined, 70_000);
         if (reply.status !== 200) throw new Error(`status ${reply.status}`);
-        for (const action of JSON.parse(reply.body) as { id: string; kind: unknown; args: unknown }[]) {
+        for (const action of JSON.parse(reply.body) as {
+          id: string;
+          kind: unknown;
+          args: unknown;
+        }[]) {
           if (typeof action.id !== "string" || taken.has(action.id)) continue;
           taken.add(action.id);
           void runAction(action).catch((error: Error) => log(`a request failed: ${error.message}`));
@@ -1519,7 +3242,8 @@ const serve = async () => {
         lastFailure = "";
       } catch (error) {
         // The root is not up, or its service is not: try again in a while.
-        if (String(error) !== lastFailure) log(`dashboard requests: ${(lastFailure = String(error))}`);
+        if (String(error) !== lastFailure)
+          log(`dashboard requests: ${(lastFailure = String(error))}`);
         await sleep(3000);
       }
     }
@@ -1535,7 +3259,10 @@ const serve = async () => {
       try {
         const reply = await rootHttp("GET", `/host/state?since=${tag}`, undefined, 70_000);
         if (reply.status !== 200) throw new Error(`status ${reply.status}`);
-        const { tag: next, state } = JSON.parse(reply.body) as { tag: string; state: Parameters<typeof stateEvents>[1] };
+        const { tag: next, state } = JSON.parse(reply.body) as {
+          tag: string;
+          state: Parameters<typeof stateEvents>[1];
+        };
         // The first state is where things stand, not news.
         if (before) for (const e of stateEvents(before, state)) events.publish(e);
         before = state;
@@ -1562,7 +3289,18 @@ const serve = async () => {
         // One look: the file's identity and size, and up to a MiB of what is new, as base64
         // (bytes, so an offset is never miscounted).
         const from = where ? where.offset : -1;
-        const read = await b.exec(ROOT_VM, ["bash", "-c", `stat -c '%i %s' "$1"; if [ "$2" -ge 0 ]; then tail -c +$(( $2 + 1 )) "$1" | head -c 1048576 | base64 -w0; fi`, "_", file, String(from)], { root: true, timeoutMs: 20_000 });
+        const read = await b.exec(
+          ROOT_VM,
+          [
+            "bash",
+            "-c",
+            `stat -c '%i %s' "$1"; if [ "$2" -ge 0 ]; then tail -c +$(( $2 + 1 )) "$1" | head -c 1048576 | base64 -w0; fi`,
+            "_",
+            file,
+            String(from),
+          ],
+          { root: true, timeoutMs: 20_000 },
+        );
         const step = pusherLogRead(where, read.stdout);
         where = step.where;
         for (const line of step.lines) {
@@ -1611,13 +3349,26 @@ const serve = async () => {
           await sleep(50);
           reconcile();
           await Promise.all([...entries.values()].map(sync));
-          reply = { ok: true, ports: view(), editor: { port: editorHostPort(), error: editorError } };
+          reply = {
+            ok: true,
+            ports: view(),
+            editor: { port: editorHostPort(), error: editorError },
+          };
         } else if (request.op === "approved") {
           // An approval given at a terminal (desolate approve, desolate push): the same event
           // the approval page's gives, from the text that was signed (parsed here).
           const message = (request as { message?: unknown }).message;
           const push = typeof message === "string" ? parseApproval(message) : null;
-          if (push) events.publish(events.host("approved", { repo: push.repo, branch: push.branch, commit: push.commit, onto: push.onto, via: "terminal" }));
+          if (push)
+            events.publish(
+              events.host("approved", {
+                repo: push.repo,
+                branch: push.branch,
+                commit: push.commit,
+                onto: push.onto,
+                via: "terminal",
+              }),
+            );
           reply = { ok: push !== null };
         } else if (request.op === "events") {
           // A stream, not an answer: the last ones asked for, then each as it comes.
@@ -1629,7 +3380,9 @@ const serve = async () => {
           const stop = events.listen(replay, (line) => {
             if (connection.writableLength > 1024 * 1024) {
               stop();
-              connection.end(`${JSON.stringify({ v: 1, at: new Date().toISOString(), type: "lagged", source: "host" })}\n`);
+              connection.end(
+                `${JSON.stringify({ v: 1, at: new Date().toISOString(), type: "lagged", source: "host" })}\n`,
+              );
               return;
             }
             connection.write(`${line}\n`);
@@ -1660,16 +3413,30 @@ const serve = async () => {
 
   // After a restart of the host: take up every workspace whose VM is running.
   try {
-    const domains = await rootctl<{ slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]>("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
-    const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+    const domains = await rootctl<
+      { slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]
+    >("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
+    const running = new Set(
+      (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
+    );
     const { isOwnVm } = await import("./workspaces.ts");
     for (const d of domains)
       for (const w of d.workspaces)
         // The root's word, checked: a record naming another domain's VM gets no link and no
         // proxy (it would give that VM this domain's names and rules: review of the fixes).
         if (running.has(w.vm) && w.domain === d.slug && isOwnVm(d.slug, w)) {
-          const proxy = await rootctl<{ socket: string }>("proxy.start", { vm: w.vm, domain: w.domain, workspace: w.workspace }, { quiet: true, timeoutMs: 60_000 });
-          register({ vm: w.vm, domain: w.domain, workspace: w.workspace, proxy: proxy.socket, checkouts: w.checkouts } as Registered);
+          const proxy = await rootctl<{ socket: string }>(
+            "proxy.start",
+            { vm: w.vm, domain: w.domain, workspace: w.workspace },
+            { quiet: true, timeoutMs: 60_000 },
+          );
+          register({
+            vm: w.vm,
+            domain: w.domain,
+            workspace: w.workspace,
+            proxy: proxy.socket,
+            checkouts: w.checkouts,
+          } as Registered);
         }
   } catch (error) {
     log(`could not list workspaces at start: ${String(error)}`);
@@ -1686,7 +3453,10 @@ const serve = async () => {
 };
 
 // ------------------------------------------------------------------ talking to it
-const ask = (request: Record<string, unknown>, timeoutMs = 60_000): Promise<Record<string, unknown>> =>
+const ask = (
+  request: Record<string, unknown>,
+  timeoutMs = 60_000,
+): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {
     const connection = connect(SOCKET);
     let buffer = "";
@@ -1710,14 +3480,23 @@ const ask = (request: Record<string, unknown>, timeoutMs = 60_000): Promise<Reco
     });
   });
 
-const alive = () => ask({ op: "ping" }, 3000).then(() => true, () => false);
+const alive = () =>
+  ask({ op: "ping" }, 3000).then(
+    () => true,
+    () => false,
+  );
 
 /** Tell `desolate events` of an approval given at a terminal. Best effort: no daemon, no event. */
-export const announceApproved = (message: string) => ask({ op: "approved", message }, 3000).catch(() => ({}));
+export const announceApproved = (message: string) =>
+  ask({ op: "approved", message }, 3000).catch(() => ({}));
 
 declare namespace announceApproved {
   /** best effort: with no daemon there is no event, and the approval it follows is not undone */
-  export type NoDaemon = Expect<Invoke<typeof announceApproved, [message: "desolate-approve v1 ..."]>, "=", {}>;
+  export type NoDaemon = Expect<
+    Invoke<typeof announceApproved, [message: "desolate-approve v1 ..."]>,
+    "=",
+    {}
+  >;
 }
 
 export const ensureDaemon = async () => {
@@ -1731,15 +3510,28 @@ export const ensureDaemon = async () => {
   }
   fs.mkdirSync(paths.logs, { recursive: true });
   const log = fs.openSync(LOG, "a");
-  const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", fileURLToPath(import.meta.url), "serve"], { detached: true, stdio: ["ignore", log, log], env: process.env });
+  const child = spawn(
+    process.execPath,
+    ["--disable-warning=ExperimentalWarning", fileURLToPath(import.meta.url), "serve"],
+    { detached: true, stdio: ["ignore", log, log], env: process.env },
+  );
   child.unref();
-  if (!(await waitFor(alive, 20_000, 100))) throw new Error(`the host daemon did not start; see ${LOG}`);
+  if (!(await waitFor(alive, 20_000, 100)))
+    throw new Error(`the host daemon did not start; see ${LOG}`);
 };
 
 export const connectWorkspace = async (plan: WorkspacePlan & { proxy?: string | null }) => {
   await ensureDaemon();
-  const reply = await ask({ op: "register", vm: plan.vm, domain: plan.domain, workspace: plan.workspace, proxy: plan.proxy ?? null, checkouts: plan.checkouts });
-  if (reply.ok !== true) throw new Error(`the host daemon refused the workspace: ${String(reply.error)}`);
+  const reply = await ask({
+    op: "register",
+    vm: plan.vm,
+    domain: plan.domain,
+    workspace: plan.workspace,
+    proxy: plan.proxy ?? null,
+    checkouts: plan.checkouts,
+  });
+  if (reply.ok !== true)
+    throw new Error(`the host daemon refused the workspace: ${String(reply.error)}`);
 };
 
 export const disconnectWorkspace = async (vm: string) => {
@@ -1753,8 +3545,16 @@ export const disconnectWorkspace = async (vm: string) => {
  *  known is not held (P6): a daemon that does not answer refuses too. */
 export const tokenAddressesSafe = async () => {
   const held = await editorPortError();
-  if (held === null) refuse("not printed: the host daemon did not say it holds its port, and this address carries a token", "desolate doctor");
-  if (held) refuse(`not printed: ${held}, and this address carries a token`, "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap");
+  if (held === null)
+    refuse(
+      "not printed: the host daemon did not say it holds its port, and this address carries a token",
+      "desolate doctor",
+    );
+  if (held)
+    refuse(
+      `not printed: ${held}, and this address carries a token`,
+      "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap",
+    );
 };
 
 declare namespace tokenAddressesSafe {
@@ -1765,23 +3565,46 @@ declare namespace tokenAddressesSafe {
   >;
   /** another program has [::1] on that port, where browsers look first: it would be sent the token */
   export type HeldByAnother = Given<
-    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "a program on this machine holds [::1]:31580, where browsers look first" } }]>,
-    Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", {
-      message: "not printed: a program on this machine holds [::1]:31580, where browsers look first, and this address carries a token";
-      fix: "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap";
-      code: 1;
-    }>
+    Invoke<
+      typeof daemonAnswering,
+      [
+        reply: {
+          ok: true;
+          editor: {
+            port: 31580;
+            error: "a program on this machine holds [::1]:31580, where browsers look first";
+          };
+        },
+      ]
+    >,
+    Expect<
+      Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>,
+      "=",
+      {
+        message: "not printed: a program on this machine holds [::1]:31580, where browsers look first, and this address carries a token";
+        fix: "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap";
+        code: 1;
+      }
+    >
   >;
   /** no daemon: not known is not held */
-  export type NoDaemon = Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", {
-    message: "not printed: the host daemon did not say it holds its port, and this address carries a token";
-    fix: "desolate doctor";
-    code: 1;
-  }>;
+  export type NoDaemon = Expect<
+    Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>,
+    "=",
+    {
+      message: "not printed: the host daemon did not say it holds its port, and this address carries a token";
+      fix: "desolate doctor";
+      code: 1;
+    }
+  >;
   /** a daemon that answers without saying (an older one, or a refusal) is not known either */
   export type NotSaid = Given<
     Invoke<typeof daemonAnswering, [reply: { ok: false; error: "unknown request" }]>,
-    Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "matches", { fix: "desolate doctor" }>
+    Expect<
+      Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>,
+      "matches",
+      { fix: "desolate doctor" }
+    >
   >;
 }
 export const editorPortError = async (): Promise<string | null> => {
@@ -1796,11 +3619,28 @@ declare namespace editorPortError {
   export type NoDaemon = Expect<Invoke<typeof editorPortError>, "=", null>;
   /** "" when the daemon holds the port, else its reason, as it said it */
   export type Said = [
-    Given<Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>, Expect<Invoke<typeof editorPortError>, "=", "">>,
-    Given<Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "a program on this machine holds port 31580" } }]>, Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31580">>,
+    Given<
+      Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+      Expect<Invoke<typeof editorPortError>, "=", "">
+    >,
+    Given<
+      Invoke<
+        typeof daemonAnswering,
+        [
+          reply: {
+            ok: true;
+            editor: { port: 31580; error: "a program on this machine holds port 31580" };
+          },
+        ]
+      >,
+      Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31580">
+    >,
   ];
   /** a daemon that refused the question has not said, so null */
-  export type Refused = Given<Invoke<typeof daemonAnswering, [reply: { ok: false; error: "unknown request" }]>, Expect<Invoke<typeof editorPortError>, "=", null>>;
+  export type Refused = Given<
+    Invoke<typeof daemonAnswering, [reply: { ok: false; error: "unknown request" }]>,
+    Expect<Invoke<typeof editorPortError>, "=", null>
+  >;
 }
 
 export const ports = async (): Promise<PortView[]> => {
@@ -1830,18 +3670,26 @@ export const ui = async (): Promise<{ dashboard: string; approvals: string }> =>
   } catch {
     /* not bootstrapped */
   }
-  if (!/^[0-9a-f]{48}$/.test(token)) refuse("this stack has no dashboard credential yet", "desolate bootstrap");
+  if (!/^[0-9a-f]{48}$/.test(token))
+    refuse("this stack has no dashboard credential yet", "desolate bootstrap");
   // An address with a token in it is printed only when this daemon holds its port, on both
   // loopback addresses: else it would be sent to whatever does.
   await tokenAddressesSafe();
   const { approveAddress } = await import("./approve-web.ts");
-  return { dashboard: `http://${ROOT_HOSTNAME}:${editorHostPort()}/?tkn=${token}`, approvals: approveAddress() };
+  return {
+    dashboard: `http://${ROOT_HOSTNAME}:${editorHostPort()}/?tkn=${token}`,
+    approvals: approveAddress(),
+  };
 };
 
 /** `desolate events`: the daemon's events, as they come, to `onLine`, for as long as this
  *  process runs (a daemon that restarts is connected to again; what it missed meanwhile is
  *  not replayed, but `replay` asks for the last ones the daemon still holds). */
-export const followEvents = async (replay: number, onLine: (line: string) => boolean | void, drained?: (resume: () => void) => void): Promise<never> => {
+export const followEvents = async (
+  replay: number,
+  onLine: (line: string) => boolean | void,
+  drained?: (resume: () => void) => void,
+): Promise<never> => {
   for (let first = true; ; first = false) {
     // The daemon is started once, here. A daemon that went away later (desolate down,
     // destroy) is waited for, never started again: a listener left running must not bring
@@ -1852,7 +3700,9 @@ export const followEvents = async (replay: number, onLine: (line: string) => boo
       const connection = connect(SOCKET);
       let buffer = "";
       connection.setEncoding("utf8");
-      connection.on("connect", () => connection.write(JSON.stringify({ op: "events", replay: first ? replay : 0 }) + "\n"));
+      connection.on("connect", () =>
+        connection.write(JSON.stringify({ op: "events", replay: first ? replay : 0 }) + "\n"),
+      );
       connection.on("data", (chunk: string) => {
         buffer += chunk;
         let full = false;
@@ -1877,4 +3727,9 @@ export const stopForwarder = async () => {
   if (await alive()) await ask({ op: "stop" }).catch(() => {});
 };
 
-if (process.argv[2] === "serve" && process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) void serve();
+if (
+  process.argv[2] === "serve" &&
+  process.argv[1] &&
+  fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
+)
+  void serve();

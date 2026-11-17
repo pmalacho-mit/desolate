@@ -7,7 +7,15 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
+const env = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.invalid",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.invalid",
+};
 
 type Story = "merged" | "squashed" | "changed-again" | "half-merged" | "not-merged";
 
@@ -21,9 +29,14 @@ type Story = "merged" | "squashed" | "changed-again" | "half-merged" | "not-merg
  *  `git` runs git there, as pushed.ts is given it; `commit` is work's tip. */
 export const aRepoWhere = (story: Story) => {
   const dir = fs.mkdtempSync(path.join(process.env.DESOLATE_HOME!, `git-${story}-`));
-  const sh = (...args: string[]) => execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env }).trim();
+  const sh = (...args: string[]) =>
+    execFileSync("git", ["-C", dir, ...args], { encoding: "utf8", env }).trim();
   const write = (file: string, text: string) => fs.writeFileSync(path.join(dir, file), text);
-  const commit = (message: string) => (sh("add", "-A"), sh("commit", "-q", "-m", message), sh("rev-parse", "HEAD"));
+  const commit = (message: string) => (
+    sh("add", "-A"),
+    sh("commit", "-q", "-m", message),
+    sh("rev-parse", "HEAD")
+  );
   sh("init", "-q", "-b", "main");
   write("a.txt", "a\n");
   write("b.txt", "b\n");
@@ -35,7 +48,8 @@ export const aRepoWhere = (story: Story) => {
   const tip = commit("work: b");
   sh("switch", "-q", "main");
   if (story === "merged") sh("merge", "-q", "--no-ff", "-m", "merge work", "work");
-  if (story === "squashed" || story === "changed-again") (sh("merge", "-q", "--squash", "work"), commit("work, squashed"));
+  if (story === "squashed" || story === "changed-again")
+    (sh("merge", "-q", "--squash", "work"), commit("work, squashed"));
   if (story === "changed-again") (write("a.txt", "a, changed again\n"), commit("a again"));
   if (story === "half-merged") (write("a.txt", "a, changed\n"), commit("only a"));
   const git = async (args: string[]) => {
@@ -52,7 +66,8 @@ export const aRepoWhere = (story: Story) => {
 export const aBundle = (kind: "clean" | "dotgit" | "v3" | "text") => {
   const dir = fs.mkdtempSync(path.join(process.env.DESOLATE_HOME!, `bundle-${kind}-`));
   const clone = path.join(dir, "clone");
-  const sh = (cwd: string, args: string[], input?: string) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env, input }).trim();
+  const sh = (cwd: string, args: string[], input?: string) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", env, input }).trim();
   sh(dir, ["init", "-q", "-b", "main", clone]);
   const copy = path.join(dir, "incoming", "taken.bundle");
   fs.mkdirSync(path.dirname(copy));
@@ -63,7 +78,10 @@ export const aBundle = (kind: "clean" | "dotgit" | "v3" | "text") => {
     sh(dir, ["init", "-q", "-b", "main", work]);
     const blob = sh(work, ["hash-object", "-w", "--stdin"], "[core]\n\thooksPath = /tmp\n");
     const inner = sh(work, ["mktree"], `100644 blob ${blob}\tconfig\n`);
-    const tree = kind === "dotgit" ? sh(work, ["mktree"], `040000 tree ${inner}\t.git\n`) : sh(work, ["mktree"], `100644 blob ${blob}\tREADME\n`);
+    const tree =
+      kind === "dotgit"
+        ? sh(work, ["mktree"], `040000 tree ${inner}\t.git\n`)
+        : sh(work, ["mktree"], `100644 blob ${blob}\tREADME\n`);
     const commit = sh(work, ["commit-tree", tree, "-m", kind]);
     sh(work, ["update-ref", "refs/heads/offered", commit]);
     sh(work, ["bundle", "create", "-q", copy, "refs/heads/offered"]);

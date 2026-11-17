@@ -57,15 +57,30 @@ export function strip(text: string): string {
 
 declare namespace strip {
   /** comments go, line and block; so does a comma before a closing bracket */
-  export type Comments = Table<typeof strip, [
-    [args: [text: '{\n  // the image\n  "image": "x", /* pinned */\n  "a": [1, 2,],\n}'], expected: '{\n  \n  "image": "x", \n  "a": [1, 2]\n}'],
-    [args: [text: '{"a": 1 , }'], expected: '{"a": 1  }'],
-  ]>;
+  export type Comments = Table<
+    typeof strip,
+    [
+      [
+        args: [text: '{\n  // the image\n  "image": "x", /* pinned */\n  "a": [1, 2,],\n}'],
+        expected: '{\n  \n  "image": "x", \n  "a": [1, 2]\n}',
+      ],
+      [args: [text: '{"a": 1 , }'], expected: '{"a": 1  }'],
+    ]
+  >;
   /** inside a string, comment marks and commas are text, and an escaped quote does not end it */
-  export type Strings = Table<typeof strip, [
-    [args: [text: '{"url": "https://example.com/x", "glob": "src/**/*.ts"}'], expected: '{"url": "https://example.com/x", "glob": "src/**/*.ts"}'],
-    [args: [text: '{"s": "a,]", "t": "say \\"// hi\\""}'], expected: '{"s": "a,]", "t": "say \\"// hi\\""}'],
-  ]>;
+  export type Strings = Table<
+    typeof strip,
+    [
+      [
+        args: [text: '{"url": "https://example.com/x", "glob": "src/**/*.ts"}'],
+        expected: '{"url": "https://example.com/x", "glob": "src/**/*.ts"}',
+      ],
+      [
+        args: [text: '{"s": "a,]", "t": "say \\"// hi\\""}'],
+        expected: '{"s": "a,]", "t": "say \\"// hi\\""}',
+      ],
+    ]
+  >;
 }
 
 function removeTrailingCommas(text: string): string {
@@ -114,7 +129,16 @@ export const parse = (text: string) => JSON.parse(strip(text));
 
 declare namespace parse {
   /** a devcontainer.json as people write them */
-  export type Spec = Expect<Invoke<typeof parse, [text: '{\n  // comments, and a trailing comma\n  "image": "example/dev:1",\n  "runArgs": ["--cap-add=SYS_PTRACE",],\n}']>, "=", { image: "example/dev:1"; runArgs: ["--cap-add=SYS_PTRACE"] }>;
+  export type Spec = Expect<
+    Invoke<
+      typeof parse,
+      [
+        text: '{\n  // comments, and a trailing comma\n  "image": "example/dev:1",\n  "runArgs": ["--cap-add=SYS_PTRACE",],\n}',
+      ]
+    >,
+    "=",
+    { image: "example/dev:1"; runArgs: ["--cap-add=SYS_PTRACE"] }
+  >;
   /** what is not JSON once the comments are gone throws: no guess at what was meant */
   export type Refuses = [
     Throws<Invoke<typeof parse, [text: "{ image: 'x' }"]>, SyntaxError>,

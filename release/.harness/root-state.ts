@@ -11,7 +11,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const base = path.join(process.env.DESOLATE_HOME!, "root-vm");
-const WHERE = { state: "DESOLATE_ROOT_STATE", domains: "DESOLATE_ROOT_DOMAINS", sys: "DESOLATE_ROOT_SYS", proxies: "DESOLATE_ROOT_PROXIES", run: "DESOLATE_ROOT_RUN", reviewer: "DESOLATE_REVIEWER_HOME", pusher: "DESOLATE_PUSHER_HOME" } as const;
+const WHERE = {
+  state: "DESOLATE_ROOT_STATE",
+  domains: "DESOLATE_ROOT_DOMAINS",
+  sys: "DESOLATE_ROOT_SYS",
+  proxies: "DESOLATE_ROOT_PROXIES",
+  run: "DESOLATE_ROOT_RUN",
+  reviewer: "DESOLATE_REVIEWER_HOME",
+  pusher: "DESOLATE_PUSHER_HOME",
+} as const;
 type Where = keyof typeof WHERE | "mirrors" | "clones";
 for (const [dir, name] of Object.entries(WHERE)) process.env[name] = path.join(base, dir);
 
@@ -20,7 +28,8 @@ const at = (where: Where, name: string) => path.join(base, where, name);
 /** The root's directories, each empty: no registry, no domains, no keys. */
 export const emptyRoot = () => {
   fs.rmSync(base, { recursive: true, force: true });
-  for (const dir of [...Object.keys(WHERE), "mirrors", "clones"]) fs.mkdirSync(path.join(base, dir), { recursive: true });
+  for (const dir of [...Object.keys(WHERE), "mirrors", "clones"])
+    fs.mkdirSync(path.join(base, dir), { recursive: true });
   // keyring.ts writes its audit log here, as start.sh has made it.
   fs.mkdirSync(at("sys", "keyring"), { recursive: true });
 };
@@ -32,7 +41,8 @@ export const writeIn = (where: Where, name: string, text: string) => {
 };
 
 /** The same, as JSON. */
-export const writeJsonIn = (where: Where, name: string, value: unknown) => writeIn(where, name, JSON.stringify(value));
+export const writeJsonIn = (where: Where, name: string, value: unknown) =>
+  writeIn(where, name, JSON.stringify(value));
 
 /** A file under one of the root's directories, or null when there is none. */
 export const readIn = (where: Where, name: string): string | null => {
@@ -64,34 +74,71 @@ export const pathIn = (where: Where, name: string) => at(where, name);
 /** A domain as the root records it (domains.ts), with these repositories, and the
  *  directories `domain create` makes. */
 export const aDomain = (slug: string, repos: string[], extra: Record<string, unknown> = {}) => {
-  for (const dir of ["repos", "outbox", "inbox", "workspaces"]) fs.mkdirSync(at("domains", `${slug}/${dir}`), { recursive: true });
-  writeJsonIn("domains", `${slug}/domain.json`, { slug, title: slug, repos, createdAt: "2026-11-16T12:00:00.000Z", ...extra });
+  for (const dir of ["repos", "outbox", "inbox", "workspaces"])
+    fs.mkdirSync(at("domains", `${slug}/${dir}`), { recursive: true });
+  writeJsonIn("domains", `${slug}/domain.json`, {
+    slug,
+    title: slug,
+    repos,
+    createdAt: "2026-11-16T12:00:00.000Z",
+    ...extra,
+  });
 };
 
 /** One of a domain's workspaces, as plan made it: `checkouts` are `<owner/repo>=main` or
  *  `<owner/repo>=worktree:<name>`; `startedBy` names the workspace that started it. */
 export const aWorkspace = (domain: string, name: string, checkouts: string[], startedBy?: string) =>
   writeJsonIn("domains", `${domain}/workspaces/${name}.json`, {
-    domain, workspace: name, vm: `dsl-test-${domain}-${name}`, title: domain, repos: [], fetch: false, createdAt: "2026-11-16T12:00:00.000Z", state: "up",
+    domain,
+    workspace: name,
+    vm: `dsl-test-${domain}-${name}`,
+    title: domain,
+    repos: [],
+    fetch: false,
+    createdAt: "2026-11-16T12:00:00.000Z",
+    state: "up",
     checkouts: checkouts.map((c) => {
       const [repo, how] = c.split("=") as [string, string];
       const worktree = how.startsWith("worktree:") ? how.slice("worktree:".length) : null;
-      return { repo, kind: worktree ? "worktree" : "main", name: worktree ?? "", branch: worktree ?? "main", base: "main", path: `/workspaces/${repo}` };
+      return {
+        repo,
+        kind: worktree ? "worktree" : "main",
+        name: worktree ?? "",
+        branch: worktree ?? "main",
+        base: "main",
+        path: `/workspaces/${repo}`,
+      };
     }),
-    ...(startedBy ? { startedBy: { workspace: startedBy, createdAt: "2026-11-16T12:00:00.000Z" } } : {}),
+    ...(startedBy
+      ? { startedBy: { workspace: startedBy, createdAt: "2026-11-16T12:00:00.000Z" } }
+      : {}),
   });
 
 /** The root's registry of repositories (repos.ts), each as the root last fetched it. */
-export const aRegistry = (repos: Record<string, { pushable?: boolean; defaultBranch?: string | null }>) =>
+export const aRegistry = (
+  repos: Record<string, { pushable?: boolean; defaultBranch?: string | null }>,
+) =>
   writeJsonIn("state", "registry.json", {
-    repos: Object.fromEntries(Object.entries(repos).map(([id, r]) => [id, { pushable: r.pushable ?? true, anonymous: false, defaultBranch: r.defaultBranch === undefined ? "main" : r.defaultBranch, fetchedAt: null }])),
+    repos: Object.fromEntries(
+      Object.entries(repos).map(([id, r]) => [
+        id,
+        {
+          pushable: r.pushable ?? true,
+          anonymous: false,
+          defaultBranch: r.defaultBranch === undefined ? "main" : r.defaultBranch,
+          fetchedAt: null,
+        },
+      ]),
+    ),
   });
 
 /** A directory under one of the root's, where a file was expected. */
-export const makeDirIn = (where: Where, name: string) => fs.mkdirSync(at(where, name), { recursive: true });
+export const makeDirIn = (where: Where, name: string) =>
+  fs.mkdirSync(at(where, name), { recursive: true });
 
 /** A file of `bytes` bytes under one of the root's directories: one too large to be read. */
-export const writeFilledIn = (where: Where, name: string, bytes: number) => writeIn(where, name, "x".repeat(bytes));
+export const writeFilledIn = (where: Where, name: string, bytes: number) =>
+  writeIn(where, name, "x".repeat(bytes));
 
 /** A symbolic link under one of the root's directories, to `target`. */
 export const linkIn = (where: Where, name: string, target: string) => {
@@ -102,15 +149,24 @@ export const linkIn = (where: Where, name: string, target: string) => {
 /** layout.ts with its mirrors and root clones under this harness's root, for `Mock`: the rest
  *  as layout.ts has it (with the environment above). Named by their real path, as
  *  /desolate/mirrors is in the root VM (macOS's temporary directory is behind a link). */
-export const mirrorsAndClonesHere = async (importOriginal: () => Promise<typeof import("../root/layout.ts")>) => {
+export const mirrorsAndClonesHere = async (
+  importOriginal: () => Promise<typeof import("../root/layout.ts")>,
+) => {
   const real = await importOriginal();
   fs.mkdirSync(base, { recursive: true });
   const here = fs.realpathSync(base);
-  const ROOT = { ...real.ROOT, mirrors: path.join(here, "mirrors"), clones: path.join(here, "clones") };
+  const ROOT = {
+    ...real.ROOT,
+    mirrors: path.join(here, "mirrors"),
+    clones: path.join(here, "clones"),
+  };
   return {
-    ...real, ROOT,
-    mirrorPath: (repo: { owner: string; name: string }) => `${ROOT.mirrors}/${repo.owner}/${repo.name}.git`,
-    clonePath: (repo: { owner: string; name: string }) => `${ROOT.clones}/${repo.owner}/${repo.name}`,
+    ...real,
+    ROOT,
+    mirrorPath: (repo: { owner: string; name: string }) =>
+      `${ROOT.mirrors}/${repo.owner}/${repo.name}.git`,
+    clonePath: (repo: { owner: string; name: string }) =>
+      `${ROOT.clones}/${repo.owner}/${repo.name}`,
   };
 };
 
@@ -131,12 +187,24 @@ export const myUid = () => process.getuid!();
 /** A workspace of `domain` whose VM is called `vm`: what another domain could have chosen a
  *  name to collide with. */
 export const writeVmIn = (domain: string, workspace: string, vm: string) =>
-  writeJsonIn("domains", `${domain}/workspaces/${workspace}.json`, { domain, workspace, vm, title: domain, repos: [], checkouts: [], fetch: false, createdAt: "2026-11-16T12:00:00.000Z", state: "up" });
+  writeJsonIn("domains", `${domain}/workspaces/${workspace}.json`, {
+    domain,
+    workspace,
+    vm,
+    title: domain,
+    repos: [],
+    checkouts: [],
+    fetch: false,
+    createdAt: "2026-11-16T12:00:00.000Z",
+    state: "up",
+  });
 
 /** Every JSON file in a directory under one of the root's, parsed: what a queue holds. (In no
  *  order a test should rely on: names made of a time and a random part.) */
 export const jsonFilesIn = (where: Where, dir: string): Record<string, unknown>[] =>
-  namesIn(where, dir).filter((name) => name.endsWith(".json")).map((name) => readJsonIn(where, `${dir}/${name}`)!);
+  namesIn(where, dir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => readJsonIn(where, `${dir}/${name}`)!);
 
 /** A file under one of the root's directories as text, "" when there is none: for a test of
  *  its length or what it holds. */

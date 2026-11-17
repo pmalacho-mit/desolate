@@ -47,25 +47,59 @@ export const checkoutPath = (repo: string, kind: "main" | "worktree", name: stri
 
 declare namespace checkoutPath {
   /** the domain clone's own checkout, or a worktree of it under `.worktrees/` */
-  export type Paths = Table<typeof checkoutPath, [
-    [args: [repo: "acme/app", kind: "main", name: ""], expected: "/workspaces/acme/app"],
-    [args: [repo: "acme/app", kind: "worktree", name: "w1"], expected: "/workspaces/acme/app/.worktrees/w1"],
-  ]>;
+  export type Paths = Table<
+    typeof checkoutPath,
+    [
+      [args: [repo: "acme/app", kind: "main", name: ""], expected: "/workspaces/acme/app"],
+      [
+        args: [repo: "acme/app", kind: "worktree", name: "w1"],
+        expected: "/workspaces/acme/app/.worktrees/w1",
+      ],
+    ]
+  >;
 }
 
 /** A workspace another workspace started, which that one is gone before: flagged, for the
  *  person to look at (nothing is removed for it). A later workspace of the same name is not
  *  the one that started it. */
-export const outlived = (all: { workspace: string; createdAt: string }[], w: { startedBy?: { workspace: string; createdAt: string } }) =>
-  w.startedBy !== undefined && !all.some((other) => other.workspace === w.startedBy!.workspace && other.createdAt === w.startedBy!.createdAt);
+export const outlived = (
+  all: { workspace: string; createdAt: string }[],
+  w: { startedBy?: { workspace: string; createdAt: string } },
+) =>
+  w.startedBy !== undefined &&
+  !all.some(
+    (other) =>
+      other.workspace === w.startedBy!.workspace && other.createdAt === w.startedBy!.createdAt,
+  );
 
 declare namespace outlived {
   /** one the person started never is; one whose parent is still there is not; one whose
    *  parent is gone, or was removed and made again under its name, is */
-  export type Cases = Table<typeof outlived, [
-    [args: [all: [{ workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" }], w: {}], expected: false],
-    [args: [all: [{ workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" }], w: { startedBy: { workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" } }], expected: false],
-    [args: [all: [], w: { startedBy: { workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" } }], expected: true],
-    [args: [all: [{ workspace: "w1"; createdAt: "2026-11-16T09:30:00Z" }], w: { startedBy: { workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" } }], expected: true],
-  ]>;
+  export type Cases = Table<
+    typeof outlived,
+    [
+      [
+        args: [all: [{ workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" }], w: {}],
+        expected: false,
+      ],
+      [
+        args: [
+          all: [{ workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" }],
+          w: { startedBy: { workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" } },
+        ],
+        expected: false,
+      ],
+      [
+        args: [all: [], w: { startedBy: { workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" } }],
+        expected: true,
+      ],
+      [
+        args: [
+          all: [{ workspace: "w1"; createdAt: "2026-11-16T09:30:00Z" }],
+          w: { startedBy: { workspace: "w1"; createdAt: "2026-11-16T08:00:00Z" } },
+        ],
+        expected: true,
+      ],
+    ]
+  >;
 }

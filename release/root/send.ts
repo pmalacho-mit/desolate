@@ -19,13 +19,22 @@ import { git, gitInvocation } from "./git.ts";
 import { clonePath, PUSHER } from "./layout.ts";
 import { lfsOf } from "./offers.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Call,
+  Expect,
+  Given,
+  Invoke,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { attemptsThat } from "../.harness/root-retry.ts";
 
 type Failed = { error: string; moved: boolean };
 
 /** One push handed over: the header line, then each file's bytes; the pusher's answer. */
-const handOver = (header: Record<string, unknown>, files: string[]): Promise<Record<string, unknown>> =>
+const handOver = (
+  header: Record<string, unknown>,
+  files: string[],
+): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {
     const socket = connect(PUSHER.control);
     let answer = "";
@@ -52,14 +61,19 @@ const handOver = (header: Record<string, unknown>, files: string[]): Promise<Rec
         finish(new Error("the pusher's answer was not JSON"));
       }
     });
-    socket.on("close", () => finish(failure ?? new Error("the pusher closed the connection without an answer")));
+    socket.on("close", () =>
+      finish(failure ?? new Error("the pusher closed the connection without an answer")),
+    );
     socket.on("connect", async () => {
       connected = true;
       socket.write(JSON.stringify(header) + "\n");
       for (const file of files)
         for await (const chunk of fs.createReadStream(file)) {
           if (done || socket.destroyed) return;
-          if (!socket.write(chunk)) await new Promise((resolve) => (socket.once("drain", resolve), socket.once("close", resolve)));
+          if (!socket.write(chunk))
+            await new Promise(
+              (resolve) => (socket.once("drain", resolve), socket.once("close", resolve)),
+            );
         }
     });
   });
@@ -69,43 +83,79 @@ const handOver = (header: Record<string, unknown>, files: string[]): Promise<Rec
  *  approval (and each approval is pushed once). */
 const RETRY = new Set(["ENOENT", "ECONNREFUSED"]);
 const withPusher = async <T>(attempt: () => Promise<T & { busy?: unknown }>): Promise<T> => {
-  for (const until = Date.now() + 60_000; ; ) {
+  for (const until = Date.now() + 60_000; ;) {
     try {
       const result = await attempt();
       if (result.busy !== true || Date.now() > until) return result;
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code ?? "";
-      if (!RETRY.has(code) || (error as { connected?: boolean }).connected || Date.now() > until) throw new Error(`the pusher: ${(error as Error).message}; desolate doctor`);
+      if (!RETRY.has(code) || (error as { connected?: boolean }).connected || Date.now() > until)
+        throw new Error(`the pusher: ${(error as Error).message}; desolate doctor`);
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
 };
 
 declare namespace withPusher {
-  type Starting = Invoke<typeof attemptsThat, [outcomes: [{ fails: "ENOENT" }, { fails: "ECONNREFUSED" }, { ok: true }]]>;
+  type Starting = Invoke<
+    typeof attemptsThat,
+    [outcomes: [{ fails: "ENOENT" }, { fails: "ECONNREFUSED" }, { ok: true }]]
+  >;
   /** a pusher that is starting (no socket yet, or not listening yet) is asked again */
   export type Starts = Given<
     Starting,
-    [Expect<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Starting["attempt"]]>, "=", { ok: true }>, Expect<Call<Starting, "calls">, "=", 3>]
+    [
+      Expect<
+        Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Starting["attempt"]]>,
+        "=",
+        { ok: true }
+      >,
+      Expect<Call<Starting, "calls">, "=", 3>,
+    ]
   >;
-  type Occupied = Invoke<typeof attemptsThat, [outcomes: [{ ok: false; busy: true; error: "another push is under way" }, { ok: true }]]>;
+  type Occupied = Invoke<
+    typeof attemptsThat,
+    [outcomes: [{ ok: false; busy: true; error: "another push is under way" }, { ok: true }]]
+  >;
   /** one that is busy with the push before this one is asked again */
   export type Busy = Given<
     Occupied,
-    [Expect<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Occupied["attempt"]]>, "=", { ok: true }>, Expect<Call<Occupied, "calls">, "=", 2>]
+    [
+      Expect<
+        Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Occupied["attempt"]]>,
+        "=",
+        { ok: true }
+      >,
+      Expect<Call<Occupied, "calls">, "=", 2>,
+    ]
   >;
-  type Reached = Invoke<typeof attemptsThat, [outcomes: [{ fails: "ECONNREFUSED"; connected: true }, { ok: true }]]>;
+  type Reached = Invoke<
+    typeof attemptsThat,
+    [outcomes: [{ fails: "ECONNREFUSED"; connected: true }, { ok: true }]]
+  >;
   /** never once the request reached it: the pusher may have claimed the approval, and each
    *  approval is pushed once. Said, with what to run */
   export type NotTwice = Given<
     Reached,
-    [Throws<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Reached["attempt"]]>, "the pusher: connect ECONNREFUSED; desolate doctor">, Expect<Call<Reached, "calls">, "=", 1>]
+    [
+      Throws<
+        Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Reached["attempt"]]>,
+        "the pusher: connect ECONNREFUSED; desolate doctor"
+      >,
+      Expect<Call<Reached, "calls">, "=", 1>,
+    ]
   >;
   type Denied = Invoke<typeof attemptsThat, [outcomes: [{ fails: "EACCES" }, { ok: true }]]>;
   /** and a failure that is not "starting" is not waited out */
   export type NotStarting = Given<
     Denied,
-    [Throws<Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Denied["attempt"]]>, "the pusher: connect EACCES; desolate doctor">, Expect<Call<Denied, "calls">, "=", 1>]
+    [
+      Throws<
+        Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Denied["attempt"]]>,
+        "the pusher: connect EACCES; desolate doctor"
+      >,
+      Expect<Call<Denied, "calls">, "=", 1>,
+    ]
   >;
 }
 
@@ -113,39 +163,68 @@ declare namespace withPusher {
  *  approval names, whatever this sends; what this sends is what makes that possible: a pack
  *  with the commit and what the remote lacks of its history (as the mirror last saw the
  *  remote), and the LFS objects that history adds. */
-export const send = async (repo: Repo, approval: string, commit: string): Promise<Failed | null> => {
+export const send = async (
+  repo: Repo,
+  approval: string,
+  commit: string,
+): Promise<Failed | null> => {
   const clone = clonePath(repo);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-send-"));
   try {
     const pack = path.join(work, "push.pack");
     // What the remote has, as the mirror saw it, is left out (the clone's origin/* are the
     // mirror's branches). Not thin: the forge resolves every delta from the pack itself.
-    const have = (await git(clone, ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin"])).stdout.split("\n").filter((id) => /^[0-9a-f]{40}$/.test(id));
+    const have = (
+      await git(clone, ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin"])
+    ).stdout
+      .split("\n")
+      .filter((id) => /^[0-9a-f]{40}$/.test(id));
     const out = fs.openSync(pack, "w", 0o600);
     const packed = await new Promise<{ code: number; stderr: string }>((resolve) => {
       const how = gitInvocation(clone);
-      const child = spawn("git", [...how.args, "pack-objects", "--stdout", "--revs", "--delta-base-offset", "--quiet"], { env: how.env, stdio: ["pipe", out, "pipe"] });
+      const child = spawn(
+        "git",
+        [...how.args, "pack-objects", "--stdout", "--revs", "--delta-base-offset", "--quiet"],
+        { env: how.env, stdio: ["pipe", out, "pipe"] },
+      );
       let stderr = "";
       child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
       child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
       child.stdin!.end([commit, ...have.map((id) => `^${id}`), ""].join("\n"));
     });
     fs.closeSync(out);
-    if (packed.code !== 0) return { error: `cannot pack the commit for the pusher: ${packed.stderr.trim().split("\n").slice(-2).join(" | ")}`, moved: false };
+    if (packed.code !== 0)
+      return {
+        error: `cannot pack the commit for the pusher: ${packed.stderr.trim().split("\n").slice(-2).join(" | ")}`,
+        moved: false,
+      };
     // LFS objects the remote lacks and this clone holds (what came with offers).
     const files: string[] = [];
     const lfs: { oid: string; size: number }[] = [];
     for (const oid of await lfsOf(repo, commit)) {
-      const file = path.join(clone, ".git", "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
+      const file = path.join(
+        clone,
+        ".git",
+        "lfs",
+        "objects",
+        oid.slice(0, 2),
+        oid.slice(2, 4),
+        oid,
+      );
       if (!fs.existsSync(file)) continue;
       lfs.push({ oid, size: fs.statSync(file).size });
       files.push(file);
     }
     if (lfs.length > 0) process.stderr.write(`uploading ${lfs.length} LFS object(s)\n`);
     files.push(pack);
-    const reply = await withPusher(() => handOver({ op: "push", approval, pack: fs.statSync(pack).size, lfs }, files));
+    const reply = await withPusher(() =>
+      handOver({ op: "push", approval, pack: fs.statSync(pack).size, lfs }, files),
+    );
     if (reply.ok === true) return null;
-    return { error: String(reply.error ?? "the pusher refused the push"), moved: reply.moved === true };
+    return {
+      error: String(reply.error ?? "the pusher refused the push"),
+      moved: reply.moved === true,
+    };
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
   }

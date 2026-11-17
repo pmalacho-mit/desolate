@@ -6,7 +6,10 @@
 /** `f(...args)`, awaited: its refusal's message, fix and exit code, or null when it was not
  *  refused. Any other error is thrown on, failing the test. (`any`: a function of any
  *  arguments, given them as the test names them.) */
-export const refusalOf = async (f: (...args: any[]) => unknown, args: unknown[] = []): Promise<{ message: string; fix: string; code: number } | null> => {
+export const refusalOf = async (
+  f: (...args: any[]) => unknown,
+  args: unknown[] = [],
+): Promise<{ message: string; fix: string; code: number } | null> => {
   try {
     await f(...args);
     return null;

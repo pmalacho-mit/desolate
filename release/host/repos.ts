@@ -25,9 +25,14 @@ const register = async (repo: string, key: Key) => {
   const forge = config()!.forge;
   if (forge.kind === "stand-in") {
     const admin = process.env.DESOLATE_FORGE_ADMIN;
-    if (!admin) refuse("the stand-in forge needs its admin command to register a key", "set DESOLATE_FORGE_ADMIN to the forge's admin script");
+    if (!admin)
+      refuse(
+        "the stand-in forge needs its admin command to register a key",
+        "set DESOLATE_FORGE_ADMIN to the forge's admin script",
+      );
     const result = await run(admin!, ["add-key", repo, key.role, key.pubkey]);
-    if (result.code !== 0) throw new Error(`the stand-in forge refused the ${key.role} key: ${result.stderr.trim()}`);
+    if (result.code !== 0)
+      throw new Error(`the stand-in forge refused the ${key.role} key: ${result.stderr.trim()}`);
     return "registered";
   }
   const file = path.join(os.tmpdir(), `desolate-${process.pid}-${key.role}.pub`);
@@ -37,14 +42,30 @@ const register = async (repo: string, key: Key) => {
     // often its owner's name ("Someones-MacBook-Pro"), so the host is named by a hash of it:
     // enough to tell two machines' keys apart, nothing about who owns them.
     const host = createHash("sha256").update(os.hostname()).digest("hex").slice(0, 8);
-    const args = ["repo", "deploy-key", "add", file, "--repo", repo, "--title", `desolate ${key.role} (host ${host}, ${INSTANCE})`];
+    const args = [
+      "repo",
+      "deploy-key",
+      "add",
+      file,
+      "--repo",
+      repo,
+      "--title",
+      `desolate ${key.role} (host ${host}, ${INSTANCE})`,
+    ];
     if (key.role === "write") args.push("--allow-write");
     const result = await run("gh", args);
     if (result.code === 0) return "registered";
     if (/already in use|already exists/i.test(result.stderr)) return "already registered";
-    if (result.code === 127) refuse("registering a deploy key needs GitHub's CLI", "install gh and run `gh auth login`, or add this key to the repository's deploy keys by hand:\n" + key.pubkey);
-    refuse(`GitHub refused the ${key.role} deploy key for ${repo}: ${result.stderr.trim().split("\n").pop()}`,
-      `if someone else administers ${repo}, they can add the keys: desolate clone ${repo} --keys-by-hand prints them. Otherwise: ${key.role === "write" ? "--no-push (no write key), or " : ""}--anonymous (no key, a public repository)`);
+    if (result.code === 127)
+      refuse(
+        "registering a deploy key needs GitHub's CLI",
+        "install gh and run `gh auth login`, or add this key to the repository's deploy keys by hand:\n" +
+          key.pubkey,
+      );
+    refuse(
+      `GitHub refused the ${key.role} deploy key for ${repo}: ${result.stderr.trim().split("\n").pop()}`,
+      `if someone else administers ${repo}, they can add the keys: desolate clone ${repo} --keys-by-hand prints them. Otherwise: ${key.role === "write" ? "--no-push (no write key), or " : ""}--anonymous (no key, a public repository)`,
+    );
   } finally {
     fs.rmSync(file, { force: true });
   }
@@ -54,8 +75,15 @@ const register = async (repo: string, key: Key) => {
 /** The domain a clone lands in: the one named (made if it is new), or `owner--repo`, made
  *  for it. A domain that already holds the repository is reused, so a
  *  second clone changes nothing. */
-const domainFor = async (repo: string, named: string | undefined): Promise<{ slug: string; made: boolean; added: boolean } | { taken: string[] }> => {
-  const existing = await rootctl<{ slug: string; repos: string[] }[]>("domain.list", {}, { quiet: true });
+const domainFor = async (
+  repo: string,
+  named: string | undefined,
+): Promise<{ slug: string; made: boolean; added: boolean } | { taken: string[] }> => {
+  const existing = await rootctl<{ slug: string; repos: string[] }[]>(
+    "domain.list",
+    {},
+    { quiet: true },
+  );
   const holding = (slug: string) => existing.find((d) => d.slug === slug);
   const join = async (slug: string) => {
     const there = holding(slug);
@@ -73,38 +101,90 @@ const domainFor = async (repo: string, named: string | undefined): Promise<{ slu
   return { taken: [slug] };
 };
 
-export const clone = async (name: string | undefined, options: { push: boolean; anonymous: boolean; domain?: string | false; byHand?: boolean }, out: Out, json: boolean) => {
+export const clone = async (
+  name: string | undefined,
+  options: { push: boolean; anonymous: boolean; domain?: string | false; byHand?: boolean },
+  out: Out,
+  json: boolean,
+) => {
   const repo = repoId(repoArg(name));
   if (typeof options.domain === "string" && !isSlug(options.domain))
-    refuse(`'${options.domain}' is not a domain name`, "a domain name is a slug: lowercase letters, digits and single dashes, at most 40", EXIT.usage);
-  const prepared = await rootctl<{ pushable: boolean; anonymous: boolean; keys: Key[] }>("repo.prepare", { repo, push: options.push, anonymous: options.anonymous });
+    refuse(
+      `'${options.domain}' is not a domain name`,
+      "a domain name is a slug: lowercase letters, digits and single dashes, at most 40",
+      EXIT.usage,
+    );
+  const prepared = await rootctl<{ pushable: boolean; anonymous: boolean; keys: Key[] }>(
+    "repo.prepare",
+    { repo, push: options.push, anonymous: options.anonymous },
+  );
   if (options.byHand) {
     // Keys added by whoever administers the repository (GitHub: Settings, Deploy keys). The
     // root made them and keeps them; only their public halves are shown. The fetch says
     // whether the read key is in place yet; the write key is first used by a push you approve.
-    const tried = await rootctl<Record<string, unknown>>("repo.fetch", { repo }, { quiet: true }).catch(() => null);
+    const tried = await rootctl<Record<string, unknown>>(
+      "repo.fetch",
+      { repo },
+      { quiet: true },
+    ).catch(() => null);
     if (!tried) {
-      out(`Add ${prepared.keys.length === 1 ? "this deploy key" : "these deploy keys"} to ${repo}${config()?.forge.kind === "github" ? ` (https://github.com/${repo}/settings/keys/new)` : ""}, then run this command again:`);
-      for (const key of prepared.keys) out(`\n  ${key.role === "write" ? "desolate write: tick \"Allow write access\"" : "desolate read: read-only"}\n  ${key.pubkey}`);
-      return out("\nOnly public halves are shown: the private ones never leave the root's keyring.");
+      out(
+        `Add ${prepared.keys.length === 1 ? "this deploy key" : "these deploy keys"} to ${repo}${config()?.forge.kind === "github" ? ` (https://github.com/${repo}/settings/keys/new)` : ""}, then run this command again:`,
+      );
+      for (const key of prepared.keys)
+        out(
+          `\n  ${key.role === "write" ? 'desolate write: tick "Allow write access"' : "desolate read: read-only"}\n  ${key.pubkey}`,
+        );
+      return out(
+        "\nOnly public halves are shown: the private ones never leave the root's keyring.",
+      );
     }
-    if (!json) out(`  keys: added by hand; the read key works${prepared.pushable ? " (the write key is first used by a push you approve)" : ""}`);
+    if (!json)
+      out(
+        `  keys: added by hand; the read key works${prepared.pushable ? " (the write key is first used by a push you approve)" : ""}`,
+      );
   } else
     for (const key of prepared.keys) {
       const how = await register(repo, key);
-      if (!json) out(`  ${key.role} key: ${how}${key.role === "write" ? " (it asks you before every push)" : ""}`);
+      if (!json)
+        out(
+          `  ${key.role} key: ${how}${key.role === "write" ? " (it asks you before every push)" : ""}`,
+        );
     }
   const fetched = await rootctl<Record<string, unknown>>("repo.fetch", { repo });
   const placed = options.domain === false ? null : await domainFor(repo, options.domain);
   const domain = placed && "slug" in placed ? placed : null;
-  if (json) return out(JSON.stringify({ ...prepared, keys: prepared.keys.map((k) => k.role), ...fetched, domain: domain?.slug ?? null }));
-  out(`cloned ${repo}: ${fetched.branches} branch(es), default ${fetched.defaultBranch ?? "none"}, ${fetched.lfsObjects} LFS object(s); ${prepared.pushable ? "pushable" : prepared.anonymous ? "read-only, fetched anonymously" : "read-only (no write key)"}.`);
+  if (json)
+    return out(
+      JSON.stringify({
+        ...prepared,
+        keys: prepared.keys.map((k) => k.role),
+        ...fetched,
+        domain: domain?.slug ?? null,
+      }),
+    );
+  out(
+    `cloned ${repo}: ${fetched.branches} branch(es), default ${fetched.defaultBranch ?? "none"}, ${fetched.lfsObjects} LFS object(s); ${prepared.pushable ? "pushable" : prepared.anonymous ? "read-only, fetched anonymously" : "read-only (no write key)"}.`,
+  );
   if (domain) {
-    out(domain.made ? `domain ${domain.slug}: made for ${repo}.` : domain.added ? `domain ${domain.slug}: ${repo} added.` : `domain ${domain.slug}: already holds ${repo}.`);
-    return out(`next: desolate up ${domain.slug}   (a workspace: a VM with its checkout, its devcontainer and an editor)`);
+    out(
+      domain.made
+        ? `domain ${domain.slug}: made for ${repo}.`
+        : domain.added
+          ? `domain ${domain.slug}: ${repo} added.`
+          : `domain ${domain.slug}: already holds ${repo}.`,
+    );
+    return out(
+      `next: desolate up ${domain.slug}   (a workspace: a VM with its checkout, its devcontainer and an editor)`,
+    );
   }
-  if (placed && "taken" in placed) out(`no domain was made: ${placed.taken.join(" and ")} is a domain already, holding other repositories.`);
-  out(`next: desolate domain create <slug> --repo ${repo}   (or, to a domain you have: desolate domain <slug> add --repo ${repo}; or clone again with --domain <slug>)`);
+  if (placed && "taken" in placed)
+    out(
+      `no domain was made: ${placed.taken.join(" and ")} is a domain already, holding other repositories.`,
+    );
+  out(
+    `next: desolate domain create <slug> --repo ${repo}   (or, to a domain you have: desolate domain <slug> add --repo ${repo}; or clone again with --domain <slug>)`,
+  );
 };
 
 declare namespace clone {
@@ -114,57 +194,170 @@ declare namespace clone {
   export type Refuses = Given<
     [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
     [
-      Expect<Invoke<typeof refusalOf, [run: typeof clone, args: [name: "acme", options: Anonymous, out: typeof collect, json: false]]>, "=", { message: "'acme' is not a repository"; fix: "name it as <owner>/<repo>"; code: 1 }>,
-      Expect<Invoke<typeof refusalOf, [run: typeof clone, args: [name: "acme/web", options: { push: false; anonymous: true; domain: "../acme" }, out: typeof collect, json: false]]>, "matches", { message: "'../acme' is not a domain name"; code: 64 }>,
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof clone,
+            args: [name: "acme", options: Anonymous, out: typeof collect, json: false],
+          ]
+        >,
+        "=",
+        { message: "'acme' is not a repository"; fix: "name it as <owner>/<repo>"; code: 1 }
+      >,
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof clone,
+            args: [
+              name: "acme/web",
+              options: { push: false; anonymous: true; domain: "../acme" },
+              out: typeof collect,
+              json: false,
+            ],
+          ]
+        >,
+        "matches",
+        { message: "'../acme' is not a domain name"; code: 64 }
+      >,
       Expect<Invoke<typeof rootAsked>, "=", []>,
     ]
   >;
   /** a repository gets a domain of its own, owner--repo, made for it */
   export type MakesItsDomain = Given<
-    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "repo.prepare": { pushable: false; anonymous: true; keys: [] }; "repo.fetch": Fetched; "domain.list": []; "domain.create": {}; "domain.add-repo": {} }]>, Invoke<typeof clone, [name: "acme/web", options: Anonymous, out: typeof collect, json: false]>],
-    Expect<Invoke<typeof said>, "=", [
-      "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only, fetched anonymously.",
-      "domain acme--web: made for acme/web.",
-      "next: desolate up acme--web   (a workspace: a VM with its checkout, its devcontainer and an editor)",
-    ]>
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "repo.prepare": { pushable: false; anonymous: true; keys: [] };
+            "repo.fetch": Fetched;
+            "domain.list": [];
+            "domain.create": {};
+            "domain.add-repo": {};
+          },
+        ]
+      >,
+      Invoke<
+        typeof clone,
+        [name: "acme/web", options: Anonymous, out: typeof collect, json: false]
+      >,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only, fetched anonymously.",
+        "domain acme--web: made for acme/web.",
+        "next: desolate up acme--web   (a workspace: a VM with its checkout, its devcontainer and an editor)",
+      ]
+    >
   >;
   /** a domain of that name that holds other repositories is not joined: it is another's */
   export type NameTaken = Given<
-    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "repo.prepare": { pushable: false; anonymous: true; keys: [] }; "repo.fetch": Fetched; "domain.list": [{ slug: "acme--web"; repos: ["acme/other"] }] }]>, Invoke<typeof clone, [name: "acme/web", options: Anonymous, out: typeof collect, json: false]>],
-    Expect<Invoke<typeof said>, "=", [
-      "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only, fetched anonymously.",
-      "no domain was made: acme--web is a domain already, holding other repositories.",
-      "next: desolate domain create <slug> --repo acme/web   (or, to a domain you have: desolate domain <slug> add --repo acme/web; or clone again with --domain <slug>)",
-    ]>
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "repo.prepare": { pushable: false; anonymous: true; keys: [] };
+            "repo.fetch": Fetched;
+            "domain.list": [{ slug: "acme--web"; repos: ["acme/other"] }];
+          },
+        ]
+      >,
+      Invoke<
+        typeof clone,
+        [name: "acme/web", options: Anonymous, out: typeof collect, json: false]
+      >,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only, fetched anonymously.",
+        "no domain was made: acme--web is a domain already, holding other repositories.",
+        "next: desolate domain create <slug> --repo acme/web   (or, to a domain you have: desolate domain <slug> add --repo acme/web; or clone again with --domain <slug>)",
+      ]
+    >
   >;
   /** keys someone else adds: their public halves, until the root can fetch with the read key */
   export type KeysByHand = Given<
-    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "repo.prepare": { pushable: true; anonymous: false; keys: [{ role: "read"; pubkey: "ssh-ed25519 AAAAread desolate-read" }, { role: "write"; pubkey: "ssh-ed25519 AAAAwrite desolate-write" }] } }]>, Invoke<typeof clone, [name: "acme/web", options: { push: true; anonymous: false; byHand: true }, out: typeof collect, json: false]>],
-    Expect<Invoke<typeof said>, "=", [
-      "Add these deploy keys to acme/web, then run this command again:",
-      "",
-      "  desolate read: read-only",
-      "  ssh-ed25519 AAAAread desolate-read",
-      "",
-      '  desolate write: tick "Allow write access"',
-      "  ssh-ed25519 AAAAwrite desolate-write",
-      "",
-      "Only public halves are shown: the private ones never leave the root's keyring.",
-    ]>
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "repo.prepare": {
+              pushable: true;
+              anonymous: false;
+              keys: [
+                { role: "read"; pubkey: "ssh-ed25519 AAAAread desolate-read" },
+                { role: "write"; pubkey: "ssh-ed25519 AAAAwrite desolate-write" },
+              ];
+            };
+          },
+        ]
+      >,
+      Invoke<
+        typeof clone,
+        [
+          name: "acme/web",
+          options: { push: true; anonymous: false; byHand: true },
+          out: typeof collect,
+          json: false,
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "Add these deploy keys to acme/web, then run this command again:",
+        "",
+        "  desolate read: read-only",
+        "  ssh-ed25519 AAAAread desolate-read",
+        "",
+        '  desolate write: tick "Allow write access"',
+        "  ssh-ed25519 AAAAwrite desolate-write",
+        "",
+        "Only public halves are shown: the private ones never leave the root's keyring.",
+      ]
+    >
   >;
 }
 
 export const fetch = async (name: string | undefined, out: Out, json: boolean) => {
   const repo = repoId(repoArg(name));
   const fetched = await rootctl<Record<string, unknown>>("repo.fetch", { repo });
-  out(json ? JSON.stringify(fetched) : `fetched ${repo}: ${fetched.branches} branch(es), ${fetched.lfsObjects} LFS object(s) in the mirror.`);
+  out(
+    json
+      ? JSON.stringify(fetched)
+      : `fetched ${repo}: ${fetched.branches} branch(es), ${fetched.lfsObjects} LFS object(s) in the mirror.`,
+  );
 };
 
 export const repos = async (out: Out, json: boolean) => {
-  const list = await rootctl<{ repo: string; pushable: boolean; anonymous: boolean; defaultBranch: string | null; fetchedAt: string | null }[]>("repo.list", {}, { quiet: true });
+  const list = await rootctl<
+    {
+      repo: string;
+      pushable: boolean;
+      anonymous: boolean;
+      defaultBranch: string | null;
+      fetchedAt: string | null;
+    }[]
+  >("repo.list", {}, { quiet: true });
   if (json) return out(JSON.stringify(list));
-  if (list.length === 0) return out("no repositories yet. Start with: desolate clone <owner>/<repo>");
-  for (const r of list) out(`${r.repo}  ${r.pushable ? "pushable" : r.anonymous ? "read-only (anonymous)" : "read-only"}  default ${r.defaultBranch ?? "?"}  fetched ${r.fetchedAt ?? "never"}`);
+  if (list.length === 0)
+    return out("no repositories yet. Start with: desolate clone <owner>/<repo>");
+  for (const r of list)
+    out(
+      `${r.repo}  ${r.pushable ? "pushable" : r.anonymous ? "read-only (anonymous)" : "read-only"}  default ${r.defaultBranch ?? "?"}  fetched ${r.fetchedAt ?? "never"}`,
+    );
 };
 
 /** The keys the root holds, and a key's public half, for adding it to a forge by hand. */
@@ -172,29 +365,73 @@ export const keys = async (name: string | undefined, out: Out, json: boolean) =>
   const held = await rootctl<{ repo: string; role: string }[]>("keys.list", {}, { quiet: true });
   if (!name) {
     if (json) return out(JSON.stringify(held));
-    if (held.length === 0) return out("the root holds no keys yet. `desolate clone <owner>/<repo>` makes a repository's.");
-    for (const key of held) out(`${key.repo}  ${key.role}${key.role === "write" ? "  (asks you before every push)" : ""}`);
+    if (held.length === 0)
+      return out(
+        "the root holds no keys yet. `desolate clone <owner>/<repo>` makes a repository's.",
+      );
+    for (const key of held)
+      out(
+        `${key.repo}  ${key.role}${key.role === "write" ? "  (asks you before every push)" : ""}`,
+      );
     return out("a key's public half: desolate keys <owner>/<repo>");
   }
   const repo = repoId(repoArg(name));
   const mine = held.filter((key) => key.repo === repo);
   if (mine.length === 0) refuse(`the root holds no key for ${repo}`, `desolate clone ${repo}`);
   const shown: { role: string; pubkey: string }[] = [];
-  for (const key of mine) shown.push({ role: key.role, pubkey: (await rootctl<{ pubkey: string }>("keys.pubkey", { repo, role: key.role }, { quiet: true })).pubkey });
+  for (const key of mine)
+    shown.push({
+      role: key.role,
+      pubkey: (
+        await rootctl<{ pubkey: string }>("keys.pubkey", { repo, role: key.role }, { quiet: true })
+      ).pubkey,
+    });
   if (json) return out(JSON.stringify(shown));
-  for (const key of shown) out(`${repo}  ${key.role} key (a deploy key${key.role === "write" ? " with write access" : ", read-only"}):\n  ${key.pubkey}`);
+  for (const key of shown)
+    out(
+      `${repo}  ${key.role} key (a deploy key${key.role === "write" ? " with write access" : ", read-only"}):\n  ${key.pubkey}`,
+    );
   out("Only public halves are ever shown: the private halves do not leave the root's keyring.");
 };
 
 declare namespace keys {
   /** a key's public half, only for a repository the root holds a key for */
   export type NoneHeld = Given<
-    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "keys.list": [{ repo: "acme/api"; role: "read" }] }]>],
-    Expect<Invoke<typeof refusalOf, [run: typeof keys, args: [name: "acme/web", out: typeof collect, json: false]]>, "=", { message: "the root holds no key for acme/web"; fix: "desolate clone acme/web"; code: 1 }>
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "keys.list": [{ repo: "acme/api"; role: "read" }] }]>,
+    ],
+    Expect<
+      Invoke<
+        typeof refusalOf,
+        [run: typeof keys, args: [name: "acme/web", out: typeof collect, json: false]]
+      >,
+      "=",
+      { message: "the root holds no key for acme/web"; fix: "desolate clone acme/web"; code: 1 }
+    >
   >;
   /** which keys the root holds; a write key asks before every push */
   export type Lists = Given<
-    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "keys.list": [{ repo: "acme/web"; role: "read" }, { repo: "acme/web"; role: "write" }] }]>, Invoke<typeof keys, [name: undefined, out: typeof collect, json: false]>],
-    Expect<Invoke<typeof said>, "=", ["acme/web  read", "acme/web  write  (asks you before every push)", "a key's public half: desolate keys <owner>/<repo>"]>
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "keys.list": [{ repo: "acme/web"; role: "read" }, { repo: "acme/web"; role: "write" }];
+          },
+        ]
+      >,
+      Invoke<typeof keys, [name: undefined, out: typeof collect, json: false]>,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "acme/web  read",
+        "acme/web  write  (asks you before every push)",
+        "a key's public half: desolate keys <owner>/<repo>",
+      ]
+    >
   >;
 }

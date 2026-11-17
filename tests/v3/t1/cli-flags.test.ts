@@ -13,20 +13,40 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-flags-"));
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 // No stack: a verb that went past its flags would fail some other way (or take its time).
 const run = (...args: string[]) =>
-  spawnSync(path.join(RELEASE, "cli.sh"), args, { encoding: "utf8", timeout: 20_000, env: { PATH: process.env.PATH, HOME: home, DESOLATE_HOME: home, DESOLATE_INSTANCE: "flagtest", DESOLATE_BACKEND: "fake" } });
+  spawnSync(path.join(RELEASE, "cli.sh"), args, {
+    encoding: "utf8",
+    timeout: 20_000,
+    env: {
+      PATH: process.env.PATH,
+      HOME: home,
+      DESOLATE_HOME: home,
+      DESOLATE_INSTANCE: "flagtest",
+      DESOLATE_BACKEND: "fake",
+    },
+  });
 
-const completionVerbs = () => /words="(bootstrap [^"]+)"/.exec(fs.readFileSync(path.join(RELEASE, "completion.bash"), "utf8"))![1]!.split(" ");
+const completionVerbs = () =>
+  /words="(bootstrap [^"]+)"/
+    .exec(fs.readFileSync(path.join(RELEASE, "completion.bash"), "utf8"))![1]!
+    .split(" ");
 
 describe("T1 the CLI's flags", () => {
   // (Verbs whose subcommand comes first are given one.)
   const lines: Record<string, string[]> = {
-    domain: ["domain", "dev", "show"], root: ["root", "shell"], net: ["net", "log"], agent: ["agent", "list"],
+    domain: ["domain", "dev", "show"],
+    root: ["root", "shell"],
+    net: ["net", "log"],
+    agent: ["agent", "list"],
     suede: ["suede", "changed", "a/b", "0".repeat(40)],
   };
   for (const verb of completionVerbs().filter((verb) => verb !== "help" && verb !== "completion"))
     it(`${verb}: an unknown flag is a usage error`, () => {
       const result = run(...(lines[verb] ?? [verb]), "--no-such-flag");
-      assert.equal(result.status, 64, `${verb} exited ${result.status}: ${result.stderr.slice(0, 300)}`);
+      assert.equal(
+        result.status,
+        64,
+        `${verb} exited ${result.status}: ${result.stderr.slice(0, 300)}`,
+      );
       assert.match(result.stderr, /no-such-flag/);
     });
 });

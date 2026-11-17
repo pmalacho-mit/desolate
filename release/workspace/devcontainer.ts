@@ -56,11 +56,25 @@ export const STATE = "/run/desolate/devcontainer.json";
 export type State =
   | { state: "none"; why: string }
   | { state: "failed"; why: string; config: string }
-  | { state: "up"; containerId: string; remoteUser: string; folder: string; config: string; override: string; checkout: string; hostNetwork: boolean; glibc: boolean; compose: boolean; extensions: string[]; image: string; note?: string;
+  | {
+      state: "up";
+      containerId: string;
+      remoteUser: string;
+      folder: string;
+      config: string;
+      override: string;
+      checkout: string;
+      hostNetwork: boolean;
+      glibc: boolean;
+      compose: boolean;
+      extensions: string[];
+      image: string;
+      note?: string;
       /** compose: svcnet.ts's socket in the primary service, when it answers (bridge.ts) */
       bridge?: string;
       /** compose: `forwardPorts` entries naming another service, for bridge.ts */
-      forwards?: { port: number; host: string }[] };
+      forwards?: { port: number; host: string }[];
+    };
 
 /** svcnet.ts's socket: in /run/desolate, which the primary service shares with the VM. */
 export const SVCNET = "/run/desolate/svcnet.sock";
@@ -73,11 +87,39 @@ export const locate = (dir: string): string | undefined => {
 
 declare namespace locate {
   /** the two places the spec may be, the folder's first; nowhere else */
-  export type Nested = Expect<Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer/devcontainer.json", ".devcontainer.json"]]>]>, "endsWith", "/.devcontainer/devcontainer.json">;
-  export type Flat = Expect<Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer.json"]]>]>, "endsWith", "/.devcontainer.json">;
+  export type Nested = Expect<
+    Invoke<
+      typeof locate,
+      [
+        dir: Invoke<
+          typeof projectWith,
+          [files: [".devcontainer/devcontainer.json", ".devcontainer.json"]]
+        >,
+      ]
+    >,
+    "endsWith",
+    "/.devcontainer/devcontainer.json"
+  >;
+  export type Flat = Expect<
+    Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer.json"]]>]>,
+    "endsWith",
+    "/.devcontainer.json"
+  >;
   /** a spec in a subfolder of .devcontainer (one of several configurations) is not looked for:
    *  the workspace is then the VM itself */
-  export type None = Expect<Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer/python/devcontainer.json", "devcontainer.json"]]>]>, "=", undefined>;
+  export type None = Expect<
+    Invoke<
+      typeof locate,
+      [
+        dir: Invoke<
+          typeof projectWith,
+          [files: [".devcontainer/python/devcontainer.json", "devcontainer.json"]]
+        >,
+      ]
+    >,
+    "=",
+    undefined
+  >;
 }
 
 const EXTENSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9][A-Za-z0-9._-]*(@[A-Za-z0-9._-]+)?$/;
@@ -88,24 +130,75 @@ export const extensionsOf = (spec: Record<string, unknown>): string[] => {
   if (typeof customizations === "object" && customizations !== null)
     for (const namespace of Object.values(customizations as Record<string, unknown>)) {
       const list = (namespace as { extensions?: unknown } | null)?.extensions;
-      for (const id of Array.isArray(list) ? list : []) if (typeof id === "string" && EXTENSION_ID.test(id)) ids.add(id);
+      for (const id of Array.isArray(list) ? list : [])
+        if (typeof id === "string" && EXTENSION_ID.test(id)) ids.add(id);
     }
   return [...ids];
 };
 
 declare namespace extensionsOf {
   /** the editor's extensions, from every editor's namespace, each once */
-  export type Lists = Table<typeof extensionsOf, [
-    [args: [spec: { customizations: { vscode: { extensions: ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode@10.1.0"] } } }], expected: ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode@10.1.0"]],
-    [args: [spec: { customizations: { vscode: { extensions: ["ms-python.python"] }; codespaces: { extensions: ["ms-python.python", "golang.go"] } } }], expected: ["ms-python.python", "golang.go"]],
-    [args: [spec: { image: "node:22" }], expected: []],
-    [args: [spec: { customizations: { vscode: { extensions: "ms-python.python" }; jetbrains: null } }], expected: []],
-  ]>;
+  export type Lists = Table<
+    typeof extensionsOf,
+    [
+      [
+        args: [
+          spec: {
+            customizations: {
+              vscode: { extensions: ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode@10.1.0"] };
+            };
+          },
+        ],
+        expected: ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode@10.1.0"],
+      ],
+      [
+        args: [
+          spec: {
+            customizations: {
+              vscode: { extensions: ["ms-python.python"] };
+              codespaces: { extensions: ["ms-python.python", "golang.go"] };
+            };
+          },
+        ],
+        expected: ["ms-python.python", "golang.go"],
+      ],
+      [args: [spec: { image: "node:22" }], expected: []],
+      [
+        args: [
+          spec: { customizations: { vscode: { extensions: "ms-python.python" }; jetbrains: null } },
+        ],
+        expected: [],
+      ],
+    ]
+  >;
   /** the spec is the project's, and the ids go to the editor's installer: only
    *  `publisher.name[@version]`, never a path, a flag or a second word */
-  export type Refuses = Table<typeof extensionsOf, [
-    [args: [spec: { customizations: { vscode: { extensions: ["eslint", "-x.y", "../x.y", "/tmp/x.vsix", "a.b c", "a.b@", "a.b;id", 42] } } }], expected: []],
-  ]>;
+  export type Refuses = Table<
+    typeof extensionsOf,
+    [
+      [
+        args: [
+          spec: {
+            customizations: {
+              vscode: {
+                extensions: [
+                  "eslint",
+                  "-x.y",
+                  "../x.y",
+                  "/tmp/x.vsix",
+                  "a.b c",
+                  "a.b@",
+                  "a.b;id",
+                  42,
+                ];
+              };
+            };
+          },
+        ],
+        expected: [],
+      ],
+    ]
+  >;
 }
 
 const ENV_CA = "/desolate/ca/ca-certificates.crt";
@@ -136,35 +229,57 @@ const withoutNetwork = (args: unknown[]): unknown[] => {
 
 declare namespace withoutNetwork {
   /** both spellings of both names go, a two-word one with its value */
-  export type Network = Table<typeof withoutNetwork, [
-    [args: [args: ["--network", "bridge", "--privileged"]], expected: ["--privileged"]],
-    [args: [args: ["--net", "none", "--cap-add=SYS_PTRACE"]], expected: ["--cap-add=SYS_PTRACE"]],
-    [args: [args: ["--network=bridge", "--net=container:db"]], expected: []],
-    /** at the end, with no value after it; and before a flag, which docker reads as its value */
-    [args: [args: ["--privileged", "--network"]], expected: ["--privileged"]],
-    [args: [args: ["--net", "--privileged", "--init"]], expected: ["--init"]],
-  ]>;
+  export type Network = Table<
+    typeof withoutNetwork,
+    [
+      [args: [args: ["--network", "bridge", "--privileged"]], expected: ["--privileged"]],
+      [args: [args: ["--net", "none", "--cap-add=SYS_PTRACE"]], expected: ["--cap-add=SYS_PTRACE"]],
+      [args: [args: ["--network=bridge", "--net=container:db"]], expected: []],
+      /** at the end, with no value after it; and before a flag, which docker reads as its value */
+      [args: [args: ["--privileged", "--network"]], expected: ["--privileged"]],
+      [args: [args: ["--net", "--privileged", "--init"]], expected: ["--init"]],
+    ]
+  >;
   /** controls: flags that only start alike, and words that are not flags, are the project's */
-  export type Keeps = Table<typeof withoutNetwork, [
-    [args: [args: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]], expected: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]],
-    [args: [args: []], expected: []],
-  ]>;
+  export type Keeps = Table<
+    typeof withoutNetwork,
+    [
+      [
+        args: [args: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42]],
+        expected: ["--network-alias", "api", "--netns-x", "-e", "NETWORK=bridge", 42],
+      ],
+      [args: [args: []], expected: []],
+    ]
+  >;
 }
 
 /** The spec desolate hands the CLI: the project's, plus what the header lists. */
-export const overrideOf = (spec: Record<string, unknown>, checkout: string, home: string, who: { domain: string; workspace: string; devHostname?: string; cache?: boolean } = { domain: "", workspace: "" }): Record<string, unknown> => {
+export const overrideOf = (
+  spec: Record<string, unknown>,
+  checkout: string,
+  home: string,
+  who: { domain: string; workspace: string; devHostname?: string; cache?: boolean } = {
+    domain: "",
+    workspace: "",
+  },
+): Record<string, unknown> => {
   // The domain's cache is a share a VM gets when it is made: one made by an older desolate has
   // none, and a bind of a missing path failed the container on every start after an upgrade
   // ("bind source path does not exist: /desolate/cache", two workspaces on the M1).
   const cache = who.cache !== false;
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
-  const env = (value: unknown): Record<string, unknown> => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {});
+  const env = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
   const compose = spec.dockerComposeFile !== undefined;
   // For compose, the CLI writes each mount into its override file as `source:target` and
   // drops every other option, `readonly` among them (read in CLI 0.88.0), so the mode rides
   // in the target, which it copies as it is: `source:target:ro` is compose's own syntax.
   const bind = (source: string, target: string, readonly = false) =>
-    compose ? `source=${source},target=${target}${readonly ? ":ro" : ""},type=bind` : `source=${source},target=${target},type=bind${readonly ? ",readonly" : ""}`;
+    compose
+      ? `source=${source},target=${target}${readonly ? ":ro" : ""},type=bind`
+      : `source=${source},target=${target},type=bind${readonly ? ",readonly" : ""}`;
   const ours = [
     bind("/desolate/mirrors", "/desolate/mirrors", true),
     bind("/desolate/inbox", "/desolate/inbox", true),
@@ -178,7 +293,12 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
     // Each runs the release's script of its own name, through one file that never changes:
     // a bind of a single file from the release share goes stale when an upgrade replaces
     // that file (workspace/entry says how).
-    ...["/usr/local/bin/desolate", "/usr/local/bin/git-remote-desolate-offer", "/usr/local/bin/git-remote-desolate-mirror", "/desolate/status"].map((target) => bind("/desolate/release/workspace/entry", target, true)),
+    ...[
+      "/usr/local/bin/desolate",
+      "/usr/local/bin/git-remote-desolate-offer",
+      "/usr/local/bin/git-remote-desolate-mirror",
+      "/desolate/status",
+    ].map((target) => bind("/desolate/release/workspace/entry", target, true)),
     ...(cache ? [bind("/desolate/cache", "/desolate/cache")] : []),
     // The VM's own disk, at the same path (start.sh): binds for docker-outside-of-docker.
     bind("/desolate/scratch", "/desolate/scratch"),
@@ -186,10 +306,16 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
   const containerEnv = {
     // git in the container: the mirror and the checkouts are owned by the VM's user, which
     // may not be the container's.
-    GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "safe.directory", GIT_CONFIG_VALUE_0: "*",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "safe.directory",
+    GIT_CONFIG_VALUE_0: "*",
     // The domain's CA (for its secrets' hosts) is in the VM's bundle; tools that take
     // their roots from the environment are pointed at it.
-    SSL_CERT_FILE: ENV_CA, NODE_EXTRA_CA_CERTS: ENV_CA, REQUESTS_CA_BUNDLE: ENV_CA, CURL_CA_BUNDLE: ENV_CA, GIT_SSL_CAINFO: ENV_CA,
+    SSL_CERT_FILE: ENV_CA,
+    NODE_EXTRA_CA_CERTS: ENV_CA,
+    REQUESTS_CA_BUNDLE: ENV_CA,
+    CURL_CA_BUNDLE: ENV_CA,
+    GIT_SSL_CAINFO: ENV_CA,
     DESOLATE_WORKSPACE: "1",
     // Which workspace this is, for `desolate offer` and the rest inside the container (the
     // VM's ~/.desolate/workspace.json is not in the container's home).
@@ -202,7 +328,13 @@ export const overrideOf = (spec: Record<string, unknown>, checkout: string, home
     ...(cache ? CACHE_ENV : {}),
     ...env(spec.containerEnv),
   };
-  if (compose) return { ...spec, workspaceFolder: checkout, mounts: [...list(spec.mounts), ...ours, bind("/workspaces", "/workspaces")], containerEnv };
+  if (compose)
+    return {
+      ...spec,
+      workspaceFolder: checkout,
+      mounts: [...list(spec.mounts), ...ours, bind("/workspaces", "/workspaces")],
+      containerEnv,
+    };
   return {
     ...spec,
     workspaceMount: bind("/workspaces", "/workspaces"),
@@ -217,7 +349,15 @@ declare namespace overrideOf {
   /** a single-container spec: the project's, with the VM's paths, the VM's network, and
    *  desolate's shares, tools and environment added */
   export type SingleContainer = Expect<
-    Invoke<typeof overrideOf, [spec: { image: "node:22" }, checkout: "/workspaces/acme/app", home: "/home/acme", who: { domain: "acme"; workspace: "w1"; devHostname: "acme-w1-0a1b2c.localhost" }]>,
+    Invoke<
+      typeof overrideOf,
+      [
+        spec: { image: "node:22" },
+        checkout: "/workspaces/acme/app",
+        home: "/home/acme",
+        who: { domain: "acme"; workspace: "w1"; devHostname: "acme-w1-0a1b2c.localhost" },
+      ]
+    >,
     "=",
     {
       image: "node:22";
@@ -242,10 +382,24 @@ declare namespace overrideOf {
       ];
       runArgs: ["--network=host"];
       containerEnv: {
-        GIT_CONFIG_COUNT: "1"; GIT_CONFIG_KEY_0: "safe.directory"; GIT_CONFIG_VALUE_0: "*";
-        SSL_CERT_FILE: "/desolate/ca/ca-certificates.crt"; NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt"; REQUESTS_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; CURL_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; GIT_SSL_CAINFO: "/desolate/ca/ca-certificates.crt";
-        DESOLATE_WORKSPACE: "1"; DESOLATE_DOMAIN: "acme"; DESOLATE_WORKSPACE_NAME: "w1"; DESOLATE_DEV_HOSTNAME: "acme-w1-0a1b2c.localhost";
-        npm_config_cache: "/desolate/cache/npm"; npm_config_store_dir: "/desolate/cache/pnpm"; YARN_CACHE_FOLDER: "/desolate/cache/yarn"; PIP_CACHE_DIR: "/desolate/cache/pip"; UV_CACHE_DIR: "/desolate/cache/uv"; GOMODCACHE: "/desolate/cache/go-mod";
+        GIT_CONFIG_COUNT: "1";
+        GIT_CONFIG_KEY_0: "safe.directory";
+        GIT_CONFIG_VALUE_0: "*";
+        SSL_CERT_FILE: "/desolate/ca/ca-certificates.crt";
+        NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt";
+        REQUESTS_CA_BUNDLE: "/desolate/ca/ca-certificates.crt";
+        CURL_CA_BUNDLE: "/desolate/ca/ca-certificates.crt";
+        GIT_SSL_CAINFO: "/desolate/ca/ca-certificates.crt";
+        DESOLATE_WORKSPACE: "1";
+        DESOLATE_DOMAIN: "acme";
+        DESOLATE_WORKSPACE_NAME: "w1";
+        DESOLATE_DEV_HOSTNAME: "acme-w1-0a1b2c.localhost";
+        npm_config_cache: "/desolate/cache/npm";
+        npm_config_store_dir: "/desolate/cache/pnpm";
+        YARN_CACHE_FOLDER: "/desolate/cache/yarn";
+        PIP_CACHE_DIR: "/desolate/cache/pip";
+        UV_CACHE_DIR: "/desolate/cache/uv";
+        GOMODCACHE: "/desolate/cache/go-mod";
       };
     }
   >;
@@ -253,14 +407,37 @@ declare namespace overrideOf {
   /** the project's own run arguments are kept, except the ones that choose a network: the
    *  container is on the VM's, the only way out the VM has */
   export type NetworkIsTheVms = Expect<
-    Invoke<typeof overrideOf, [spec: { image: "node:22"; runArgs: ["--privileged", "--network=bridge", "--net=none", "--cap-add=SYS_PTRACE", "--network"] }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    Invoke<
+      typeof overrideOf,
+      [
+        spec: {
+          image: "node:22";
+          runArgs: [
+            "--privileged",
+            "--network=bridge",
+            "--net=none",
+            "--cap-add=SYS_PTRACE",
+            "--network",
+          ];
+        },
+        checkout: "/workspaces/acme/app",
+        home: "/home/acme",
+      ]
+    >,
     "matches",
     { runArgs: ["--privileged", "--cap-add=SYS_PTRACE", "--network=host"] }
   >;
   /** a network named as two words goes with its value: docker run would read a value left
    *  behind as the image */
   export type NetworkAsTwoWords = Expect<
-    Invoke<typeof overrideOf, [spec: { image: "node:22"; runArgs: ["--network", "bridge", "--privileged"] }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    Invoke<
+      typeof overrideOf,
+      [
+        spec: { image: "node:22"; runArgs: ["--network", "bridge", "--privileged"] },
+        checkout: "/workspaces/acme/app",
+        home: "/home/acme",
+      ]
+    >,
     "matches",
     { runArgs: ["--privileged", "--network=host"] }
   >;
@@ -269,9 +446,30 @@ declare namespace overrideOf {
    *  the VM's (git works only on its paths), and the project's environment wins over
    *  desolate's defaults, which are only defaults */
   export type ProjectAndDesolate = Expect<
-    Invoke<typeof overrideOf, [spec: { image: "node:22"; workspaceMount: "source=${localWorkspaceFolder},target=/src,type=bind"; workspaceFolder: "/src"; containerEnv: { NODE_ENV: "development"; SSL_CERT_FILE: "/etc/ssl/project.pem" } }, checkout: "/workspaces/acme/app", home: "/home/acme"]>,
+    Invoke<
+      typeof overrideOf,
+      [
+        spec: {
+          image: "node:22";
+          workspaceMount: "source=${localWorkspaceFolder},target=/src,type=bind";
+          workspaceFolder: "/src";
+          containerEnv: { NODE_ENV: "development"; SSL_CERT_FILE: "/etc/ssl/project.pem" };
+        },
+        checkout: "/workspaces/acme/app",
+        home: "/home/acme",
+      ]
+    >,
     "matches",
-    { workspaceMount: "source=/workspaces,target=/workspaces,type=bind"; workspaceFolder: "/workspaces/acme/app"; containerEnv: { NODE_ENV: "development"; SSL_CERT_FILE: "/etc/ssl/project.pem"; NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt"; DESOLATE_WORKSPACE: "1" } }
+    {
+      workspaceMount: "source=/workspaces,target=/workspaces,type=bind";
+      workspaceFolder: "/workspaces/acme/app";
+      containerEnv: {
+        NODE_ENV: "development";
+        SSL_CERT_FILE: "/etc/ssl/project.pem";
+        NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt";
+        DESOLATE_WORKSPACE: "1";
+      };
+    }
   >;
 
   /** a compose spec: the same shares in its primary service, read-only written in the target
@@ -279,7 +477,19 @@ declare namespace overrideOf {
    *  so it is mounted over whatever the compose file puts there. Its network stays its own.
    *  A VM made before the domain's cache existed gets no cache mount and no cache variables */
   export type Compose = Expect<
-    Invoke<typeof overrideOf, [spec: { dockerComposeFile: "compose.yml"; service: "app"; mounts: ["source=..,target=/src,type=bind"] }, checkout: "/workspaces/acme/app", home: "/home/acme", who: { domain: "acme"; workspace: "w1"; cache: false }]>,
+    Invoke<
+      typeof overrideOf,
+      [
+        spec: {
+          dockerComposeFile: "compose.yml";
+          service: "app";
+          mounts: ["source=..,target=/src,type=bind"];
+        },
+        checkout: "/workspaces/acme/app",
+        home: "/home/acme",
+        who: { domain: "acme"; workspace: "w1"; cache: false },
+      ]
+    >,
     "=",
     {
       dockerComposeFile: "compose.yml";
@@ -304,9 +514,17 @@ declare namespace overrideOf {
         "source=/workspaces,target=/workspaces,type=bind",
       ];
       containerEnv: {
-        GIT_CONFIG_COUNT: "1"; GIT_CONFIG_KEY_0: "safe.directory"; GIT_CONFIG_VALUE_0: "*";
-        SSL_CERT_FILE: "/desolate/ca/ca-certificates.crt"; NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt"; REQUESTS_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; CURL_CA_BUNDLE: "/desolate/ca/ca-certificates.crt"; GIT_SSL_CAINFO: "/desolate/ca/ca-certificates.crt";
-        DESOLATE_WORKSPACE: "1"; DESOLATE_DOMAIN: "acme"; DESOLATE_WORKSPACE_NAME: "w1";
+        GIT_CONFIG_COUNT: "1";
+        GIT_CONFIG_KEY_0: "safe.directory";
+        GIT_CONFIG_VALUE_0: "*";
+        SSL_CERT_FILE: "/desolate/ca/ca-certificates.crt";
+        NODE_EXTRA_CA_CERTS: "/desolate/ca/ca-certificates.crt";
+        REQUESTS_CA_BUNDLE: "/desolate/ca/ca-certificates.crt";
+        CURL_CA_BUNDLE: "/desolate/ca/ca-certificates.crt";
+        GIT_SSL_CAINFO: "/desolate/ca/ca-certificates.crt";
+        DESOLATE_WORKSPACE: "1";
+        DESOLATE_DOMAIN: "acme";
+        DESOLATE_WORKSPACE_NAME: "w1";
       };
     }
   >;
@@ -318,10 +536,21 @@ declare namespace overrideOf {
 export const forwardsOf = (spec: Record<string, unknown>): { port: number; host: string }[] => {
   const out = new Map<number, string>();
   for (const entry of Array.isArray(spec.forwardPorts) ? spec.forwardPorts : []) {
-    const match = typeof entry === "string" ? /^([A-Za-z0-9][A-Za-z0-9._-]{0,62}):(\d{1,5})$/.exec(entry) : null;
+    const match =
+      typeof entry === "string"
+        ? /^([A-Za-z0-9][A-Za-z0-9._-]{0,62}):(\d{1,5})$/.exec(entry)
+        : null;
     if (!match) continue;
     const [host, port] = [match[1]!, Number(match[2])];
-    if (port < 1024 || port > 65535 || host === spec.service || host === "localhost" || host === "127.0.0.1" || out.has(port)) continue;
+    if (
+      port < 1024 ||
+      port > 65535 ||
+      host === spec.service ||
+      host === "localhost" ||
+      host === "127.0.0.1" ||
+      out.has(port)
+    )
+      continue;
     out.set(port, host);
   }
   return [...out].map(([port, host]) => ({ port, host }));
@@ -330,18 +559,48 @@ export const forwardsOf = (spec: Record<string, unknown>): { port: number; host:
 declare namespace forwardsOf {
   /** `service:port` entries for the other services; a bare number, or the primary service's
    *  own name, is mirrored already */
-  export type OtherServices = Table<typeof forwardsOf, [
-    [args: [spec: { service: "app"; forwardPorts: [3000, "db:5432", "app:8080", "cache:6379"] }], expected: [{ port: 5432; host: "db" }, { port: 6379; host: "cache" }]],
-    [args: [spec: { service: "app" }], expected: []],
-    /** one number, one listener in the VM: the first entry for a port has it */
-    [args: [spec: { service: "app"; forwardPorts: ["db:5432", "replica:5432"] }], expected: [{ port: 5432; host: "db" }]],
-  ]>;
+  export type OtherServices = Table<
+    typeof forwardsOf,
+    [
+      [
+        args: [spec: { service: "app"; forwardPorts: [3000, "db:5432", "app:8080", "cache:6379"] }],
+        expected: [{ port: 5432; host: "db" }, { port: 6379; host: "cache" }],
+      ],
+      [args: [spec: { service: "app" }], expected: []],
+      /** one number, one listener in the VM: the first entry for a port has it */
+      [
+        args: [spec: { service: "app"; forwardPorts: ["db:5432", "replica:5432"] }],
+        expected: [{ port: 5432; host: "db" }],
+      ],
+    ]
+  >;
   /** the name becomes a host to connect to inside the service's network, and the number a
    *  listener in the VM: loopback names, privileged or impossible ports, and anything that is
    *  not one name and one number are left out */
-  export type Refuses = Table<typeof forwardsOf, [
-    [args: [spec: { service: "app"; forwardPorts: ["localhost:9000", "127.0.0.1:9001", "db:80", "db:70000", "-db:5432", "db;id:5432", "db:5432:1", "db: 5432", "user@db:5432"] }], expected: []],
-  ]>;
+  export type Refuses = Table<
+    typeof forwardsOf,
+    [
+      [
+        args: [
+          spec: {
+            service: "app";
+            forwardPorts: [
+              "localhost:9000",
+              "127.0.0.1:9001",
+              "db:80",
+              "db:70000",
+              "-db:5432",
+              "db;id:5432",
+              "db:5432:1",
+              "db: 5432",
+              "user@db:5432",
+            ];
+          },
+        ],
+        expected: [],
+      ],
+    ]
+  >;
 }
 
 /** svcnet.ts in the primary service, as the VM's user, with the editor's node (a glibc
@@ -357,7 +616,17 @@ const startSvcnet = async (id: string): Promise<boolean> => {
       conn.on("close", () => resolve(false));
     });
   if (await answers()) return true;
-  const started = await run("docker", ["exec", "-d", "-u", `${process.getuid!()}:${process.getgid!()}`, id, "/opt/desolate/editor/node", "--disable-warning=ExperimentalWarning", "/desolate/release/workspace/svcnet.ts", SVCNET]);
+  const started = await run("docker", [
+    "exec",
+    "-d",
+    "-u",
+    `${process.getuid!()}:${process.getgid!()}`,
+    id,
+    "/opt/desolate/editor/node",
+    "--disable-warning=ExperimentalWarning",
+    "/desolate/release/workspace/svcnet.ts",
+    SVCNET,
+  ]);
   if (started.code !== 0) return false;
   for (let i = 0; i < 50; i++) {
     if (await answers()) return true;
@@ -371,47 +640,102 @@ const main = async () => {
   const plan = readJson<WorkspacePlan | null>(`/desolate/inbox/workspaces/${name}.json`, null);
   const done = (state: State) => {
     writeJson(STATE, state);
-    process.stdout.write(state.state === "up" ? `devcontainer: up (${state.image}, user ${state.remoteUser}${state.compose ? ", compose" : ""})${state.note ? `; note: ${state.note}` : ""}\n` : `devcontainer: ${state.state === "none" ? "none" : "FAILED"}: ${state.why}\n`);
+    process.stdout.write(
+      state.state === "up"
+        ? `devcontainer: up (${state.image}, user ${state.remoteUser}${state.compose ? ", compose" : ""})${state.note ? `; note: ${state.note}` : ""}\n`
+        : `devcontainer: ${state.state === "none" ? "none" : "FAILED"}: ${state.why}\n`,
+    );
   };
-  if (!plan) return done({ state: "none", why: `the root sent no plan for the workspace '${name}'` });
+  if (!plan)
+    return done({ state: "none", why: `the root sent no plan for the workspace '${name}'` });
   // The domain's environment: the repository it names, else the first checkout with a spec.
-  const checkout = plan.checkouts.find((c) => c.repo === plan.env && locate(c.path) !== undefined) ?? plan.checkouts.find((c) => locate(c.path) !== undefined);
-  if (!checkout) return done({ state: "none", why: "no checkout has a devcontainer.json; this workspace is the VM itself" });
+  const checkout =
+    plan.checkouts.find((c) => c.repo === plan.env && locate(c.path) !== undefined) ??
+    plan.checkouts.find((c) => locate(c.path) !== undefined);
+  if (!checkout)
+    return done({
+      state: "none",
+      why: "no checkout has a devcontainer.json; this workspace is the VM itself",
+    });
   const config = locate(checkout.path)!;
   let spec: Record<string, unknown>;
   try {
     const parsed: unknown = parseJsonc(fs.readFileSync(config, "utf8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("it is not an object");
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      throw new Error("it is not an object");
     spec = parsed as Record<string, unknown>;
   } catch (error) {
-    return done({ state: "failed", why: `${config} cannot be read: ${(error as Error).message}`, config });
+    return done({
+      state: "failed",
+      why: `${config} cannot be read: ${(error as Error).message}`,
+      config,
+    });
   }
-  for (let waited = 0; (await run("docker", ["info"], { timeoutMs: 20_000 })).code !== 0; waited += 500) {
-    if (waited > 90_000) return done({ state: "failed", why: "the VM's docker daemon is not answering (see /var/lib/desolate/dockerd.log)", config });
+  for (
+    let waited = 0;
+    (await run("docker", ["info"], { timeoutMs: 20_000 })).code !== 0;
+    waited += 500
+  ) {
+    if (waited > 90_000)
+      return done({
+        state: "failed",
+        why: "the VM's docker daemon is not answering (see /var/lib/desolate/dockerd.log)",
+        config,
+      });
     await sleep(500);
   }
   const home = os.homedir();
   fs.mkdirSync(`${home}/.desolate-editor`, { recursive: true, mode: 0o700 });
   const instance = /^dsl-([a-z0-9]{1,12})-/.exec(plan.vm)?.[1];
   const cache = (await run("mountpoint", ["-q", "/desolate/cache"])).code === 0;
-  const merged = overrideOf(spec, checkout.path, home, { domain: plan.domain, workspace: plan.workspace, cache, ...(instance ? { devHostname: devHostname(instance, plan.domain, plan.workspace) } : {}) });
+  const merged = overrideOf(spec, checkout.path, home, {
+    domain: plan.domain,
+    workspace: plan.workspace,
+    cache,
+    ...(instance ? { devHostname: devHostname(instance, plan.domain, plan.workspace) } : {}),
+  });
   const text = JSON.stringify(merged, null, 2);
   const dir = `${home}/.desolate-devcontainer`;
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const override = path.join(dir, "devcontainer.json");
   // A spec that changed since the container was made gets a new container.
   const digest = createHash("sha256").update(text).digest("hex");
-  const changed = fs.existsSync(override) && readJson<string>(path.join(dir, "digest.json"), "") !== digest;
+  const changed =
+    fs.existsSync(override) && readJson<string>(path.join(dir, "digest.json"), "") !== digest;
   fs.writeFileSync(override, text);
   writeJson(path.join(dir, "digest.json"), digest);
   // A spec with features makes the CLI write a lockfile beside it, into the checkout, where
   // an agent's `git add -A` takes it (seen in the promo). Unless the project keeps a
   // lockfile of its own (then it is verified, as the project asked), none is written.
-  const lockfile = path.join(path.dirname(config), path.basename(config).startsWith(".") ? ".devcontainer-lock.json" : "devcontainer-lock.json");
+  const lockfile = path.join(
+    path.dirname(config),
+    path.basename(config).startsWith(".") ? ".devcontainer-lock.json" : "devcontainer-lock.json",
+  );
   const noLockfile = fs.existsSync(lockfile) ? [] : ["--no-lockfile"];
-  const up = await run("devcontainer", ["up", "--workspace-folder", checkout.path, "--config", config, "--override-config", override, ...noLockfile, ...(changed ? ["--remove-existing-container"] : [])], { timeoutMs: 3_600_000, env: { ...process.env, DOCKER_BUILDKIT: "1" } });
+  const up = await run(
+    "devcontainer",
+    [
+      "up",
+      "--workspace-folder",
+      checkout.path,
+      "--config",
+      config,
+      "--override-config",
+      override,
+      ...noLockfile,
+      ...(changed ? ["--remove-existing-container"] : []),
+    ],
+    { timeoutMs: 3_600_000, env: { ...process.env, DOCKER_BUILDKIT: "1" } },
+  );
   fs.writeFileSync(path.join(dir, "up.log"), `${up.stderr}\n${up.stdout}`);
-  let result: { outcome?: string; containerId?: string; remoteUser?: string; remoteWorkspaceFolder?: string; message?: string; description?: string } = {};
+  let result: {
+    outcome?: string;
+    containerId?: string;
+    remoteUser?: string;
+    remoteWorkspaceFolder?: string;
+    message?: string;
+    description?: string;
+  } = {};
   try {
     result = JSON.parse(up.stdout.trim().split("\n").pop() ?? "{}");
   } catch {
@@ -420,33 +744,89 @@ const main = async () => {
   if (up.code !== 0 || result.outcome !== "success" || !result.containerId) {
     // The CLI's own summary is general ("An error occurred setting up the container"); the
     // line that says what happened is docker's or the build's, further up its log.
-    const cause = up.stderr.split("\n").map((line) => line.replace(/^\[[^\]]*\]\s*/, "").trim()).filter((line) => /error|denied|not found|no such|failed|refused/i.test(line) && !/^at /.test(line) && !/control manifest/.test(line)).pop();
-    const summary = (result.description ?? result.message ?? "devcontainer up failed").replace(/\s+/g, " ");
-    return done({ state: "failed", why: `${summary.slice(0, 160)}${cause ? ` (${cause.replace(/\s+/g, " ").slice(0, 240)})` : ""} (the whole log: ${dir}/up.log in the workspace)`, config });
+    const cause = up.stderr
+      .split("\n")
+      .map((line) => line.replace(/^\[[^\]]*\]\s*/, "").trim())
+      .filter(
+        (line) =>
+          /error|denied|not found|no such|failed|refused/i.test(line) &&
+          !/^at /.test(line) &&
+          !/control manifest/.test(line),
+      )
+      .pop();
+    const summary = (result.description ?? result.message ?? "devcontainer up failed").replace(
+      /\s+/g,
+      " ",
+    );
+    return done({
+      state: "failed",
+      why: `${summary.slice(0, 160)}${cause ? ` (${cause.replace(/\s+/g, " ").slice(0, 240)})` : ""} (the whole log: ${dir}/up.log in the workspace)`,
+      config,
+    });
   }
   const id = result.containerId;
-  const inspect = await run("docker", ["inspect", "-f", "{{.HostConfig.NetworkMode}} {{.Config.Image}}", id]);
+  const inspect = await run("docker", [
+    "inspect",
+    "-f",
+    "{{.HostConfig.NetworkMode}} {{.Config.Image}}",
+    id,
+  ]);
   const [network, image] = inspect.stdout.trim().split(" ");
   // The editor's server is a glibc program: it can run in the container only on glibc.
-  const glibc = (await run("docker", ["exec", id, "sh", "-c", "ls /lib/ld-linux-*.so.* /lib64/ld-linux-*.so.* 2>/dev/null | head -1"])).stdout.trim() !== "";
+  const glibc =
+    (
+      await run("docker", [
+        "exec",
+        id,
+        "sh",
+        "-c",
+        "ls /lib/ld-linux-*.so.* /lib64/ld-linux-*.so.* 2>/dev/null | head -1",
+      ])
+    ).stdout.trim() !== "";
   // A repository that keeps files in Git LFS, in a container without git-lfs: committing such
   // a file fails there ("git-lfs: command not found"). Said, not changed: the environment is
   // the project's.
   let usesLfs = false;
   try {
-    usesLfs = /filter=lfs/.test(fs.readFileSync(path.join(checkout.path, ".gitattributes"), "utf8"));
+    usesLfs = /filter=lfs/.test(
+      fs.readFileSync(path.join(checkout.path, ".gitattributes"), "utf8"),
+    );
   } catch {
     /* no .gitattributes */
   }
-  const lfsMissing = usesLfs && (await run("docker", ["exec", id, "sh", "-c", "git lfs version"])).code !== 0;
+  const lfsMissing =
+    usesLfs && (await run("docker", ["exec", id, "sh", "-c", "git lfs version"])).code !== 0;
   // Who commits from the editor and its terminals: the workspace's identity (init.ts: the
   // person's, from the Mac), unless the container's user has one of its own. Without it a
   // first `git commit` in the editor failed with "Please tell me who you are". A fallback of
   // desolate's own (`...desolate.invalid`) is replaced, as in the VM (init.ts).
-  const identity = [plan.author?.name ?? `${plan.domain}/${plan.workspace}`, plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`];
-  await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "sh", "-c", 'case "$(git config --global user.email 2>/dev/null)" in ""|*.desolate.invalid) git config --global user.name "$1" && git config --global user.email "$2" ;; esac', "_", ...identity]);
+  const identity = [
+    plan.author?.name ?? `${plan.domain}/${plan.workspace}`,
+    plan.author?.email ?? `${plan.workspace}@${plan.domain}.desolate.invalid`,
+  ];
+  await run("docker", [
+    "exec",
+    "-u",
+    result.remoteUser ?? "root",
+    id,
+    "sh",
+    "-c",
+    'case "$(git config --global user.email 2>/dev/null)" in ""|*.desolate.invalid) git config --global user.name "$1" && git config --global user.email "$2" ;; esac',
+    "_",
+    ...identity,
+  ]);
   // And the domain's repositories by their GitHub addresses, as in the VM (git-urls.ts).
-  for (const args of urlRules(plan.repos ?? plan.checkouts.map((c) => c.repo))) await run("docker", ["exec", "-u", result.remoteUser ?? "root", id, "git", "config", "--global", ...args]);
+  for (const args of urlRules(plan.repos ?? plan.checkouts.map((c) => c.repo)))
+    await run("docker", [
+      "exec",
+      "-u",
+      result.remoteUser ?? "root",
+      id,
+      "git",
+      "config",
+      "--global",
+      ...args,
+    ]);
   // A compose service's own network, reached from the VM (bridge.ts): its listeners, its
   // `service:port` forwards, and the editor's server when it runs there.
   const compose = spec.dockerComposeFile !== undefined;
@@ -455,22 +835,69 @@ const main = async () => {
   // user's login shell finds), worked out once, here: enter.sh then enters with `docker
   // exec` and this, in 20 ms rather than the CLI's 300 to 400 (measured on the M1), every
   // `desolate exec` and every editor terminal. Made again whenever the container is.
-  const probed = await run("devcontainer", ["exec", "--workspace-folder", checkout.path, "--config", config, "--override-config", override, "sh", "-c", "env -0 2>/dev/null || env"], { timeoutMs: 120_000 });
+  const probed = await run(
+    "devcontainer",
+    [
+      "exec",
+      "--workspace-folder",
+      checkout.path,
+      "--config",
+      config,
+      "--override-config",
+      override,
+      "sh",
+      "-c",
+      "env -0 2>/dev/null || env",
+    ],
+    { timeoutMs: 120_000 },
+  );
   const execEnv = path.join(dir, "exec-env.json");
   fs.rmSync(execEnv, { force: true });
   if (probed.code === 0) {
-    const entries = (probed.stdout.includes("\0") ? probed.stdout.split("\0") : probed.stdout.split("\n"))
-      .filter((entry) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(entry) && !/^(PWD|OLDPWD|SHLVL|_|TERM|HOSTNAME)=/.test(entry));
-    fs.writeFileSync(execEnv, JSON.stringify({ containerId: id, user: result.remoteUser ?? "root", env: entries }), { mode: 0o600 });
+    const entries = (
+      probed.stdout.includes("\0") ? probed.stdout.split("\0") : probed.stdout.split("\n")
+    ).filter(
+      (entry) =>
+        /^[A-Za-z_][A-Za-z0-9_]*=/.test(entry) &&
+        !/^(PWD|OLDPWD|SHLVL|_|TERM|HOSTNAME)=/.test(entry),
+    );
+    fs.writeFileSync(
+      execEnv,
+      JSON.stringify({ containerId: id, user: result.remoteUser ?? "root", env: entries }),
+      { mode: 0o600 },
+    );
   }
   const notes = [
-    ...(lfsMissing ? ["this repository keeps files in Git LFS and the container has no git-lfs, so committing them fails there; add the feature ghcr.io/devcontainers/features/git-lfs:1 to its devcontainer.json"] : []),
-    ...(compose && network !== "host" && !bridged ? [`its service's ports are not forwarded and the editor runs in the VM: ${glibc ? "desolate's port relay did not start in it" : "it is not a glibc container, which desolate's port relay and the editor need"}`] : []),
+    ...(lfsMissing
+      ? [
+          "this repository keeps files in Git LFS and the container has no git-lfs, so committing them fails there; add the feature ghcr.io/devcontainers/features/git-lfs:1 to its devcontainer.json",
+        ]
+      : []),
+    ...(compose && network !== "host" && !bridged
+      ? [
+          `its service's ports are not forwarded and the editor runs in the VM: ${glibc ? "desolate's port relay did not start in it" : "it is not a glibc container, which desolate's port relay and the editor need"}`,
+        ]
+      : []),
   ];
-  done({ state: "up", containerId: id, remoteUser: result.remoteUser ?? "root", folder: result.remoteWorkspaceFolder ?? checkout.path, config, override, checkout: checkout.path, hostNetwork: network === "host", glibc, compose, extensions: extensionsOf(spec),
-    image: (compose ? `service ${String(spec.service)}` : String(spec.image ?? image ?? "built")).slice(0, 120),
+  done({
+    state: "up",
+    containerId: id,
+    remoteUser: result.remoteUser ?? "root",
+    folder: result.remoteWorkspaceFolder ?? checkout.path,
+    config,
+    override,
+    checkout: checkout.path,
+    hostNetwork: network === "host",
+    glibc,
+    compose,
+    extensions: extensionsOf(spec),
+    image: (compose
+      ? `service ${String(spec.service)}`
+      : String(spec.image ?? image ?? "built")
+    ).slice(0, 120),
     ...(bridged ? { bridge: SVCNET, forwards: forwardsOf(spec) } : {}),
-    ...(notes.length ? { note: notes.join("; ") } : {}) });
+    ...(notes.length ? { note: notes.join("; ") } : {}),
+  });
 };
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) await main();

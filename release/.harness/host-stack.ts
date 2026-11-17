@@ -39,10 +39,14 @@ const rootctl = async (op: string, args: Record<string, unknown> = {}) => {
   return answers[op];
 };
 
-type VmAnswers = { list?: { name: string; status: string; labels: Record<string, string> }[]; exec?: { code: number; stdout: string; stderr?: string } };
+type VmAnswers = {
+  list?: { name: string; status: string; labels: Record<string, string> }[];
+  exec?: { code: number; stdout: string; stderr?: string };
+};
 /** What the backend answers from now on in this test: the VMs it lists, and what every command
  *  run in one prints (its argv is kept with the root's asks, as `exec`). */
-export const vmAnswers = (answers: VmAnswers) => fs.writeFileSync(file("vm"), JSON.stringify(answers));
+export const vmAnswers = (answers: VmAnswers) =>
+  fs.writeFileSync(file("vm"), JSON.stringify(answers));
 
 /** A backend with no VM behind it: it lists and runs what `vmAnswers` left, and anything else
  *  it is asked is an error that says what was asked. */
@@ -50,15 +54,27 @@ const noVm = () => {
   const answers = read<VmAnswers>("vm", {});
   const fake: Record<string, unknown> = {
     ...(answers.list ? { list: async () => answers.list } : {}),
-    ...(answers.exec ? { exec: async (vm: string, argv: string[]) => {
-      fs.writeFileSync(file("asked"), JSON.stringify([...rootAsked(), { op: "exec", args: { vm, argv } }]));
-      return { stderr: "", ...answers.exec };
-    } } : {}),
+    ...(answers.exec
+      ? {
+          exec: async (vm: string, argv: string[]) => {
+            fs.writeFileSync(
+              file("asked"),
+              JSON.stringify([...rootAsked(), { op: "exec", args: { vm, argv } }]),
+            );
+            return { stderr: "", ...answers.exec };
+          },
+        }
+      : {}),
   };
   return new Proxy(fake, {
-    get: (target, name) => (name in target ? target[name as string] : name === "then" ? undefined : () => {
-      throw new Error(`no VM in an in-source test (${String(name)})`);
-    }),
+    get: (target, name) =>
+      name in target
+        ? target[name as string]
+        : name === "then"
+          ? undefined
+          : () => {
+              throw new Error(`no VM in an in-source test (${String(name)})`);
+            },
   });
 };
 

@@ -19,38 +19,64 @@ import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vi
 /** `git config --global` argument lists, in order: each rule's old values, then the new ones. */
 export const urlRules = (repos: readonly string[]): string[][] =>
   repos.flatMap((repo) =>
-    ([["insteadOf", "desolate-mirror"], ["pushInsteadOf", "desolate-offer"]] as const).flatMap(([kind, helper]) => {
+    (
+      [
+        ["insteadOf", "desolate-mirror"],
+        ["pushInsteadOf", "desolate-offer"],
+      ] as const
+    ).flatMap(([kind, helper]) => {
       const key = `url.${helper}::${repo}.${kind}`;
-      return [["--unset-all", key], ...[`git@github.com:${repo}.git`, `ssh://git@github.com/${repo}.git`, `https://github.com/${repo}.git`].map((address) => ["--add", key, address])];
+      return [
+        ["--unset-all", key],
+        ...[
+          `git@github.com:${repo}.git`,
+          `ssh://git@github.com/${repo}.git`,
+          `https://github.com/${repo}.git`,
+        ].map((address) => ["--add", key, address]),
+      ];
     }),
   );
 
 declare namespace urlRules {
   /** each address of each repository, to the mirror for a fetch and to an offer for a push */
-  export type OneRepository = Table<typeof urlRules, [
-    [args: [repos: ["o/r"]], expected: [
-      ["--unset-all", "url.desolate-mirror::o/r.insteadOf"],
-      ["--add", "url.desolate-mirror::o/r.insteadOf", "git@github.com:o/r.git"],
-      ["--add", "url.desolate-mirror::o/r.insteadOf", "ssh://git@github.com/o/r.git"],
-      ["--add", "url.desolate-mirror::o/r.insteadOf", "https://github.com/o/r.git"],
-      ["--unset-all", "url.desolate-offer::o/r.pushInsteadOf"],
-      ["--add", "url.desolate-offer::o/r.pushInsteadOf", "git@github.com:o/r.git"],
-      ["--add", "url.desolate-offer::o/r.pushInsteadOf", "ssh://git@github.com/o/r.git"],
-      ["--add", "url.desolate-offer::o/r.pushInsteadOf", "https://github.com/o/r.git"],
-    ]],
-    [args: [repos: []], expected: []],
-  ]>;
+  export type OneRepository = Table<
+    typeof urlRules,
+    [
+      [
+        args: [repos: ["o/r"]],
+        expected: [
+          ["--unset-all", "url.desolate-mirror::o/r.insteadOf"],
+          ["--add", "url.desolate-mirror::o/r.insteadOf", "git@github.com:o/r.git"],
+          ["--add", "url.desolate-mirror::o/r.insteadOf", "ssh://git@github.com/o/r.git"],
+          ["--add", "url.desolate-mirror::o/r.insteadOf", "https://github.com/o/r.git"],
+          ["--unset-all", "url.desolate-offer::o/r.pushInsteadOf"],
+          ["--add", "url.desolate-offer::o/r.pushInsteadOf", "git@github.com:o/r.git"],
+          ["--add", "url.desolate-offer::o/r.pushInsteadOf", "ssh://git@github.com/o/r.git"],
+          ["--add", "url.desolate-offer::o/r.pushInsteadOf", "https://github.com/o/r.git"],
+        ],
+      ],
+      [args: [repos: []], expected: []],
+    ]
+  >;
   /** the key names the repository, so setting one repository's rules again (`--unset-all`
    *  first) leaves every other's alone */
   export type EachItsOwn = [
     Expect<Invoke<typeof urlRules, [repos: ["acme/app", "acme/lib"]]>["length"], "=", 16>,
-    Expect<Invoke<typeof urlRules, [repos: ["acme/app", "acme/lib"]]>[8], "=", ["--unset-all", "url.desolate-mirror::acme/lib.insteadOf"]>,
+    Expect<
+      Invoke<typeof urlRules, [repos: ["acme/app", "acme/lib"]]>[8],
+      "=",
+      ["--unset-all", "url.desolate-mirror::acme/lib.insteadOf"]
+    >,
   ];
   /** a name with dots is still one key: git takes the section and the variable at the first
    *  and the last dot, and everything between is the subsection */
   export type DotsInTheName = Expect<
     Invoke<typeof urlRules, [repos: ["acme/suede.nests"]]>[3],
     "=",
-    ["--add", "url.desolate-mirror::acme/suede.nests.insteadOf", "https://github.com/acme/suede.nests.git"]
+    [
+      "--add",
+      "url.desolate-mirror::acme/suede.nests.insteadOf",
+      "https://github.com/acme/suede.nests.git",
+    ]
   >;
 }

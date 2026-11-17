@@ -18,7 +18,10 @@ export const giveKey = (domain: string, workspace: string, key: string) => {
 };
 
 /** The request, as a workspace holding `key` signs it. */
-export const signed = (key: string, request: Signed): Signed & { mac: string } => ({ ...request, mac: sign(key, request) });
+export const signed = (key: string, request: Signed): Signed & { mac: string } => ({
+  ...request,
+  mac: sign(key, request),
+});
 
 /** The backend's answer to "does this VM exist?": every one does, or none does. */
 export const everyVmExists = (_vm: string) => true;

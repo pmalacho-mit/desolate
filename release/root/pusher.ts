@@ -50,33 +50,75 @@ import { run } from "../shared/run.ts";
 import { ask } from "./keyring-client.ts";
 import { GITCONFIG, KEYRING, PINNED_FORGE, PUSHER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Call,
+  Expect,
+  Given,
+  Invoke,
+  Table,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aBrokenPack, aPack, forgeSaying } from "../.harness/root-forge.ts";
 import type { emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
-const LIMIT = { header: 1024 * 1024, pack: 2 * 1024 ** 3, lfs: 5 * 1024 ** 3, objects: 2000, advertised: 64 * 1024 * 1024, idleMs: 60_000 } as const;
+const LIMIT = {
+  header: 1024 * 1024,
+  pack: 2 * 1024 ** 3,
+  lfs: 5 * 1024 ** 3,
+  objects: 2000,
+  advertised: 64 * 1024 * 1024,
+  idleMs: 60_000,
+} as const;
 const ZERO = "0".repeat(40);
 // One line per message, always starting with the time: no log line can read as an event.
-const log = (message: string) => console.error(`${new Date().toISOString()} pusher: ${message.replace(/[\r\n]+/g, " ")}`);
+const log = (message: string) =>
+  console.error(`${new Date().toISOString()} pusher: ${message.replace(/[\r\n]+/g, " ")}`);
 /** What happened, for `desolate events` on the host (host/events.ts): one line on stdout,
  *  which root's supervisor keeps in a log of root's. Made of the keyring's record of the
  *  approval and the forge's answer, nothing the root's user said. */
 let current: { repo: string; ref: string; commit: string; onto: string | null } | null = null;
 const emit = (result: Record<string, unknown>) => {
   if (!current) return;
-  const base = { at: new Date().toISOString(), repo: current.repo, branch: current.ref, commit: current.commit, onto: current.onto };
-  const line = result.ok === true ? { type: "pushed", ...base } : { type: result.uncertain === true ? "push-uncertain" : "push-failed", ...base, error: String(result.error ?? "").slice(0, 300) };
+  const base = {
+    at: new Date().toISOString(),
+    repo: current.repo,
+    branch: current.ref,
+    commit: current.commit,
+    onto: current.onto,
+  };
+  const line =
+    result.ok === true
+      ? { type: "pushed", ...base }
+      : {
+          type: result.uncertain === true ? "push-uncertain" : "push-failed",
+          ...base,
+          error: String(result.error ?? "").slice(0, 300),
+        };
   process.stdout.write(`EVENT ${JSON.stringify(line)}\n`);
 };
 
-type Approved = { id: string; repo: string; ref: string; commit: string; onto: string | null; pubkey: string };
+type Approved = {
+  id: string;
+  repo: string;
+  ref: string;
+  commit: string;
+  onto: string | null;
+  pubkey: string;
+};
 
 /** The forge's address, from root's own copy (the host writes it, as root): the root's user
  *  cannot aim a push elsewhere. */
 export const forgeAddress = (): { user: string; host: string; port: number } => {
-  const f = JSON.parse(fs.readFileSync(PINNED_FORGE.config, "utf8")) as { ssh?: { user?: string; host?: string; port?: number } };
+  const f = JSON.parse(fs.readFileSync(PINNED_FORGE.config, "utf8")) as {
+    ssh?: { user?: string; host?: string; port?: number };
+  };
   const ssh = f.ssh ?? {};
-  if (!/^[a-z_][a-z0-9_-]*$/.test(ssh.user ?? "") || !/^[A-Za-z0-9.-]+$/.test(ssh.host ?? "") || !Number.isInteger(ssh.port)) throw new Error("the forge's address is not well formed");
+  if (
+    !/^[a-z_][a-z0-9_-]*$/.test(ssh.user ?? "") ||
+    !/^[A-Za-z0-9.-]+$/.test(ssh.host ?? "") ||
+    !Number.isInteger(ssh.port)
+  )
+    throw new Error("the forge's address is not well formed");
   return ssh as { user: string; host: string; port: number };
 };
 
@@ -84,24 +126,95 @@ declare namespace forgeAddress {
   type Fresh = Invoke<typeof emptyRoot>;
   /** where a push goes is root's copy of the forge (forge-pin.ts), read as three checked words */
   export type Reads = Given<
-    [Fresh, Invoke<typeof writeJsonIn, [where: "sys", name: "forge.json", value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 } }]>],
+    [
+      Fresh,
+      Invoke<
+        typeof writeJsonIn,
+        [
+          where: "sys",
+          name: "forge.json",
+          value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 } },
+        ]
+      >,
+    ],
     Expect<Invoke<typeof forgeAddress>, "=", { user: "git"; host: "github.com"; port: 22 }>
   >;
   /** an address that would be read as an ssh option, or carry a second word, is not one */
   export type Refuses = [
-    Given<[Fresh, Invoke<typeof writeJsonIn, [where: "sys", name: "forge.json", value: { ssh: { user: "-oProxyCommand=sh"; host: "github.com"; port: 22 } }]>], Throws<Invoke<typeof forgeAddress>, "the forge's address is not well formed">>,
-    Given<[Fresh, Invoke<typeof writeJsonIn, [where: "sys", name: "forge.json", value: { ssh: { user: "git"; host: "github.com evil.example"; port: 22 } }]>], Throws<Invoke<typeof forgeAddress>, "the forge's address is not well formed">>,
-    Given<[Fresh, Invoke<typeof writeJsonIn, [where: "sys", name: "forge.json", value: { ssh: { user: "git"; host: "github.com"; port: "22" } }]>], Throws<Invoke<typeof forgeAddress>, "the forge's address is not well formed">>,
+    Given<
+      [
+        Fresh,
+        Invoke<
+          typeof writeJsonIn,
+          [
+            where: "sys",
+            name: "forge.json",
+            value: { ssh: { user: "-oProxyCommand=sh"; host: "github.com"; port: 22 } },
+          ]
+        >,
+      ],
+      Throws<Invoke<typeof forgeAddress>, "the forge's address is not well formed">
+    >,
+    Given<
+      [
+        Fresh,
+        Invoke<
+          typeof writeJsonIn,
+          [
+            where: "sys",
+            name: "forge.json",
+            value: { ssh: { user: "git"; host: "github.com evil.example"; port: 22 } },
+          ]
+        >,
+      ],
+      Throws<Invoke<typeof forgeAddress>, "the forge's address is not well formed">
+    >,
+    Given<
+      [
+        Fresh,
+        Invoke<
+          typeof writeJsonIn,
+          [
+            where: "sys",
+            name: "forge.json",
+            value: { ssh: { user: "git"; host: "github.com"; port: "22" } },
+          ]
+        >,
+      ],
+      Throws<Invoke<typeof forgeAddress>, "the forge's address is not well formed">
+    >,
   ];
 }
 
 const sshOptions = (identity: string) => [
-  "-F", "/dev/null", "-o", `IdentityAgent=${KEYRING.writeAgent}`, "-o", `IdentityFile=${identity}`, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-  "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${PINNED_FORGE.knownHosts}`, "-o", "ConnectTimeout=20", "-o", "ServerAliveInterval=15",
+  "-F",
+  "/dev/null",
+  "-o",
+  `IdentityAgent=${KEYRING.writeAgent}`,
+  "-o",
+  `IdentityFile=${identity}`,
+  "-o",
+  "IdentitiesOnly=yes",
+  "-o",
+  "BatchMode=yes",
+  "-o",
+  "StrictHostKeyChecking=yes",
+  "-o",
+  `UserKnownHostsFile=${PINNED_FORGE.knownHosts}`,
+  "-o",
+  "ConnectTimeout=20",
+  "-o",
+  "ServerAliveInterval=15",
 ];
 const env = (extra: Record<string, string> = {}) => ({
-  PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: PUSHER.home, LANG: "C.UTF-8",
-  GIT_CONFIG_GLOBAL: GITCONFIG, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1", ...extra,
+  PATH: process.env.PATH ?? "/usr/bin:/bin",
+  HOME: PUSHER.home,
+  LANG: "C.UTF-8",
+  GIT_CONFIG_GLOBAL: GITCONFIG,
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_TERMINAL_PROMPT: "0",
+  GIT_NO_REPLACE_OBJECTS: "1",
+  ...extra,
 });
 
 // ---------------------------------------------------------------- git's pkt-line, by hand
@@ -115,11 +228,22 @@ export const FLUSH = Buffer.from("0000");
 
 declare namespace pkt {
   /** four hex digits of length, the four included, then the text */
-  export type Frames = Expect<Call<Invoke<typeof pkt, [text: "abc\n"]>, "toString">, "=", "0008abc\n">;
+  export type Frames = Expect<
+    Call<Invoke<typeof pkt, [text: "abc\n"]>, "toString">,
+    "=",
+    "0008abc\n"
+  >;
   /** the longest line git takes is framed */
-  export type Fits = Expect<Invoke<typeof pkt, [text: Call<"x", "repeat", [count: 65516]>]>["length"], "=", 65520>;
+  export type Fits = Expect<
+    Invoke<typeof pkt, [text: Call<"x", "repeat", [count: 65516]>]>["length"],
+    "=",
+    65520
+  >;
   /** one byte more is refused, never sent */
-  export type TooLong = Throws<Invoke<typeof pkt, [text: Call<"x", "repeat", [count: 65517]>]>, "a pkt-line is at most 65516 bytes">;
+  export type TooLong = Throws<
+    Invoke<typeof pkt, [text: Call<"x", "repeat", [count: 65517]>]>,
+    "a pkt-line is at most 65516 bytes"
+  >;
 }
 
 /** pkt-lines from a stream: `next()` gives a line's text, or null for a flush. */
@@ -177,7 +301,8 @@ export const advertised = (lines: string[], branch: string): string => {
   for (const [index, raw] of lines.entries()) {
     const line = (index === 0 ? raw.split("\0")[0]! : raw).replace(/\n$/, "");
     const [id, name, extra] = line.split(" ");
-    if (!/^[0-9a-f]{40}$/.test(id ?? "") || !name || extra !== undefined) throw new Error("the forge's ref list is not one desolate reads");
+    if (!/^[0-9a-f]{40}$/.test(id ?? "") || !name || extra !== undefined)
+      throw new Error("the forge's ref list is not one desolate reads");
     if (name === want) return id!;
   }
   return ZERO;
@@ -185,39 +310,106 @@ export const advertised = (lines: string[], branch: string): string => {
 
 declare namespace advertised {
   // The forge's ref list, as receive-pack sends it: the first line carries its capabilities.
-  type List = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta\n", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/feature\n"];
+  type List = [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta\n",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/feature\n",
+  ];
   /** what the branch is on the forge now, or the all-zero id when it has no such branch */
-  export type Reads = Table<typeof advertised, [
-    [args: [lines: List, branch: "main"], expected: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
-    [args: [lines: List, branch: "feature"], expected: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],
-    [args: [lines: List, branch: "other"], expected: "0000000000000000000000000000000000000000"],
-    [args: [lines: ["0000000000000000000000000000000000000000 capabilities^{}\0report-status ofs-delta\n"], branch: "main"], expected: "0000000000000000000000000000000000000000"],
-  ]>;
+  export type Reads = Table<
+    typeof advertised,
+    [
+      [args: [lines: List, branch: "main"], expected: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+      [
+        args: [lines: List, branch: "feature"],
+        expected: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      ],
+      [args: [lines: List, branch: "other"], expected: "0000000000000000000000000000000000000000"],
+      [
+        args: [
+          lines: [
+            "0000000000000000000000000000000000000000 capabilities^{}\0report-status ofs-delta\n",
+          ],
+          branch: "main",
+        ],
+        expected: "0000000000000000000000000000000000000000",
+      ],
+    ]
+  >;
   /** a list that is not one git sends is not read at all: a line with a third word, or no id */
   export type Strict = [
-    Throws<Invoke<typeof advertised, [lines: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main extra\n"], branch: "main"]>, "the forge's ref list is not one desolate reads">,
-    Throws<Invoke<typeof advertised, [lines: ["main refs/heads/main\n"], branch: "main"]>, "the forge's ref list is not one desolate reads">,
+    Throws<
+      Invoke<
+        typeof advertised,
+        [
+          lines: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main extra\n"],
+          branch: "main",
+        ]
+      >,
+      "the forge's ref list is not one desolate reads"
+    >,
+    Throws<
+      Invoke<typeof advertised, [lines: ["main refs/heads/main\n"], branch: "main"]>,
+      "the forge's ref list is not one desolate reads"
+    >,
   ];
 }
 
 /** The forge's report: did it take the one update asked for? */
-export const reported = (lines: string[], ref: string): { ok: true } | { ok: false; error: string } => {
+export const reported = (
+  lines: string[],
+  ref: string,
+): { ok: true } | { ok: false; error: string } => {
   const text = lines.map((line) => line.replace(/\n$/, ""));
-  if (text[0] !== "unpack ok") return { ok: false, error: `the forge could not unpack what was sent (${(text[0] ?? "no report").slice(0, 200)})` };
+  if (text[0] !== "unpack ok")
+    return {
+      ok: false,
+      error: `the forge could not unpack what was sent (${(text[0] ?? "no report").slice(0, 200)})`,
+    };
   if (text.slice(1).includes(`ok ${ref}`)) return { ok: true };
   const ng = text.find((line) => line.startsWith(`ng ${ref} `));
-  return { ok: false, error: `the forge refused the update: ${ng ? ng.slice(ref.length + 4, ref.length + 204) : "no answer for the branch"}` };
+  return {
+    ok: false,
+    error: `the forge refused the update: ${ng ? ng.slice(ref.length + 4, ref.length + 204) : "no answer for the branch"}`,
+  };
 };
 
 declare namespace reported {
   /** the forge unpacked what was sent, and took the one update asked for */
-  export type Took = Expect<Invoke<typeof reported, [lines: ["unpack ok\n", "ok refs/heads/main\n"], ref: "refs/heads/main"]>, "=", { ok: true }>;
+  export type Took = Expect<
+    Invoke<
+      typeof reported,
+      [lines: ["unpack ok\n", "ok refs/heads/main\n"], ref: "refs/heads/main"]
+    >,
+    "=",
+    { ok: true }
+  >;
   /** anything else is not that: an ok for another ref, no unpack line, the forge's refusal */
-  export type DidNot = Table<typeof reported, [
-    [args: [lines: ["unpack ok\n", "ok refs/heads/other\n"], ref: "refs/heads/main"], expected: { ok: false; error: "the forge refused the update: no answer for the branch" }],
-    [args: [lines: ["ok refs/heads/main\n"], ref: "refs/heads/main"], expected: { ok: false; error: "the forge could not unpack what was sent (ok refs/heads/main)" }],
-    [args: [lines: ["unpack ok\n", "ng refs/heads/main protected branch hook declined\n"], ref: "refs/heads/main"], expected: { ok: false; error: "the forge refused the update: protected branch hook declined" }],
-  ]>;
+  export type DidNot = Table<
+    typeof reported,
+    [
+      [
+        args: [lines: ["unpack ok\n", "ok refs/heads/other\n"], ref: "refs/heads/main"],
+        expected: { ok: false; error: "the forge refused the update: no answer for the branch" },
+      ],
+      [
+        args: [lines: ["ok refs/heads/main\n"], ref: "refs/heads/main"],
+        expected: {
+          ok: false;
+          error: "the forge could not unpack what was sent (ok refs/heads/main)";
+        },
+      ],
+      [
+        args: [
+          lines: ["unpack ok\n", "ng refs/heads/main protected branch hook declined\n"],
+          ref: "refs/heads/main",
+        ],
+        expected: {
+          ok: false;
+          error: "the forge refused the update: protected branch hook declined";
+        },
+      ],
+    ]
+  >;
 }
 
 /** The whole conversation with the forge's receive-pack: read its ref list; if the branch is
@@ -225,7 +417,9 @@ declare namespace reported {
  *  let `sendPack` put the pack on the wire, and read the forge's report. */
 export const updateRef = async (
   forge: { stdin: Writable; stdout: Readable },
-  branch: string, onto: string | null, commit: string,
+  branch: string,
+  onto: string | null,
+  commit: string,
   sendPack: (sink: Writable) => Promise<void>,
 ): Promise<{ ok: true } | { ok: false; moved: boolean; error: string }> => {
   const from = onto ?? ZERO;
@@ -233,7 +427,8 @@ export const updateRef = async (
   const reader = pktReader(forge.stdout, LIMIT.advertised);
   const refs: string[] = [];
   for (let line = await reader.next(); line !== null; line = await reader.next()) refs.push(line);
-  if (refs.length === 0) throw new Error("the forge listed no refs, not even an empty repository's");
+  if (refs.length === 0)
+    throw new Error("the forge listed no refs, not even an empty repository's");
   const now = advertised(refs, branch);
   // Already there (a push that landed, asked again): nothing to do, and it is done.
   if (now === commit) {
@@ -242,26 +437,40 @@ export const updateRef = async (
   }
   if (now !== from) {
     await write(forge.stdin, FLUSH).catch(() => {});
-    return { ok: false, moved: true, error: `the remote's ${branch} is ${now === ZERO ? "not there" : `at ${now.slice(0, 12)}`}, not ${onto ? `at the ${onto.slice(0, 12)}` : "absent, as"} the approval names: nothing was pushed` };
+    return {
+      ok: false,
+      moved: true,
+      error: `the remote's ${branch} is ${now === ZERO ? "not there" : `at ${now.slice(0, 12)}`}, not ${onto ? `at the ${onto.slice(0, 12)}` : "absent, as"} the approval names: nothing was pushed`,
+    };
   }
   // The pack is made with offset deltas (send.ts); a forge that does not take them is told
   // nothing rather than sent what it cannot read.
   const caps = (refs[0]!.split("\0")[1] ?? "").trim().split(" ");
-  if (!caps.includes("report-status") || !caps.includes("ofs-delta")) throw new Error(`the forge does not offer what desolate's push needs (report-status, ofs-delta): ${caps.join(" ").slice(0, 200)}`);
-  await write(forge.stdin, Buffer.concat([pkt(`${from} ${commit} ${ref}\0report-status agent=desolate-pusher\n`), FLUSH]));
+  if (!caps.includes("report-status") || !caps.includes("ofs-delta"))
+    throw new Error(
+      `the forge does not offer what desolate's push needs (report-status, ofs-delta): ${caps.join(" ").slice(0, 200)}`,
+    );
+  await write(
+    forge.stdin,
+    Buffer.concat([pkt(`${from} ${commit} ${ref}\0report-status agent=desolate-pusher\n`), FLUSH]),
+  );
   // From here the forge may take the update as soon as the pack is whole, whatever happens
   // after: its report is read while the pack goes, and a failure past this point says that
   // the push may have landed, never that nothing was pushed.
   const report = (async () => {
     const lines: string[] = [];
-    for (let line = await reader.next(); line !== null; line = await reader.next()) lines.push(line);
+    for (let line = await reader.next(); line !== null; line = await reader.next())
+      lines.push(line);
     return reported(lines, ref);
   })();
   report.catch(() => {});
   try {
     await sendPack(forge.stdin);
   } catch (error) {
-    const said = await Promise.race([report, new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))]).catch(() => null);
+    const said = await Promise.race([
+      report,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+    ]).catch(() => null);
     if (said?.ok) return said;
     throw new Uncertain(`sending the pack failed (${(error as Error).message})`);
   }
@@ -271,7 +480,13 @@ export const updateRef = async (
   } catch (error) {
     throw new Uncertain(`the forge's report did not arrive (${(error as Error).message})`);
   }
-  return result.ok ? result : { ok: false, moved: /non-fast-forward|fetch first|stale|lock/.test(result.error), error: result.error };
+  return result.ok
+    ? result
+    : {
+        ok: false,
+        moved: /non-fast-forward|fetch first|stale|lock/.test(result.error),
+        error: result.error,
+      };
 };
 
 /** A failure after the ref update was asked for: the forge may have applied it. */
@@ -279,60 +494,216 @@ export class Uncertain extends Error {}
 
 declare namespace updateRef {
   // A forge whose main is at aaaa..., which takes the update and says so.
-  type Takes = Invoke<typeof forgeSaying, [refs: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta delete-refs\n"], report: ["unpack ok\n", "ok refs/heads/main\n"]]>;
+  type Takes = Invoke<
+    typeof forgeSaying,
+    [
+      refs: [
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta delete-refs\n",
+      ],
+      report: ["unpack ok\n", "ok refs/heads/main\n"],
+    ]
+  >;
   /** the branch is where the approval says: one update is asked for, from exactly it to the
    *  approved commit, and the pack follows as it came */
   export type Updates = Given<
     Takes,
     [
-      Expect<Invoke<typeof updateRef, [forge: Takes, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>, "=", { ok: true }>,
-      Expect<Call<Takes, "asked">, "=", "008aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main\0report-status agent=desolate-pusher\n0000PACK">,
+      Expect<
+        Invoke<
+          typeof updateRef,
+          [
+            forge: Takes,
+            branch: "main",
+            onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            sendPack: typeof aPack,
+          ]
+        >,
+        "=",
+        { ok: true }
+      >,
+      Expect<
+        Call<Takes, "asked">,
+        "=",
+        "008aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main\0report-status agent=desolate-pusher\n0000PACK"
+      >,
     ]
   >;
   /** a new branch moves from the all-zero id, on an empty repository too */
   export type NewBranch = Expect<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: ["0000000000000000000000000000000000000000 capabilities^{}\0report-status ofs-delta\n"], report: ["unpack ok\n", "ok refs/heads/feature\n"]]>, branch: "feature", onto: null, commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>,
-    "=", { ok: true }
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<
+          typeof forgeSaying,
+          [
+            refs: [
+              "0000000000000000000000000000000000000000 capabilities^{}\0report-status ofs-delta\n",
+            ],
+            report: ["unpack ok\n", "ok refs/heads/feature\n"],
+          ]
+        >,
+        branch: "feature",
+        onto: null,
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aPack,
+      ]
+    >,
+    "=",
+    { ok: true }
   >;
   // A forge whose main has moved on to cccc... since the approval.
-  type Moved = Invoke<typeof forgeSaying, [refs: ["cccccccccccccccccccccccccccccccccccccccc refs/heads/main\0report-status ofs-delta\n"]]>;
+  type Moved = Invoke<
+    typeof forgeSaying,
+    [refs: ["cccccccccccccccccccccccccccccccccccccccc refs/heads/main\0report-status ofs-delta\n"]]
+  >;
   /** the remote moved since the person approved: nothing is asked for, no pack is sent */
   export type RemoteMoved = Given<
     Moved,
     [
-      Expect<Invoke<typeof updateRef, [forge: Moved, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>, "=", { ok: false; moved: true; error: "the remote's main is at cccccccccccc, not at the aaaaaaaaaaaa the approval names: nothing was pushed" }>,
+      Expect<
+        Invoke<
+          typeof updateRef,
+          [
+            forge: Moved,
+            branch: "main",
+            onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            sendPack: typeof aPack,
+          ]
+        >,
+        "=",
+        {
+          ok: false;
+          moved: true;
+          error: "the remote's main is at cccccccccccc, not at the aaaaaaaaaaaa the approval names: nothing was pushed";
+        }
+      >,
       Expect<Call<Moved, "asked">, "=", "0000">,
     ]
   >;
   /** a branch the approval names as new that the remote has by now is not overwritten */
   export type NotNewAnyMore = Expect<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: ["cccccccccccccccccccccccccccccccccccccccc refs/heads/feature\0report-status ofs-delta\n"]]>, branch: "feature", onto: null, commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>,
-    "=", { ok: false; moved: true; error: "the remote's feature is at cccccccccccc, not absent, as the approval names: nothing was pushed" }
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<
+          typeof forgeSaying,
+          [
+            refs: [
+              "cccccccccccccccccccccccccccccccccccccccc refs/heads/feature\0report-status ofs-delta\n",
+            ],
+          ]
+        >,
+        branch: "feature",
+        onto: null,
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aPack,
+      ]
+    >,
+    "=",
+    {
+      ok: false;
+      moved: true;
+      error: "the remote's feature is at cccccccccccc, not absent, as the approval names: nothing was pushed";
+    }
   >;
   /** already at the approved commit (a push that landed, asked again): done, nothing sent */
   export type AlreadyThere = Expect<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: ["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main\0report-status ofs-delta\n"]]>, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>,
-    "=", { ok: true }
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<
+          typeof forgeSaying,
+          [
+            refs: [
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb refs/heads/main\0report-status ofs-delta\n",
+            ],
+          ]
+        >,
+        branch: "main",
+        onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aPack,
+      ]
+    >,
+    "=",
+    { ok: true }
   >;
   /** the forge's refusal is passed on, and one that says the branch moved says so */
   export type Refused = Expect<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta\n"], report: ["unpack ok\n", "ng refs/heads/main non-fast-forward\n"]]>, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>,
-    "=", { ok: false; moved: true; error: "the forge refused the update: non-fast-forward" }
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<
+          typeof forgeSaying,
+          [
+            refs: [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta\n",
+            ],
+            report: ["unpack ok\n", "ng refs/heads/main non-fast-forward\n"],
+          ]
+        >,
+        branch: "main",
+        onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aPack,
+      ]
+    >,
+    "=",
+    { ok: false; moved: true; error: "the forge refused the update: non-fast-forward" }
   >;
   /** a pack that broke after the update was asked for may still have landed: that is said,
    *  never "nothing was pushed" */
   export type MayHaveLanded = Throws<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta\n"]]>, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aBrokenPack]>,
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<
+          typeof forgeSaying,
+          [
+            refs: [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status ofs-delta\n",
+            ],
+          ]
+        >,
+        branch: "main",
+        onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aBrokenPack,
+      ]
+    >,
     Uncertain
   >;
   /** a forge that cannot take what the pusher sends is told nothing */
   export type NoOfsDelta = Throws<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status\n"]]>, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>,
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<
+          typeof forgeSaying,
+          [refs: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa refs/heads/main\0report-status\n"]]
+        >,
+        branch: "main",
+        onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aPack,
+      ]
+    >,
     "the forge does not offer what desolate's push needs (report-status, ofs-delta): report-status"
   >;
   /** and one that does not speak git's protocol is not read past its first four bytes */
   export type NotGit = Throws<
-    Invoke<typeof updateRef, [forge: Invoke<typeof forgeSaying, [refs: [], report: [], raw: "HTTP/1.1 200 OK\r\n"]>, branch: "main", onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", sendPack: typeof aPack]>,
+    Invoke<
+      typeof updateRef,
+      [
+        forge: Invoke<typeof forgeSaying, [refs: [], report: [], raw: "HTTP/1.1 200 OK\r\n"]>,
+        branch: "main",
+        onto: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sendPack: typeof aPack,
+      ]
+    >,
     "the forge did not speak git's protocol"
   >;
 }
@@ -340,7 +711,12 @@ declare namespace updateRef {
 // ---------------------------------------------------------------- what arrives
 /** Exactly `count` bytes from a socket, each chunk to `sink` (a file, the forge), hashed on
  *  the way. Gives up when nothing arrives for a minute. */
-const receive = (socket: Socket, first: Buffer, count: number, sink: (chunk: Buffer) => Promise<void> | void): Promise<{ rest: Buffer; sha256: string }> =>
+const receive = (
+  socket: Socket,
+  first: Buffer,
+  count: number,
+  sink: (chunk: Buffer) => Promise<void> | void,
+): Promise<{ rest: Buffer; sha256: string }> =>
   new Promise((resolve, reject) => {
     const hash = createHash("sha256");
     let left = count;
@@ -397,7 +773,8 @@ const receive = (socket: Socket, first: Buffer, count: number, sink: (chunk: Buf
 
 const write = (stream: Writable, chunk: Buffer) =>
   new Promise<void>((resolve, reject) => {
-    if (stream.destroyed || stream.writableEnded) return reject(new Error("the forge stopped listening"));
+    if (stream.destroyed || stream.writableEnded)
+      return reject(new Error("the forge stopped listening"));
     if (stream.write(chunk)) return resolve();
     const onError = (error: Error) => reject(error);
     stream.once("error", onError);
@@ -408,21 +785,53 @@ const write = (stream: Writable, chunk: Buffer) =>
   });
 
 // ---------------------------------------------------------------- one push
-const lfsPath = (dir: string, oid: string) => path.join(dir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
+const lfsPath = (dir: string, oid: string) =>
+  path.join(dir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
 
-const push = async (socket: Socket, request: Record<string, unknown>, rest: Buffer): Promise<Record<string, unknown>> => {
+const push = async (
+  socket: Socket,
+  request: Record<string, unknown>,
+  rest: Buffer,
+): Promise<Record<string, unknown>> => {
   const id = String(request.approval ?? "");
   const reply = await ask(KEYRING.pusher, { op: "approval", id });
-  if (reply.ok !== true) return { ok: false, error: `the keyring holds no live approval ${id.slice(0, 40)}: nothing was pushed` };
+  if (reply.ok !== true)
+    return {
+      ok: false,
+      error: `the keyring holds no live approval ${id.slice(0, 40)}: nothing was pushed`,
+    };
   const approved = reply.approval as Approved;
-  current = { repo: approved.repo, ref: approved.ref, commit: approved.commit, onto: approved.onto };
+  current = {
+    repo: approved.repo,
+    ref: approved.ref,
+    commit: approved.commit,
+    onto: approved.onto,
+  };
   const repo = parseRepo(approved.repo);
-  if (!repo || !isBranch(approved.ref) || !isCommit(approved.commit) || (approved.onto !== null && !isCommit(approved.onto)) || typeof approved.pubkey !== "string")
+  if (
+    !repo ||
+    !isBranch(approved.ref) ||
+    !isCommit(approved.commit) ||
+    (approved.onto !== null && !isCommit(approved.onto)) ||
+    typeof approved.pubkey !== "string"
+  )
     return { ok: false, error: "the keyring's approval is not well formed" };
   const packSize = Number(request.pack);
-  const lfs = Array.isArray(request.lfs) ? (request.lfs as { oid?: unknown; size?: unknown }[]) : [];
-  if (!Number.isInteger(packSize) || packSize < 32 || packSize > LIMIT.pack) return { ok: false, error: "a pack is a whole number of bytes, at most 2 GiB" };
-  if (lfs.length > LIMIT.objects || lfs.some((o) => !isLfsOid(o.oid) || !Number.isInteger(o.size) || (o.size as number) < 0 || (o.size as number) > LIMIT.lfs))
+  const lfs = Array.isArray(request.lfs)
+    ? (request.lfs as { oid?: unknown; size?: unknown }[])
+    : [];
+  if (!Number.isInteger(packSize) || packSize < 32 || packSize > LIMIT.pack)
+    return { ok: false, error: "a pack is a whole number of bytes, at most 2 GiB" };
+  if (
+    lfs.length > LIMIT.objects ||
+    lfs.some(
+      (o) =>
+        !isLfsOid(o.oid) ||
+        !Number.isInteger(o.size) ||
+        (o.size as number) < 0 ||
+        (o.size as number) > LIMIT.lfs,
+    )
+  )
     return { ok: false, error: "LFS objects are named by sha256, with a size of at most 5 GiB" };
   const onto = approved.onto ?? ZERO;
   const forge = forgeAddress();
@@ -436,40 +845,103 @@ const push = async (socket: Socket, request: Record<string, unknown>, rest: Buff
     if (lfs.length > 0) {
       const dir = path.join(work, "lfs.git");
       const made = await run("git", ["init", "--bare", "--quiet", dir], { env: env() });
-      if (made.code !== 0) return { ok: false, error: `cannot make the pusher's LFS repository: ${made.stderr.trim()}` };
+      if (made.code !== 0)
+        return {
+          ok: false,
+          error: `cannot make the pusher's LFS repository: ${made.stderr.trim()}`,
+        };
       fs.rmSync(path.join(dir, "hooks"), { recursive: true, force: true });
       for (const object of lfs) {
         const file = lfsPath(dir, object.oid as string);
         fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-        const out = fs.openSync(`${file}.part`, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+        const out = fs.openSync(
+          `${file}.part`,
+          fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+          0o600,
+        );
         let got: { rest: Buffer; sha256: string };
         try {
-          got = await receive(socket, left, object.size as number, (chunk) => void fs.writeSync(out, chunk));
+          got = await receive(
+            socket,
+            left,
+            object.size as number,
+            (chunk) => void fs.writeSync(out, chunk),
+          );
         } finally {
           fs.closeSync(out);
         }
         left = got.rest;
-        if (got.sha256 !== object.oid) return { ok: false, error: `an LFS object did not hash to its name (${String(object.oid).slice(0, 12)}): nothing was pushed` };
+        if (got.sha256 !== object.oid)
+          return {
+            ok: false,
+            error: `an LFS object did not hash to its name (${String(object.oid).slice(0, 12)}): nothing was pushed`,
+          };
         fs.renameSync(`${file}.part`, file);
       }
       const url = `ssh://${forge.user}@${forge.host}:${forge.port}/${repo.owner}/${repo.name}.git`;
       log(`${approved.repo}: uploading ${lfs.length} LFS object(s)`);
-      const up = await run("git", ["--git-dir", dir, "-c", `safe.directory=${dir}`, "-c", "core.hooksPath=/dev/null", "-c", `remote.origin.url=${url}`, "-c", `lfs.url=${url}`, "-c", `lfs.pushurl=${url}`, "-c", "lfs.locksverify=false",
-        "lfs", "push", "origin", "--object-id", ...lfs.map((o) => o.oid as string)], { env: env({ GIT_DIR: dir, GIT_SSH_COMMAND: ["ssh", ...sshOptions(identity)].join(" ") }), timeoutMs: 1_800_000 });
-      if (up.code !== 0) return { ok: false, error: `the LFS objects did not upload, so the commit was not pushed: ${up.stderr.trim().split("\n").slice(-2).join(" | ")}` };
+      const up = await run(
+        "git",
+        [
+          "--git-dir",
+          dir,
+          "-c",
+          `safe.directory=${dir}`,
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          `remote.origin.url=${url}`,
+          "-c",
+          `lfs.url=${url}`,
+          "-c",
+          `lfs.pushurl=${url}`,
+          "-c",
+          "lfs.locksverify=false",
+          "lfs",
+          "push",
+          "origin",
+          "--object-id",
+          ...lfs.map((o) => o.oid as string),
+        ],
+        {
+          env: env({ GIT_DIR: dir, GIT_SSH_COMMAND: ["ssh", ...sshOptions(identity)].join(" ") }),
+          timeoutMs: 1_800_000,
+        },
+      );
+      if (up.code !== 0)
+        return {
+          ok: false,
+          error: `the LFS objects did not upload, so the commit was not pushed: ${up.stderr.trim().split("\n").slice(-2).join(" | ")}`,
+        };
     }
 
     // The one ref update, and the pack as it came.
-    const ssh = spawn("ssh", [...sshOptions(identity), "-p", String(forge.port), `${forge.user}@${forge.host}`, `git-receive-pack '${repo.owner}/${repo.name}.git'`], { env: env(), stdio: ["pipe", "pipe", "pipe"] });
+    const ssh = spawn(
+      "ssh",
+      [
+        ...sshOptions(identity),
+        "-p",
+        String(forge.port),
+        `${forge.user}@${forge.host}`,
+        `git-receive-pack '${repo.owner}/${repo.name}.git'`,
+      ],
+      { env: env(), stdio: ["pipe", "pipe", "pipe"] },
+    );
     let stderr = "";
     ssh.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-4000)));
     ssh.stdin.on("error", () => {});
     const exited = new Promise<number>((resolve) => ssh.on("close", (code) => resolve(code ?? 1)));
     const timer = setTimeout(() => ssh.kill("SIGKILL"), 1_800_000);
     try {
-      const result = await updateRef(ssh, approved.ref, approved.onto, approved.commit, async (sink) => {
-        left = (await receive(socket, left, packSize, (chunk) => write(sink, chunk))).rest;
-      });
+      const result = await updateRef(
+        ssh,
+        approved.ref,
+        approved.onto,
+        approved.commit,
+        async (sink) => {
+          left = (await receive(socket, left, packSize, (chunk) => write(sink, chunk))).rest;
+        },
+      );
       ssh.stdin.end();
       await exited;
       if (!result.ok) return { ok: false, moved: result.moved, error: result.error };
@@ -477,8 +949,15 @@ const push = async (socket: Socket, request: Record<string, unknown>, rest: Buff
       return { ok: true, repo: approved.repo, branch: approved.ref, commit: approved.commit };
     } catch (error) {
       ssh.kill("SIGKILL");
-      const said = stderr.trim() ? ` (ssh: ${stderr.trim().split("\n").slice(-2).join(" | ").slice(0, 300)})` : "";
-      if (error instanceof Uncertain) return { ok: false, uncertain: true, error: `${error.message}${said}: the push may have reached the remote; \`desolate fetch ${approved.repo}\` shows whether ${approved.ref} is at ${approved.commit.slice(0, 12)}` };
+      const said = stderr.trim()
+        ? ` (ssh: ${stderr.trim().split("\n").slice(-2).join(" | ").slice(0, 300)})`
+        : "";
+      if (error instanceof Uncertain)
+        return {
+          ok: false,
+          uncertain: true,
+          error: `${error.message}${said}: the push may have reached the remote; \`desolate fetch ${approved.repo}\` shows whether ${approved.ref} is at ${approved.commit.slice(0, 12)}`,
+        };
       return { ok: false, error: `${(error as Error).message}${said}: nothing was pushed` };
     } finally {
       clearTimeout(timer);
@@ -509,14 +988,21 @@ const handle = (socket: Socket) => {
       return answer({ ok: false, error: "not a request" });
     }
     if (request.op === "ping") return answer({ ok: true });
-    if (request.op !== "push") return answer({ ok: false, error: `unknown op '${String(request.op).slice(0, 40)}'` });
+    if (request.op !== "push")
+      return answer({ ok: false, error: `unknown op '${String(request.op).slice(0, 40)}'` });
     // One push per process: the next waits for the next process (root/send.ts retries).
     if (pushing) return answer({ ok: false, busy: true, error: "another push is under way" });
     pushing = true;
     server.close();
     const exit = () => process.exit(0);
     void push(socket, request, rest)
-      .then((result) => (emit(result), answer(result)), (error: Error) => (emit({ ok: false, error: error.message }), answer({ ok: false, error: error.message })))
+      .then(
+        (result) => (emit(result), answer(result)),
+        (error: Error) => (
+          emit({ ok: false, error: error.message }),
+          answer({ ok: false, error: error.message })
+        ),
+      )
       .finally(() => {
         socket.once("close", exit);
         setTimeout(exit, 5000).unref();
@@ -527,7 +1013,8 @@ const handle = (socket: Socket) => {
 
 const main = async () => {
   // Whatever an earlier push's process left in this user's home: gone, before anything.
-  for (const name of fs.readdirSync(PUSHER.home)) fs.rmSync(path.join(PUSHER.home, name), { recursive: true, force: true });
+  for (const name of fs.readdirSync(PUSHER.home))
+    fs.rmSync(path.join(PUSHER.home, name), { recursive: true, force: true });
   fs.rmSync(PUSHER.control, { force: true });
   // The directory (root/start.sh: this user's, the root's user's group, 0750) is the gate.
   const before = process.umask(0o111);
@@ -537,4 +1024,5 @@ const main = async () => {
   log(`listening at ${PUSHER.control}`);
 };
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname) void main();
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname)
+  void main();

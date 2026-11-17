@@ -42,17 +42,47 @@ export type Stack = {
   destroy: () => void;
 };
 
-const sh = (command: string, args: string[], options: { env?: NodeJS.ProcessEnv; input?: string; cwd?: string } = {}): Result => {
+const sh = (
+  command: string,
+  args: string[],
+  options: { env?: NodeJS.ProcessEnv; input?: string; cwd?: string } = {},
+): Result => {
   const started = Date.now();
-  const result = spawnSync(command, args, { env: options.env ?? process.env, input: options.input, cwd: options.cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
-  return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "", ms: Date.now() - started };
+  const result = spawnSync(command, args, {
+    env: options.env ?? process.env,
+    input: options.input,
+    cwd: options.cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return {
+    code: result.status ?? 1,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    ms: Date.now() - started,
+  };
 };
 
 export const git = (dir: string, ...args: string[]) =>
-  execFileSync("git", ["-C", dir, "-c", "user.name=seed", "-c", "user.email=seed@example.invalid", "-c", "init.defaultBranch=main", ...args], { encoding: "utf8" });
+  execFileSync(
+    "git",
+    [
+      "-C",
+      dir,
+      "-c",
+      "user.name=seed",
+      "-c",
+      "user.email=seed@example.invalid",
+      "-c",
+      "init.defaultBranch=main",
+      ...args,
+    ],
+    { encoding: "utf8" },
+  );
 
 /** T2: the fake backend. T3: real VMs on Linux (qemu). T4: the product backend on a Mac (vz). */
-export const backendOfTier = (): "fake" | "qemu" | "vz" => (process.env.DESOLATE_TIER === "T3" ? "qemu" : process.env.DESOLATE_TIER === "T4" ? "vz" : "fake");
+export const backendOfTier = (): "fake" | "qemu" | "vz" =>
+  process.env.DESOLATE_TIER === "T3" ? "qemu" : process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
 
 export const newStack = (label: string): Stack => {
   const backend = backendOfTier();
@@ -70,16 +100,71 @@ export const newStack = (label: string): Stack => {
   // reach: the forge publishes its two ports on the Mac's loopback instead, and is named
   // by the address a Lima VM reaches the Mac's loopback at.
   const published = backend === "vz";
-  const freePort = () => Number(execFileSync(process.execPath, ["-e", "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})"], { encoding: "utf8" }).trim());
+  const freePort = () =>
+    Number(
+      execFileSync(
+        process.execPath,
+        [
+          "-e",
+          "const s=require('net').createServer();s.listen(0,'127.0.0.1',()=>{console.log(s.address().port);s.close()})",
+        ],
+        { encoding: "utf8" },
+      ).trim(),
+    );
   const [sshPort, lfsPort] = published ? [freePort(), freePort()] : [22, 8080];
-  execFileSync("docker", ["run", "-d", "--name", forgeName, "--label", `desolate.forge=${instance}`,
-    // (Its stand-in for the internet answers on 80 and 443, the only ports a workspace may
-    // leave by, so those are published as they are.)
-    ...(published ? ["-p", `127.0.0.1:${sshPort}:${sshPort}`, "-p", `127.0.0.1:${lfsPort}:${lfsPort}`, "-p", "127.0.0.1:80:80", "-p", "127.0.0.1:443:443"] : []),
-    "-v", `${FORGE_SRC}:/forge:ro`, "-v", `${forgeState}:/forge-state`, "-v", `${seeds}:/seeds:ro`,
-    process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest", "sleep", "infinity"], { stdio: "ignore" });
-  const ip = published ? "192.168.5.2" : execFileSync("docker", ["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", forgeName], { encoding: "utf8" }).trim();
-  execFileSync("docker", ["exec", "-d", forgeName, "bash", "/forge/serve.sh", "/forge-state", ip, String(sshPort), String(lfsPort)]);
+  execFileSync(
+    "docker",
+    [
+      "run",
+      "-d",
+      "--name",
+      forgeName,
+      "--label",
+      `desolate.forge=${instance}`,
+      // (Its stand-in for the internet answers on 80 and 443, the only ports a workspace may
+      // leave by, so those are published as they are.)
+      ...(published
+        ? [
+            "-p",
+            `127.0.0.1:${sshPort}:${sshPort}`,
+            "-p",
+            `127.0.0.1:${lfsPort}:${lfsPort}`,
+            "-p",
+            "127.0.0.1:80:80",
+            "-p",
+            "127.0.0.1:443:443",
+          ]
+        : []),
+      "-v",
+      `${FORGE_SRC}:/forge:ro`,
+      "-v",
+      `${forgeState}:/forge-state`,
+      "-v",
+      `${seeds}:/seeds:ro`,
+      process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest",
+      "sleep",
+      "infinity",
+    ],
+    { stdio: "ignore" },
+  );
+  const ip = published
+    ? "192.168.5.2"
+    : execFileSync(
+        "docker",
+        ["inspect", "-f", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", forgeName],
+        { encoding: "utf8" },
+      ).trim();
+  execFileSync("docker", [
+    "exec",
+    "-d",
+    forgeName,
+    "bash",
+    "/forge/serve.sh",
+    "/forge-state",
+    ip,
+    String(sshPort),
+    String(lfsPort),
+  ]);
   for (let waited = 0; !fs.existsSync(path.join(forgeState, "sshd.pid")); waited += 100) {
     if (waited > 20_000) throw new Error("the stand-in forge did not start");
     spawnSync("sleep", ["0.1"]);
@@ -90,10 +175,23 @@ export const newStack = (label: string): Stack => {
     fs.writeFileSync(file, "[user]\n\tname = A Person\n\temail = person@example.invalid\n");
     return file;
   };
-  fs.writeFileSync(admin, `#!/bin/sh\nexec docker exec -e FORGE_STATE=/forge-state ${forgeName} node --disable-warning=ExperimentalWarning /forge/admin.ts "$@"\n`, { mode: 0o755 });
+  fs.writeFileSync(
+    admin,
+    `#!/bin/sh\nexec docker exec -e FORGE_STATE=/forge-state ${forgeName} node --disable-warning=ExperimentalWarning /forge/admin.ts "$@"\n`,
+    { mode: 0o755 },
+  );
 
   // A free port, asked of the system (it hands out one nobody holds), unless one is given.
-  const editorPort = process.env.DESOLATE_EDITOR_PORT ?? execFileSync(process.execPath, ["-e", "const s = require('net').createServer().listen(0, '127.0.0.1', () => { process.stdout.write(String(s.address().port)); s.close(); })"], { encoding: "utf8" }).trim();
+  const editorPort =
+    process.env.DESOLATE_EDITOR_PORT ??
+    execFileSync(
+      process.execPath,
+      [
+        "-e",
+        "const s = require('net').createServer().listen(0, '127.0.0.1', () => { process.stdout.write(String(s.address().port)); s.close(); })",
+      ],
+      { encoding: "utf8" },
+    ).trim();
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     DESOLATE_HOME: home,
@@ -123,12 +221,23 @@ export const newStack = (label: string): Stack => {
   let stepStarted = Date.now();
   const scrub = (text: string) =>
     text
-      .split(home).join("<home>").split(work).join("<work>").split(REPO_ROOT).join("<repo>")
-      .split(instance).join("<instance>").split(`${ip}:${sshPort}`).join(`${ip}:22`).split(ip).join("<forge>")
+      .split(home)
+      .join("<home>")
+      .split(work)
+      .join("<work>")
+      .split(REPO_ROOT)
+      .join("<repo>")
+      .split(instance)
+      .join("<instance>")
+      .split(`${ip}:${sshPort}`)
+      .join(`${ip}:22`)
+      .split(ip)
+      .join("<forge>")
       .replace(/ssh-ed25519 [A-Za-z0-9+/=]+/g, "ssh-ed25519 <key>")
       .replace(/tkn=[0-9a-f]{48}/g, "tkn=<token>")
       .replace(/docker daemon: docker \d+\.\d+\.\d+/g, "docker daemon: docker <version>")
-      .replace(/\b[0-9a-f]{40}\b/g, "<commit>").replace(/\b[0-9a-f]{64}\b/g, "<oid>")
+      .replace(/\b[0-9a-f]{40}\b/g, "<commit>")
+      .replace(/\b[0-9a-f]{64}\b/g, "<oid>")
       .replace(/sha256:[0-9a-f]{12}|\b[0-9a-f]{12}\b/g, "<id>")
       .replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, "<time>")
       .replace(/\b\d+(\.\d+)? ?(ms|s)\b/g, "<duration>")
@@ -145,25 +254,89 @@ export const newStack = (label: string): Stack => {
   // with Lima's key. Its login user has no sudo there.
   const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
   const rootSsh = (vm: string, argv: string[], input: string) =>
-    sh("ssh", ["-F", path.join(home, "lima", vm, "ssh.config"), "-o", "ControlPath=none", "-l", "root", `lima-${vm}`, "--", `cd / && exec ${argv.map(quote).join(" ")}`], { env, input });
+    sh(
+      "ssh",
+      [
+        "-F",
+        path.join(home, "lima", vm, "ssh.config"),
+        "-o",
+        "ControlPath=none",
+        "-l",
+        "root",
+        `lima-${vm}`,
+        "--",
+        `cd / && exec ${argv.map(quote).join(" ")}`,
+      ],
+      { env, input },
+    );
   const vmExec = (vm: string, argv: string[], options: { root?: boolean; input?: string } = {}) =>
     backend === "fake"
-      ? sh("docker", ["exec", "-i", "-u", options.root ? "0:0" : "desolate", "-e", `HOME=${options.root ? "/root" : "/home/desolate"}`, vm, ...argv], { input: options.input ?? "" })
+      ? sh(
+          "docker",
+          [
+            "exec",
+            "-i",
+            "-u",
+            options.root ? "0:0" : "desolate",
+            "-e",
+            `HOME=${options.root ? "/root" : "/home/desolate"}`,
+            vm,
+            ...argv,
+          ],
+          { input: options.input ?? "" },
+        )
       : options.root && vm === `dsl-${instance}-root`
         ? rootSsh(vm, argv, options.input ?? "")
-        : sh(process.env.DESOLATE_LIMACTL ?? "limactl", ["--tty=false", "shell", "--workdir", "/", vm, ...(options.root ? ["sudo"] : []), ...argv], { env, input: options.input ?? "" });
+        : sh(
+            process.env.DESOLATE_LIMACTL ?? "limactl",
+            [
+              "--tty=false",
+              "shell",
+              "--workdir",
+              "/",
+              vm,
+              ...(options.root ? ["sudo"] : []),
+              ...argv,
+            ],
+            { env, input: options.input ?? "" },
+          );
 
   const stack: Stack = {
     tier: backend === "fake" ? "T2" : backend === "qemu" ? "T3" : "T4",
-    backend, instance, home, work, env, timings,
+    backend,
+    instance,
+    home,
+    work,
+    env,
+    timings,
     desolate: (...args) => {
       const result = sh(CLI, args, { env });
-      transcript.push(scrub(`$ desolate ${args.join(" ")}`), ...scrub(result.stdout + result.stderr).trimEnd().split("\n").filter((line) => line.length > 0), `[exit ${result.code}]`, "");
+      transcript.push(
+        scrub(`$ desolate ${args.join(" ")}`),
+        ...scrub(result.stdout + result.stderr)
+          .trimEnd()
+          .split("\n")
+          .filter((line) => line.length > 0),
+        `[exit ${result.code}]`,
+        "",
+      );
       return result;
     },
     person: (wait, answer, ...args) => {
-      const result = sh("python3", [path.join(HERE, "person.py"), wait, answer, "--", CLI, ...args], { env });
-      transcript.push(scrub(`$ desolate ${args.join(" ")}    # at a terminal; the person types: ${answer}`), ...scrub(result.stdout + result.stderr).trimEnd().split("\n").filter((line) => line.length > 0), `[exit ${result.code}]`, "");
+      const result = sh(
+        "python3",
+        [path.join(HERE, "person.py"), wait, answer, "--", CLI, ...args],
+        { env },
+      );
+      transcript.push(
+        scrub(`$ desolate ${args.join(" ")}    # at a terminal; the person types: ${answer}`),
+        ...scrub(result.stdout + result.stderr)
+          .trimEnd()
+          .split("\n")
+          .filter((line) => line.length > 0),
+        `[exit ${result.code}]`,
+        "",
+      );
       return result;
     },
     quiet: (...args) => sh(CLI, args, { env }),
@@ -175,7 +348,9 @@ export const newStack = (label: string): Stack => {
       fs.mkdirSync(dir, { recursive: true });
       git(dir, "init", "--quiet", "-b", "main");
       fill(dir);
-      execFileSync(admin, ["create-repo", repo, `/seeds/${path.basename(dir)}`], { stdio: "ignore" });
+      execFileSync(admin, ["create-repo", repo, `/seeds/${path.basename(dir)}`], {
+        stdio: "ignore",
+      });
     },
     step: (name) => {
       if (stepName) timings.push({ step: stepName, ms: Date.now() - stepStarted });
@@ -194,23 +369,45 @@ export const newStack = (label: string): Stack => {
       const want = fs.readFileSync(file, "utf8");
       if (want !== text) {
         fs.writeFileSync(`${file}.actual`, text);
-        throw new Error(`the transcript of '${name}' changed. A changed message is a reviewed change: diff ${file} ${file}.actual, and if it is right, run with UPDATE_TRANSCRIPTS=1.`);
+        throw new Error(
+          `the transcript of '${name}' changed. A changed message is a reviewed change: diff ${file} ${file}.actual, and if it is right, run with UPDATE_TRANSCRIPTS=1.`,
+        );
       }
     },
     destroy: () => {
       if (stepName) timings.push({ step: stepName, ms: Date.now() - stepStarted });
       if (process.env.DESOLATE_KEEP === "1") {
         // For debugging a failure by hand: leave the stack up and say how to reach it.
-        fs.writeFileSync("/tmp/desolate-kept.env", Object.entries(env).filter(([key]) => key.startsWith("DESOLATE_")).map(([key, value]) => `export ${key}='${value}'`).join("\n") + "\n");
+        fs.writeFileSync(
+          "/tmp/desolate-kept.env",
+          Object.entries(env)
+            .filter(([key]) => key.startsWith("DESOLATE_"))
+            .map(([key, value]) => `export ${key}='${value}'`)
+            .join("\n") + "\n",
+        );
         return;
       }
       sh(CLI, ["destroy", "--all"], { env });
       spawnSync("docker", ["rm", "-f", "-v", forgeName], { stdio: "ignore" });
       // Files the forge's root wrote are not ours to delete directly.
-      spawnSync("docker", ["run", "--rm", "-v", `${work}:/w`, process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest", "bash", "-c", "rm -rf /w/* /w/.[!.]* 2>/dev/null; true"], { stdio: "ignore" });
+      spawnSync(
+        "docker",
+        [
+          "run",
+          "--rm",
+          "-v",
+          `${work}:/w`,
+          process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest",
+          "bash",
+          "-c",
+          "rm -rf /w/* /w/.[!.]* 2>/dev/null; true",
+        ],
+        { stdio: "ignore" },
+      );
       fs.rmSync(work, { recursive: true, force: true });
       const report = process.env.DESOLATE_TIMINGS;
-      if (report) fs.appendFileSync(report, timings.map((t) => `${label}\t${t.step}\t${t.ms}\n`).join(""));
+      if (report)
+        fs.appendFileSync(report, timings.map((t) => `${label}\t${t.step}\t${t.ms}\n`).join(""));
     },
   };
   return stack;
@@ -218,4 +415,10 @@ export const newStack = (label: string): Stack => {
 
 /** bootstrap with the stand-in forge: the first command of every end-to-end test. */
 export const bootstrap = (stack: Stack) =>
-  stack.desolate("bootstrap", "--forge", stack.env.DESOLATE_FORGE_SPEC!, "--forge-known-hosts", stack.env.DESOLATE_FORGE_KNOWN_HOSTS!);
+  stack.desolate(
+    "bootstrap",
+    "--forge",
+    stack.env.DESOLATE_FORGE_SPEC!,
+    "--forge-known-hosts",
+    stack.env.DESOLATE_FORGE_KNOWN_HOSTS!,
+  );

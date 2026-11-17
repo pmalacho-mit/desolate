@@ -108,9 +108,17 @@ const out = (line: string) => process.stdout.write(`${forTerminal(line)}\n`);
 const err = (line: string) => process.stderr.write(`${forTerminal(line)}\n`);
 
 type Flags = { values: Record<string, unknown>; positionals: string[] };
-const flags = (argv: string[], options: Record<string, { type: "boolean" | "string"; multiple?: boolean }>): Flags => {
+const flags = (
+  argv: string[],
+  options: Record<string, { type: "boolean" | "string"; multiple?: boolean }>,
+): Flags => {
   try {
-    return parseArgs({ args: argv, options: { json: { type: "boolean" }, help: { type: "boolean" }, ...options }, allowPositionals: true, strict: true }) as Flags;
+    return parseArgs({
+      args: argv,
+      options: { json: { type: "boolean" }, help: { type: "boolean" }, ...options },
+      allowPositionals: true,
+      strict: true,
+    }) as Flags;
   } catch (error) {
     throw new Refusal((error as Error).message, "desolate help", EXIT.usage);
   }
@@ -119,16 +127,44 @@ const flags = (argv: string[], options: Record<string, { type: "boolean" | "stri
 declare namespace flags {
   /** every command takes --json and --help besides its own; the rest are its positionals */
   export type Reads = Expect<
-    Invoke<typeof flags, [argv: ["acme", "--name", "w1", "--checkout", "acme/web=main", "--checkout", "acme/api=main", "--json"], options: { name: { type: "string" }; checkout: { type: "string"; multiple: true } }]>,
+    Invoke<
+      typeof flags,
+      [
+        argv: [
+          "acme",
+          "--name",
+          "w1",
+          "--checkout",
+          "acme/web=main",
+          "--checkout",
+          "acme/api=main",
+          "--json",
+        ],
+        options: { name: { type: "string" }; checkout: { type: "string"; multiple: true } },
+      ]
+    >,
     "=",
-    { values: { name: "w1"; checkout: ["acme/web=main", "acme/api=main"]; json: true }; positionals: ["acme"] }
+    {
+      values: { name: "w1"; checkout: ["acme/web=main", "acme/api=main"]; json: true };
+      positionals: ["acme"];
+    }
   >;
   /** a flag the command does not take is a usage error (exit 64) that points at the help, never
    *  a word passed on; a string flag with no value is not read as a boolean */
   export type Refuses = [
-    Expect<Invoke<typeof refusalOf, [f: typeof flags, args: [argv: ["acme", "--force"], options: {}]]>, "matches", { fix: "desolate help"; code: 64 }>,
-    Throws<Invoke<typeof flags, [argv: ["acme", "--force"], options: {}]>, "Unknown option '--force'">,
-    Throws<Invoke<typeof flags, [argv: ["acme", "--name"], options: { name: { type: "string" } }]>, "argument missing">,
+    Expect<
+      Invoke<typeof refusalOf, [f: typeof flags, args: [argv: ["acme", "--force"], options: {}]]>,
+      "matches",
+      { fix: "desolate help"; code: 64 }
+    >,
+    Throws<
+      Invoke<typeof flags, [argv: ["acme", "--force"], options: {}]>,
+      "Unknown option '--force'"
+    >,
+    Throws<
+      Invoke<typeof flags, [argv: ["acme", "--name"], options: { name: { type: "string" } }]>,
+      "argument missing"
+    >,
   ];
 }
 
@@ -136,9 +172,16 @@ declare namespace flags {
  *  Safari cannot find desolate's *.localhost names. */
 const openInBrowser = (url: string) => {
   if (process.platform !== "darwin") return void spawnSync("xdg-open", [url], { stdio: "ignore" });
-  const browser = process.env.DESOLATE_BROWSER ?? ["Google Chrome", "Firefox", "Chromium", "Brave Browser", "Microsoft Edge"].find((app) => fs.existsSync(`/Applications/${app}.app`));
+  const browser =
+    process.env.DESOLATE_BROWSER ??
+    ["Google Chrome", "Firefox", "Chromium", "Brave Browser", "Microsoft Edge"].find((app) =>
+      fs.existsSync(`/Applications/${app}.app`),
+    );
   const opened = spawnSync("open", browser ? ["-a", browser, url] : [url], { stdio: "ignore" });
-  if (opened.status !== 0 || !browser) process.stderr.write(`desolate: ${browser ? `could not open ${browser}` : "no Chrome or Firefox found: Safari cannot open *.localhost addresses"}; open the address above in Chrome or Firefox\n`);
+  if (opened.status !== 0 || !browser)
+    process.stderr.write(
+      `desolate: ${browser ? `could not open ${browser}` : "no Chrome or Firefox found: Safari cannot open *.localhost addresses"}; open the address above in Chrome or Firefox\n`,
+    );
 };
 
 const main = async (argv: string[]): Promise<number> => {
@@ -148,10 +191,20 @@ const main = async (argv: string[]): Promise<number> => {
     return verb ? EXIT.ok : EXIT.usage;
   }
   if (verb === "bootstrap") {
-    const { values } = flags(rest, { backend: { type: "string" }, forge: { type: "string" }, "forge-known-hosts": { type: "string" } });
+    const { values } = flags(rest, {
+      backend: { type: "string" },
+      forge: { type: "string" },
+      "forge-known-hosts": { type: "string" },
+    });
     if (values.backend) process.env.DESOLATE_BACKEND = String(values.backend);
     const { bootstrap } = await import("./bootstrap.ts");
-    await bootstrap({ forge: values.forge as string | undefined, forgeKnownHosts: values["forge-known-hosts"] as string | undefined }, out);
+    await bootstrap(
+      {
+        forge: values.forge as string | undefined,
+        forgeKnownHosts: values["forge-known-hosts"] as string | undefined,
+      },
+      out,
+    );
     return EXIT.ok;
   }
   if (verb === "doctor") {
@@ -165,10 +218,27 @@ const main = async (argv: string[]): Promise<number> => {
     return (await destroy({ all: values.all === true }, out)).length === 0 ? EXIT.ok : EXIT.failed;
   }
   if (verb === "clone") {
-    const { values, positionals } = flags(rest, { "no-push": { type: "boolean" }, anonymous: { type: "boolean" }, domain: { type: "string" }, "no-domain": { type: "boolean" }, "keys-by-hand": { type: "boolean" } });
+    const { values, positionals } = flags(rest, {
+      "no-push": { type: "boolean" },
+      anonymous: { type: "boolean" },
+      domain: { type: "string" },
+      "no-domain": { type: "boolean" },
+      "keys-by-hand": { type: "boolean" },
+    });
     const { clone } = await import("./repos.ts");
-    if (values.domain !== undefined && values["no-domain"] === true) refuse("--domain and --no-domain say opposite things", "give one of them", EXIT.usage);
-    await clone(positionals[0], { push: values["no-push"] !== true && values.anonymous !== true, anonymous: values.anonymous === true, domain: values["no-domain"] === true ? false : values.domain as string | undefined, byHand: values["keys-by-hand"] === true }, out, values.json === true);
+    if (values.domain !== undefined && values["no-domain"] === true)
+      refuse("--domain and --no-domain say opposite things", "give one of them", EXIT.usage);
+    await clone(
+      positionals[0],
+      {
+        push: values["no-push"] !== true && values.anonymous !== true,
+        anonymous: values.anonymous === true,
+        domain: values["no-domain"] === true ? false : (values.domain as string | undefined),
+        byHand: values["keys-by-hand"] === true,
+      },
+      out,
+      values.json === true,
+    );
     return EXIT.ok;
   }
   if (verb === "fetch") {
@@ -190,7 +260,20 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "domain") {
-    const { values, positionals } = flags(rest, { title: { type: "string" }, repo: { type: "string", multiple: true }, max: { type: "string" }, cpus: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, clear: { type: "boolean" }, hosts: { type: "string" }, headers: { type: "string" }, ttl: { type: "string" }, secret: { type: "string" }, from: { type: "string" } });
+    const { values, positionals } = flags(rest, {
+      title: { type: "string" },
+      repo: { type: "string", multiple: true },
+      max: { type: "string" },
+      cpus: { type: "string" },
+      memory: { type: "string" },
+      disk: { type: "string" },
+      clear: { type: "boolean" },
+      hosts: { type: "string" },
+      headers: { type: "string" },
+      ttl: { type: "string" },
+      secret: { type: "string" },
+      from: { type: "string" },
+    });
     const { domainCommand } = await import("./domains.ts");
     await domainCommand(positionals, values, out);
     return EXIT.ok;
@@ -198,9 +281,24 @@ const main = async (argv: string[]): Promise<number> => {
   if (verb === "net" && rest[0] === "log") {
     const { values, positionals } = flags(rest.slice(1), {});
     const { rootctl } = await import("./stack.ts");
-    const entries = await rootctl<{ time: string; domain: string; workspace: string; host: string; port: number; verdict: string; reason?: string; secrets?: string[] }[]>("net.log", { domain: positionals[0] }, { quiet: true });
+    const entries = await rootctl<
+      {
+        time: string;
+        domain: string;
+        workspace: string;
+        host: string;
+        port: number;
+        verdict: string;
+        reason?: string;
+        secrets?: string[];
+      }[]
+    >("net.log", { domain: positionals[0] }, { quiet: true });
     if (values.json === true) out(JSON.stringify(entries));
-    else for (const e of entries) out(`${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`);
+    else
+      for (const e of entries)
+        out(
+          `${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
+        );
     return EXIT.ok;
   }
   if (verb === "up") {
@@ -209,9 +307,33 @@ const main = async (argv: string[]): Promise<number> => {
     const dash = rest.indexOf("--");
     const own = dash >= 0 ? rest.slice(0, dash) : rest;
     const command = dash >= 0 ? rest.slice(dash + 1) : [];
-    const { values, positionals } = flags(own, { name: { type: "string" }, checkout: { type: "string", multiple: true }, branch: { type: "string" }, base: { type: "string" }, fetch: { type: "boolean" }, cpus: { type: "string" }, memory: { type: "string" }, disk: { type: "string" }, "started-by": { type: "string" } });
+    const { values, positionals } = flags(own, {
+      name: { type: "string" },
+      checkout: { type: "string", multiple: true },
+      branch: { type: "string" },
+      base: { type: "string" },
+      fetch: { type: "boolean" },
+      cpus: { type: "string" },
+      memory: { type: "string" },
+      disk: { type: "string" },
+      "started-by": { type: "string" },
+    });
     const { up, sizeFlags } = await import("./workspaces.ts");
-    await up(positionals[0], { name: values.name as string | undefined, checkouts: (values.checkout as string[] | undefined) ?? [], branch: values.branch as string | undefined, base: values.base as string | undefined, fetch: values.fetch === true, size: sizeFlags(values), startedBy: values["started-by"] as string | undefined, command }, out, values.json === true);
+    await up(
+      positionals[0],
+      {
+        name: values.name as string | undefined,
+        checkouts: (values.checkout as string[] | undefined) ?? [],
+        branch: values.branch as string | undefined,
+        base: values.base as string | undefined,
+        fetch: values.fetch === true,
+        size: sizeFlags(values),
+        startedBy: values["started-by"] as string | undefined,
+        command,
+      },
+      out,
+      values.json === true,
+    );
     return EXIT.ok;
   }
   if ((verb === "status" || verb === "board") && rest.some((arg) => !arg.startsWith("-"))) {
@@ -227,9 +349,13 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "stop" || verb === "start" || verb === "rm") {
-    const { values, positionals } = flags(rest, verb === "rm" ? { "if-clean": { type: "boolean" } } : {});
+    const { values, positionals } = flags(
+      rest,
+      verb === "rm" ? { "if-clean": { type: "boolean" } } : {},
+    );
     const workspaces = await import("./workspaces.ts");
-    if (verb === "rm") await workspaces.remove(positionals[0], out, { ifClean: values["if-clean"] === true });
+    if (verb === "rm")
+      await workspaces.remove(positionals[0], out, { ifClean: values["if-clean"] === true });
     else await (verb === "stop" ? workspaces.stop : workspaces.start)(positionals[0], out);
     return EXIT.ok;
   }
@@ -237,10 +363,17 @@ const main = async (argv: string[]): Promise<number> => {
     const { values, positionals } = flags(rest, {});
     if (positionals[0] === "dismiss") {
       const [, domain, repo, branch] = positionals;
-      if (!domain || !repo || !branch) refuse("dismiss which offer?", "desolate offers dismiss <domain> <owner/repo> <branch>   (see desolate offers)", EXIT.usage);
+      if (!domain || !repo || !branch)
+        refuse(
+          "dismiss which offer?",
+          "desolate offers dismiss <domain> <owner/repo> <branch>   (see desolate offers)",
+          EXIT.usage,
+        );
       const { rootctl } = await import("./stack.ts");
       await rootctl("offers.dismiss", { domain, repo, branch }, { quiet: true });
-      out(`dismissed: ${domain} ${repo} ${branch} is no longer under "Needs you". The branch stays (desolate branches ${domain}); offering it again brings it back.`);
+      out(
+        `dismissed: ${domain} ${repo} ${branch} is no longer under "Needs you". The branch stays (desolate branches ${domain}); offering it again brings it back.`,
+      );
       return EXIT.ok;
     }
     const { offers } = await import("./push.ts");
@@ -254,10 +387,23 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "review") {
-    const { values, positionals } = flags(rest, { diff: { type: "boolean" }, against: { type: "string" } });
-    if (values.against !== undefined && values.against !== "origin" && values.against !== "domain") refuse(`--against '${String(values.against)}' is not understood`, "--against origin (the remote's default branch, as the mirror has it) or --against domain (the domain's own copy of it)", EXIT.usage);
+    const { values, positionals } = flags(rest, {
+      diff: { type: "boolean" },
+      against: { type: "string" },
+    });
+    if (values.against !== undefined && values.against !== "origin" && values.against !== "domain")
+      refuse(
+        `--against '${String(values.against)}' is not understood`,
+        "--against origin (the remote's default branch, as the mirror has it) or --against domain (the domain's own copy of it)",
+        EXIT.usage,
+      );
     const { review } = await import("./push.ts");
-    await review(values.diff === true ? [...positionals, "--diff"] : positionals, out, values.json === true, values.against === "domain" ? "domain" : "origin");
+    await review(
+      values.diff === true ? [...positionals, "--diff"] : positionals,
+      out,
+      values.json === true,
+      values.against === "domain" ? "domain" : "origin",
+    );
     return EXIT.ok;
   }
   if (verb === "push") {
@@ -275,7 +421,12 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "down") {
-    if (flags(rest, {}).positionals.length > 0) refuse("desolate down takes no arguments: it stops every VM (and removes nothing)", "desolate down", EXIT.usage);
+    if (flags(rest, {}).positionals.length > 0)
+      refuse(
+        "desolate down takes no arguments: it stops every VM (and removes nothing)",
+        "desolate down",
+        EXIT.usage,
+      );
     const { down } = await import("./bootstrap.ts");
     await down(out);
     return EXIT.ok;
@@ -290,15 +441,23 @@ const main = async (argv: string[]): Promise<number> => {
     const { values, positionals } = flags(rest, { open: { type: "boolean" } });
     const { editor } = await import("./workspaces.ts");
     let url = "";
-    await editor(positionals[0], (line) => {
-      url = /(http:\/\/\S+)/.exec(line)?.[1] ?? url;
-      out(line);
-    }, values.json === true);
+    await editor(
+      positionals[0],
+      (line) => {
+        url = /(http:\/\/\S+)/.exec(line)?.[1] ?? url;
+        out(line);
+      },
+      values.json === true,
+    );
     if (values.open === true && url) openInBrowser(url);
     return 0;
   }
   if (verb === "approve") {
-    const { values } = flags(rest, { selftest: { type: "boolean" }, web: { type: "boolean" }, open: { type: "boolean" } });
+    const { values } = flags(rest, {
+      selftest: { type: "boolean" },
+      web: { type: "boolean" },
+      open: { type: "boolean" },
+    });
     if (values.selftest === true) return (await import("./approver.ts")).selftest(out);
     if (values.web === true) {
       // The page's address carries this stack's token: it is the person's to open in a
@@ -319,19 +478,30 @@ const main = async (argv: string[]): Promise<number> => {
     // far each kind of event can be believed).
     const { values } = flags(rest, { replay: { type: "string" } });
     const replay = values.replay === undefined ? 0 : Number(values.replay);
-    if (!Number.isInteger(replay) || replay < 0) refuse("--replay takes a number", "desolate events --replay 20", EXIT.usage);
+    if (!Number.isInteger(replay) || replay < 0)
+      refuse("--replay takes a number", "desolate events --replay 20", EXIT.usage);
     const { followEvents } = await import("./daemon.ts");
     // (A reader that stops reading is let go by the daemon, with a "lagged" line: this
     // process does not pile lines up either, it stops when stdout does.)
     process.stdout.on("error", () => process.exit(0));
-    await followEvents(replay, (line) => process.stdout.write(`${forTerminal(line)}\n`), (resume) => process.stdout.once("drain", resume));
+    await followEvents(
+      replay,
+      (line) => process.stdout.write(`${forTerminal(line)}\n`),
+      (resume) => process.stdout.once("drain", resume),
+    );
   }
   if (verb === "issues" || verb === "issue") {
     const { values, positionals } = flags(rest, {});
     const issues = await import("./issues.ts");
     if (verb === "issues") await issues.list(out, values.json === true);
-    else if (positionals[0] === "publish" || positionals[0] === "refuse") await issues.decide(positionals[0], positionals[1], out);
-    else refuse("desolate issue what?", "desolate issues | desolate issue publish <id> | desolate issue refuse <id>", EXIT.usage);
+    else if (positionals[0] === "publish" || positionals[0] === "refuse")
+      await issues.decide(positionals[0], positionals[1], out);
+    else
+      refuse(
+        "desolate issue what?",
+        "desolate issues | desolate issue publish <id> | desolate issue refuse <id>",
+        EXIT.usage,
+      );
     return EXIT.ok;
   }
   if (verb === "agent") {
@@ -339,32 +509,72 @@ const main = async (argv: string[]): Promise<number> => {
     const dash = rest.indexOf("--");
     const own = dash >= 0 ? rest.slice(0, dash) : rest;
     const command = dash >= 0 ? rest.slice(dash + 1) : [];
-    const { values, positionals } = flags(own, { name: { type: "string" }, checkout: { type: "string" } });
+    const { values, positionals } = flags(own, {
+      name: { type: "string" },
+      checkout: { type: "string" },
+    });
     const agents = await import("./agent.ts");
     const [sub, where] = positionals;
-    if (sub === "start") await agents.start(where, { name: values.name as string | undefined, checkout: values.checkout as string | undefined }, command, out, values.json === true);
-    else if (sub === "attach") return agents.attach(where, { name: values.name as string | undefined });
+    if (sub === "start")
+      await agents.start(
+        where,
+        {
+          name: values.name as string | undefined,
+          checkout: values.checkout as string | undefined,
+        },
+        command,
+        out,
+        values.json === true,
+      );
+    else if (sub === "attach")
+      return agents.attach(where, { name: values.name as string | undefined });
     else if (sub === "list") await agents.list(where, out, values.json === true);
-    else if (sub === "stop") await agents.stop(where, { name: values.name as string | undefined }, out);
+    else if (sub === "stop")
+      await agents.stop(where, { name: values.name as string | undefined }, out);
     else if (sub === "log") await agents.log(where, { name: values.name as string | undefined });
-    else refuse("desolate agent what?", "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]", EXIT.usage);
+    else
+      refuse(
+        "desolate agent what?",
+        "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]",
+        EXIT.usage,
+      );
     return EXIT.ok;
   }
   if (verb === "task" || verb === "factory") {
     // Recipes now: scripts of ordinary desolate commands, to read, run and change.
-    refuse(`'desolate ${verb}' is a recipe now`, verb === "task" ? 'release/recipes/claude.sh <domain> "<what to do>"   (or agent.sh, for any other program; see release/recipes/README.md)' : "release/recipes/issues.sh or release/recipes/suede.sh   (see release/recipes/README.md)", EXIT.usage);
+    refuse(
+      `'desolate ${verb}' is a recipe now`,
+      verb === "task"
+        ? 'release/recipes/claude.sh <domain> "<what to do>"   (or agent.sh, for any other program; see release/recipes/README.md)'
+        : "release/recipes/issues.sh or release/recipes/suede.sh   (see release/recipes/README.md)",
+      EXIT.usage,
+    );
   }
   if (verb === "suede" && rest[0] === "changed") {
     const { values, positionals } = flags(rest.slice(1), { from: { type: "string" } });
     const { rootctl } = await import("./stack.ts");
-    const changed = await rootctl<{ dir: string; remote: string | null; branch: string; files: string[] }[]>("suede.changed", { repo: positionals[0], to: positionals[1], from: values.from ?? null }, { quiet: true });
+    const changed = await rootctl<
+      { dir: string; remote: string | null; branch: string; files: string[] }[]
+    >(
+      "suede.changed",
+      { repo: positionals[0], to: positionals[1], from: values.from ?? null },
+      { quiet: true },
+    );
     if (values.json === true) out(JSON.stringify(changed));
-    else for (const c of changed) out(`  ${c.dir}  ${c.remote ?? "(no remote)"} ${c.branch}  ${c.files.length ? `${c.files.length} file(s) changed` : "unchanged"}`);
+    else
+      for (const c of changed)
+        out(
+          `  ${c.dir}  ${c.remote ?? "(no remote)"} ${c.branch}  ${c.files.length ? `${c.files.length} file(s) changed` : "unchanged"}`,
+        );
     return EXIT.ok;
   }
   if (verb === "upstream") {
     // suede's upstream, desolate's pinned copy, in the git VM; the push waits for approval.
-    const { values, positionals } = flags(rest, { from: { type: "string" }, remote: { type: "string" },"no-wait": { type: "boolean" } });
+    const { values, positionals } = flags(rest, {
+      from: { type: "string" },
+      remote: { type: "string" },
+      "no-wait": { type: "boolean" },
+    });
     const { upstreamCommand } = await import("./upstream.ts");
     return upstreamCommand(positionals, values, out);
   }
@@ -378,7 +588,8 @@ const main = async (argv: string[]): Promise<number> => {
     // is the person's to open on this Mac.
     const { values: gitValues, positionals: gitArgs } = flags(rest, { open: { type: "boolean" } });
     const repo = gitArgs[0];
-    if (repo !== undefined && !parseRepo(repo)) refuse(`'${repo}' is not a repository`, "desolate git <owner/repo>", EXIT.usage);
+    if (repo !== undefined && !parseRepo(repo))
+      refuse(`'${repo}' is not a repository`, "desolate git <owner/repo>", EXIT.usage);
     const { ensureGitVm, ensureGitClone } = await import("./git-vm.ts");
     await ensureGitVm(err);
     if (repo) await ensureGitClone(parseRepo(repo)!);
@@ -401,19 +612,30 @@ const main = async (argv: string[]): Promise<number> => {
     const view = (await ports()).filter((w) => !positionals[0] || w.workspace === positionals[0]);
     if (values.json === true) out(JSON.stringify(view));
     else if (view.length === 0) out("no workspace is running.");
-    else for (const w of view) {
-      out(w.workspace);
-      if (w.forwarded.length === 0) out("  nothing is listening yet: start a dev server in it and its URL appears here");
-      for (const f of w.forwarded) out(`  ${f.url}`);
-      for (const r of w.reserved) out(`  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`);
-    }
+    else
+      for (const w of view) {
+        out(w.workspace);
+        if (w.forwarded.length === 0)
+          out("  nothing is listening yet: start a dev server in it and its URL appears here");
+        for (const f of w.forwarded) out(`  ${f.url}`);
+        for (const r of w.reserved)
+          out(
+            `  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`,
+          );
+      }
     return EXIT.ok;
   }
   if (verb === "exec") {
     const split = rest.indexOf("--");
-    const { values, positionals } = flags(split < 0 ? rest : rest.slice(0, split), { checkout: { type: "string" }, vm: { type: "boolean" } });
+    const { values, positionals } = flags(split < 0 ? rest : rest.slice(0, split), {
+      checkout: { type: "string" },
+      vm: { type: "boolean" },
+    });
     const { exec } = await import("./workspaces.ts");
-    return exec(positionals[0], split < 0 ? positionals.slice(1) : rest.slice(split + 1), { checkout: values.checkout as string | undefined, vm: values.vm === true });
+    return exec(positionals[0], split < 0 ? positionals.slice(1) : rest.slice(split + 1), {
+      checkout: values.checkout as string | undefined,
+      vm: values.vm === true,
+    });
   }
   throw new Refusal(`desolate has no command '${verb}'`, "desolate help", EXIT.usage);
 };
@@ -422,34 +644,123 @@ declare namespace main {
   /** the help, asked for (exit 0) or for want of a verb (exit 64, a usage error) */
   export type Help = [
     Expect<Invoke<typeof printed, [run: typeof main, args: [argv: ["help"]]]>["value"], "=", 0>,
-    Expect<Invoke<typeof printed, [run: typeof main, args: [argv: ["help"]]]>["stdout"], "startsWith", "desolate: develop in VMs of their own.">,
+    Expect<
+      Invoke<typeof printed, [run: typeof main, args: [argv: ["help"]]]>["stdout"],
+      "startsWith",
+      "desolate: develop in VMs of their own."
+    >,
     Expect<Invoke<typeof printed, [run: typeof main, args: [argv: []]]>["value"], "=", 64>,
   ];
   /** what is refused before anything is asked of a VM or the root: each a usage error (exit 64)
    *  that names the spelling that works */
-  export type Refuses = Table<typeof refusalOf, [
-    [args: [f: typeof main, args: [argv: ["nosuchverb"]]], expected: { message: "desolate has no command 'nosuchverb'"; fix: "desolate help"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["list", "--frobnicate"]]], condition: "matches", expected: { fix: "desolate help"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["push", "acme", "acme/web", "main", "--force"]]], condition: "matches", expected: { fix: "desolate help"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["clone", "acme/web", "--domain", "web", "--no-domain"]]], expected: { message: "--domain and --no-domain say opposite things"; fix: "give one of them"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["review", "acme", "acme/web", "main", "--against", "upstream"]]], condition: "matches", expected: { message: "--against 'upstream' is not understood"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["git", "../etc"]]], expected: { message: "'../etc' is not a repository"; fix: "desolate git <owner/repo>"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["offers", "dismiss", "acme"]]], condition: "matches", expected: { message: "dismiss which offer?"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["down", "now"]]], condition: "matches", expected: { message: "desolate down takes no arguments: it stops every VM (and removes nothing)"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["events", "--replay=lots"]]], expected: { message: "--replay takes a number"; fix: "desolate events --replay 20"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["up", "acme", "--memory", "lots"]]], condition: "matches", expected: { message: "--memory 'lots' is not an amount"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["issue", "frob"]]], condition: "matches", expected: { message: "desolate issue what?"; code: 64 }],
-    [args: [f: typeof main, args: [argv: ["task"]]], condition: "matches", expected: { message: "'desolate task' is a recipe now"; code: 64 }],
-  ]>;
+  export type Refuses = Table<
+    typeof refusalOf,
+    [
+      [
+        args: [f: typeof main, args: [argv: ["nosuchverb"]]],
+        expected: {
+          message: "desolate has no command 'nosuchverb'";
+          fix: "desolate help";
+          code: 64;
+        },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["list", "--frobnicate"]]],
+        condition: "matches",
+        expected: { fix: "desolate help"; code: 64 },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["push", "acme", "acme/web", "main", "--force"]]],
+        condition: "matches",
+        expected: { fix: "desolate help"; code: 64 },
+      ],
+      [
+        args: [
+          f: typeof main,
+          args: [argv: ["clone", "acme/web", "--domain", "web", "--no-domain"]],
+        ],
+        expected: {
+          message: "--domain and --no-domain say opposite things";
+          fix: "give one of them";
+          code: 64;
+        },
+      ],
+      [
+        args: [
+          f: typeof main,
+          args: [argv: ["review", "acme", "acme/web", "main", "--against", "upstream"]],
+        ],
+        condition: "matches",
+        expected: { message: "--against 'upstream' is not understood"; code: 64 },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["git", "../etc"]]],
+        expected: {
+          message: "'../etc' is not a repository";
+          fix: "desolate git <owner/repo>";
+          code: 64;
+        },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["offers", "dismiss", "acme"]]],
+        condition: "matches",
+        expected: { message: "dismiss which offer?"; code: 64 },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["down", "now"]]],
+        condition: "matches",
+        expected: {
+          message: "desolate down takes no arguments: it stops every VM (and removes nothing)";
+          code: 64;
+        },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["events", "--replay=lots"]]],
+        expected: {
+          message: "--replay takes a number";
+          fix: "desolate events --replay 20";
+          code: 64;
+        },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["up", "acme", "--memory", "lots"]]],
+        condition: "matches",
+        expected: { message: "--memory 'lots' is not an amount"; code: 64 },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["issue", "frob"]]],
+        condition: "matches",
+        expected: { message: "desolate issue what?"; code: 64 },
+      ],
+      [
+        args: [f: typeof main, args: [argv: ["task"]]],
+        condition: "matches",
+        expected: { message: "'desolate task' is a recipe now"; code: 64 },
+      ],
+    ]
+  >;
   /** after `--`, the words are the agent's command, not desolate's flags */
-  export type DashDash = Expect<Invoke<typeof refusalOf, [f: typeof main, args: [argv: ["agent", "frob", "--", "--force", "--json"]]]>, "=", { message: "desolate agent what?"; fix: "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]"; code: 64 }>;
+  export type DashDash = Expect<
+    Invoke<
+      typeof refusalOf,
+      [f: typeof main, args: [argv: ["agent", "frob", "--", "--force", "--json"]]]
+    >,
+    "=",
+    {
+      message: "desolate agent what?";
+      fix: "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]";
+      code: 64;
+    }
+  >;
 }
 
 // Run only as the command (cli.sh runs this file; realpath, since cli.sh is reached through
 // the `desolate` link), never when a test imports it.
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   // Piped into something that stops reading (`desolate list | head -1`): done, not a crash.
-  process.stdout.on("error", (error: NodeJS.ErrnoException) => process.exit(error.code === "EPIPE" ? 0 : EXIT.failed));
+  process.stdout.on("error", (error: NodeJS.ErrnoException) =>
+    process.exit(error.code === "EPIPE" ? 0 : EXIT.failed),
+  );
   try {
     process.exitCode = await main(process.argv.slice(2));
   } catch (error) {

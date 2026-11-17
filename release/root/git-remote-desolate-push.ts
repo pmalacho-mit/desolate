@@ -29,12 +29,18 @@ const fail = (message: string): never => {
 
 /** One of git's push lines (`[+]<source>:<target>`), read: a branch to update, or the line to
  *  answer git with when it is not one desolate pushes. */
-export const pushSpec = (spec: string): { forced: boolean; source: string; target: string; branch: string } | { answer: string } => {
+export const pushSpec = (
+  spec: string,
+): { forced: boolean; source: string; target: string; branch: string } | { answer: string } => {
   const forced = spec.startsWith("+");
   const [source, target] = spec.replace(/^\+/, "").split(":");
   const branch = (target ?? "").replace(/^refs\/heads\//, "");
-  if (!target?.startsWith("refs/heads/") || !isBranch(branch)) return { answer: `error ${target} desolate pushes branches` };
-  if (!source) return { answer: `error ${target} deleting a branch on the remote is not something desolate does: delete it on the forge` };
+  if (!target?.startsWith("refs/heads/") || !isBranch(branch))
+    return { answer: `error ${target} desolate pushes branches` };
+  if (!source)
+    return {
+      answer: `error ${target} deleting a branch on the remote is not something desolate does: delete it on the forge`,
+    };
   return { forced, source, target, branch };
 };
 
@@ -42,19 +48,38 @@ const main = async () => {
   const repo = parseRepo(process.argv[3]) ?? fail(`'${process.argv[3]}' is not a repository`);
   const name = repoId(repo);
   const here = (args: string[]) => run("git", args, { env: process.env, timeoutMs: 600_000 });
-  if ((await here(["config", "--get", "desolate.repo"])).stdout.trim() !== name) fail(`this is not the root's clone of ${name}`);
+  if ((await here(["config", "--get", "desolate.repo"])).stdout.trim() !== name)
+    fail(`this is not the root's clone of ${name}`);
 
   /** What the remote has, as the mirror last saw it: local, and needing no key. If it is
    *  stale the remote says so when the push arrives. */
-  const remoteRefs = async () => (await gitIn(mirrorPath(repo), ["for-each-ref", "--format=%(objectname) %(refname)", "refs/heads"])).stdout.split("\n").filter(Boolean);
+  const remoteRefs = async () =>
+    (
+      await gitIn(mirrorPath(repo), [
+        "for-each-ref",
+        "--format=%(objectname) %(refname)",
+        "refs/heads",
+      ])
+    ).stdout
+      .split("\n")
+      .filter(Boolean);
 
   const pushOne = async (spec: string): Promise<string> => {
     const parsed = pushSpec(spec);
     if ("answer" in parsed) return parsed.answer;
     const { forced, source, target, branch } = parsed;
-    const commit = (await here(["rev-parse", "--verify", "--quiet", `${source}^{commit}`])).stdout.trim();
+    const commit = (
+      await here(["rev-parse", "--verify", "--quiet", `${source}^{commit}`])
+    ).stdout.trim();
     if (!commit) return `error ${target} no such commit`;
-    const failed = await pushCommit(repo, commit, branch, forced, "a raw git push from the root's terminal", (line) => process.stderr.write(`${line}\n`));
+    const failed = await pushCommit(
+      repo,
+      commit,
+      branch,
+      forced,
+      "a raw git push from the root's terminal",
+      (line) => process.stderr.write(`${line}\n`),
+    );
     return failed ? `error ${target} ${failed.replace(/\n/g, " ")}` : `ok ${target}`;
   };
 
@@ -63,7 +88,8 @@ const main = async () => {
   let batch: string[] = [];
   for await (const line of input) {
     if (line === "capabilities") say("push\n\n");
-    else if (line === "list for-push" || line === "list") say([...(await remoteRefs()), ""].join("\n") + "\n");
+    else if (line === "list for-push" || line === "list")
+      say([...(await remoteRefs()), ""].join("\n") + "\n");
     else if (line.startsWith("push ")) batch.push(line.slice(5));
     else if (line === "") {
       if (batch.length === 0) break;
@@ -76,21 +102,58 @@ const main = async () => {
 
 declare namespace pushSpec {
   /** a branch, from a commit-ish; with `+`, one that may replace what the remote has */
-  export type Branches = Table<typeof pushSpec, [
-    [args: [spec: "HEAD:refs/heads/feature/login"], expected: { forced: false; source: "HEAD"; target: "refs/heads/feature/login"; branch: "feature/login" }],
-    [args: [spec: "+refs/heads/fix:refs/heads/fix"], expected: { forced: true; source: "refs/heads/fix"; target: "refs/heads/fix"; branch: "fix" }],
-  ]>;
+  export type Branches = Table<
+    typeof pushSpec,
+    [
+      [
+        args: [spec: "HEAD:refs/heads/feature/login"],
+        expected: {
+          forced: false;
+          source: "HEAD";
+          target: "refs/heads/feature/login";
+          branch: "feature/login";
+        },
+      ],
+      [
+        args: [spec: "+refs/heads/fix:refs/heads/fix"],
+        expected: {
+          forced: true;
+          source: "refs/heads/fix";
+          target: "refs/heads/fix";
+          branch: "fix";
+        },
+      ],
+    ]
+  >;
   /** a tag, a ref outside refs/heads, a branch name desolate would not carry, or a deletion
    *  (no source) is answered as git's error for that ref, and nothing is pushed */
-  export type Refuses = Table<typeof pushSpec, [
-    [args: [spec: "v1:refs/tags/v1"], expected: { answer: "error refs/tags/v1 desolate pushes branches" }],
-    [args: [spec: "HEAD:refs/heads/a..b"], expected: { answer: "error refs/heads/a..b desolate pushes branches" }],
-    [args: [spec: "HEAD:refs/heads/--upload-pack=x"], expected: { answer: "error refs/heads/--upload-pack=x desolate pushes branches" }],
-    [args: [spec: "HEAD"], expected: { answer: "error undefined desolate pushes branches" }],
-    [args: [spec: ":refs/heads/fix"], expected: { answer: "error refs/heads/fix deleting a branch on the remote is not something desolate does: delete it on the forge" }],
-  ]>;
+  export type Refuses = Table<
+    typeof pushSpec,
+    [
+      [
+        args: [spec: "v1:refs/tags/v1"],
+        expected: { answer: "error refs/tags/v1 desolate pushes branches" },
+      ],
+      [
+        args: [spec: "HEAD:refs/heads/a..b"],
+        expected: { answer: "error refs/heads/a..b desolate pushes branches" },
+      ],
+      [
+        args: [spec: "HEAD:refs/heads/--upload-pack=x"],
+        expected: { answer: "error refs/heads/--upload-pack=x desolate pushes branches" },
+      ],
+      [args: [spec: "HEAD"], expected: { answer: "error undefined desolate pushes branches" }],
+      [
+        args: [spec: ":refs/heads/fix"],
+        expected: {
+          answer: "error refs/heads/fix deleting a branch on the remote is not something desolate does: delete it on the forge";
+        },
+      ],
+    ]
+  >;
 }
 
 // Run by git, for a push to `desolate-push::<owner>/<repo>` (/usr/local/bin/git-remote-desolate-push,
 // a wrapper that runs node with this file's path); imported, it does nothing.
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname) await main();
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname)
+  await main();

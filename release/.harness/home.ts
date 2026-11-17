@@ -8,7 +8,8 @@ const state = (name: string) => path.join(home(), "state", name);
 
 /** The home, emptied: no state, no domains, nothing. */
 export const emptyHome = () => {
-  for (const entry of fs.readdirSync(home())) fs.rmSync(path.join(home(), entry), { recursive: true, force: true });
+  for (const entry of fs.readdirSync(home()))
+    fs.rmSync(path.join(home(), entry), { recursive: true, force: true });
   fs.mkdirSync(path.join(home(), "state"), { recursive: true });
 };
 

@@ -16,15 +16,34 @@ import type { Stack } from "../lib/harness.ts";
 let stack: Stack;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** A command in a workspace VM, as its agent would run it. */
-const inside = (workspace: string, script: string) => stack.desolate("exec", `dev/${workspace}`, "--vm", "--", "bash", "-c", script);
-type Listed = { domain: string; workspaces: { workspace: string; status: string; startedBy: string | null; outlived: boolean }[] }[];
-const listed = () => (JSON.parse(stack.desolate("list", "dev", "--json").stdout || "[]") as Listed)[0]?.workspaces ?? [];
+const inside = (workspace: string, script: string) =>
+  stack.desolate("exec", `dev/${workspace}`, "--vm", "--", "bash", "-c", script);
+type Listed = {
+  domain: string;
+  workspaces: { workspace: string; status: string; startedBy: string | null; outlived: boolean }[];
+}[];
+const listed = () =>
+  (JSON.parse(stack.desolate("list", "dev", "--json").stdout || "[]") as Listed)[0]?.workspaces ??
+  [];
 const until = async (probe: () => boolean, ms: number) => {
-  for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(500)) if (probe()) return true;
+  for (const deadline = Date.now() + ms; Date.now() < deadline; await sleep(500))
+    if (probe()) return true;
   return false;
 };
-type Event = { type: string; workspace?: string; startedBy?: string | null; request?: string; ok?: boolean; said?: string; parent?: string };
-const events = (workspace = "w1"): Event[] => inside(workspace, "desolate events --all").stdout.split("\n").filter(Boolean).map((line) => JSON.parse(line) as Event);
+type Event = {
+  type: string;
+  workspace?: string;
+  startedBy?: string | null;
+  request?: string;
+  ok?: boolean;
+  said?: string;
+  parent?: string;
+};
+const events = (workspace = "w1"): Event[] =>
+  inside(workspace, "desolate events --all")
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Event);
 
 describe("T2 workspaces that start workspaces, in their own domain only", () => {
   before(() => {
@@ -43,14 +62,23 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
   after(() => stack.destroy());
 
   it("on by default, with no limit; the person can turn it off, and set a limit", () => {
-    assert.match(stack.desolate("domain", "dev", "spawn").stdout, /may start workspaces, in dev only, .* with no limit/);
-    assert.match(inside("w1", "desolate domain stats").stdout, /started by workspaces: 0, no limit/);
+    assert.match(
+      stack.desolate("domain", "dev", "spawn").stdout,
+      /may start workspaces, in dev only, .* with no limit/,
+    );
+    assert.match(
+      inside("w1", "desolate domain stats").stdout,
+      /started by workspaces: 0, no limit/,
+    );
     assert.equal(stack.desolate("domain", "dev", "spawn", "--max", "0").code, 0);
     const asked = inside("w1", "desolate spawn --name helper");
     assert.equal(asked.code, 1);
     assert.match(asked.stderr, /cannot start workspaces: the person turned it off/);
     assert.match(asked.stderr, /desolate domain dev spawn --max none/);
-    assert.match(inside("w1", "desolate domain stats").stdout, /its workspaces cannot start workspaces: the person turned it off/);
+    assert.match(
+      inside("w1", "desolate domain stats").stdout,
+      /its workspaces cannot start workspaces: the person turned it off/,
+    );
     const limited = stack.desolate("domain", "dev", "spawn", "--max", "1");
     assert.equal(limited.code, 0, limited.stderr);
     assert.match(limited.stdout, /may have up to 1 workspace\(s\) they started at once/);
@@ -60,29 +88,70 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     const held = inside("w1", "desolate spawn --name dup --branch task/one");
     assert.equal(held.code, 1);
     assert.match(held.stderr, /the branch 'task\/one' is checked out in this workspace/);
-    assert.match(held.stderr, /desolate spawn --name dup --checkout <owner\/repo>=worktree:<a branch of its own>/);
-    assert.doesNotMatch(held.stderr, /desolate rm/, "never told to remove a workspace, least of all itself");
+    assert.match(
+      held.stderr,
+      /desolate spawn --name dup --checkout <owner\/repo>=worktree:<a branch of its own>/,
+    );
+    assert.doesNotMatch(
+      held.stderr,
+      /desolate rm/,
+      "never told to remove a workspace, least of all itself",
+    );
   });
 
   it("a workspace starts one, with its command as the agent; it is labelled, in the stats and the events", async () => {
     // The task's words reach the agent as words: quotes, `$(...)` and a leading dash included.
-    const asked = inside("w1", `desolate spawn --name helper --branch task/helper -- bash -c 'echo "task: $1"; sleep 600' _ 'tidy up; $(id) --help'`);
+    const asked = inside(
+      "w1",
+      `desolate spawn --name helper --branch task/helper -- bash -c 'echo "task: $1"; sleep 600' _ 'tidy up; $(id) --help'`,
+    );
     assert.equal(asked.code, 0, asked.stderr);
     assert.match(asked.stdout, /asked for dev\/helper/);
-    assert.ok(await until(() => listed().some((w) => w.workspace === "helper" && w.status === "running"), 240_000), JSON.stringify(listed()));
+    assert.ok(
+      await until(
+        () => listed().some((w) => w.workspace === "helper" && w.status === "running"),
+        240_000,
+      ),
+      JSON.stringify(listed()),
+    );
     const helper = listed().find((w) => w.workspace === "helper")!;
     assert.equal(helper.startedBy, "w1");
     assert.equal(listed().find((w) => w.workspace === "w1")!.startedBy, null);
     assert.match(stack.desolate("list", "dev").stdout, /dev\/helper .* started by w1\n/);
     assert.match(stack.desolate("list", "dev").stdout, /dev\/w1 .* started by you\n/);
     let log = "";
-    assert.ok(await until(() => /task: tidy up; \$\(id\) --help/.test((log = stack.desolate("agent", "log", "dev/helper").stdout)), 30_000), log);
+    assert.ok(
+      await until(
+        () =>
+          /task: tidy up; \$\(id\) --help/.test(
+            (log = stack.desolate("agent", "log", "dev/helper").stdout),
+          ),
+        30_000,
+      ),
+      log,
+    );
     // What the workspace that asked can see.
     const stats = inside("w1", "desolate domain stats").stdout;
     assert.match(stats, /started by workspaces: 1 of at most 1/);
     assert.match(stats, /helper {2}running .* started by w1/);
-    assert.ok(await until(() => events().some((e) => e.type === "request" && e.request === "spawn" && e.ok === true && e.workspace === "helper"), 30_000));
-    assert.ok(events().some((e) => e.type === "workspace-made" && e.workspace === "helper" && e.startedBy === "w1"));
+    assert.ok(
+      await until(
+        () =>
+          events().some(
+            (e) =>
+              e.type === "request" &&
+              e.request === "spawn" &&
+              e.ok === true &&
+              e.workspace === "helper",
+          ),
+        30_000,
+      ),
+    );
+    assert.ok(
+      events().some(
+        (e) => e.type === "workspace-made" && e.workspace === "helper" && e.startedBy === "w1",
+      ),
+    );
   });
 
   it("the limit holds: a second one is refused at once", () => {
@@ -95,16 +164,50 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     // As the root's ordinary user would, if a domain's data had taken it over: straight into
     // the queue the host is handed, for a workspace of the domain, with a signature of its own.
     stack.desolate("domain", "dev", "spawn", "--max", "none");
-    const forged = { kind: "workspace.spawn", at: Date.now(), args: { domain: "dev", workspace: "forged", parent: "w1", branch: "", command: JSON.stringify(["bash", "-c", "echo pwned"]), at: new Date().toISOString(), nonce: "0f".repeat(16), mac: "ab".repeat(32) } };
-    const put = stack.inRoot(["bash", "-c", 'mkdir -p /var/lib/desolate/host-queue && cat > /var/lib/desolate/host-queue/zz1-0123456789.json'], { input: JSON.stringify(forged) });
+    const forged = {
+      kind: "workspace.spawn",
+      at: Date.now(),
+      args: {
+        domain: "dev",
+        workspace: "forged",
+        parent: "w1",
+        branch: "",
+        command: JSON.stringify(["bash", "-c", "echo pwned"]),
+        at: new Date().toISOString(),
+        nonce: "0f".repeat(16),
+        mac: "ab".repeat(32),
+      },
+    };
+    const put = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        "mkdir -p /var/lib/desolate/host-queue && cat > /var/lib/desolate/host-queue/zz1-0123456789.json",
+      ],
+      { input: JSON.stringify(forged) },
+    );
     assert.equal(put.code, 0, put.stderr);
-    assert.ok(await until(() => events().some((e) => e.type === "request" && e.workspace === "forged"), 30_000));
+    assert.ok(
+      await until(
+        () => events().some((e) => e.type === "request" && e.workspace === "forged"),
+        30_000,
+      ),
+    );
     const said = events().find((e) => e.type === "request" && e.workspace === "forged")!;
     assert.equal(said.ok, false);
     assert.match(String(said.said), /not signed by dev\/w1/);
     // Ended, it holds nothing: its queue entry (which reserved its name and counted against
     // the limit, for half an hour) is gone.
-    assert.ok(await until(() => !/zz1-0123456789/.test(stack.inRoot(["bash", "-c", "ls /var/lib/desolate/host-queue"]).stdout), 10_000), "the refused request's queue entry is removed");
+    assert.ok(
+      await until(
+        () =>
+          !/zz1-0123456789/.test(
+            stack.inRoot(["bash", "-c", "ls /var/lib/desolate/host-queue"]).stdout,
+          ),
+        10_000,
+      ),
+      "the refused request's queue entry is removed",
+    );
     await sleep(3000);
     assert.ok(!listed().some((w) => w.workspace === "forged"), "nothing was made");
     stack.desolate("domain", "dev", "spawn", "--max", "1");
@@ -116,17 +219,51 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     assert.equal(notMine.code, 1);
     assert.match(notMine.stderr, /was not started by helper/);
     // Uncommitted work in it: refused, and said why.
-    assert.equal(inside("helper", "cd /workspaces/acme/widgets/.worktrees/task-helper && echo draft > notes.txt").code, 0);
+    assert.equal(
+      inside(
+        "helper",
+        "cd /workspaces/acme/widgets/.worktrees/task-helper && echo draft > notes.txt",
+      ).code,
+      0,
+    );
     assert.equal(inside("w1", "desolate close helper").code, 0, "the root takes the request");
-    assert.ok(await until(() => events().some((e) => e.type === "request" && e.request === "close" && e.ok === false), 120_000));
-    assert.match(String(events().find((e) => e.request === "close" && e.ok === false)!.said), /uncommitted changes or untracked files in \/workspaces\/acme\/widgets\/\.worktrees\/task-helper/);
-    assert.ok(listed().some((w) => w.workspace === "helper"), "still there");
+    assert.ok(
+      await until(
+        () => events().some((e) => e.type === "request" && e.request === "close" && e.ok === false),
+        120_000,
+      ),
+    );
+    assert.match(
+      String(events().find((e) => e.request === "close" && e.ok === false)!.said),
+      /uncommitted changes or untracked files in \/workspaces\/acme\/widgets\/\.worktrees\/task-helper/,
+    );
+    assert.ok(
+      listed().some((w) => w.workspace === "helper"),
+      "still there",
+    );
     // Committed: it goes, and its branch stays.
-    assert.equal(inside("helper", "cd /workspaces/acme/widgets/.worktrees/task-helper && git add -A && git commit -qm notes").code, 0);
+    assert.equal(
+      inside(
+        "helper",
+        "cd /workspaces/acme/widgets/.worktrees/task-helper && git add -A && git commit -qm notes",
+      ).code,
+      0,
+    );
     assert.equal(inside("w1", "desolate close helper").code, 0);
-    assert.ok(await until(() => !listed().some((w) => w.workspace === "helper"), 120_000), JSON.stringify(listed()));
-    assert.ok(events().some((e) => e.type === "workspace-removed" && e.workspace === "helper" && e.startedBy === "w1"));
-    assert.match(stack.desolate("branches", "dev").stdout, /task\/helper/, "its branch is the domain's still");
+    assert.ok(
+      await until(() => !listed().some((w) => w.workspace === "helper"), 120_000),
+      JSON.stringify(listed()),
+    );
+    assert.ok(
+      events().some(
+        (e) => e.type === "workspace-removed" && e.workspace === "helper" && e.startedBy === "w1",
+      ),
+    );
+    assert.match(
+      stack.desolate("branches", "dev").stdout,
+      /task\/helper/,
+      "its branch is the domain's still",
+    );
   });
 
   it("--checkout: a workspace for one repository, on a branch of its own; no empty branch in the others", async () => {
@@ -138,17 +275,65 @@ describe("T2 workspaces that start workspaces, in their own domain only", () => 
     assert.equal(stack.quiet("clone", "acme/notes", "--no-domain").code, 0);
     assert.equal(stack.quiet("domain", "dev", "add", "--repo", "acme/notes").code, 0);
     // Held: refused at once, naming the repository.
-    const held = inside("w1", "desolate spawn --name notes --checkout acme/widgets=worktree:task/one");
+    const held = inside(
+      "w1",
+      "desolate spawn --name notes --checkout acme/widgets=worktree:task/one",
+    );
     assert.equal(held.code, 1);
-    assert.match(held.stderr, /the branch 'task\/one' of acme\/widgets is checked out in this workspace/);
-    const asked = inside("w1", "desolate spawn --name notes --checkout acme/notes=worktree:notes/one");
+    assert.match(
+      held.stderr,
+      /the branch 'task\/one' of acme\/widgets is checked out in this workspace/,
+    );
+    const asked = inside(
+      "w1",
+      "desolate spawn --name notes --checkout acme/notes=worktree:notes/one",
+    );
     assert.equal(asked.code, 0, asked.stderr);
-    assert.ok(await until(() => listed().some((w) => w.workspace === "notes" && w.status === "running"), 240_000), JSON.stringify(listed()));
-    const plan = (JSON.parse(stack.desolate("list", "dev", "--json").stdout) as { workspaces: { workspace: string; checkouts: { repo: string; branch: string; kind: string }[] }[] }[])[0]!.workspaces.find((w) => w.workspace === "notes")!;
-    assert.deepEqual(plan.checkouts.find((c) => c.repo === "acme/notes"), { ...plan.checkouts.find((c) => c.repo === "acme/notes"), kind: "worktree", branch: "notes/one" });
+    assert.ok(
+      await until(
+        () => listed().some((w) => w.workspace === "notes" && w.status === "running"),
+        240_000,
+      ),
+      JSON.stringify(listed()),
+    );
+    const plan = (
+      JSON.parse(stack.desolate("list", "dev", "--json").stdout) as {
+        workspaces: {
+          workspace: string;
+          checkouts: { repo: string; branch: string; kind: string }[];
+        }[];
+      }[]
+    )[0]!.workspaces.find((w) => w.workspace === "notes")!;
+    assert.deepEqual(
+      plan.checkouts.find((c) => c.repo === "acme/notes"),
+      {
+        ...plan.checkouts.find((c) => c.repo === "acme/notes"),
+        kind: "worktree",
+        branch: "notes/one",
+      },
+    );
     // acme/widgets was not named: its main checkout if free, never a branch named for "notes".
-    assert.ok(plan.checkouts.every((c) => c.repo !== "acme/widgets" || c.kind === "main"), JSON.stringify(plan.checkouts));
-    assert.doesNotMatch(stack.desolate("branches", "dev").stdout, /acme\/widgets {2}notes /, "no empty branch for it in acme/widgets");
-    assert.ok(await until(() => events().some((e) => e.type === "request" && e.request === "spawn" && e.ok === true && e.workspace === "notes"), 60_000));
+    assert.ok(
+      plan.checkouts.every((c) => c.repo !== "acme/widgets" || c.kind === "main"),
+      JSON.stringify(plan.checkouts),
+    );
+    assert.doesNotMatch(
+      stack.desolate("branches", "dev").stdout,
+      /acme\/widgets {2}notes /,
+      "no empty branch for it in acme/widgets",
+    );
+    assert.ok(
+      await until(
+        () =>
+          events().some(
+            (e) =>
+              e.type === "request" &&
+              e.request === "spawn" &&
+              e.ok === true &&
+              e.workspace === "notes",
+          ),
+        60_000,
+      ),
+    );
   });
 });

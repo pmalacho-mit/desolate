@@ -11,14 +11,40 @@ import type { status } from "../host/status.ts";
 /** A workspace as the root records it, with one checkout of `repo` (the main one when
  *  `branch` is "main", else a worktree of that name). Its VM is the one desolate names for
  *  `vmOf`'s workspace of that name: the domain's own, unless a test says otherwise. */
-export const rootRecord = (domain: string, workspace: string, repo: string, branch: string, vmOf = domain): WorkspacePlan => ({
-  domain, workspace, vm: workspaceVmName(INSTANCE, vmOf, workspace), title: workspace, fetch: false, createdAt: "2026-11-16T09:00:00Z",
-  checkouts: [{ repo, kind: branch === "main" ? "main" : "worktree", name: branch, branch, base: "origin/main", path: `/workspaces/${repo}` }],
+export const rootRecord = (
+  domain: string,
+  workspace: string,
+  repo: string,
+  branch: string,
+  vmOf = domain,
+): WorkspacePlan => ({
+  domain,
+  workspace,
+  vm: workspaceVmName(INSTANCE, vmOf, workspace),
+  title: workspace,
+  fetch: false,
+  createdAt: "2026-11-16T09:00:00Z",
+  checkouts: [
+    {
+      repo,
+      kind: branch === "main" ? "main" : "worktree",
+      name: branch,
+      branch,
+      base: "origin/main",
+      path: `/workspaces/${repo}`,
+    },
+  ],
 });
 
 /** A checkout's status and note, written where /desolate/status writes them in the domain's
  *  clone (shared/status.ts, statusDir). */
-export const checkoutSays = (domain: string, repo: string, branch: string, statusJson: string, note: string) => {
+export const checkoutSays = (
+  domain: string,
+  repo: string,
+  branch: string,
+  statusJson: string,
+  note: string,
+) => {
   const git = path.join(process.env.DESOLATE_HOME!, "domains", domain, "repos", repo, ".git");
   const dir = branch === "main" ? git : path.join(git, "worktrees", branch);
   fs.mkdirSync(dir, { recursive: true });
@@ -27,7 +53,11 @@ export const checkoutSays = (domain: string, repo: string, branch: string, statu
 };
 
 /** What `desolate status <target>` printed, or the refusal it ended with and its fix. */
-export const statusSays = async (command: typeof status, target: string | undefined, json: boolean): Promise<{ lines: string[] } | { refused: string; fix: string }> => {
+export const statusSays = async (
+  command: typeof status,
+  target: string | undefined,
+  json: boolean,
+): Promise<{ lines: string[] } | { refused: string; fix: string }> => {
   const lines: string[] = [];
   try {
     await command(target, (line) => void lines.push(line), json);

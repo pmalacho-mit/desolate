@@ -18,7 +18,9 @@ const reached = (start: string): Set<string> => {
     if (seen.has(file)) return;
     seen.add(file);
     const source = fs.readFileSync(file, "utf8");
-    for (const m of source.matchAll(/(?:^|\s)(?:import|export)\s[^;]*?from\s+"(\.[^"]+)"|import\(\s*"(\.[^"]+)"\s*\)/gm)) {
+    for (const m of source.matchAll(
+      /(?:^|\s)(?:import|export)\s[^;]*?from\s+"(\.[^"]+)"|import\(\s*"(\.[^"]+)"\s*\)/gm,
+    )) {
       const spec = m[1] ?? m[2]!;
       if (/^import type\s/.test(m[0].trim())) continue;
       if (!spec.endsWith(".ts")) continue;
@@ -37,9 +39,18 @@ describe("T1 the daemon's code, as its restart sees it", () => {
     assert.deepEqual([...new Set(outside)].sort(), []);
   });
   it("everything the root's services import is in root/ or shared/: what start.sh copies and hashes", () => {
-    const entries = fs.readdirSync(path.join(RELEASE, "root")).filter((name) => name.endsWith(".ts")).map((name) => `root/${name}`)
-      .concat(fs.readdirSync(path.join(RELEASE, "root/proxy")).filter((name) => name.endsWith(".ts")).map((name) => `root/proxy/${name}`));
-    const outside = entries.flatMap((entry) => [...reached(entry)])
+    const entries = fs
+      .readdirSync(path.join(RELEASE, "root"))
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => `root/${name}`)
+      .concat(
+        fs
+          .readdirSync(path.join(RELEASE, "root/proxy"))
+          .filter((name) => name.endsWith(".ts"))
+          .map((name) => `root/proxy/${name}`),
+      );
+    const outside = entries
+      .flatMap((entry) => [...reached(entry)])
       .map((file) => path.relative(RELEASE, file))
       .filter((file) => !/^(root|shared)\//.test(file));
     assert.deepEqual([...new Set(outside)].sort(), []);

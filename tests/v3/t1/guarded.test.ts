@@ -13,16 +13,23 @@ const get = (port: number, path: string) =>
       let body = "";
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
-    }).on("error", reject).end();
+    })
+      .on("error", reject)
+      .end();
   });
 
 describe("T1 a page that throws", () => {
   it("is that request's 500, logged, and the next request is answered", async () => {
     const logged: string[] = [];
-    const server = createServer(guarded((line) => logged.push(line), async (req, res) => {
-      if (req.url === "/boom") throw new ReferenceError("same is not defined");
-      res.end("fine");
-    }));
+    const server = createServer(
+      guarded(
+        (line) => logged.push(line),
+        async (req, res) => {
+          if (req.url === "/boom") throw new ReferenceError("same is not defined");
+          res.end("fine");
+        },
+      ),
+    );
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as AddressInfo).port;
     try {

@@ -12,7 +12,8 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-retired-"));
 process.env.DESOLATE_HOME = home;
 const state = path.join(home, "state");
 fs.mkdirSync(state, { recursive: true });
-const { dashboardMade, dashboardStale, retire, retiredAt, stale } = await import("../../../release/host/retired.ts");
+const { dashboardMade, dashboardStale, retire, retiredAt, stale } =
+  await import("../../../release/host/retired.ts");
 
 describe("T1 retired tokens", () => {
   after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -25,12 +26,18 @@ describe("T1 retired tokens", () => {
   });
 
   it("retiring removes the page tokens; a token not marked with this retiring is stale", () => {
-    for (const name of ["approve-token", "git-token"]) fs.writeFileSync(path.join(state, name), "x\n");
+    for (const name of ["approve-token", "git-token"])
+      fs.writeFileSync(path.join(state, name), "x\n");
     retire();
     const at = retiredAt();
     assert.ok(at > 0);
-    for (const name of ["approve-token", "git-token", "ui-token"]) assert.ok(!fs.existsSync(path.join(state, name)), name);
-    assert.equal(stale(0), true, "an editor token with no mark (made before, or by an older desolate)");
+    for (const name of ["approve-token", "git-token", "ui-token"])
+      assert.ok(!fs.existsSync(path.join(state, name)), name);
+    assert.equal(
+      stale(0),
+      true,
+      "an editor token with no mark (made before, or by an older desolate)",
+    );
     assert.equal(stale(at - 1), true, "one made after an earlier retiring");
     assert.equal(stale(at), false, "one made after this one (editor.sh marks it with this number)");
     assert.equal(dashboardStale(), true, "no dashboard token at all");
@@ -42,7 +49,7 @@ describe("T1 retired tokens", () => {
 
   it("a later retiring is always a larger number, whatever the clock did", () => {
     const first = retiredAt();
-    fs.writeFileSync(path.join(state, "tokens-retired"), `${Date.now() + 3_600_000}\n`);   // the clock went back an hour since
+    fs.writeFileSync(path.join(state, "tokens-retired"), `${Date.now() + 3_600_000}\n`); // the clock went back an hour since
     const ahead = retiredAt();
     retire();
     assert.ok(retiredAt() > ahead && ahead > first);

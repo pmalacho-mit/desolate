@@ -26,19 +26,32 @@ describe("T2 destroy and bootstrap again: nothing of yours is lost", () => {
     assert.equal(bootstrap(stack).code, 0);
     assert.equal(stack.quiet("clone", "acme/widgets", "--no-domain").code, 0);
     assert.equal(stack.quiet("domain", "create", "dev", "--repo", "acme/widgets").code, 0);
-    const secret = spawnSync(CLI, ["domain", "dev", "secret", "set", "REBUILD-TOKEN", "--hosts", "example.com"], { env: stack.env, input: "rebuild-secret-value\n", encoding: "utf8" });
+    const secret = spawnSync(
+      CLI,
+      ["domain", "dev", "secret", "set", "REBUILD-TOKEN", "--hosts", "example.com"],
+      { env: stack.env, input: "rebuild-secret-value\n", encoding: "utf8" },
+    );
     assert.equal(secret.status, 0, secret.stderr);
     assert.equal(stack.quiet("domain", "dev", "net", "allow", "example.org").code, 0);
     const up = stack.quiet("up", "dev", "--name", "w1", "--branch", "task/one");
     assert.equal(up.code, 0, up.stderr);
-    const work = stack.quiet("exec", "dev/w1", "--", "bash", "-c", `cd ${CHECKOUT} && echo done > WORK.md && git add WORK.md && git -c user.name=a -c user.email=a@x commit -qm work && echo wip > WIP.txt`);
+    const work = stack.quiet(
+      "exec",
+      "dev/w1",
+      "--",
+      "bash",
+      "-c",
+      `cd ${CHECKOUT} && echo done > WORK.md && git add WORK.md && git -c user.name=a -c user.email=a@x commit -qm work && echo wip > WIP.txt`,
+    );
     assert.equal(work.code, 0, work.stderr);
   });
   after(() => stack.destroy());
 
   const state = () => ({
     keys: stack.quiet("keys").stdout,
-    repos: JSON.parse(stack.quiet("repos", "--json").stdout).map((r: { repo: string; pushable: boolean }) => [r.repo, r.pushable]),
+    repos: JSON.parse(stack.quiet("repos", "--json").stdout).map(
+      (r: { repo: string; pushable: boolean }) => [r.repo, r.pushable],
+    ),
     secrets: stack.quiet("domain", "dev", "secret", "list").stdout,
     net: stack.quiet("domain", "dev", "net", "show").stdout,
   });
@@ -56,7 +69,11 @@ describe("T2 destroy and bootstrap again: nothing of yours is lost", () => {
     const again = bootstrap(stack);
     assert.equal(again.code, 0, again.stderr);
     assert.match(again.stdout, /put back the root's keys, registry, secrets and network rules/);
-    assert.deepEqual(state(), before, "keys, repositories, secrets and network rules, as they were");
+    assert.deepEqual(
+      state(),
+      before,
+      "keys, repositories, secrets and network rules, as they were",
+    );
     assert.ok(!fs.existsSync(kept()), "the host's copy is gone once it is back in the root");
   });
 
@@ -76,13 +93,30 @@ describe("T2 destroy and bootstrap again: nothing of yours is lost", () => {
   });
 
   it("start makes a workspace whose VM is gone again, on its checkouts, with its work", () => {
-    const listed = JSON.parse(stack.quiet("list", "--json").stdout) as { workspaces: { workspace: string; status: string }[] }[];
-    assert.equal(listed[0]!.workspaces[0]!.status, "missing", "control: its VM went with the destroy");
+    const listed = JSON.parse(stack.quiet("list", "--json").stdout) as {
+      workspaces: { workspace: string; status: string }[];
+    }[];
+    assert.equal(
+      listed[0]!.workspaces[0]!.status,
+      "missing",
+      "control: its VM went with the destroy",
+    );
     const started = stack.desolate("start", "dev/w1");
     assert.equal(started.code, 0, started.stderr);
     assert.match(started.stdout, /is gone; making it again, on the same checkouts/);
-    const seen = stack.quiet("exec", "dev/w1", "--", "bash", "-c", `cd ${CHECKOUT} && git log --format=%s -1 && cat WIP.txt`);
+    const seen = stack.quiet(
+      "exec",
+      "dev/w1",
+      "--",
+      "bash",
+      "-c",
+      `cd ${CHECKOUT} && git log --format=%s -1 && cat WIP.txt`,
+    );
     assert.equal(seen.code, 0, seen.stderr);
-    assert.equal(seen.stdout.trim(), "work\nwip", "the commit and the uncommitted file are both there");
+    assert.equal(
+      seen.stdout.trim(),
+      "work\nwip",
+      "the commit and the uncommitted file are both there",
+    );
   });
 });

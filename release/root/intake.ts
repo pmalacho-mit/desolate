@@ -25,14 +25,20 @@ export const bundleRefusal = async (copy: string, gitDir: string): Promise<strin
   const read = fs.readSync(fd, head, 0, head.length, 0);
   fs.closeSync(fd);
   const end = head.subarray(0, read).indexOf("\n\n");
-  if (!head.subarray(0, 20).toString("latin1").startsWith("# v2 git bundle\n") || end < 0) return "it is not a bundle a workspace's git writes (v2)";
+  if (!head.subarray(0, 20).toString("latin1").startsWith("# v2 git bundle\n") || end < 0)
+    return "it is not a bundle a workspace's git writes (v2)";
   const quarantine = fs.mkdtempSync(path.join(path.dirname(copy), "check-"));
   fs.mkdirSync(path.join(quarantine, "pack"));
   try {
     const child = spawn("git", ["index-pack", "--strict", "--fix-thin", "--stdin"], {
       stdio: ["pipe", "ignore", "pipe"],
       cwd: path.dirname(gitDir),
-      env: { ...process.env, GIT_DIR: gitDir, GIT_OBJECT_DIRECTORY: quarantine, GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(gitDir, "objects") },
+      env: {
+        ...process.env,
+        GIT_DIR: gitDir,
+        GIT_OBJECT_DIRECTORY: quarantine,
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(gitDir, "objects"),
+      },
     });
     let stderr = "";
     child.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-2000)));
@@ -40,16 +46,27 @@ export const bundleRefusal = async (copy: string, gitDir: string): Promise<strin
     fs.createReadStream(copy, { start: end + 2 }).pipe(child.stdin);
     // A pack made to be slow is refused, not waited on.
     let late = false;
-    const timer = setTimeout(() => { late = true; child.kill("SIGKILL"); }, CHECK_MS);
-    const code = await new Promise<number>((resolve) => child.on("close", (status) => resolve(status ?? 1)));
+    const timer = setTimeout(() => {
+      late = true;
+      child.kill("SIGKILL");
+    }, CHECK_MS);
+    const code = await new Promise<number>((resolve) =>
+      child.on("close", (status) => resolve(status ?? 1)),
+    );
     clearTimeout(timer);
     if (late) return `checking its objects took longer than ${CHECK_MS / 60_000} minutes`;
     if (code === 0) return null;
     // git names what it found ("error: object <id>: hasDotgit: contains '.git'") before its
     // last line ("fatal: fsck error in packed object"): the first is the one worth reading.
     const said = stderr.trim().split("\n");
-    const why = said.find((line) => line.startsWith("error: ")) ?? said.pop() ?? "its objects did not pass git's checks";
-    return why.replace(/^error: /, "").replace(/[^\x20-\x7e]/g, "?").slice(0, 300);
+    const why =
+      said.find((line) => line.startsWith("error: ")) ??
+      said.pop() ??
+      "its objects did not pass git's checks";
+    return why
+      .replace(/^error: /, "")
+      .replace(/[^\x20-\x7e]/g, "?")
+      .slice(0, 300);
   } finally {
     fs.rmSync(quarantine, { recursive: true, force: true });
   }
@@ -60,14 +77,36 @@ declare namespace bundleRefusal {
   type Clean = Invoke<typeof aBundle, [kind: "clean"]>;
   type DotGit = Invoke<typeof aBundle, [kind: "dotgit"]>;
   /** an ordinary commit's bundle passes: every object is one git's own fsck accepts */
-  export type Passes = Expect<Invoke<typeof bundleRefusal, [copy: Clean["copy"], gitDir: Clean["gitDir"]]>, "=", null>;
+  export type Passes = Expect<
+    Invoke<typeof bundleRefusal, [copy: Clean["copy"], gitDir: Clean["gitDir"]]>,
+    "=",
+    null
+  >;
   /** a tree with a `.git` in it is refused before any of it enters the clone, and git's own
    *  words say why */
-  export type DotGitInATree = Expect<Invoke<typeof bundleRefusal, [copy: DotGit["copy"], gitDir: DotGit["gitDir"]]>, "includes", "hasDotgit: contains '.git'">;
+  export type DotGitInATree = Expect<
+    Invoke<typeof bundleRefusal, [copy: DotGit["copy"], gitDir: DotGit["gitDir"]]>,
+    "includes",
+    "hasDotgit: contains '.git'"
+  >;
   /** only the format a workspace's git writes: v3 (another hash, objects left out) and what
    *  is not a bundle at all are refused by their header */
   export type NotV2 = [
-    Expect<Invoke<typeof bundleRefusal, [copy: Invoke<typeof aBundle, [kind: "v3"]>["copy"], gitDir: "/nowhere"]>, "=", "it is not a bundle a workspace's git writes (v2)">,
-    Expect<Invoke<typeof bundleRefusal, [copy: Invoke<typeof aBundle, [kind: "text"]>["copy"], gitDir: "/nowhere"]>, "=", "it is not a bundle a workspace's git writes (v2)">,
+    Expect<
+      Invoke<
+        typeof bundleRefusal,
+        [copy: Invoke<typeof aBundle, [kind: "v3"]>["copy"], gitDir: "/nowhere"]
+      >,
+      "=",
+      "it is not a bundle a workspace's git writes (v2)"
+    >,
+    Expect<
+      Invoke<
+        typeof bundleRefusal,
+        [copy: Invoke<typeof aBundle, [kind: "text"]>["copy"], gitDir: "/nowhere"]
+      >,
+      "=",
+      "it is not a bundle a workspace's git writes (v2)"
+    >,
   ];
 }

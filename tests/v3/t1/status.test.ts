@@ -16,14 +16,28 @@ describe("T1 status files: read as data, and only where they are", () => {
   const secret = path.join(top, "the-roots-own");
   fs.mkdirSync(secret);
   fs.writeFileSync(path.join(secret, "desolate-note.md"), "ROOT SECRET\n");
-  fs.writeFileSync(path.join(secret, "desolate-status.json"), JSON.stringify({ color: "red", message: "ROOT SECRET", updated: "x" }));
+  fs.writeFileSync(
+    path.join(secret, "desolate-status.json"),
+    JSON.stringify({ color: "red", message: "ROOT SECRET", updated: "x" }),
+  );
   const status = path.join(git, "desolate-status.json");
   const note = path.join(git, "desolate-note.md");
 
   it("control: an honest status and note are read", () => {
-    fs.writeFileSync(status, JSON.stringify({ color: "green", message: "tests pass\u001b[31m", updated: "2026-01-01T00:00:00Z" }));
+    fs.writeFileSync(
+      status,
+      JSON.stringify({
+        color: "green",
+        message: "tests pass\u001b[31m",
+        updated: "2026-01-01T00:00:00Z",
+      }),
+    );
     fs.writeFileSync(note, "# done\n\u001b]0;title\u0007");
-    assert.deepEqual(readStatus(base, status), { color: "green", message: "tests pass [31m", updated: "2026-01-01T00:00:00Z" });
+    assert.deepEqual(readStatus(base, status), {
+      color: "green",
+      message: "tests pass [31m",
+      updated: "2026-01-01T00:00:00Z",
+    });
     assert.equal(readNote(base, note), "# done\n ]0;title");
   });
 
@@ -39,7 +53,11 @@ describe("T1 status files: read as data, and only where they are", () => {
   it("a directory on the way that is a link elsewhere is not walked through", () => {
     fs.rmSync(git, { recursive: true });
     fs.symlinkSync(secret, git);
-    assert.equal(fs.readFileSync(note, "utf8"), "ROOT SECRET\n", "control: the path does lead to the other file");
+    assert.equal(
+      fs.readFileSync(note, "utf8"),
+      "ROOT SECRET\n",
+      "control: the path does lead to the other file",
+    );
     assert.equal(readStatus(base, status), null);
     assert.equal(readNote(base, note), "");
   });
@@ -67,7 +85,10 @@ describe("T1 a checkout's HEAD: what it has checked out now, read as data", () =
   const top = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-head-"));
   const base = path.join(top, "repos");
   const clone = path.join(base, "acme/widgets");
-  const run = (dir: string, ...args: string[]) => execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { encoding: "utf8" }).trim();
+  const run = (dir: string, ...args: string[]) =>
+    execFileSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+      encoding: "utf8",
+    }).trim();
   fs.mkdirSync(clone, { recursive: true });
   run(clone, "init", "-q", "-b", "main");
   run(clone, "commit", "-q", "--allow-empty", "-m", "one");
@@ -79,13 +100,24 @@ describe("T1 a checkout's HEAD: what it has checked out now, read as data", () =
     assert.deepEqual(readHead(base, main), { branch: "main", commit: one });
     run(clone, "switch", "-q", "-c", "feature/greeting");
     run(clone, "commit", "-q", "--allow-empty", "-m", "two");
-    assert.deepEqual(readHead(base, main), { branch: "feature/greeting", commit: run(clone, "rev-parse", "HEAD") });
+    assert.deepEqual(readHead(base, main), {
+      branch: "feature/greeting",
+      commit: run(clone, "rev-parse", "HEAD"),
+    });
     run(clone, "pack-refs", "--all");
-    assert.deepEqual(readHead(base, main), { branch: "feature/greeting", commit: run(clone, "rev-parse", "HEAD") }, "from packed-refs");
+    assert.deepEqual(
+      readHead(base, main),
+      { branch: "feature/greeting", commit: run(clone, "rev-parse", "HEAD") },
+      "from packed-refs",
+    );
     const packed = path.join(clone, ".git", "packed-refs");
     const honest = fs.readFileSync(packed, "utf8");
     fs.writeFileSync(packed, honest + `# ${"x".repeat(300 * 1024)}\n`);
-    assert.deepEqual(readHead(base, main), { branch: "feature/greeting", commit: null }, "a packed-refs over 256 KiB is not read");
+    assert.deepEqual(
+      readHead(base, main),
+      { branch: "feature/greeting", commit: null },
+      "a packed-refs over 256 KiB is not read",
+    );
     fs.writeFileSync(packed, honest);
     run(clone, "worktree", "add", "-q", "-b", "w2", ".worktrees/w2", "main");
     assert.deepEqual(readHead(base, tree), { branch: "w2", commit: one });
@@ -96,12 +128,22 @@ describe("T1 a checkout's HEAD: what it has checked out now, read as data", () =
   it("a HEAD the workspace wrote is believed only as far as a name desolate would carry", () => {
     const head = path.join(clone, ".git", "HEAD");
     const keep = fs.readFileSync(head, "utf8");
-    for (const text of ["ref: refs/heads/../../../etc/passwd\n", "ref: refs/heads/-x\n", "ref: refs/tags/v1\n", "garbage\n", "ref: refs/heads/a\u001b[2J\n"]) {
+    for (const text of [
+      "ref: refs/heads/../../../etc/passwd\n",
+      "ref: refs/heads/-x\n",
+      "ref: refs/tags/v1\n",
+      "garbage\n",
+      "ref: refs/heads/a\u001b[2J\n",
+    ]) {
       fs.writeFileSync(head, text);
       assert.deepEqual(readHead(base, main), { branch: null, commit: null }, JSON.stringify(text));
     }
     fs.writeFileSync(head, "ref: refs/heads/live-");
-    assert.equal(readHead(base, main), null, "half written (no newline yet): unsettled, not a branch called live-");
+    assert.equal(
+      readHead(base, main),
+      null,
+      "half written (no newline yet): unsettled, not a branch called live-",
+    );
     fs.rmSync(head);
     fs.symlinkSync(path.join(top, "elsewhere"), head);
     fs.writeFileSync(path.join(top, "elsewhere"), keep);

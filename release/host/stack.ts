@@ -25,7 +25,8 @@ const CONFIG = path.join(paths.state, "config.json");
 export const config = (): Config | null => readJson<Config | null>(CONFIG, null);
 export const saveConfig = (value: Config) => writeJson(CONFIG, value);
 
-export const defaultBackend = (): Config["backend"] => (process.platform === "darwin" ? "vz" : "qemu");
+export const defaultBackend = (): Config["backend"] =>
+  process.platform === "darwin" ? "vz" : "qemu";
 
 /** Which backend this invocation uses. `fake` is never remembered and never a default: it
  *  runs only when DESOLATE_BACKEND=fake is in the environment of this very command
@@ -33,16 +34,29 @@ export const defaultBackend = (): Config["backend"] => (process.platform === "da
 export const backendKind = (): Config["backend"] => {
   const env = process.env.DESOLATE_BACKEND;
   const stored = config()?.backend;
-  if (env !== undefined && env !== "fake" && env !== "qemu" && env !== "vz") refuse(`DESOLATE_BACKEND is '${env}'`, "use fake, qemu or vz");
-  if (stored === "fake" && env !== "fake") refuse("this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name", "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend");
-  if (env === "fake" && stored && stored !== "fake") refuse(`DESOLATE_BACKEND=fake, but this stack was bootstrapped on ${stored}`, "unset DESOLATE_BACKEND");
+  if (env !== undefined && env !== "fake" && env !== "qemu" && env !== "vz")
+    refuse(`DESOLATE_BACKEND is '${env}'`, "use fake, qemu or vz");
+  if (stored === "fake" && env !== "fake")
+    refuse(
+      "this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name",
+      "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend",
+    );
+  if (env === "fake" && stored && stored !== "fake")
+    refuse(
+      `DESOLATE_BACKEND=fake, but this stack was bootstrapped on ${stored}`,
+      "unset DESOLATE_BACKEND",
+    );
   return (env as Config["backend"] | undefined) ?? stored ?? defaultBackend();
 };
 
 declare namespace backendKind {
   /** what bootstrap recorded, when this command names none */
   export type Recorded = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "config.json", text: '{"backend":"qemu"}']>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>],
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "config.json", text: '{"backend":"qemu"}']>,
+      Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>,
+    ],
     Expect<Invoke<typeof backendKind>, "=", "qemu">
   >;
   /** the fake backend (no isolation at all) only when this very command asks for it by name */
@@ -52,19 +66,50 @@ declare namespace backendKind {
       Expect<Invoke<typeof backendKind>, "=", "fake">
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "config.json", text: '{"backend":"fake"}']>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>],
-      Expect<Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>, "=", { message: "this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name"; fix: "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend"; code: 1 }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof writeState, [name: "config.json", text: '{"backend":"fake"}']>,
+        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>,
+      ],
+      Expect<
+        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
+        "=",
+        {
+          message: "this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name";
+          fix: "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend";
+          code: 1;
+        }
+      >
     >,
   ];
   /** nor on a stack that was bootstrapped on a real one; and no backend it does not know */
   export type Refuses = [
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "config.json", text: '{"backend":"vz"}']>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
-      Expect<Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>, "=", { message: "DESOLATE_BACKEND=fake, but this stack was bootstrapped on vz"; fix: "unset DESOLATE_BACKEND"; code: 1 }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof writeState, [name: "config.json", text: '{"backend":"vz"}']>,
+        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>,
+      ],
+      Expect<
+        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
+        "=",
+        {
+          message: "DESOLATE_BACKEND=fake, but this stack was bootstrapped on vz";
+          fix: "unset DESOLATE_BACKEND";
+          code: 1;
+        }
+      >
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "docker"]>],
-      Expect<Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>, "=", { message: "DESOLATE_BACKEND is 'docker'"; fix: "use fake, qemu or vz"; code: 1 }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "docker"]>,
+      ],
+      Expect<
+        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
+        "=",
+        { message: "DESOLATE_BACKEND is 'docker'"; fix: "use fake, qemu or vz"; code: 1 }
+      >
     >,
   ];
 }
@@ -102,15 +147,21 @@ export const rootSpec = (): VmSpec => ({
 declare namespace rootSpec {
   /** the root reaches the network (it fetches and pushes); it reads desolate's code and cannot
    *  change it, and holds the mirrors, its clones and every domain's share */
-  export type Shares = Expect<Invoke<typeof rootSpec>, "matches", {
-    role: "root"; egress: "open"; sockets: [];
-    shares: [
-      { guest: "/desolate/release"; writable: false },
-      { guest: "/desolate/mirrors"; writable: true },
-      { guest: "/desolate/root"; writable: true },
-      { guest: "/desolate/domains"; writable: true },
-    ];
-  }>;
+  export type Shares = Expect<
+    Invoke<typeof rootSpec>,
+    "matches",
+    {
+      role: "root";
+      egress: "open";
+      sockets: [];
+      shares: [
+        { guest: "/desolate/release"; writable: false },
+        { guest: "/desolate/mirrors"; writable: true },
+        { guest: "/desolate/root"; writable: true },
+        { guest: "/desolate/domains"; writable: true },
+      ];
+    }
+  >;
 }
 
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
@@ -121,10 +172,20 @@ type Reply<T> = { ok: boolean; result?: T; error?: string; fix?: string; code?: 
 
 /** The request, over the service: its progress shown as it comes, its answer, or null when
  *  the service is not there or its code is stale (the caller then asks the old way). */
-const viaService = <T>(op: string, args: Record<string, unknown>, options: { quiet?: boolean; timeoutMs?: number }): Promise<Reply<T> | null> =>
+const viaService = <T>(
+  op: string,
+  args: Record<string, unknown>,
+  options: { quiet?: boolean; timeoutMs?: number },
+): Promise<Reply<T> | null> =>
   new Promise((resolve) => {
     // (socat's -t: how long it waits for the answer after sending the request.)
-    const child = backend().spawn(ROOT_VM, ["socat", "-t", "86400", "-", `UNIX-CONNECT:${ROOTCTL_SOCKET}`]);
+    const child = backend().spawn(ROOT_VM, [
+      "socat",
+      "-t",
+      "86400",
+      "-",
+      `UNIX-CONNECT:${ROOTCTL_SOCKET}`,
+    ]);
     let buffer = "";
     let reply: Reply<T> | null = null;
     let accepted = false;
@@ -135,9 +196,15 @@ const viaService = <T>(op: string, args: Record<string, unknown>, options: { qui
         const line = buffer.slice(0, end);
         buffer = buffer.slice(end + 1);
         try {
-          const message = JSON.parse(line) as { accepted?: boolean; progress?: unknown; reply?: Reply<T>; stale?: boolean };
+          const message = JSON.parse(line) as {
+            accepted?: boolean;
+            progress?: unknown;
+            reply?: Reply<T>;
+            stale?: boolean;
+          };
           if (message.accepted) accepted = true;
-          if (typeof message.progress === "string" && !options.quiet) process.stderr.write(`${forTerminal(message.progress)}\n`);
+          if (typeof message.progress === "string" && !options.quiet)
+            process.stderr.write(`${forTerminal(message.progress)}\n`);
           if (message.reply) reply = message.reply;
         } catch {
           /* not a line of the service's */
@@ -150,7 +217,13 @@ const viaService = <T>(op: string, args: Record<string, unknown>, options: { qui
     child.on("close", () => {
       clearTimeout(timer);
       // Taken and not answered: the operation may have run. Said, not asked again.
-      if (!reply && accepted) resolve({ ok: false, error: `the root took '${op}' and its answer was lost: it may have run`, fix: "desolate doctor; then look before asking again", code: 1 });
+      if (!reply && accepted)
+        resolve({
+          ok: false,
+          error: `the root took '${op}' and its answer was lost: it may have run`,
+          fix: "desolate doctor; then look before asking again",
+          code: 1,
+        });
       else resolve(reply);
     });
     child.stdin!.end(JSON.stringify({ op, args }) + "\n");
@@ -159,10 +232,16 @@ const viaService = <T>(op: string, args: Record<string, unknown>, options: { qui
 /** One request over the CLI channel. The root's refusals arrive as Refusals, with their fix.
  *  Asked of the root's CLI service when it is up (a fraction of the time), else by running
  *  rootctl.ts once (a fresh stack, a service restarting on new code). */
-export const rootctl = async <T = unknown>(op: string, args: Record<string, unknown> = {}, options: { quiet?: boolean; timeoutMs?: number } = {}): Promise<T> => {
-  const served = process.env.DESOLATE_ROOTCTL === "exec" ? null : await viaService<T>(op, args, options);
+export const rootctl = async <T = unknown>(
+  op: string,
+  args: Record<string, unknown> = {},
+  options: { quiet?: boolean; timeoutMs?: number } = {},
+): Promise<T> => {
+  const served =
+    process.env.DESOLATE_ROOTCTL === "exec" ? null : await viaService<T>(op, args, options);
   if (served) {
-    if (!served.ok) throw new Refusal(served.error ?? "the root refused", served.fix ?? "", served.code ?? 1);
+    if (!served.ok)
+      throw new Refusal(served.error ?? "the root refused", served.fix ?? "", served.code ?? 1);
     return served.result as T;
   }
   const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/rootctl.ts`], {
@@ -175,14 +254,27 @@ export const rootctl = async <T = unknown>(op: string, args: Record<string, unkn
   try {
     reply = JSON.parse(line);
   } catch {
-    throw new Refusal(`the root did not answer '${op}' (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400) || "no output"}`, "desolate doctor");
+    throw new Refusal(
+      `the root did not answer '${op}' (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-400) || "no output"}`,
+      "desolate doctor",
+    );
   }
-  if (!reply.ok) throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "", reply.code ?? 1);
+  if (!reply.ok)
+    throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "", reply.code ?? 1);
   return reply.result as T;
 };
 
 export const ensureHome = () => {
-  for (const dir of [paths.home, paths.mirrors, paths.rootClones, paths.domains, paths.state, paths.run, paths.logs]) fs.mkdirSync(dir, { recursive: true });
+  for (const dir of [
+    paths.home,
+    paths.mirrors,
+    paths.rootClones,
+    paths.domains,
+    paths.state,
+    paths.run,
+    paths.logs,
+  ])
+    fs.mkdirSync(dir, { recursive: true });
   // The home holds every repository's history and every domain's work: the user's alone.
   fs.chmodSync(paths.home, 0o700);
 };
@@ -194,8 +286,16 @@ const proxyUsers = new Set<string>();
  *  programs as these users and must not make them). */
 export const ensureProxyUser = async (domain: string) => {
   if (proxyUsers.has(domain)) return;
-  const result = await backend().exec(ROOT_VM, ["bash", `${guest.release}/root/proxy-user.sh`, String(process.getuid!()), domain], { root: true, timeoutMs: 60_000 });
-  if (result.code !== 0) refuse(`the domain ${domain}'s proxies' user could not be made: ${(result.stderr || result.stdout).trim().slice(-300)}`, "desolate doctor");
+  const result = await backend().exec(
+    ROOT_VM,
+    ["bash", `${guest.release}/root/proxy-user.sh`, String(process.getuid!()), domain],
+    { root: true, timeoutMs: 60_000 },
+  );
+  if (result.code !== 0)
+    refuse(
+      `the domain ${domain}'s proxies' user could not be made: ${(result.stderr || result.stdout).trim().slice(-300)}`,
+      "desolate doctor",
+    );
   proxyUsers.add(domain);
 };
 
@@ -203,22 +303,41 @@ export const ensureProxyUser = async (domain: string) => {
  *  directory (root/forge-pin.ts), through the host's own way in, never through the root's
  *  ordinary user (which could rewrite its own copy, and so aim a push elsewhere). */
 export const pinForge = async (forge: unknown) => {
-  const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/forge-pin.ts`], { root: true, input: JSON.stringify(forge), timeoutMs: 60_000 });
-  if (result.code !== 0) refuse(`the root could not pin the forge's address: ${(result.stdout || result.stderr).trim().slice(-300)}`, "desolate doctor");
+  const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/forge-pin.ts`], {
+    root: true,
+    input: JSON.stringify(forge),
+    timeoutMs: 60_000,
+  });
+  if (result.code !== 0)
+    refuse(
+      `the root could not pin the forge's address: ${(result.stdout || result.stderr).trim().slice(-300)}`,
+      "desolate doctor",
+    );
 };
 
 /** Change a domain's secrets: as root in the root VM, through the host's own way in, with
  *  the request (a value among it) on stdin (root/proxy/secret-store.ts). Then the root's
  *  user, which never sees a value, starts or stops the domain's secrets proxy and tells its
  *  workspaces the names. Returns the names, hosts and switches. */
-export const changeSecrets = async <T>(domain: string, op: "set" | "switch" | "remove" | "copy", input: Record<string, unknown>): Promise<T> => {
+export const changeSecrets = async <T>(
+  domain: string,
+  op: "set" | "switch" | "remove" | "copy",
+  input: Record<string, unknown>,
+): Promise<T> => {
   await ensureProxyUser(domain);
-  const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/proxy/secret-store.ts`, domain, op], { root: true, input: JSON.stringify(input), timeoutMs: 60_000 });
+  const result = await backend().exec(
+    ROOT_VM,
+    [...NODE, `${guest.release}/root/proxy/secret-store.ts`, domain, op],
+    { root: true, input: JSON.stringify(input), timeoutMs: 60_000 },
+  );
   let reply: { ok: boolean; error?: string; fix?: string };
   try {
     reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   } catch {
-    throw new Refusal(`the root did not change ${domain}'s secrets (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-300)}`, "desolate doctor");
+    throw new Refusal(
+      `the root did not change ${domain}'s secrets (exit ${result.code}): ${(result.stderr || result.stdout).trim().slice(-300)}`,
+      "desolate doctor",
+    );
   }
   if (!reply.ok) throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "");
   return rootctl<T>("secret.apply", { domain }, { quiet: true });

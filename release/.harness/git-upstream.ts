@@ -13,7 +13,13 @@ const scratch = () => {
   onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
   return dir;
 };
-const placesIn = (dir: string): Places => ({ clones: path.join(dir, "git"), mirrors: path.join(dir, "mirrors"), release: path.join(dir, "release"), subrepo: path.join(dir, "subrepo"), scratch: dir });
+const placesIn = (dir: string): Places => ({
+  clones: path.join(dir, "git"),
+  mirrors: path.join(dir, "mirrors"),
+  release: path.join(dir, "release"),
+  subrepo: path.join(dir, "subrepo"),
+  scratch: dir,
+});
 
 /** A git VM with clones of `clones` and mirrors of `mirrors` (each <owner>/<repo>). */
 export const gitVm = (clones: string[], mirrors: string[]): Places => {

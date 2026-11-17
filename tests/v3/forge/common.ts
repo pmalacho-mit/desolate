@@ -24,10 +24,14 @@ export const writeJson = (name: string, value: unknown) => {
   fs.renameSync(`${file}.tmp`, file);
 };
 export const append = (name: string, entry: Record<string, unknown>) =>
-  fs.appendFileSync(path.join(STATE, name), JSON.stringify({ time: new Date().toISOString(), ...entry }) + "\n");
+  fs.appendFileSync(
+    path.join(STATE, name),
+    JSON.stringify({ time: new Date().toISOString(), ...entry }) + "\n",
+  );
 
 const secret = () => fs.readFileSync(path.join(STATE, "secret"), "utf8").trim();
-export const config = () => readJson<{ host: string; lfsPort: number }>("config.json", { host: "127.0.0.1", lfsPort: 8080 });
+export const config = () =>
+  readJson<{ host: string; lfsPort: number }>("config.json", { host: "127.0.0.1", lfsPort: 8080 });
 
 /** An LFS token: what `git-lfs-authenticate` hands a key, scoped to one repository and one
  *  operation, as GitHub's is. A download token cannot upload. */
@@ -41,7 +45,8 @@ export const checkToken = (token: string): { repo: string; operation: string } |
   if (!encoded || !mac) return null;
   const body = Buffer.from(encoded, "base64url").toString();
   const want = createHmac("sha256", secret()).update(body).digest("base64url");
-  if (mac.length !== want.length || !timingSafeEqual(Buffer.from(mac), Buffer.from(want))) return null;
+  if (mac.length !== want.length || !timingSafeEqual(Buffer.from(mac), Buffer.from(want)))
+    return null;
   const [repo, operation, expires] = body.split("|");
   if (!repo || !operation || Number(expires) < Date.now()) return null;
   return { repo, operation };

@@ -33,12 +33,20 @@ export const domainPath = (domain: string) => `${ROOT.domains}/${domain}`;
 
 declare namespace mirrorPath {
   /** one bare mirror per repository: what the remote published, which every clone borrows */
-  export type Where = Expect<Invoke<typeof mirrorPath, [repo: { owner: "acme"; name: "app" }]>, "=", "/desolate/mirrors/acme/app.git">;
+  export type Where = Expect<
+    Invoke<typeof mirrorPath, [repo: { owner: "acme"; name: "app" }]>,
+    "=",
+    "/desolate/mirrors/acme/app.git"
+  >;
 }
 
 declare namespace clonePath {
   /** and the root's own clone of it, the person's: on the share the host and the git VM see */
-  export type Where = Expect<Invoke<typeof clonePath, [repo: { owner: "acme"; name: "app" }]>, "=", "/desolate/root/acme/app">;
+  export type Where = Expect<
+    Invoke<typeof clonePath, [repo: { owner: "acme"; name: "app" }]>,
+    "=",
+    "/desolate/root/acme/app"
+  >;
 }
 
 export const KEYRING = {
@@ -83,7 +91,10 @@ export const GITCONFIG = `${ROOT.sys}/gitconfig`;
 /** The forge's address and host key, as the host gave them, in root's own directory: what the
  *  pusher reads (root/forge-pin.ts writes them). The root's user's copies (FORGE and its
  *  known_hosts) are for fetching, and that user could rewrite them. */
-export const PINNED_FORGE = { config: `${ROOT.sys}/forge.json`, knownHosts: `${ROOT.sys}/known_hosts` } as const;
+export const PINNED_FORGE = {
+  config: `${ROOT.sys}/forge.json`,
+  knownHosts: `${ROOT.sys}/known_hosts`,
+} as const;
 /** Where the host leaves a push from the git VM (a bundle) for the root to take in: in the
  *  root clones' share, which the host writes and the git VM cannot. */
 export const GIT_IN = `${ROOT.clones}/.git-in`;

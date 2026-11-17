@@ -106,19 +106,27 @@ export const GUEST_USER = "desolate";
 /** socat's address for a dial target; a port, or a socket path made only of plain names. */
 export const socatAddress = (target: number | string): string => {
   if (typeof target === "number") {
-    if (!Number.isInteger(target) || target < 1 || target > 65535) throw new Error(`bad port ${target}`);
+    if (!Number.isInteger(target) || target < 1 || target > 65535)
+      throw new Error(`bad port ${target}`);
     return `TCP:127.0.0.1:${target}`;
   }
-  if (!/^(\/[A-Za-z0-9._-]+)+$/.test(target) || target.includes("/../") || target.length > 200) throw new Error("bad socket path");
+  if (!/^(\/[A-Za-z0-9._-]+)+$/.test(target) || target.includes("/../") || target.length > 200)
+    throw new Error("bad socket path");
   return `UNIX-CONNECT:${target}`;
 };
 
 declare namespace socatAddress {
   /** a port on the VM's own loopback, or a socket by an absolute path of plain names */
-  export type Targets = Table<typeof socatAddress, [
-    [args: [target: 8080], expected: "TCP:127.0.0.1:8080"],
-    [args: [target: "/desolate/link/proxy.sock"], expected: "UNIX-CONNECT:/desolate/link/proxy.sock"],
-  ]>;
+  export type Targets = Table<
+    typeof socatAddress,
+    [
+      [args: [target: 8080], expected: "TCP:127.0.0.1:8080"],
+      [
+        args: [target: "/desolate/link/proxy.sock"],
+        expected: "UNIX-CONNECT:/desolate/link/proxy.sock",
+      ],
+    ]
+  >;
   /** the address is one socat word: nothing in it may reach another host, climb out of its
    *  directory, or add an option */
   export type Refuses = [

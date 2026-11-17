@@ -9,7 +9,13 @@ import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Mock, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Mock,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { gitAnswers, scriptedGit } from "../.harness/workspace-git.ts";
 
 export const OUTBOX = "/desolate/outbox";
@@ -18,7 +24,11 @@ const clone = (repo: string) => `/workspaces/${repo}`;
 const syncDir = (repo: string) => path.join(OUTBOX, "sync", repo);
 
 const git = async (repo: string, args: string[], input?: string) => {
-  const result = await run("git", ["-C", clone(repo), ...args], { input, timeoutMs: 300_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
+  const result = await run("git", ["-C", clone(repo), ...args], {
+    input,
+    timeoutMs: 300_000,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
   return { ok: result.code === 0, out: result.stdout.trim(), err: result.stderr.trim() };
 };
 
@@ -27,8 +37,15 @@ export const domainRepos = (): string[] => {
   try {
     for (const owner of fs.readdirSync("/workspaces", { withFileTypes: true })) {
       if (!owner.isDirectory() || owner.name.startsWith(".")) continue;
-      for (const name of fs.readdirSync(path.join("/workspaces", owner.name), { withFileTypes: true }))
-        if (name.isDirectory() && parseRepo(`${owner.name}/${name.name}`) && fs.existsSync(path.join("/workspaces", owner.name, name.name, ".git"))) out.push(`${owner.name}/${name.name}`);
+      for (const name of fs.readdirSync(path.join("/workspaces", owner.name), {
+        withFileTypes: true,
+      }))
+        if (
+          name.isDirectory() &&
+          parseRepo(`${owner.name}/${name.name}`) &&
+          fs.existsSync(path.join("/workspaces", owner.name, name.name, ".git"))
+        )
+          out.push(`${owner.name}/${name.name}`);
     }
   } catch {
     /* no clones yet */
@@ -37,7 +54,11 @@ export const domainRepos = (): string[] => {
 };
 
 export const branches = async (repo: string): Promise<Record<string, string>> => {
-  const listed = await git(repo, ["for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads"]);
+  const listed = await git(repo, [
+    "for-each-ref",
+    "--format=%(objectname) %(refname:strip=2)",
+    "refs/heads",
+  ]);
   const out: Record<string, string> = {};
   for (const line of listed.out.split("\n")) {
     const [commit, ...rest] = line.split(" ");
@@ -54,9 +75,26 @@ declare namespace branches {
   export type OnlyWhatTheRootCarries = Given<
     [
       Mock<"../shared/run.ts", typeof scriptedGit>,
-      Invoke<typeof gitAnswers, [answers: [["for-each-ref", "1111111111111111111111111111111111111111 main\n2222222222222222222222222222222222222222 feature/greet\n1111111111111111111111111111111111111111 --upload-pack=touch x\n1111111111111111111111111111111111111111 a..b\n1111111111111111111111111111111111111111 x.lock\n1111111 short\n"]]]>,
+      Invoke<
+        typeof gitAnswers,
+        [
+          answers: [
+            [
+              "for-each-ref",
+              "1111111111111111111111111111111111111111 main\n2222222222222222222222222222222222222222 feature/greet\n1111111111111111111111111111111111111111 --upload-pack=touch x\n1111111111111111111111111111111111111111 a..b\n1111111111111111111111111111111111111111 x.lock\n1111111 short\n",
+            ],
+          ],
+        ]
+      >,
     ],
-    Expect<Invoke<typeof branches, [repo: "acme/app"]>, "=", { main: "1111111111111111111111111111111111111111"; "feature/greet": "2222222222222222222222222222222222222222" }>
+    Expect<
+      Invoke<typeof branches, [repo: "acme/app"]>,
+      "=",
+      {
+        main: "1111111111111111111111111111111111111111";
+        "feature/greet": "2222222222222222222222222222222222222222";
+      }
+    >
   >;
   /** a clone git cannot read has no branches, rather than an error */
   export type NoClone = Given<
@@ -74,35 +112,67 @@ export const syncRepo = async (repo: string): Promise<{ branches: number; bundle
   const haves = readJson<string[]>(path.join(INBOX, "haves", `${repo}.json`), []).filter(isCommit);
   // Only haves this clone actually has can be named as exclusions.
   const known: string[] = [];
-  for (const commit of haves.slice(0, 500)) if ((await git(repo, ["cat-file", "-e", `${commit}^{commit}`])).ok) known.push(commit);
+  for (const commit of haves.slice(0, 500))
+    if ((await git(repo, ["cat-file", "-e", `${commit}^{commit}`])).ok) known.push(commit);
   const names = Object.keys(refs);
   let bundled = false;
   if (names.length > 0) {
     const file = path.join(dir, `${Date.now().toString(36)}-${process.pid}.bundle`);
-    const made = await git(repo, ["bundle", "create", "--quiet", `${file}.tmp`, ...names.map((name) => `refs/heads/${name}`), "--not", "--remotes=origin", ...known]);
+    const made = await git(repo, [
+      "bundle",
+      "create",
+      "--quiet",
+      `${file}.tmp`,
+      ...names.map((name) => `refs/heads/${name}`),
+      "--not",
+      "--remotes=origin",
+      ...known,
+    ]);
     if (made.ok) {
       fs.renameSync(`${file}.tmp`, file);
       bundled = true;
     } else {
       fs.rmSync(`${file}.tmp`, { force: true });
-      if (!/empty bundle/i.test(made.err)) throw new Error(`could not bundle ${repo}: ${made.err.slice(-300)}`);
+      if (!/empty bundle/i.test(made.err))
+        throw new Error(`could not bundle ${repo}: ${made.err.slice(-300)}`);
     }
   }
   writeJson(path.join(dir, "refs.json"), { refs, at: new Date().toISOString() });
   return { branches: names.length, bundled };
 };
 
-const POINTER = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
+const POINTER =
+  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
 
 /** The LFS objects that `branch`'s commits reference and the mirror does not hold, copied to
  *  the outbox by oid. Pointers are found in every new commit, not only at the tip: the
  *  remote refuses a push that references an object it was never sent. */
-export const stageLfs = async (repo: string, branch: string): Promise<{ oid: string; size: number }[]> => {
-  const listed = await git(repo, ["rev-list", "--objects", `refs/heads/${branch}`, "--not", "--remotes=origin"]);
-  const ids = listed.out.split("\n").map((line) => line.split(" ")[0]!).filter((id) => /^[0-9a-f]{40,64}$/.test(id));
+export const stageLfs = async (
+  repo: string,
+  branch: string,
+): Promise<{ oid: string; size: number }[]> => {
+  const listed = await git(repo, [
+    "rev-list",
+    "--objects",
+    `refs/heads/${branch}`,
+    "--not",
+    "--remotes=origin",
+  ]);
+  const ids = listed.out
+    .split("\n")
+    .map((line) => line.split(" ")[0]!)
+    .filter((id) => /^[0-9a-f]{40,64}$/.test(id));
   if (ids.length === 0) return [];
-  const sizes = await git(repo, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], ids.join("\n") + "\n");
-  const small = sizes.out.split("\n").map((line) => line.split(" ")).filter(([, type, size]) => type === "blob" && Number(size) < 400).map(([id]) => id!);
+  const sizes = await git(
+    repo,
+    ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+    ids.join("\n") + "\n",
+  );
+  const small = sizes.out
+    .split("\n")
+    .map((line) => line.split(" "))
+    .filter(([, type, size]) => type === "blob" && Number(size) < 400)
+    .map(([id]) => id!);
   const staged: { oid: string; size: number }[] = [];
   const mirror = `/desolate/mirrors/${repo}.git/lfs/objects`;
   for (const id of small) {
@@ -113,7 +183,10 @@ export const stageLfs = async (repo: string, branch: string): Promise<{ oid: str
     const where = path.join(oid.slice(0, 2), oid.slice(2, 4), oid);
     if (fs.existsSync(path.join(mirror, where)) || staged.some((s) => s.oid === oid)) continue;
     const local = path.join(clone(repo), ".git", "lfs", "objects", where);
-    if (!fs.existsSync(local)) throw new Error(`${branch} references the LFS object ${oid.slice(0, 12)}, which is neither in this clone nor in the mirror`);
+    if (!fs.existsSync(local))
+      throw new Error(
+        `${branch} references the LFS object ${oid.slice(0, 12)}, which is neither in this clone nor in the mirror`,
+      );
     const target = path.join(OUTBOX, "lfs", repo, oid);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(local, target);
@@ -125,7 +198,10 @@ export const stageLfs = async (repo: string, branch: string): Promise<{ oid: str
 declare namespace stageLfs {
   /** a branch with nothing the remote lacks has nothing to stage, and git is not asked more */
   export type NothingNew = Given<
-    [Mock<"../shared/run.ts", typeof scriptedGit>, Invoke<typeof gitAnswers, [answers: [["rev-list", ""]]]>],
+    [
+      Mock<"../shared/run.ts", typeof scriptedGit>,
+      Invoke<typeof gitAnswers, [answers: [["rev-list", ""]]]>,
+    ],
     Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
   >;
   /** only a small blob can be a pointer: a large one is never read, and a small one that is not
@@ -133,11 +209,22 @@ declare namespace stageLfs {
   export type OrdinaryFiles = Given<
     [
       Mock<"../shared/run.ts", typeof scriptedGit>,
-      Invoke<typeof gitAnswers, [answers: [
-        ["rev-list", "1111111111111111111111111111111111111111\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa README.md\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb big.bin\n"],
-        ["cat-file --batch-check", "1111111111111111111111111111111111111111 commit 200\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 120\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 5000\n"],
-        ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "# app\nA small file.\n"],
-      ]]>,
+      Invoke<
+        typeof gitAnswers,
+        [
+          answers: [
+            [
+              "rev-list",
+              "1111111111111111111111111111111111111111\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa README.md\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb big.bin\n",
+            ],
+            [
+              "cat-file --batch-check",
+              "1111111111111111111111111111111111111111 commit 200\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 120\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 5000\n",
+            ],
+            ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "# app\nA small file.\n"],
+          ],
+        ]
+      >,
     ],
     Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
   >;
@@ -146,13 +233,33 @@ declare namespace stageLfs {
   export type NotQuitePointers = Given<
     [
       Mock<"../shared/run.ts", typeof scriptedGit>,
-      Invoke<typeof gitAnswers, [answers: [
-        ["rev-list", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb b\ndddddddddddddddddddddddddddddddddddddddd d\n"],
-        ["cat-file --batch-check", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 130\ndddddddddddddddddddddddddddddddddddddddd blob 140\n"],
-        ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n"],
-        ["cat-file blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\nsize 12\n"],
-        ["cat-file blob dddddddddddddddddddddddddddddddddddddddd", "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n"],
-      ]]>,
+      Invoke<
+        typeof gitAnswers,
+        [
+          answers: [
+            [
+              "rev-list",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb b\ndddddddddddddddddddddddddddddddddddddddd d\n",
+            ],
+            [
+              "cat-file --batch-check",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 130\ndddddddddddddddddddddddddddddddddddddddd blob 140\n",
+            ],
+            [
+              "cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+            ],
+            [
+              "cat-file blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\nsize 12\n",
+            ],
+            [
+              "cat-file blob dddddddddddddddddddddddddddddddddddddddd",
+              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n",
+            ],
+          ],
+        ]
+      >,
     ],
     Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
   >;
@@ -161,13 +268,24 @@ declare namespace stageLfs {
   export type MissingObject = Given<
     [
       Mock<"../shared/run.ts", typeof scriptedGit>,
-      Invoke<typeof gitAnswers, [answers: [
-        ["rev-list", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa data/model.bin\n"],
-        ["cat-file --batch-check", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\n"],
-        ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n"],
-      ]]>,
+      Invoke<
+        typeof gitAnswers,
+        [
+          answers: [
+            ["rev-list", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa data/model.bin\n"],
+            ["cat-file --batch-check", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\n"],
+            [
+              "cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+            ],
+          ],
+        ]
+      >,
     ],
-    Throws<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "main references the LFS object 0123456789ab, which is neither in this clone nor in the mirror">
+    Throws<
+      Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>,
+      "main references the LFS object 0123456789ab, which is neither in this clone nor in the mirror"
+    >
   >;
 }
 
@@ -179,41 +297,69 @@ export const importDeliveries = async (repo: string): Promise<string[]> => {
   const imported: string[] = [];
   let names: string[] = [];
   try {
-    names = fs.readdirSync(dir).filter((name) => name.endsWith(".json")).sort();
+    names = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith(".json"))
+      .sort();
   } catch {
     return [];
   }
   for (const name of names) {
     const id = name.slice(0, -5);
     if (done.includes(id)) continue;
-    const meta = readJson<{ branch?: string; commit?: string; bundle?: boolean } | null>(path.join(dir, name), null);
+    const meta = readJson<{ branch?: string; commit?: string; bundle?: boolean } | null>(
+      path.join(dir, name),
+      null,
+    );
     if (!meta || !isBranch(meta.branch) || !isCommit(meta.commit)) continue;
     if (meta.bundle !== false) {
-      await git(repo, ["fetch", "--quiet", "--no-tags", path.join(dir, `${id}.bundle`), "+refs/heads/*:refs/desolate/delivery/*"]);
-      const scratch = await git(repo, ["for-each-ref", "--format=%(refname)", "refs/desolate/delivery/"]);
-      for (const ref of scratch.out.split("\n").filter(Boolean)) await git(repo, ["update-ref", "-d", ref]);
+      await git(repo, [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        path.join(dir, `${id}.bundle`),
+        "+refs/heads/*:refs/desolate/delivery/*",
+      ]);
+      const scratch = await git(repo, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/desolate/delivery/",
+      ]);
+      for (const ref of scratch.out.split("\n").filter(Boolean))
+        await git(repo, ["update-ref", "-d", ref]);
     }
     // As root/<branch>: never over a branch of the domain's own.
-    if ((await git(repo, ["cat-file", "-e", `${meta.commit}^{commit}`])).ok && (await git(repo, ["update-ref", `refs/remotes/root/${meta.branch}`, meta.commit])).ok) imported.push(meta.branch);
+    if (
+      (await git(repo, ["cat-file", "-e", `${meta.commit}^{commit}`])).ok &&
+      (await git(repo, ["update-ref", `refs/remotes/root/${meta.branch}`, meta.commit])).ok
+    )
+      imported.push(meta.branch);
     done.push(id);
   }
-  if (imported.length > 0 || names.length > 0) writeJson(path.join(clone(repo), ".git", "desolate-delivered.json"), done.slice(-500));
+  if (imported.length > 0 || names.length > 0)
+    writeJson(path.join(clone(repo), ".git", "desolate-delivered.json"), done.slice(-500));
   return imported;
 };
 
 /** The request channel (section 6.4): a fixed vocabulary, written to the outbox; the root
  *  answers in the inbox, which the domain cannot write. */
-export const request = async (body: Record<string, unknown>, timeoutMs = 120_000): Promise<Record<string, unknown>> => {
+export const request = async (
+  body: Record<string, unknown>,
+  timeoutMs = 120_000,
+): Promise<Record<string, unknown>> => {
   const id = `${Date.now().toString(36)}-${createHash("sha256").update(`${process.pid}${Math.random()}`).digest("hex").slice(0, 10)}`;
   const dir = path.join(OUTBOX, "requests");
   fs.mkdirSync(dir, { recursive: true });
   writeJson(path.join(dir, `${id}.json`), body);
   const reply = path.join(INBOX, "replies", `${id}.json`);
-  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline; ) {
+  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline;) {
     const value = readJson<Record<string, unknown> | null>(reply, null);
     if (value) return value;
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
   fs.rmSync(path.join(dir, `${id}.json`), { force: true });
-  return { ok: false, error: "the root did not answer. Is it running? On the host: desolate doctor" };
+  return {
+    ok: false,
+    error: "the root did not answer. Is it running? On the host: desolate doctor",
+  };
 };

@@ -21,17 +21,27 @@ import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
 export const SOCKET = path.join(ROOT.run, "rootctl", "rootctl.sock");
 
 /** One request, answered: shared by the one-shot and the service. */
-const answer = async (request: unknown, progress: (line: string) => void): Promise<Record<string, unknown>> => {
-  if (!isRecord(request) || typeof request.op !== "string") return { ok: false, error: "a request is {op, args}", fix: "", code: 64 };
+const answer = async (
+  request: unknown,
+  progress: (line: string) => void,
+): Promise<Record<string, unknown>> => {
+  if (!isRecord(request) || typeof request.op !== "string")
+    return { ok: false, error: "a request is {op, args}", fix: "", code: 64 };
   // Its own operations only: `ops[op]` alone also finds what every object inherits
   // ("constructor" ran `Object(args)` and answered ok: in-source tests, 2026-11-16).
   const op = Object.hasOwn(ops, request.op) ? ops[request.op] : undefined;
-  if (!op) return { ok: false, error: `the root has no operation '${request.op}'`, fix: "", code: 64 };
+  if (!op)
+    return { ok: false, error: `the root has no operation '${request.op}'`, fix: "", code: 64 };
   try {
     return { ok: true, result: await op(isRecord(request.args) ? request.args : {}, progress) };
   } catch (error) {
     const refusal = error instanceof Refusal ? error : null;
-    return { ok: false, error: error instanceof Error ? error.message : String(error), fix: refusal?.fix ?? "", code: refusal?.code ?? 1 };
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+      fix: refusal?.fix ?? "",
+      code: refusal?.code ?? 1,
+    };
   }
 };
 
@@ -41,32 +51,77 @@ declare namespace answer {
   /** one of the fixed table's operations, by name, with its JSON arguments: its result */
   export type Answers = Given<
     [Fresh, Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>],
-    Expect<Invoke<typeof answer, [request: { op: "repo.list" }, progress: Quiet]>, "matches", { ok: true; result: [{ repo: "acme/app"; pushable: true }] }>
+    Expect<
+      Invoke<typeof answer, [request: { op: "repo.list" }, progress: Quiet]>,
+      "matches",
+      { ok: true; result: [{ repo: "acme/app"; pushable: true }] }
+    >
   >;
   /** a refusal comes back whole: what is wrong, what to run, the exit code a script sees */
   export type Refused = Given<
     Fresh,
-    Expect<Invoke<typeof answer, [request: { op: "domain.show"; args: { slug: "../x" } }, progress: Quiet]>, "=", {
-      ok: false; error: "'../x' is not a domain name"; fix: "a domain name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit"; code: 64;
-    }>
+    Expect<
+      Invoke<
+        typeof answer,
+        [request: { op: "domain.show"; args: { slug: "../x" } }, progress: Quiet]
+      >,
+      "=",
+      {
+        ok: false;
+        error: "'../x' is not a domain name";
+        fix: "a domain name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit";
+        code: 64;
+      }
+    >
   >;
   /** what is not a request, or names no operation the table has, is a usage error: the
    *  channel never carries a command line */
   export type NotOnTheTable = [
-    Expect<Invoke<typeof answer, [request: null, progress: Quiet]>, "=", { ok: false; error: "a request is {op, args}"; fix: ""; code: 64 }>,
-    Expect<Invoke<typeof answer, [request: { op: ["ping"] }, progress: Quiet]>, "=", { ok: false; error: "a request is {op, args}"; fix: ""; code: 64 }>,
-    Expect<Invoke<typeof answer, [request: { op: "sh -c id" }, progress: Quiet]>, "=", { ok: false; error: "the root has no operation 'sh -c id'"; fix: ""; code: 64 }>,
+    Expect<
+      Invoke<typeof answer, [request: null, progress: Quiet]>,
+      "=",
+      { ok: false; error: "a request is {op, args}"; fix: ""; code: 64 }
+    >,
+    Expect<
+      Invoke<typeof answer, [request: { op: ["ping"] }, progress: Quiet]>,
+      "=",
+      { ok: false; error: "a request is {op, args}"; fix: ""; code: 64 }
+    >,
+    Expect<
+      Invoke<typeof answer, [request: { op: "sh -c id" }, progress: Quiet]>,
+      "=",
+      { ok: false; error: "the root has no operation 'sh -c id'"; fix: ""; code: 64 }
+    >,
   ];
   /** nor a name every object inherits: only the table's own operations are on it */
   export type Inherited = [
-    Expect<Invoke<typeof answer, [request: { op: "constructor"; args: {} }, progress: Quiet]>, "=", { ok: false; error: "the root has no operation 'constructor'"; fix: ""; code: 64 }>,
-    Expect<Invoke<typeof answer, [request: { op: "toString" }, progress: Quiet]>, "=", { ok: false; error: "the root has no operation 'toString'"; fix: ""; code: 64 }>,
-    Expect<Invoke<typeof answer, [request: { op: "__proto__" }, progress: Quiet]>, "=", { ok: false; error: "the root has no operation '__proto__'"; fix: ""; code: 64 }>,
+    Expect<
+      Invoke<typeof answer, [request: { op: "constructor"; args: {} }, progress: Quiet]>,
+      "=",
+      { ok: false; error: "the root has no operation 'constructor'"; fix: ""; code: 64 }
+    >,
+    Expect<
+      Invoke<typeof answer, [request: { op: "toString" }, progress: Quiet]>,
+      "=",
+      { ok: false; error: "the root has no operation 'toString'"; fix: ""; code: 64 }
+    >,
+    Expect<
+      Invoke<typeof answer, [request: { op: "__proto__" }, progress: Quiet]>,
+      "=",
+      { ok: false; error: "the root has no operation '__proto__'"; fix: ""; code: 64 }
+    >,
   ];
   /** an operation that fails without a refusal says so, with no fix and exit code 1 */
   export type Failed = Given<
     Fresh,
-    Expect<Invoke<typeof answer, [request: { op: "repo.fetch"; args: { repo: "acme" } }, progress: Quiet]>, "=", { ok: false; error: "not a repository name (owner/repo): acme"; fix: ""; code: 1 }>
+    Expect<
+      Invoke<
+        typeof answer,
+        [request: { op: "repo.fetch"; args: { repo: "acme" } }, progress: Quiet]
+      >,
+      "=",
+      { ok: false; error: "not a repository name (owner/repo): acme"; fix: ""; code: 1 }
+    >
   >;
 }
 
@@ -76,7 +131,9 @@ const codeTime = () => {
   let newest = 0;
   for (const dir of [HERE, path.join(HERE, "proxy"), path.join(HERE, "..", "shared")])
     try {
-      for (const name of fs.readdirSync(dir)) if (name.endsWith(".ts")) newest = Math.max(newest, fs.statSync(path.join(dir, name)).mtimeMs);
+      for (const name of fs.readdirSync(dir))
+        if (name.endsWith(".ts"))
+          newest = Math.max(newest, fs.statSync(path.join(dir, name)).mtimeMs);
     } catch {
       /* gone: stale */
       return Infinity;
@@ -118,7 +175,9 @@ const serve = () => {
       }
       // Taken: from here the host never asks again the old way (an operation must not run twice).
       connection.write(JSON.stringify({ accepted: true }) + "\n");
-      const reply = await answer(request, (line) => connection.write(JSON.stringify({ progress: line }) + "\n"));
+      const reply = await answer(request, (line) =>
+        connection.write(JSON.stringify({ progress: line }) + "\n"),
+      );
       connection.end(JSON.stringify({ reply }) + "\n");
     });
   });
@@ -138,7 +197,9 @@ const main = async () => {
   } catch {
     request = null;
   }
-  process.stdout.write(JSON.stringify(await answer(request, (line) => process.stderr.write(`${line}\n`))) + "\n");
+  process.stdout.write(
+    JSON.stringify(await answer(request, (line) => process.stderr.write(`${line}\n`))) + "\n",
+  );
 };
 
 // Run by the host (`node rootctl.ts`, a request on stdin) and by start.sh (`rootctl.ts serve`);

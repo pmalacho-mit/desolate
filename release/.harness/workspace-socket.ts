@@ -15,20 +15,25 @@ export const wsctlAsking = async (
 ): Promise<{ daemonGot: string | null; written: string[] }> => {
   const file = path.join(process.env.DESOLATE_HOME!, `wsd-${process.pid}-${made++}.sock`);
   let daemonGot: string | null = null;
-  const server = reply === null ? null : net.createServer((connection) => {
-    let got = "";
-    connection.on("data", (chunk) => {
-      got += chunk;
-      if (got.includes("\n")) {
-        daemonGot = got;
-        connection.end(reply);
-      }
-    });
-  });
+  const server =
+    reply === null
+      ? null
+      : net.createServer((connection) => {
+          let got = "";
+          connection.on("data", (chunk) => {
+            got += chunk;
+            if (got.includes("\n")) {
+              daemonGot = got;
+              connection.end(reply);
+            }
+          });
+        });
   if (server) await new Promise<void>((resolve) => server.listen(file, resolve));
   const written: string[] = [];
   try {
-    await new Promise<void>((resolve) => ask(input, file, (text) => written.push(text)).on("close", () => resolve()));
+    await new Promise<void>((resolve) =>
+      ask(input, file, (text) => written.push(text)).on("close", () => resolve()),
+    );
     return { daemonGot, written };
   } finally {
     server?.close();

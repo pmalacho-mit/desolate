@@ -21,6 +21,8 @@ export const scriptedGit = {
     const asked = words.join(" ");
     const answers = ((globalThis as Record<string, unknown>)[ANSWERS] ?? []) as Answer[];
     const found = answers.find(([start]) => asked.startsWith(start));
-    return found ? { code: 0, stdout: found[1], stderr: "" } : { code: 1, stdout: "", stderr: `fatal: not scripted: ${command} ${asked}` };
+    return found
+      ? { code: 0, stdout: found[1], stderr: "" }
+      : { code: 1, stdout: "", stderr: `fatal: not scripted: ${command} ${asked}` };
   },
 };

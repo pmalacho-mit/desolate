@@ -19,7 +19,8 @@ export const ID = /^[0-9a-z]{6,12}-[0-9a-f]{8}$/;
  *  formatting (what would make the text on the approval page not the text published). */
 const HIDDEN = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
 /** The same for a body, which keeps its newlines and tabs. */
-const HIDDEN_IN_BODY = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
+const HIDDEN_IN_BODY =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/u;
 
 export type Draft = { repo: string; title: string; body: string; labels: string[] };
 
@@ -28,17 +29,33 @@ export const draftOf = (value: unknown): Draft | { error: string } => {
   const v = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
   if (!parseRepo(v.repo)) return { error: "an issue names its repository as <owner>/<repo>" };
   const title = typeof v.title === "string" ? v.title.trim() : "";
-  if (!title || title.length > LIMIT.title) return { error: `an issue needs a title, of at most ${LIMIT.title} characters` };
+  if (!title || title.length > LIMIT.title)
+    return { error: `an issue needs a title, of at most ${LIMIT.title} characters` };
   if (HIDDEN.test(title)) return { error: "the title holds a control or invisible character" };
-  const body = typeof v.body === "string" ? v.body.replace(/\r\n?/g, "\n") : v.body === undefined ? "" : null;
-  if (body === null || body.length > LIMIT.body) return { error: `the body is text, of at most ${LIMIT.body} characters` };
-  if (HIDDEN_IN_BODY.test(body)) return { error: "the body holds a control or invisible character (newlines and tabs are fine)" };
+  const body =
+    typeof v.body === "string" ? v.body.replace(/\r\n?/g, "\n") : v.body === undefined ? "" : null;
+  if (body === null || body.length > LIMIT.body)
+    return { error: `the body is text, of at most ${LIMIT.body} characters` };
+  if (HIDDEN_IN_BODY.test(body))
+    return {
+      error: "the body holds a control or invisible character (newlines and tabs are fine)",
+    };
   const raw = v.labels === undefined ? [] : v.labels;
-  if (!Array.isArray(raw) || raw.length > LIMIT.labels) return { error: `labels are a list, of at most ${LIMIT.labels}` };
+  if (!Array.isArray(raw) || raw.length > LIMIT.labels)
+    return { error: `labels are a list, of at most ${LIMIT.labels}` };
   const labels: string[] = [];
   for (const label of raw) {
     // No comma: gh reads one as a separator, and the label would become two.
-    if (typeof label !== "string" || !label.trim() || label.length > LIMIT.label || HIDDEN.test(label) || label.includes(",")) return { error: `'${String(label).slice(0, 60)}' is not a label desolate carries (at most ${LIMIT.label} characters, no comma)` };
+    if (
+      typeof label !== "string" ||
+      !label.trim() ||
+      label.length > LIMIT.label ||
+      HIDDEN.test(label) ||
+      label.includes(",")
+    )
+      return {
+        error: `'${String(label).slice(0, 60)}' is not a label desolate carries (at most ${LIMIT.label} characters, no comma)`,
+      };
     if (!labels.includes(label.trim())) labels.push(label.trim());
   }
   return { repo: String(v.repo), title, body, labels };
@@ -46,39 +63,119 @@ export const draftOf = (value: unknown): Draft | { error: string } => {
 
 declare namespace draftOf {
   /** text as it is, trimmed; nothing that would hide on the approval page; labels gh reads as one */
-  export type Cases = Table<typeof draftOf, [
-    [args: [value: { repo: "acme/app"; title: " Fix the login loop "; body: "Steps:\r\n1. log in"; labels: ["bug", "desolate:run", "bug"] }], expected: { repo: "acme/app"; title: "Fix the login loop"; body: "Steps:\n1. log in"; labels: ["bug", "desolate:run"] }],
-    [args: [value: { repo: "acme/app"; title: "x"; labels: ["a,b"] }], expected: { error: "'a,b' is not a label desolate carries (at most 50 characters, no comma)" }],
-    [args: [value: { repo: "acme/app"; title: "ok \u202e evil" }], expected: { error: "the title holds a control or invisible character" }],
-    [args: [value: { repo: "acme"; title: "x" }], expected: { error: "an issue names its repository as <owner>/<repo>" }],
-    [args: [value: { repo: "acme/app"; title: "" }], expected: { error: "an issue needs a title, of at most 256 characters" }],
-  ]>;
+  export type Cases = Table<
+    typeof draftOf,
+    [
+      [
+        args: [
+          value: {
+            repo: "acme/app";
+            title: " Fix the login loop ";
+            body: "Steps:\r\n1. log in";
+            labels: ["bug", "desolate:run", "bug"];
+          },
+        ],
+        expected: {
+          repo: "acme/app";
+          title: "Fix the login loop";
+          body: "Steps:\n1. log in";
+          labels: ["bug", "desolate:run"];
+        },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "x"; labels: ["a,b"] }],
+        expected: {
+          error: "'a,b' is not a label desolate carries (at most 50 characters, no comma)";
+        },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "ok \u202e evil" }],
+        expected: { error: "the title holds a control or invisible character" },
+      ],
+      [
+        args: [value: { repo: "acme"; title: "x" }],
+        expected: { error: "an issue names its repository as <owner>/<repo>" },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "" }],
+        expected: { error: "an issue needs a title, of at most 256 characters" },
+      ],
+    ]
+  >;
   /** a body keeps its newlines and tabs; nothing else invisible, and it is text or nothing */
-  export type Body = Table<typeof draftOf, [
-    [args: [value: { repo: "acme/app"; title: "x"; body: "a\tb\n" }], expected: { repo: "acme/app"; title: "x"; body: "a\tb\n"; labels: [] }],
-    [args: [value: { repo: "acme/app"; title: "x"; body: "a\u0007" }], expected: { error: "the body holds a control or invisible character (newlines and tabs are fine)" }],
-    [args: [value: { repo: "acme/app"; title: "x"; body: "zero\u200bwidth" }], expected: { error: "the body holds a control or invisible character (newlines and tabs are fine)" }],
-    [args: [value: { repo: "acme/app"; title: "x"; body: 5 }], expected: { error: "the body is text, of at most 65536 characters" }],
-  ]>;
+  export type Body = Table<
+    typeof draftOf,
+    [
+      [
+        args: [value: { repo: "acme/app"; title: "x"; body: "a\tb\n" }],
+        expected: { repo: "acme/app"; title: "x"; body: "a\tb\n"; labels: [] },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "x"; body: "a\u0007" }],
+        expected: {
+          error: "the body holds a control or invisible character (newlines and tabs are fine)";
+        },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "x"; body: "zero\u200bwidth" }],
+        expected: {
+          error: "the body holds a control or invisible character (newlines and tabs are fine)";
+        },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "x"; body: 5 }],
+        expected: { error: "the body is text, of at most 65536 characters" },
+      ],
+    ]
+  >;
   /** labels are a list of names gh takes as given: not one string, not a blank one */
-  export type Labels = Table<typeof draftOf, [
-    [args: [value: { repo: "acme/app"; title: "x"; labels: "bug" }], expected: { error: "labels are a list, of at most 20" }],
-    [args: [value: { repo: "acme/app"; title: "x"; labels: [" "] }], expected: { error: "' ' is not a label desolate carries (at most 50 characters, no comma)" }],
-  ]>;
+  export type Labels = Table<
+    typeof draftOf,
+    [
+      [
+        args: [value: { repo: "acme/app"; title: "x"; labels: "bug" }],
+        expected: { error: "labels are a list, of at most 20" },
+      ],
+      [
+        args: [value: { repo: "acme/app"; title: "x"; labels: [" "] }],
+        expected: {
+          error: "' ' is not a label desolate carries (at most 50 characters, no comma)";
+        },
+      ],
+    ]
+  >;
   /** not even an object: the first thing missing is said */
-  export type NotADraft = Expect<Invoke<typeof draftOf, [value: null]>, "=", { error: "an issue names its repository as <owner>/<repo>" }>;
+  export type NotADraft = Expect<
+    Invoke<typeof draftOf, [value: null]>,
+    "=",
+    { error: "an issue names its repository as <owner>/<repo>" }
+  >;
 }
 
 /** What the approval covers: the repository and every word of the issue. */
-export const digestOf = (d: Draft) => createHash("sha256").update(JSON.stringify(["desolate-issue-v1", d.repo, d.title, d.body, d.labels])).digest("hex");
+export const digestOf = (d: Draft) =>
+  createHash("sha256")
+    .update(JSON.stringify(["desolate-issue-v1", d.repo, d.title, d.body, d.labels]))
+    .digest("hex");
 
 declare namespace digestOf {
   /** every word is covered: a label added after the approval is another digest, so the
    *  approval no longer matches */
-  export type Covers = Table<typeof digestOf, [
-    [args: [d: { repo: "acme/app"; title: "Fix the login loop"; body: ""; labels: ["bug"] }], expected: "7b571941f8fbcdbe6fe2bc94948fbb1d631fd6e0d2108c5802bb5732bf0115ed"],
-    [args: [d: { repo: "acme/app"; title: "Fix the login loop"; body: ""; labels: ["bug", "urgent"] }], expected: "09767c2db8b82d798f131d1a58c5bf3f1155b7dc70c5025673a14bac3343e2ea"],
-  ]>;
+  export type Covers = Table<
+    typeof digestOf,
+    [
+      [
+        args: [d: { repo: "acme/app"; title: "Fix the login loop"; body: ""; labels: ["bug"] }],
+        expected: "7b571941f8fbcdbe6fe2bc94948fbb1d631fd6e0d2108c5802bb5732bf0115ed",
+      ],
+      [
+        args: [
+          d: { repo: "acme/app"; title: "Fix the login loop"; body: ""; labels: ["bug", "urgent"] },
+        ],
+        expected: "09767c2db8b82d798f131d1a58c5bf3f1155b7dc70c5025673a14bac3343e2ea",
+      ],
+    ]
+  >;
 }
 
 export type Issue = Draft & {
@@ -101,20 +198,42 @@ export const issueUrl = (repo: string, value: unknown): string | null => {
   const r = parseRepo(repo);
   // Case-insensitive: GitHub answers with the repository's own casing, which may not be the
   // one it was registered with (a publish that worked was reported as failed: audit).
-  return r && typeof value === "string" && new RegExp(`^https://github\\.com/${r.owner.replace(/\./g, "\\.")}/${r.name.replace(/\./g, "\\.")}/issues/\\d{1,9}$`, "i").test(value.trim()) ? value.trim() : null;
+  return r &&
+    typeof value === "string" &&
+    new RegExp(
+      `^https://github\\.com/${r.owner.replace(/\./g, "\\.")}/${r.name.replace(/\./g, "\\.")}/issues/\\d{1,9}$`,
+      "i",
+    ).test(value.trim())
+    ? value.trim()
+    : null;
 };
 
 declare namespace issueUrl {
   /** the issue's page on github.com, for this repository, and nothing else */
-  export type Cases = Table<typeof issueUrl, [
-    [args: [repo: "acme/app", value: "https://github.com/acme/app/issues/12\n"], expected: "https://github.com/acme/app/issues/12"],
-    [args: [repo: "acme/app", value: "https://github.com/acme/other/issues/12"], expected: null],
-    [args: [repo: "acme/app", value: "javascript:alert(1)"], expected: null],
-    /** GitHub's own casing of the repository is the same repository */
-    [args: [repo: "acme/my.app", value: "https://github.com/ACME/My.App/issues/1"], expected: "https://github.com/ACME/My.App/issues/1"],
-    /** a dot in the name is a dot, not any character */
-    [args: [repo: "acme/my.app", value: "https://github.com/acme/myxapp/issues/1"], expected: null],
-    [args: [repo: "acme/app", value: "https://github.com/acme/app/issues/12#evil"], expected: null],
-    [args: [repo: "acme/app", value: "https://github.com/acme/app/pull/12"], expected: null],
-  ]>;
+  export type Cases = Table<
+    typeof issueUrl,
+    [
+      [
+        args: [repo: "acme/app", value: "https://github.com/acme/app/issues/12\n"],
+        expected: "https://github.com/acme/app/issues/12",
+      ],
+      [args: [repo: "acme/app", value: "https://github.com/acme/other/issues/12"], expected: null],
+      [args: [repo: "acme/app", value: "javascript:alert(1)"], expected: null],
+      /** GitHub's own casing of the repository is the same repository */
+      [
+        args: [repo: "acme/my.app", value: "https://github.com/ACME/My.App/issues/1"],
+        expected: "https://github.com/ACME/My.App/issues/1",
+      ],
+      /** a dot in the name is a dot, not any character */
+      [
+        args: [repo: "acme/my.app", value: "https://github.com/acme/myxapp/issues/1"],
+        expected: null,
+      ],
+      [
+        args: [repo: "acme/app", value: "https://github.com/acme/app/issues/12#evil"],
+        expected: null,
+      ],
+      [args: [repo: "acme/app", value: "https://github.com/acme/app/pull/12"], expected: null],
+    ]
+  >;
 }

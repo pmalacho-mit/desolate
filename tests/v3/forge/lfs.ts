@@ -7,7 +7,8 @@ import * as path from "node:path";
 import { append, checkToken, config, lfsDir } from "./common.ts";
 
 const OID = /^[0-9a-f]{64}$/;
-const objectPath = (repo: string, oid: string) => path.join(lfsDir(repo), oid.slice(0, 2), oid.slice(2, 4), oid);
+const objectPath = (repo: string, oid: string) =>
+  path.join(lfsDir(repo), oid.slice(0, 2), oid.slice(2, 4), oid);
 
 const server = createServer((request, response) => {
   const send = (status: number, body: unknown, type = "application/vnd.git-lfs+json") => {
@@ -19,13 +20,17 @@ const server = createServer((request, response) => {
   const batch = /^\/(.+?)\.git\/info\/lfs\/objects\/batch$/.exec(url.pathname);
   const object = /^\/(.+?)\.git\/lfs\/objects\/([0-9a-f]{64})$/.exec(url.pathname);
   const repo = batch?.[1] ?? object?.[1] ?? "";
-  if (!token || token.repo !== repo) return send(401, { message: "this token is not for this repository" });
+  if (!token || token.repo !== repo)
+    return send(401, { message: "this token is not for this repository" });
 
   if (batch && request.method === "POST") {
     let text = "";
     request.on("data", (chunk) => (text += chunk));
     request.on("end", () => {
-      const body = JSON.parse(text) as { operation: string; objects: { oid: string; size: number }[] };
+      const body = JSON.parse(text) as {
+        operation: string;
+        objects: { oid: string; size: number }[];
+      };
       if (body.operation === "upload" && token.operation !== "upload") {
         append("access.log", { lfs: "batch", repo, operation: body.operation, verdict: "denied" });
         return send(403, { message: "this key is read-only; it cannot upload LFS objects" });
@@ -37,10 +42,20 @@ const server = createServer((request, response) => {
         if (!OID.test(oid)) return { oid, size, error: { code: 422, message: "bad oid" } };
         const have = fs.existsSync(objectPath(repo, oid));
         if (body.operation === "download")
-          return have ? { oid, size, actions: { download: { href: href(oid), header } } } : { oid, size, error: { code: 404, message: "object not found" } };
-        return have ? { oid, size } : { oid, size, actions: { upload: { href: href(oid), header } } };
+          return have
+            ? { oid, size, actions: { download: { href: href(oid), header } } }
+            : { oid, size, error: { code: 404, message: "object not found" } };
+        return have
+          ? { oid, size }
+          : { oid, size, actions: { upload: { href: href(oid), header } } };
       });
-      append("access.log", { lfs: "batch", repo, operation: body.operation, objects: body.objects.length, verdict: "allowed" });
+      append("access.log", {
+        lfs: "batch",
+        repo,
+        operation: body.operation,
+        objects: body.objects.length,
+        verdict: "allowed",
+      });
       send(200, { transfer: "basic", objects });
     });
     return;
@@ -56,7 +71,8 @@ const server = createServer((request, response) => {
     request.on("data", (chunk) => chunks.push(chunk));
     request.on("end", () => {
       const data = Buffer.concat(chunks);
-      if (createHash("sha256").update(data).digest("hex") !== object[2]) return send(422, { message: "content does not match its oid" });
+      if (createHash("sha256").update(data).digest("hex") !== object[2])
+        return send(422, { message: "content does not match its oid" });
       const file = objectPath(repo, object[2]!);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, data);
