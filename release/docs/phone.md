@@ -53,6 +53,12 @@ ask you something (a permission it needs, a question), with its own words.
   typed into it, and the keys a phone keyboard lacks (Enter, the arrows, Tab, Esc, Ctrl-C).
   `desolate agent say <domain>/<workspace> -- <text>` does the same from a terminal.
 
+- **Your dev servers.** Each server a workspace runs gets an address on the tailnet while it
+  listens, from `https://<mac>:9101` to `:9116`: `desolate ports` lists them ("on your
+  phone"), and the dashboard on the phone links to them. The server sees what it sees on the
+  Mac (its workspace's own name), and Vite's hot reload works through it. Sixteen at once;
+  past that, a server has no phone address until one stops.
+
 What it cannot do: approve a push, open an editor, or open the git terminal. A push is
 approved on the Mac, outside every VM: that stays the one step nothing else can take.
 
@@ -67,8 +73,16 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   reads every domain's data; the agents page is served by the Mac's own daemon, the root never
   sees what it is asked, and the dashboard's script, on another origin, cannot call it. (The
   approval page is the Mac's for the same reason.)
+- **Dev servers share one name on the tailnet, so desolate keeps their cookies apart.** A
+  browser sends a name's cookies to every port of it. So the dashboard's and the agents page's
+  cookies are never passed to a dev server, and a dev server cannot set them; the cookies a
+  server sets are renamed for its address and returned to it only. (A cookie a page's own
+  script sets goes to every dev server, as it would on any one host.) And the dashboard and
+  the agents page refuse any request another page starts, so a dev server's page cannot make
+  them do or read anything.
 - **What the agents page shows is drawn as a terminal draws it,** through the same filter as
   `desolate agent attach`: an agent's output is never put on the page as HTML.
 
 Anything on the Mac can reach the two loopback ports Tailscale Serve is pointed at, as it can
-the dashboard's own; the tokens are what open the pages, there as here.
+the dashboard's own; the tokens are what open the pages, there as here. (`desolate phone on`
+points Serve at eighteen ports: the two pages and the sixteen dev-server addresses.)
