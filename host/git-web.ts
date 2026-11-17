@@ -21,7 +21,7 @@ import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, parseRepo } from "../sh
 import { embedAddress } from "./approve-web.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
-import type { Expect, Given, Invoke, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../../tests/nests/home.harness.ts";
 import type { ask, gitVmDown, noShell, quiet } from "../../tests/nests/host-web.harness.ts";
 
@@ -111,7 +111,8 @@ export const handler = (spawn: (argv: string[]) => ChildProcess, log: (line: str
 
   return async (req: IncomingMessage, res: ServerResponse) => {
     const refused = refusal(GIT_HOSTNAME, req.headers);
-    if (refused) return send(res, refused.status, "text/plain; charset=utf-8", `desolate: refused ${refused.why.replace(/this is the editor of/, "this is the git terminal at")}\n`);
+    // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
+    if (refused) return send(res, refused.status, "text/plain; charset=utf-8", `desolate: refused ${refused.why.replace(/this is the editor of/, "this is the git terminal at").replace("`desolate editor`", "`desolate git`")}\n`);
     const token = gitToken();
     const name = cookieName(token);
     const url = new URL(req.url ?? "/", `http://${GIT_HOSTNAME}`);
@@ -215,9 +216,8 @@ declare namespace handler {
   /** another name for this port (a workspace's, where an agent's page is) is refused first */
   export type OnlyByItsName = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/approvals-frame"; headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 421 }>
+    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/approvals-frame"; headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 421; text: "desolate: refused this is the git terminal at desolate-git.localhost; open it by that name (`desolate git` prints the address)\n" }>
   >;
-  export type WrongFixWhenRefusedByName = Todo<"bug: the 421's text says `desolate editor` prints the git terminal's address (gate.ts's editor wording, only half replaced); it is `desolate git`">;
   /** a shell is opened only by the page's own script: signed in, same-origin, this origin, JSON */
   export type OnlyThePage = Given<
     HasToken,

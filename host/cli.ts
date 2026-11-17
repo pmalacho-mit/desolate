@@ -3,9 +3,13 @@
 import { forTerminal, printable } from "../shared/text.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { parseRepo } from "../shared/names.ts";
+import type { Expect, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { printed } from "../../tests/nests/host-cli.harness.ts";
+import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
 const HELP = `desolate: develop in VMs of their own. A workspace per task, an editor inside it, every push through you.
 
@@ -111,6 +115,22 @@ const flags = (argv: string[], options: Record<string, { type: "boolean" | "stri
     throw new Refusal((error as Error).message, "desolate help", EXIT.usage);
   }
 };
+
+declare namespace flags {
+  /** every command takes --json and --help besides its own; the rest are its positionals */
+  export type Reads = Expect<
+    Invoke<typeof flags, [argv: ["acme", "--name", "w1", "--checkout", "acme/web=main", "--checkout", "acme/api=main", "--json"], options: { name: { type: "string" }; checkout: { type: "string"; multiple: true } }]>,
+    "=",
+    { values: { name: "w1"; checkout: ["acme/web=main", "acme/api=main"]; json: true }; positionals: ["acme"] }
+  >;
+  /** a flag the command does not take is a usage error (exit 64) that points at the help, never
+   *  a word passed on; a string flag with no value is not read as a boolean */
+  export type Refuses = [
+    Expect<Invoke<typeof refusalOf, [f: typeof flags, args: [argv: ["acme", "--force"], options: {}]]>, "matches", { fix: "desolate help"; code: 64 }>,
+    Throws<Invoke<typeof flags, [argv: ["acme", "--force"], options: {}]>, "Unknown option '--force'">,
+    Throws<Invoke<typeof flags, [argv: ["acme", "--name"], options: { name: { type: "string" } }]>, "argument missing">,
+  ];
+}
 
 /** `--open`: the address in a browser on this Mac. Chrome or Firefox if there is one:
  *  Safari cannot find desolate's *.localhost names. */
@@ -398,17 +418,48 @@ const main = async (argv: string[]): Promise<number> => {
   throw new Refusal(`desolate has no command '${verb}'`, "desolate help", EXIT.usage);
 };
 
-// Piped into something that stops reading (`desolate list | head -1`): done, not a crash.
-process.stdout.on("error", (error: NodeJS.ErrnoException) => process.exit(error.code === "EPIPE" ? 0 : EXIT.failed));
-try {
-  process.exitCode = await main(process.argv.slice(2));
-} catch (error) {
-  if (error instanceof Refusal) {
-    err(`desolate: ${error.message}`);
-    if (error.fix) err(`  fix: ${error.fix}`);
-    process.exitCode = error.code;
-  } else {
-    err(`desolate: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
-    process.exitCode = EXIT.failed;
+declare namespace main {
+  /** the help, asked for (exit 0) or for want of a verb (exit 64, a usage error) */
+  export type Help = [
+    Expect<Invoke<typeof printed, [run: typeof main, args: [argv: ["help"]]]>["value"], "=", 0>,
+    Expect<Invoke<typeof printed, [run: typeof main, args: [argv: ["help"]]]>["stdout"], "startsWith", "desolate: develop in VMs of their own.">,
+    Expect<Invoke<typeof printed, [run: typeof main, args: [argv: []]]>["value"], "=", 64>,
+  ];
+  /** what is refused before anything is asked of a VM or the root: each a usage error (exit 64)
+   *  that names the spelling that works */
+  export type Refuses = Table<typeof refusalOf, [
+    [args: [f: typeof main, args: [argv: ["nosuchverb"]]], expected: { message: "desolate has no command 'nosuchverb'"; fix: "desolate help"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["list", "--frobnicate"]]], condition: "matches", expected: { fix: "desolate help"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["push", "acme", "acme/web", "main", "--force"]]], condition: "matches", expected: { fix: "desolate help"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["clone", "acme/web", "--domain", "web", "--no-domain"]]], expected: { message: "--domain and --no-domain say opposite things"; fix: "give one of them"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["review", "acme", "acme/web", "main", "--against", "upstream"]]], condition: "matches", expected: { message: "--against 'upstream' is not understood"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["git", "../etc"]]], expected: { message: "'../etc' is not a repository"; fix: "desolate git <owner/repo>"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["offers", "dismiss", "acme"]]], condition: "matches", expected: { message: "dismiss which offer?"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["down", "now"]]], condition: "matches", expected: { message: "desolate down takes no arguments: it stops every VM (and removes nothing)"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["events", "--replay=lots"]]], expected: { message: "--replay takes a number"; fix: "desolate events --replay 20"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["up", "acme", "--memory", "lots"]]], condition: "matches", expected: { message: "--memory 'lots' is not an amount"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["issue", "frob"]]], condition: "matches", expected: { message: "desolate issue what?"; code: 64 }],
+    [args: [f: typeof main, args: [argv: ["task"]]], condition: "matches", expected: { message: "'desolate task' is a recipe now"; code: 64 }],
+  ]>;
+  /** after `--`, the words are the agent's command, not desolate's flags */
+  export type DashDash = Expect<Invoke<typeof refusalOf, [f: typeof main, args: [argv: ["agent", "frob", "--", "--force", "--json"]]]>, "=", { message: "desolate agent what?"; fix: "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]"; code: 64 }>;
+}
+
+// Run only as the command (cli.sh runs this file; realpath, since cli.sh is reached through
+// the `desolate` link), never when a test imports it.
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // Piped into something that stops reading (`desolate list | head -1`): done, not a crash.
+  process.stdout.on("error", (error: NodeJS.ErrnoException) => process.exit(error.code === "EPIPE" ? 0 : EXIT.failed));
+  try {
+    process.exitCode = await main(process.argv.slice(2));
+  } catch (error) {
+    if (error instanceof Refusal) {
+      err(`desolate: ${error.message}`);
+      if (error.fix) err(`  fix: ${error.fix}`);
+      process.exitCode = error.code;
+    } else {
+      err(`desolate: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+      process.exitCode = EXIT.failed;
+    }
   }
 }

@@ -42,7 +42,7 @@ import type { Issue } from "../shared/issues.ts";
 import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, isSlug } from "../shared/names.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
-import type { Expect, Given, Invoke, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../../tests/nests/home.harness.ts";
 import type { approved, ask, quiet, waiting } from "../../tests/nests/host-web.harness.ts";
 
@@ -187,7 +187,8 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   // the live page, under a pointer that site chose (found by the audit of #93).
   const asFrame = req.method === "GET" && url.pathname === "/embed" && url.search === "" && req.headers["sec-fetch-dest"] === "iframe";
   const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame);
-  if (refused) return text(res, refused.status, `refused ${refused.why.replace(/this is the editor of/, "this is the approval page at")}`);
+  // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
+  if (refused) return text(res, refused.status, `refused ${refused.why.replace(/this is the editor of/, "this is the approval page at").replace("`desolate editor`", "`desolate approve --web`")}`);
   if (req.method === "GET" && url.pathname === "/embed" && !asFrame) return text(res, 403, "refused: /embed is the approval page beside the git terminal, and loads only as its frame");
   const token = approveToken();
   const name = cookieName(token);
@@ -340,9 +341,8 @@ declare namespace handler {
   /** another name for this port (a workspace's, where an agent's page is) is refused first */
   export type OnlyByItsName = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 421 }>
+    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 421; text: "desolate: refused this is the approval page at desolate-approve.localhost; open it by that name (`desolate approve --web` prints the address)\n" }>
   >;
-  export type WrongFixWhenRefusedByName = Todo<"bug: the 421's text says `desolate editor` prints the approval page's address (gate.ts's editor wording, only half replaced); it is `desolate approve --web`">;
 
   /** what is waiting: the parsed text and a token over it, and only to the page's own script */
   export type ListsWhatWaits = Given<

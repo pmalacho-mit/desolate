@@ -20,6 +20,9 @@ import { ROOT } from "../layout.ts";
 import { inbox } from "../outbox.ts";
 import { indexFile, storeFile } from "./secret-store.ts";
 import type { Indexed } from "./secret-store.ts";
+// In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
+import type { Expect, Given, Invoke } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, jsonListIn, linkIn, pathIn, readIn, writeIn, writeJsonIn } from "../../../tests/nests/root-state.harness.ts";
 import { alive, ensureLinkToken, hasProxyUser, linkTokenFile, listenerUid, PROXY_CODE, proxyDomainDir, proxyOutDir, proxyUid, spawnAsProxy, stopProxy } from "./as-proxy.ts";
 
 const DIR = `${ROOT.state}/proxy`;
@@ -50,6 +53,55 @@ export const list = (domain: string) =>
     const on = s.off !== true && (s.until === undefined || now < s.until);
     return { name, hosts: s.hosts, headers: s.headers ?? null, on, ...(on && s.until !== undefined ? { secondsLeft: Math.max(0, Math.round(s.until - now)) } : {}) };
   }).sort((a, b) => a.name.localeCompare(b.name));
+
+declare namespace list {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** what workspaces may know of a secret, from root's index (there is no value in it to
+   *  leak): its name, its hosts, its headers, and whether it is on now */
+  export type Names = Given<
+    [Fresh, Invoke<typeof writeJsonIn, [where: "proxies", name: "secrets/acme.index.json", value: [
+      { name: "MYAPP-OPENAI-KEY"; hosts: ["api.openai.com"]; headers: ["authorization"] },
+      { name: "MYAPP-OFF-SECRET"; hosts: ["x.example.com"]; off: true },
+      { name: "MYAPP-EXPIRED-KEY"; hosts: ["x.example.com"]; until: 1577836800 },
+      { name: "MYAPP-TIMED-KEY"; hosts: ["x.example.com"]; until: 4102444800 },
+    ]]>],
+    Expect<Invoke<typeof list, [domain: "acme"]>, "matches", [
+      { name: "MYAPP-EXPIRED-KEY"; on: false },
+      { name: "MYAPP-OFF-SECRET"; headers: null; on: false },
+      { name: "MYAPP-OPENAI-KEY"; hosts: ["api.openai.com"]; headers: ["authorization"]; on: true },
+      { name: "MYAPP-TIMED-KEY"; on: true },
+    ]>
+  >;
+  /** none, or no index yet: none */
+  export type None = Given<Fresh, Expect<Invoke<typeof list, [domain: "acme"]>, "=", []>>;
+}
+
+declare namespace publish {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: []]>;
+  type Index = Invoke<typeof writeJsonIn, [where: "proxies", name: "secrets/acme.index.json", value: [{ name: "MYAPP-OPENAI-KEY"; hosts: ["api.openai.com"]; off: true }]]>;
+  /** into the domain's inbox: its secrets' names and switches as stored, and the CA its
+   *  workspaces must trust for those hosts */
+  export type Inbox = Given<
+    [Fresh, Acme, Index, Invoke<typeof writeIn, [where: "proxies", name: "out/acme/ca/mitmproxy-ca-cert.pem", text: "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0FfZXhhbXBsZQ==\n-----END CERTIFICATE-----\n"]>, Invoke<typeof publish, [domain: "acme"]>],
+    [
+      Expect<Invoke<typeof jsonListIn, [where: "domains", name: "acme/inbox/secrets.json"]>, "=", [{ name: "MYAPP-OPENAI-KEY"; hosts: ["api.openai.com"]; headers: null; off: true }]>,
+      Expect<Invoke<typeof readIn, [where: "domains", name: "acme/inbox/ca.pem"]>, "=", "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0FfZXhhbXBsZQ==\n-----END CERTIFICATE-----\n">,
+    ]
+  >;
+  /** the CA is the proxies' user's file: one that is a link (to a file of the root's, say), or
+   *  is not a certificate, is not handed to the workspaces */
+  export type NotACertificate = [
+    Given<
+      [Fresh, Acme, Index, Invoke<typeof writeIn, [where: "state", name: "registry.json", text: "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQ0FfZXhhbXBsZQ==\n-----END CERTIFICATE-----\n"]>, Invoke<typeof linkIn, [where: "proxies", name: "out/acme/ca/mitmproxy-ca-cert.pem", target: Invoke<typeof pathIn, [where: "state", name: "registry.json"]>]>, Invoke<typeof publish, [domain: "acme"]>],
+      Expect<Invoke<typeof readIn, [where: "domains", name: "acme/inbox/ca.pem"]>, "=", null>
+    >,
+    Given<
+      [Fresh, Acme, Index, Invoke<typeof writeIn, [where: "proxies", name: "out/acme/ca/mitmproxy-ca-cert.pem", text: "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----\n"]>, Invoke<typeof publish, [domain: "acme"]>],
+      Expect<Invoke<typeof readIn, [where: "domains", name: "acme/inbox/ca.pem"]>, "=", null>
+    >,
+  ];
+}
 
 const publish = (domain: string) => {
   // For the workspaces: the switch as stored (`off`, `until`), not "on right now", which
@@ -129,6 +181,21 @@ export const ensure = async (domain: string): Promise<Running | null> => {
   publish(domain);
   return running;
 };
+
+declare namespace ensure {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** a domain with no secret has no secrets proxy: what was recorded as running is gone, and
+   *  its workspaces are told there are none. (One with secrets starts mitmproxy as the
+   *  domain's proxies' user: T2's 07-secrets.) */
+  export type NoneNoProxy = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: []]>, Invoke<typeof writeJsonIn, [where: "proxies", name: "domains/acme/secrets-proxy.json", value: { port: 1; pid: 999999; hosts: [] }]>],
+    [
+      Expect<Invoke<typeof ensure, [domain: "acme"]>, "=", null>,
+      Expect<Invoke<typeof readIn, [where: "proxies", name: "domains/acme/secrets-proxy.json"]>, "=", null>,
+      Expect<Invoke<typeof jsonListIn, [where: "domains", name: "acme/inbox/secrets.json"]>, "=", []>,
+    ]
+  >;
+}
 
 /** After root changed the domain's secrets (proxy/secret-store.ts, by the host): its
  *  secrets proxy running if it has any, its workspaces told the names. Values are not this

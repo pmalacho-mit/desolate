@@ -7,10 +7,24 @@
 // already did; to a pipe or a file, it is passed as it is.
 import { spawn } from "node:child_process";
 import { terminalFilter } from "../../shared/terminal-filter.ts";
+import type { Table } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+
+/** The child's stdio: the terminal (stdin) always its own; stdout and stderr piped here, to be
+ *  filtered, only where they are a terminal. */
+export const stdioFor = (out: boolean, err: boolean): ["inherit", "pipe" | "inherit", "pipe" | "inherit"] => ["inherit", out ? "pipe" : "inherit", err ? "pipe" : "inherit"];
+
+declare namespace stdioFor {
+  /** a terminal gets only what a screen needs; a pipe or a file gets the bytes as they are */
+  export type Streams = Table<typeof stdioFor, [
+    [args: [out: true, err: true], expected: ["inherit", "pipe", "pipe"]],
+    [args: [out: false, err: true], expected: ["inherit", "inherit", "pipe"]],
+    [args: [out: false, err: false], expected: ["inherit", "inherit", "inherit"]],
+  ]>;
+}
 
 export const attachFiltered = (command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<number> => {
   const out = process.stdout.isTTY, err = process.stderr.isTTY;
-  const child = spawn(command, args, { stdio: ["inherit", out ? "pipe" : "inherit", err ? "pipe" : "inherit"], env: env ?? process.env });
+  const child = spawn(command, args, { stdio: stdioFor(out, err), env: env ?? process.env });
   const shown = terminalFilter(), said = terminalFilter();
   let drew = false;
   if (out) child.stdout!.on("data", (chunk: Buffer) => {

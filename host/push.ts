@@ -15,7 +15,7 @@ import { parseApproval } from "../shared/approval.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import type { Issue } from "../shared/issues.ts";
-import type { Expect, Given, Invoke, Mock, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 import type { collect, fakeStack, rootAnswers, said } from "../../tests/nests/host-stack.harness.ts";
 import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
 
@@ -36,7 +36,7 @@ export const offers = async (domain: string | undefined, out: Out, json: boolean
   const issues = (await rootctl<Issue[]>("issue.list", { waiting: true }, { quiet: true }).catch(() => [] as Issue[])).filter((i) => (i.state === "offered" || i.state === "approving") && (!domain || i.domain === domain));
   if (list.length === 0 && issues.length === 0) return out("no offers. In a workspace, `desolate offer` marks a branch ready for you.");
   out("Needs you:");
-  for (const o of list) out(`  ${o.domain}  ${o.repo}  ${plain(o.branch)}  ${o.commit.slice(0, 12)}  from ${plain(o.workspace) || "(a workspace of the domain)"}${o.base ? `  for ${plain(o.base)}` : ""}${o.lfs ? `  ${o.lfs} LFS object(s)` : ""}\n    review: desolate review ${o.domain} ${o.repo} ${o.branch}`);
+  for (const o of list) out(`  ${o.domain}  ${o.repo}  ${plain(o.branch)}  ${o.commit.slice(0, 12)}  from ${plain(o.workspace) || "(a workspace of the domain)"}${o.base ? `  for ${plain(o.base)}` : ""}${o.lfs ? `  ${o.lfs} LFS object(s)` : ""}\n    review: desolate review ${o.domain} ${o.repo} ${plain(o.branch)}`);
   for (const i of issues) out(`  ${i.domain}  ${i.repo}  issue "${printable(i.title, 100)}"  from ${plain(i.workspace)}${i.state === "approving" ? "  waiting for you to publish it" : ""}\n    ${i.state === "approving" ? `publish: desolate issue publish ${i.id}` : `edit it on the dashboard (desolate ui), or publish: desolate issue publish ${i.id}`}`);
 };
 
@@ -68,8 +68,15 @@ declare namespace offers {
     [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: { "offers.list": []; "offers.refused": []; "issue.list": [] }]>, Invoke<typeof offers, [domain: undefined, out: typeof collect, json: false]>],
     Expect<Invoke<typeof said>, "=", ["no offers. In a workspace, `desolate offer` marks a branch ready for you."]>
   >;
-  /** a branch name is the domain's text: the listing shows it as text, the review line does not */
-  export type BranchInTheReviewLine = Todo<"bug: offers() puts o.branch in its `review:` line as it came (the line before, and branches(), use plain()); cli.ts's out() makes it printable on the way to a terminal, so only a caller of offers() with another out sees the raw text">;
+  /** a branch name is the domain's text: shown as text on both its lines, whatever prints them */
+  export type BranchAsText = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "offers.list": [{ domain: "acme"; repo: "acme/web"; branch: "fix/login\u001b]0;pwned\u0007"; commit: "0123456789abcdef0123456789abcdef01234567"; workspace: "w1"; lfs: 0; at: "2026-11-16T10:00:00Z" }]; "offers.refused": []; "issue.list": [] }]>,
+      Invoke<typeof offers, [domain: undefined, out: typeof collect, json: false]>,
+    ],
+    Expect<Invoke<typeof said>, "=", ["Needs you:", "  acme  acme/web  fix/login?]0;pwned?  0123456789ab  from w1", "    review: desolate review acme acme/web fix/login?]0;pwned?"]>
+  >;
 }
 
 /** `desolate branches [<domain>]`: every branch each domain has, not only what was offered.
