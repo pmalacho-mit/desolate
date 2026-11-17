@@ -28,6 +28,12 @@ in its own devcontainer, with `DESOLATE_WORKSPACE=1` in the environment. That me
   hypervisor) or run the new code as the person's real stack. A change to a boundary (VMs,
   shares, egress, the keyring, the pusher) needs T4 on the Mac before it is believed.
   Write that in your offer's status: `desolate status set yellow "ready; T4 not run: <why it matters>"`.
+- **When a workspace is not enough, ask for the Mac user.** Some work cannot be done from
+  inside a desolate workspace at all: T4, anything else that needs the Mac's hypervisor,
+  trying the new code as a real stack, or a change outside the VMs. For that, the owner
+  (@pmalacho-mit) keeps a separate, isolated macOS user on the Mac. Do not work around the
+  workspace. Say what you need run there and why, to the owner directly: in your reply, and
+  in your status (`desolate status set orange "needs the Mac user: <what, and why>"`).
 
 [`release/docs/developing-desolate.md`](release/docs/developing-desolate.md) has the
 person's side: setting up the workspace, the push, the pull on the Mac, and which restart a
