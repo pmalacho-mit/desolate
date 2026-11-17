@@ -21,7 +21,7 @@ import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table, Todo } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
 
 type Listener = { port: number; address: string };
 /** /proc/net/tcp{,6}: state 0A is LISTEN; addresses are hex, in the kernel's byte order. */
@@ -55,7 +55,8 @@ const addressV6 = (hex: string) => {
   const text = groups.map((g) => g.replace(/^0+(?=.)/, "")).join(":");
   if (/^0:0:0:0:0:0:0:0$/.test(text)) return "::";
   if (/^0:0:0:0:0:0:0:1$/.test(text)) return "::1";
-  const mapped = /^0:0:0:0:0:ffff:([0-9a-f]+):([0-9a-f]+)$/.exec(text);
+  // The kernel writes hex in capitals.
+  const mapped = /^0:0:0:0:0:ffff:([0-9a-f]+):([0-9a-f]+)$/i.exec(text);
   if (mapped) {
     const a = parseInt(mapped[1]!, 16);
     const b = parseInt(mapped[2]!, 16);
@@ -84,7 +85,14 @@ declare namespace addressV6 {
     [args: [hex: "00000000000000000000000001000000"], expected: "::1"],
     [args: [hex: "B80D0120000000000000000001000000"], expected: "2001:DB8:0:0:0:0:0:1"],
   ]>;
-  export type Mapped = Todo<"bug: an IPv4-mapped address as the kernel writes it (0000000000000000FFFF00000100007F, capitals) gives 0:0:0:0:0:FFFF:7F00:1, not 127.0.0.1: the mapped pattern looks for a lower-case ffff">;
+  /** an IPv4 address on an IPv6 socket (::ffff:a.b.c.d), as the kernel writes it, is that IPv4
+   *  address; FFFF anywhere else is an IPv6 address like any other */
+  export type Mapped = Table<typeof addressV6, [
+    [args: [hex: "0000000000000000FFFF00000100007F"], expected: "127.0.0.1"],
+    [args: [hex: "0000000000000000FFFF00000200A8C0"], expected: "192.168.0.2"],
+    [args: [hex: "0000000000000000FEFF00000100007F"], expected: "0:0:0:0:0:FFFE:7F00:1"],
+    [args: [hex: "FFFF0000000000000000000001000000"], expected: "0:FFFF:0:0:0:0:0:1"],
+  ]>;
 }
 
 /** Where to reach the listener on a port: a wildcard is reached at loopback. */
