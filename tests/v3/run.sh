@@ -100,7 +100,7 @@ docker_ready() {
   # What the fake backend relies on in every request to its root: a command run with `-i`
   # still delivers what it prints after its input has ended. A relay that closes early (see
   # DOCKER_HOST above) loses it, and every suite then fails in its setup with a lost answer.
-  [ "$(echo request | timeout 60 docker run --rm -i --network none desolate/base:latest sh -c 'cat >/dev/null; sleep 1; echo answered' 2>/dev/null)" = answered ] \
+  [ "$(echo request | docker run --rm -i --network none desolate/base:latest sh -c 'cat >/dev/null; sleep 1; echo answered' 2>/dev/null)" = answered ] \
     || need "Docker here loses what a command prints after its input ends (docker run/exec -i): the fake backend's root answers would be lost" "talk to Docker directly, not through a relay that closes early: DOCKER_HOST=unix:///var/run/docker-host.sock (a devcontainer's docker-outside-of-docker)"
   command -v git-lfs >/dev/null 2>&1 || need "git-lfs is needed on this machine to make the test repositories" "apt-get install git-lfs  /  brew install git-lfs"
   command -v python3 >/dev/null 2>&1 || need "python3 is needed (tests/v3/lib/person.py plays the person at a terminal)" "install python3"
