@@ -855,7 +855,8 @@ const main = async (argv: string[]): Promise<number> => {
         out(w.workspace);
         if (w.forwarded.length === 0)
           out("  nothing is listening yet: start a dev server in it and its URL appears here");
-        for (const f of w.forwarded) out(`  ${f.url}`);
+        for (const f of w.forwarded)
+          out(`  ${f.url}${f.phone ? `   on your phone: ${f.phone}` : ""}`);
         for (const r of w.reserved)
           out(
             `  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`,

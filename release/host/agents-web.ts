@@ -147,6 +147,15 @@ export const serveAgents = (log: (line: string) => void, port: number) => {
     const phone = readPhone();
     const checked = tailnetRequest(phone, req.headers);
     if ("refused" in checked) return text(res, checked.refused.status, checked.refused.text);
+    // Only this page, or a navigation to it: the dev servers on the tailnet share its name,
+    // and so its site, and a page of theirs could otherwise make it read (the dashboard's rule).
+    const site = String(req.headers["sec-fetch-site"] ?? "");
+    if (site !== "" && site !== "same-origin" && site !== "none")
+      return text(
+        res,
+        403,
+        `a request another page started (Sec-Fetch-Site: ${site.slice(0, 40).replace(/[^\x20-\x7e]/g, "?")})`,
+      );
     const token = agentsToken();
     const name = cookieName(token);
     const url = new URL(req.url ?? "/", "http://agents");

@@ -46,7 +46,7 @@ import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
-import { phonePort, servePhone } from "./phone.ts";
+import { assignSlots, phonePort, serveSlots, servePhone, slotAddress } from "./phone.ts";
 import { serveAgents } from "./agents-web.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
@@ -115,7 +115,7 @@ type Entry = Registered & {
 };
 export type PortView = {
   workspace: string;
-  forwarded: { port: number; url: string }[];
+  forwarded: { port: number; url: string; phone?: string }[];
   reserved: { port: number; why: string }[];
 };
 
@@ -2165,6 +2165,7 @@ const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
   hostHeld: { has(port: number): boolean },
   rawOwner: { get(port: number): string | undefined },
   holderOf: (port: number) => string,
+  phoneOf: (vm: string, port: number) => string | undefined = () => undefined,
 ): PortView[] =>
   workspaces
     .map((entry) => ({
@@ -2172,10 +2173,14 @@ const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
       forwarded: [...entry.listeners]
         .sort((a, b) => a - b)
         .filter((port) => !hostHeld.has(port))
-        .map((port) => ({
-          port,
-          url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}`,
-        })),
+        .map((port) => {
+          const phone = phoneOf(entry.vm, port);
+          return {
+            port,
+            url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}`,
+            ...(phone ? { phone } : {}),
+          };
+        }),
       reserved: [
         ...[...entry.reserved]
           .sort((a, b) => a - b)
@@ -2731,6 +2736,28 @@ const serve = async () => {
   servePhone(log);
   // Your agents, from your phone (agents-web.ts): the next port, an origin of its own.
   serveAgents(log, phonePort() + 1);
+  // Dev servers on the tailnet (phone.ts): each forwarded one a slot, kept while it listens.
+  let slots: (string | null)[] = [];
+  const assigned = () => {
+    const wanted = [...entries.values()].flatMap((e) =>
+      [...e.listeners]
+        .filter((p) => !hostHeld.has(p))
+        .sort((x, y) => x - y)
+        .map((p) => `${e.vm} ${p}`),
+    );
+    slots = assignSlots(slots, wanted);
+    return slots;
+  };
+  const phoneOf = (vm: string, port: number) => {
+    const slot = assigned().indexOf(`${vm} ${port}`);
+    return slot >= 0 ? slotAddress(slot) : undefined;
+  };
+  serveSlots(log, (slot) => {
+    const key = assigned()[slot];
+    const [vm = "", port = ""] = (key ?? "").split(" ");
+    const e = key ? entries.get(vm) : undefined;
+    return e ? { devHost: devHostname(INSTANCE, e.domain, e.workspace), port: Number(port) } : null;
+  });
 
   const reconcile = () => {
     const wanted = new Set<number>();
@@ -2969,7 +2996,8 @@ const serve = async () => {
     reconcile();
   };
 
-  const view = (): PortView[] => portsView([...entries.values()], hostHeld, rawOwner, holderOf);
+  const view = (): PortView[] =>
+    portsView([...entries.values()], hostHeld, rawOwner, holderOf, phoneOf);
 
   // ---------------------------------------------------------------- the root UI's host side
   // The root's state service cannot see the host, and cannot ask: no VM can open a
@@ -3102,10 +3130,14 @@ const serve = async () => {
               ports: [...entry.listeners]
                 .sort((x, y) => x - y)
                 .filter((p) => !hostHeld.has(p))
-                .map((p) => ({
-                  port: p,
-                  url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}`,
-                })),
+                .map((p) => {
+                  const phone = phoneOf(entry.vm, p);
+                  return {
+                    port: p,
+                    url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}`,
+                    ...(phone ? { phone } : {}),
+                  };
+                }),
               // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
               // address on that port reaches the Mac's program (the dashboard says so).
               heldOnMac: [...entry.listeners]

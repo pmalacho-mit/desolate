@@ -24,6 +24,7 @@
 // key, here as there.
 import * as fs from "node:fs";
 import { createServer, request } from "node:http";
+import { connect } from "node:net";
 import type { IncomingHttpHeaders, OutgoingHttpHeaders } from "node:http";
 import * as path from "node:path";
 import { run } from "../shared/run.ts";
@@ -357,6 +358,11 @@ export const phoneOn = async (): Promise<Phone | { refused: string; fix: string 
   for (const [https, local] of [
     [httpsPort, phonePort()],
     [httpsPort + 1, phonePort() + 1],
+    // The dev servers' slots (serveSlots).
+    ...Array.from(
+      { length: SLOTS },
+      (_, slot) => [slotHttpsPort(slot), slotLocalPort(slot)] as const,
+    ),
   ] as const) {
     const serve = await run(
       tailscale(),
@@ -382,10 +388,293 @@ export const phoneOff = async (): Promise<void> => {
   const phone = readPhone();
   fs.rmSync(STATE(), { force: true });
   const https = phone?.httpsPort ?? phoneHttpsPort();
-  for (const port of [https, https + 1])
+  for (const port of [
+    https,
+    https + 1,
+    ...Array.from({ length: SLOTS }, (_, slot) => slotHttpsPort(slot)),
+  ])
     await run(tailscale(), ["serve", `--https=${port}`, "off"], { timeoutMs: 15_000 });
 };
 
 /** The phone's addresses, each with its page's token (opened once on the phone). */
 export const phoneAddress = (phone: Phone, token: string) =>
   `https://${phone.name}${phone.httpsPort === 443 ? "" : `:${phone.httpsPort}`}/?tkn=${token}`;
+
+// ------------------------------------------------------------------ dev servers, on the tailnet
+// A workspace's dev server, from your phone. On the Mac each has a name of its own
+// (<domain>-<workspace>-<hex>.localhost:<port>); the tailnet has one name for this Mac. So
+// `desolate phone on` publishes a fixed block of slots, https://<mac>:9101 to :9116, and the
+// daemon gives each forwarded dev server a slot while it listens. A slot's proxy asks
+// tailnetRequest, then passes the request (and a WebSocket, for hot reload) to the forwarder
+// on the Mac under the workspace's own name, so the server sees what it sees on the Mac.
+//
+// One name for every slot, and for the dashboard and the agents page, means one cookie jar:
+// a browser sends a name's cookies to every port of it. So a slot's proxy never passes
+// desolate's own cookies to a dev server, and never lets one set them; and the cookies a dev
+// server sets are renamed for its slot, and passed back to its slot only, so one
+// workspace's server does not get another's. (A cookie a page's own script sets cannot be
+// renamed: it goes to every slot, as on any one host.)
+
+/** How many slots: dev servers on the tailnet at once. */
+export const SLOTS = 16;
+/** A slot's port on the tailnet name. */
+export const slotHttpsPort = (slot: number) => 9101 + slot;
+/** A slot's loopback port, where Tailscale Serve sends it. */
+export const slotLocalPort = (slot: number) => phonePort() + 10 + slot;
+
+/** Which dev server (a key: "<vm> <port>") has which slot, as servers come and go: one that
+ *  has a slot keeps it, a new one takes the first free, one that is gone frees its own. */
+export const assignSlots = (previous: readonly (string | null)[], wanted: readonly string[]) => {
+  const slots: (string | null)[] = Array.from({ length: SLOTS }, (_, i) =>
+    wanted.includes(previous[i] ?? "\0") ? previous[i]! : null,
+  );
+  for (const key of wanted)
+    if (!slots.includes(key)) {
+      const free = slots.indexOf(null);
+      if (free >= 0) slots[free] = key;
+    }
+  return slots;
+};
+
+declare namespace assignSlots {
+  /** a server keeps its slot; a new one takes the first free; one gone frees its own */
+  export type Stable = Expect<
+    Invoke<
+      typeof assignSlots,
+      [
+        previous: [
+          "vm1 5173",
+          "vm2 3000",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+        ],
+        wanted: ["vm2 3000", "vm3 8080"],
+      ]
+    >,
+    "=",
+    [
+      "vm3 8080",
+      "vm2 3000",
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+    ]
+  >;
+}
+
+const COOKIE_PAIR = /^\s*([^=;\s]+)=(.*)$/;
+const ours = (name: string) => /^desolate/i.test(name) || /^slot\d+__/.test(name);
+
+/** The Cookie header a dev server in `slot` is sent: none of desolate's, its own slot's
+ *  under the names it set them with, another slot's not at all, and what a page's script set. */
+export const slotCookies = (header: string | undefined, slot: number): string | undefined => {
+  const kept: string[] = [];
+  for (const part of String(header ?? "").split(";")) {
+    const pair = COOKIE_PAIR.exec(part);
+    if (!pair) continue;
+    const [, name, value] = pair as unknown as [string, string, string];
+    const own = new RegExp(`^slot${slot}__(.+)$`).exec(name);
+    if (own) kept.push(`${own[1]}=${value}`);
+    else if (!ours(name)) kept.push(`${name}=${value}`);
+  }
+  return kept.length ? kept.join("; ") : undefined;
+};
+
+declare namespace slotCookies {
+  /** the dashboard's and the agents page's cookies never reach a dev server; another
+   *  slot's neither; its own come back under its own names */
+  export type Isolated = Expect<
+    Invoke<
+      typeof slotCookies,
+      [
+        header: "desolate_ui_ab12=tok; desolate_agents_cd34=tok2; slot3__sid=mine; slot4__sid=theirs; theme=dark",
+        slot: 3,
+      ]
+    >,
+    "=",
+    "sid=mine; theme=dark"
+  >;
+  /** nothing left: no Cookie header at all */
+  export type Nothing = Expect<
+    Invoke<typeof slotCookies, [header: "desolate_ui_ab12=tok", slot: 0]>,
+    "=",
+    undefined
+  >;
+}
+
+/** The Set-Cookie headers a dev server in `slot` may send back: each renamed for its slot,
+ *  and none that would set one of desolate's (or another slot's). */
+export const slotSetCookies = (values: readonly string[] | undefined, slot: number): string[] =>
+  (values ?? []).flatMap((value) => {
+    const pair = COOKIE_PAIR.exec(value);
+    if (!pair || ours(pair[1]!)) return [];
+    return [`slot${slot}__${value.trimStart()}`];
+  });
+
+declare namespace slotSetCookies {
+  /** its own, renamed for its slot; one that would be desolate's, dropped */
+  export type Renamed = Expect<
+    Invoke<
+      typeof slotSetCookies,
+      [values: ["sid=abc; Path=/; HttpOnly", "desolate_ui_ab12=x; Path=/", "slot1__sid=y"], slot: 2]
+    >,
+    "=",
+    ["slot2__sid=abc; Path=/; HttpOnly"]
+  >;
+}
+
+/** A redirect a dev server sends to its own name, made the slot's address on the tailnet. */
+export const slotLocation = (location: string, devOrigin: string, slotOrigin: string) =>
+  location.startsWith(devOrigin) ? `${slotOrigin}${location.slice(devOrigin.length)}` : location;
+
+declare namespace slotLocation {
+  export type Cases = Table<
+    typeof slotLocation,
+    [
+      [
+        args: [
+          location: "http://acme-w1-0a1b2c.localhost:5173/login",
+          devOrigin: "http://acme-w1-0a1b2c.localhost:5173",
+          slotOrigin: "https://mac.tail1234.ts.net:9101",
+        ],
+        expected: "https://mac.tail1234.ts.net:9101/login",
+      ],
+      [
+        args: [
+          location: "/login",
+          devOrigin: "http://acme-w1-0a1b2c.localhost:5173",
+          slotOrigin: "https://mac.tail1234.ts.net:9101",
+        ],
+        expected: "/login",
+      ],
+    ]
+  >;
+}
+
+/** What a slot reaches now: a workspace's dev hostname and its port, or nothing. */
+export type SlotTarget = { devHost: string; port: number } | null;
+
+/** The slots' proxies, on 127.0.0.1 only (Tailscale Serve is pointed there). `target` says
+ *  what each slot reaches now, as the daemon assigned it. */
+export const serveSlots = (log: (line: string) => void, target: (slot: number) => SlotTarget) => {
+  const decide = (slot: number, headers: IncomingHttpHeaders) => {
+    const checked = tailnetRequest(readPhone(), headers);
+    if ("refused" in checked) return checked;
+    const to = target(slot);
+    if (!to)
+      return {
+        refused: {
+          status: 404,
+          text: "no dev server is on this address now: `desolate ports` lists them",
+        },
+      };
+    const devOrigin = `http://${to.devHost}:${to.port}`;
+    const slotOrigin = `https://${checked.phone.name}:${slotHttpsPort(slot)}`;
+    const passed: OutgoingHttpHeaders = { ...headers, host: `${to.devHost}:${to.port}` };
+    if (typeof headers.origin === "string" && headers.origin === slotOrigin)
+      passed.origin = devOrigin;
+    if (typeof headers.referer === "string" && headers.referer.startsWith(slotOrigin))
+      passed.referer = `${devOrigin}${headers.referer.slice(slotOrigin.length)}`;
+    const cookie = slotCookies(headers.cookie, slot);
+    if (cookie) passed.cookie = cookie;
+    else delete passed.cookie;
+    for (const name of Object.keys(passed))
+      if (name.startsWith("x-forwarded-") || name.startsWith("tailscale-")) delete passed[name];
+    return { to, devOrigin, slotOrigin, headers: passed };
+  };
+  for (let slot = 0; slot < SLOTS; slot++) {
+    const server = createServer((req, res) => {
+      const d = decide(slot, req.headers);
+      if ("refused" in d) {
+        res.writeHead(d.refused.status, { "content-type": "text/plain; charset=utf-8" });
+        return res.end(`desolate: ${d.refused.text}\n`);
+      }
+      const upstream = request(
+        {
+          host: "127.0.0.1",
+          port: d.to.port,
+          method: req.method,
+          path: req.url,
+          headers: d.headers,
+        },
+        (answer) => {
+          const headers = { ...answer.headers };
+          const set = slotSetCookies(answer.headers["set-cookie"], slot);
+          if (set.length) headers["set-cookie"] = set;
+          else delete headers["set-cookie"];
+          if (typeof headers.location === "string")
+            headers.location = slotLocation(headers.location, d.devOrigin, d.slotOrigin);
+          res.writeHead(answer.statusCode ?? 502, headers);
+          answer.pipe(res);
+        },
+      );
+      upstream.on("error", () => {
+        if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+        res.end("desolate: the workspace's dev server did not answer\n");
+      });
+      req.pipe(upstream);
+      res.on("close", () => upstream.destroy());
+    });
+    // A WebSocket (Vite's hot reload): the same checks, then the bytes both ways.
+    server.on("upgrade", (req, client, head) => {
+      const d = decide(slot, req.headers);
+      if ("refused" in d) {
+        client.end(
+          `HTTP/1.1 ${d.refused.status} Refused\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
+        );
+        return;
+      }
+      const upstream = connect(d.to.port, "127.0.0.1", () => {
+        const lines = [`${req.method} ${req.url} HTTP/1.1`];
+        for (const [name, value] of Object.entries(d.headers))
+          for (const v of Array.isArray(value) ? value : [value])
+            if (v !== undefined) lines.push(`${name}: ${v}`);
+        upstream.write(`${lines.join("\r\n")}\r\n\r\n`);
+        if (head.length) upstream.write(head);
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      const end = () => {
+        client.destroy();
+        upstream.destroy();
+      };
+      upstream.on("error", end);
+      client.on("error", end);
+      upstream.on("close", end);
+      client.on("close", end);
+    });
+    server.on("error", (error: NodeJS.ErrnoException) =>
+      log(`phone slot ${slot} (port ${slotLocalPort(slot)}): ${error.message}`),
+    );
+    server.listen({ port: slotLocalPort(slot), host: "127.0.0.1", exclusive: true });
+  }
+};
+
+/** A dev server's address on the tailnet, when it has a slot and the phone is on. */
+export const slotAddress = (slot: number) => {
+  const phone = readPhone();
+  return phone ? `https://${phone.name}:${slotHttpsPort(slot)}/` : undefined;
+};
