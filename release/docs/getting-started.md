@@ -86,11 +86,16 @@ next: desolate up you--app   (a workspace: a VM with its checkout, its devcontai
   all, for a public repository.
 - A **domain** is a trust boundary: its repositories, its network rules, its secrets.
   Workspaces in one domain can see each other's branches; workspaces in different domains
-  share nothing. `clone` makes one per repository, named `owner--repo` (`you--app`).
-  Repositories that work together go in one: `desolate clone you/lib --domain you--app`.
-  `--no-domain` makes none.
+  share nothing. `clone` makes one per repository, named `owner--repo` (`you--app`): the
+  repository's **home domain**, for it alone (the dashboard marks it). Repositories that work
+  together go in a domain of their own: **New domain** on the dashboard, ticking them, or
+  `desolate domain create you--work --repo you/app --repo you/lib`. `--no-domain` makes none.
 
 ## 4. Start a workspace
+
+On the dashboard (`desolate ui --open`), a domain with no workspaces offers **Workspace on
+main**: one on the default branch, the domain's own checkout of each repository. Or, for a
+branch of its own:
 
 ```bash
 desolate up you--app --name greet --branch feature/greet-by-name
@@ -194,6 +199,10 @@ claude setup-token        # on your Mac
 desolate domain you--app secret set CLAUDE-OAUTH --hosts api.anthropic.com --headers authorization   # paste it
 ```
 
+(Or **Add a secret...** on the domain's card on the dashboard: the secrets page, which is your
+Mac's, like the approval page. The value goes from it to the root and is never shown on a page
+again; `desolate domain you--app secret show CLAUDE-OAUTH` shows it in your terminal.)
+
 then, for each task:
 
 ```bash
@@ -214,13 +223,22 @@ desolate ui --open                           # the dashboard
 ```
 
 Everything committed in a workspace reaches the root within seconds. The dashboard shows
-each checkout's branch as it changes, what needs you (offers, a workspace asking for help),
-and every branch of every domain under **Branches**:
+what needs you on top (offers, a workspace asking for help), then each domain as a card:
+
+- **each workspace's state** as a pill (running, stopped, or what the dashboard is doing to
+  it: being made, starting, stopping, deleting, with the step it is at);
+- **each checkout's branch** as it changes, and whether its commits are on the remote;
+- **every branch of the domain** under **Branches**:
 
 ![Every branch a domain has, offered or not, with Review and Open in git](assets/dashboard-branches.png)
 
-**Review** shows what a push would send: the commits, the files and the diff, made by git in
-the root VM, from the objects alone (nothing in the branch runs):
+Cards fold to a line, and the domains filter by name or repository; hover a pill for what it
+means.
+
+**Review** (or a checkout's **Diff**) opens a panel on the right, the window's height, as wide
+as you drag it. It shows what a push would send: the commits, the files and the diff, made by
+git in the root VM, from the objects alone (nothing in the branch runs), against the remote's
+default branch as last fetched (**Fetch now** fetches it):
 
 ![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
 
@@ -266,7 +284,7 @@ every branch desolate pushes.
 | `desolate list` | every domain and workspace, with the branch each checkout is on now |
 | `desolate branches [<domain>]` | every branch the domains have, offered or not |
 | `desolate review <domain> <repo> <branch> [--diff]` | what a push would send |
-| `desolate stop / start / rm <domain>/<workspace>` | a workspace's VM; `rm` removes the VM (its branches stay in the domain's clones) |
+| `desolate stop / start / rm <domain>/<workspace>` | a workspace's VM; `rm` removes the VM (its branches stay in the domain's clones). The dashboard's **Delete** does it only when nothing in it would be lost and its commits are on the remote; hover it to see why it is off |
 | `desolate fetch <repo>` | refresh a mirror from its remote |
 | `desolate doctor` | every check, with what to do about each that fails |
 | `desolate down` | stop every VM and the daemon; remove nothing |
@@ -306,7 +324,7 @@ next `up`.
 ## Removing it
 
 ```bash
-desolate rm you--app/greet            # a workspace's VM (its branches stay)
+desolate rm you--app/greet            # a workspace's VM (its branches stay); or Delete on the dashboard
 desolate rm you--app                   # a domain and its clones
 desolate destroy                  # every VM; your clones, keys and secrets stay (the next bootstrap puts them back)
 desolate destroy --all            # and ~/.desolate: mirrors, clones, the root's keys

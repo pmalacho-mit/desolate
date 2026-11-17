@@ -274,6 +274,8 @@ there once and never to a page again. To see a value, in a terminal on the Mac:
 host's own way into the root VM, as root, as a set is: nothing in a VM, and not the dashboard,
 can ask for it.
 
+![The secrets page: a domain's secrets by name and host, and the form to add one](assets/secrets.png)
+
 ## On a Mac: if macOS asks about `limactl` and incoming connections
 
 With the macOS firewall on, you may see this dialog (the wording on macOS 14.5, from the
