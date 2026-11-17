@@ -284,7 +284,13 @@ const render = (pending, issues) => {
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
   // (A number, to that one origin.)
   if (EMBED && window.parent !== window) window.parent.postMessage({ desolatePending: waiting }, location.origin.replace("//desolate-approve.", "//desolate-git."));
-  say(waiting ? "" : "Nothing is waiting. This page checks every second.");
+  // Nothing waiting: said as a state of its own, with what makes something appear here. A
+  // grey line alone read as a page that did not work (dogfooding, 2026-11-17, after
+  // `desolate approve --web --open` with nothing waiting).
+  const empty = [...cards.values()].length === 0;
+  document.getElementById("empty").hidden = !empty;
+  document.body.classList.toggle("nothing", empty);
+  say(waiting || empty ? "" : "Nothing else is waiting. This page checks every second.");
 };
 
 const poll = async () => {
