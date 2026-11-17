@@ -138,6 +138,12 @@ const main = async (name: string) => {
       await git(clone, ["config", "remote.origin.pushurl", `desolate-offer::${checkout.repo}`]);
       // And `git fetch` asks the root to refresh the mirror first (git-remote-desolate-mirror).
       await git(clone, ["config", "remote.origin.url", `desolate-mirror::${checkout.repo}`]);
+      // A plain `git push` on a branch with no upstream (every worktree's: made --no-track,
+      // below) pushes it under its own name. Without this, git's default stopped it with
+      // "has no upstream branch" before the push reached the helper (a person trying desolate
+      // as a new user, 2026-11-16). The refusal that follows sets no upstream, so the next
+      // `git push` offers it again.
+      await git(clone, ["config", "push.autoSetupRemote", "true"]);
       if (plan.fetch) await git(clone, ["fetch", "--quiet", "--prune", "origin"]);
       if (checkout.kind === "worktree" && !fs.existsSync(path.join(checkout.path, ".git"))) {
         const exists = await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", `refs/heads/${checkout.branch}`]);
