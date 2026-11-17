@@ -289,6 +289,7 @@ const render = (pending, issues) => {
   // `desolate approve --web --open` with nothing waiting).
   const empty = [...cards.values()].length === 0;
   document.getElementById("empty").hidden = !empty;
+  document.body.classList.toggle("nothing", empty);
   say(waiting || empty ? "" : "Nothing else is waiting. This page checks every second.");
 };
 

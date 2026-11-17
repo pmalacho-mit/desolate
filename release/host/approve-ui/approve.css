@@ -3,7 +3,8 @@
 * { box-sizing: border-box; }
 body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
 header, main, .status, .empty { max-width: 760px; margin: 0 auto; }
-.empty { margin-top: 16px; }
+.card.empty { margin: 16px auto; }
+body.nothing .lede { display: none; }
 .empty .big { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
 .empty .more, .empty li { color: var(--muted); }
 .empty ul { margin: 4px 0 8px; padding-left: 20px; }
