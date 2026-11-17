@@ -27,6 +27,34 @@ const gitLink = (repo) => state && state.stack && state.stack.editorPort
 // A token in an address is for the link, never for the label.
 const redact = (text) => String(text).replace(/tkn=[0-9a-f]+/g, "tkn=...");
 const short = (commit) => String(commit).slice(0, 12);
+/** A pill: a word or two in a colour of its own, with more on hover. */
+const pill = (text, cls = "", title = null, attrs = {}) => el("span", { class: `pill ${cls}`.trim(), title, ...attrs }, text);
+/** How long ago, in words a person reads at a glance. */
+const ago = (iso) => {
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  if (!Number.isFinite(s)) return "at an unknown time";
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+};
+// What the person folded (a section, a domain's card), kept in this browser.
+const folded = (() => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("desolate-folded") || "[]"));
+  } catch {
+    return new Set();
+  }
+})();
+const toggleFold = (key) => {
+  if (folded.has(key)) folded.delete(key);
+  else folded.add(key);
+  try {
+    localStorage.setItem("desolate-folded", JSON.stringify([...folded]));
+  } catch {
+    /* a page without storage keeps it for now */
+  }
+  render();
+};
+let domainFilter = "";
+let activityFilter = "";
 
 const act = async (key, kind, args) => {
   busy.add(key);
@@ -243,13 +271,14 @@ const loadDiff = async () => {
  *  ("origin") or the domain's own copy of it ("domain"). The target names only a domain, a
  *  repository and a branch: what is shown is read in the root. */
 const openReview = async (offer, against = "origin") => {
-  reviewing = { offer, against, loading: true };
+  const fetchedAt = ((state && state.repos.find((r) => r.repo === offer.repo)) || {}).fetchedAt || null;
+  reviewing = { offer, against, fetchedAt, loading: true };
   render();
   try {
     const response = await fetch(`/review?${query(offer, against)}`);
-    reviewing = { offer, against, review: await response.json() };
+    reviewing = { offer, against, fetchedAt, review: await response.json() };
   } catch (error) {
-    reviewing = { offer, against, review: { error: String(error) } };
+    reviewing = { offer, against, fetchedAt, review: { error: String(error) } };
   }
   render();
   if (reviewing && reviewing.review && !reviewing.review.error) loadDiff();
@@ -369,31 +398,63 @@ const needsYou = () => {
   return items;
 };
 
+/** git's shortstat ("2 files changed, 10 insertions(+), 3 deletions(-)"), as numbers in
+ *  colour: what a branch changes, readable at a glance. */
+const statView = (stat) => {
+  if (!stat) return [pill("no file changes", "", "the branch changes no file against what it is compared with")];
+  const files = /(\d+) files? changed/.exec(stat);
+  const adds = /(\d+) insertions?\(\+\)/.exec(stat);
+  const dels = /(\d+) deletions?\(-\)/.exec(stat);
+  return [
+    el("span", {}, el("span", { class: "num" }, files ? files[1] : "0"), files && files[1] === "1" ? " file" : " files"),
+    el("span", { class: "num-add", title: "lines added" }, `+${adds ? adds[1] : 0}`),
+    el("span", { class: "num-del", title: "lines removed" }, `−${dels ? dels[1] : 0}`),
+  ];
+};
+
 const reviewPanel = () => {
   if (!reviewing) return null;
   const { offer, review, loading } = reviewing;
   const close = el("button", { class: "quiet", onclick: () => { reviewing = null; render(); } }, "Close");
-  if (loading) return el("div", { class: "card" }, el("div", { class: "top" }, el("h3", {}, `Reviewing ${offer.repo} ${offer.branch}`), el("span", { class: "grow" }), close), el("div", { class: "sub" }, "reading what a push would send..."));
-  if (review.error) return el("div", { class: "card" }, el("div", { class: "top" }, el("h3", {}, `${offer.repo} ${offer.branch}`), el("span", { class: "grow" }), close), el("div", { class: "warn" }, review.error));
+  const header = (...title) => el("div", { class: "review-head" }, el("div", { class: "title-row" }, el("div", { class: "title" }, ...title), close));
+  if (loading) return el("div", { class: "card" }, header(el("h3", {}, `Reviewing ${offer.repo} ${offer.branch}`)), el("div", { class: "sub" }, "reading what a push would send..."));
+  if (review.error) return el("div", { class: "card" }, header(el("h3", {}, `${offer.repo} ${offer.branch}`)), el("div", { class: "warn" }, review.error));
   const key = `push:${offer.domain}:${offer.repo}:${offer.branch}`;
   // Pushing from here is for what the agent offered, at the commit reviewed: an offer is how
   // its new LFS objects reach the root. Anything else is pushed from the git terminal.
   const offered = state.offers.some((o) => o.domain === offer.domain && o.repo === review.repo && o.branch === review.branch && o.commit === review.commit);
   const other = reviewing.against === "domain" ? "origin" : "domain";
+  const repo = state.repos.find((r) => r.repo === review.repo) || {};
+  const def = review.defaultBranch || "default branch";
+  // Against the remote (origin): what a push would send, and for a workspace on the default
+  // branch, what it changes beyond the remote's (dogfooding: "compare with the domain's main"
+  // compared main with itself). The remote as last fetched, and a way to fetch it now.
+  const against = reviewing.against === "domain"
+    ? [pill(`against ${offer.domain}'s ${def}`, "accent", "the domain's own copy of the default branch: what its workspaces built on, which may be ahead of the remote")]
+    : [pill(`against the remote's ${def}`, "accent", `origin/${def}: the remote's ${def}, as the root last fetched it`), el("span", { class: "sub" }, repo.fetchedAt ? `fetched ${ago(repo.fetchedAt)}` : ""),
+      el("button", { class: "quiet small", disabled: busy.has(`fetch:${review.repo}`), "data-fetch": review.repo, title: `desolate fetch ${review.repo}: the remote's branches as they are now; the review follows`, onclick: () => act(`fetch:${review.repo}`, "repo.fetch", { repo: review.repo }) }, busy.has(`fetch:${review.repo}`) ? "Fetching..." : "Fetch now")];
   return el("div", { class: "card", id: "review-card" },
-    el("div", { class: "top" }, el("h3", {}, `${review.repo} ${review.branch}`), el("span", { class: "mono sub" }, review.commit), el("span", { class: "grow" }), close),
-    el("div", { class: "sub" }, `Against ${review.againstLabel}${review.base ? ` (from ${short(review.base)})` : ""}. `,
-      el("button", { class: "quiet", "data-against": other, onclick: () => openReview(offer, other) }, other === "domain" ? `Compare with ${offer.domain}'s ${review.defaultBranch || "default branch"}` : `Compare with origin/${review.defaultBranch || "default branch"}`)),
-    el("div", { class: "sub" }, `${reviewing.against === "domain" ? "Beyond that, it has" : "A push would send"} ${review.commits.length} commit(s): ${review.stat || "no file changes"}${review.lfsObjects ? `, and ${review.lfsObjects} LFS object(s)` : ""}.`),
-    review.warnings.map((w) => el("div", { class: "warn" }, `Warning: a push of this branch ${w}`)),
+    header(el("h3", {}, review.repo), pill(review.branch, "mono", "the branch reviewed"), el("span", { class: "mono sub", title: "the commit reviewed: Push sends exactly this" }, short(review.commit))),
+    el("div", { class: "toolbar" }, ...against,
+      // The domain's own default branch, against itself, shows nothing: offered only for
+      // another branch.
+      review.isDefault && reviewing.against === "origin" ? null
+        : el("button", { class: "quiet small", "data-against": other, onclick: () => openReview(offer, other) }, other === "domain" ? `Compare with ${offer.domain}'s ${def}` : `Compare with the remote's ${def}`)),
+    el("div", { class: "stat" },
+      pill(`${review.commits.length} commit${review.commits.length === 1 ? "" : "s"}`, review.commits.length ? "blue" : "", reviewing.against === "domain" ? "beyond the domain's default branch" : "what a push would send"),
+      ...statView(review.stat),
+      review.lfsObjects ? pill(`${review.lfsObjects} LFS object(s)`, "accent", "large files a push would send with it") : null,
+      reviewing.against === "domain" ? el("span", { class: "sub" }, `(a push would send ${review.pushCommits}, counted against the remote)`) : null),
+    review.warnings.length ? el("div", { class: "warnbox" }, review.warnings.map((w) => el("div", {}, pill("warning", "orange"), ` a push of this branch ${w}`))) : null,
     el("pre", { class: "mono" }, review.commits.slice(0, 40).map((c) => `${short(c.commit)}  ${c.subject}`).join("\n")),
     el("pre", { class: "mono" }, review.files.slice(0, 80).join("\n")),
     reviewing.diff && reviewing.diff.loading ? el("div", { class: "sub" }, "reading the diff...") : null,
     reviewing.diff && reviewing.diff.error ? el("div", { class: "warn" }, reviewing.diff.error) : null,
     // The diff is shown only if it is of the commit the Push button names.
     reviewing.diff && reviewing.diff.text !== undefined && reviewing.diff.commit === review.commit ? [
-      el("div", { class: "sub" }, el("button", { class: "quiet small", "data-whitespace": "", onclick: () => { reviewing.whitespace = reviewing.whitespace === "ignore" ? "show" : "ignore"; loadDiff(); } }, reviewing.whitespace === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes")),
-      el("div", { class: "sub" }, el("button", { class: "quiet small", "data-layout": "", onclick: () => setLayout(layout === "sides" ? "unified" : "sides") }, layout === "sides" ? "Unified" : "Side by side")),
+      el("div", { class: "toolbar" },
+        el("button", { class: "quiet small", "data-whitespace": "", onclick: () => { reviewing.whitespace = reviewing.whitespace === "ignore" ? "show" : "ignore"; loadDiff(); } }, reviewing.whitespace === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes"),
+        el("button", { class: "quiet small", "data-layout": "", onclick: () => setLayout(layout === "sides" ? "unified" : "sides") }, layout === "sides" ? "Unified" : "Side by side")),
       diffElement(reviewing.diff),
       reviewing.diff.truncated ? el("div", { class: "warn" }, "The diff is longer than is shown here. Read the rest with git, in `desolate root shell`, before you push.") : null] : null,
     reviewing.diff && reviewing.diff.commit && reviewing.diff.commit !== review.commit ? el("div", { class: "warn" }, "The branch moved while you were reading. Close this and review it again.") : null,
@@ -406,13 +467,21 @@ const reviewPanel = () => {
     el("div", { class: "sub" }, "Pushing waits for your approval on the host: on the approval page (", el("code", {}, "desolate approve --web --open"), "), or ", el("code", {}, "desolate approve"), " in a terminal."));
 };
 
-/** A checkout as it is NOW (its HEAD, which the host watches), not as it started. */
-const checkoutLine = (c) => {
+/** A checkout as it is NOW (its HEAD, which the host watches), not as it started: the
+ *  repository, the branch it is on, its commit, and whether that is on the remote. */
+const checkoutLine = (d, w, c) => {
   const head = c.head;
-  const at = head && head.commit ? ` ${short(head.commit)}` : "";
-  if (!head) return [el("span", { class: "mono" }, c.repo), ` @ ${c.branch}`, el("span", { class: "sub" }, " (as started)")];
-  if (!head.branch) return [el("span", { class: "mono" }, c.repo), " ", el("span", { class: "warn" }, head.commit ? `detached at${at}` : "on a branch desolate does not carry")];
-  return [el("span", { class: "mono" }, c.repo), ` @ ${head.branch}`, el("span", { class: "sub mono" }, at)];
+  const pushed = (w.pushed || []).find((p) => p.repo === c.repo);
+  const where = !head
+    ? [pill(c.branch, "mono", "the branch it started on: its HEAD has not been read yet"), el("span", { class: "sub" }, "(as started)")]
+    : !head.branch
+      ? [pill(head.commit ? `detached at ${short(head.commit)}` : "on a branch desolate does not carry", "orange", "not on a branch: commits here reach the root only from a branch")]
+      : [pill(head.branch, "mono", `the branch checked out now`), head.commit ? el("span", { class: "mono" }, short(head.commit)) : null];
+  const remote = !pushed ? null
+    : pushed.count === 0 ? pill("on the remote", "green", "every commit here is on a branch of the remote (origin)")
+      : pushed.count > 0 ? pill(`${pushed.count} not on the remote`, "orange", `${pushed.why}: review and push it, or offer it`)
+        : pill("not counted", "gray", pushed.why || "its commits could not be counted against the remote");
+  return [pill(c.repo, "repo mono", "the repository"), ...where, remote];
 };
 
 /** The base a checkout's branch is merged into, when the root saw its pushed commit land
@@ -429,44 +498,75 @@ const allLanded = (d, w) => {
   return w.checkouts.some((c) => landedOf(d, c)) && w.checkouts.every((c) => landedOf(d, c) || (c.head && c.head.branch && c.head.branch === defaultOf(c.repo)));
 };
 
+/** Whether the dashboard may delete a workspace, and if not, every reason: nothing in it that
+ *  a remove would lose (the host looked, in its VM: while it runs, and as it stopped), and
+ *  every commit on the remote (the root counted). The host checks again when it runs. */
+const deletable = (w, running) => {
+  const why = [];
+  const looked = w.host && w.host.looked;
+  if (!w.host) why.push("the host has not said what it holds yet");
+  else if (!looked || (!running && !looked.atStop))
+    why.push(running ? "desolate has not looked at what it holds yet (it does within half a minute)" : "it stopped before desolate looked at what it holds: start it and stop it again, and Delete can tell");
+  else why.push(...looked.lost);
+  if (!w.pushed) why.push("its commits have not been counted against the remote yet");
+  else for (const c of w.pushed) if (c.why) why.push(`${c.repo}: ${c.why}`);
+  return why;
+};
+
+/** A workspace's state in a word, and its colour: what the dashboard is doing to it first. */
+const statusOf = (w, host, running) => {
+  if (!state.hostConnected) return [`${w.state} (as last known)`, "gray", "the host is not connected: this is what it last said"];
+  if (w.doing) return [w.doing, "blue pulse", "the dashboard's action is at it; the step it is at is below"];
+  if (w.state === "planned" && !running) return ["not made yet", "gray", "planned, but its VM was never made: Start makes it"];
+  if (running) return ["running", "green", "its VM is running"];
+  if (host.status === "stopped") return ["stopped", "gray", "its VM is stopped: its files are kept, and Start brings it back"];
+  return [host.status || w.state, host.status ? "red" : "gray", "what its VM says it is"];
+};
+
 const workspaceRow = (d, w) => {
   const host = w.host || {};
   const running = host.status === "running";
-  // Being made or started by an action of the dashboard's: said so, with the step it is at,
-  // and no Start or Stop until it is done (they were offered meanwhile, and read as "it has
-  // not started"; dogfooding, 2026-11-17).
+  // Being made, started, stopped or deleted by an action of the dashboard's: said so, with
+  // the step it is at, and no buttons until it is done (they were offered meanwhile, and
+  // read as "it has not started"; dogfooding, 2026-11-17).
   const making = typeof w.making === "string";
   const says = w.says.status;
   const key = `ws:${d.slug}/${w.workspace}`;
   const target = { domain: d.slug, workspace: w.workspace };
+  const [word, colour, explain] = statusOf(w, host, running);
+  const why = deletable(w, running);
+  const remove = el("span", { class: "tip", title: why.length ? `Not deletable yet: ${why.join("; ")}.` : `Delete ${d.slug}/${w.workspace}: its VM goes, nothing in it is unsaved, and every commit is on the remote. Its branches stay in the domain.` },
+    el("button", { class: "quiet danger", disabled: why.length > 0 || busy.has(`rm:${d.slug}/${w.workspace}`), "data-delete": `${d.slug}/${w.workspace}`,
+      onclick: () => { if (confirm(`Delete ${d.slug}/${w.workspace}? Its VM is removed. Nothing in it is unsaved, and its commits are on the remote; its branches stay in the domain.`)) act(`rm:${d.slug}/${w.workspace}`, "workspace.remove", target); } }, "Delete"));
   return el("li", { "data-workspace": `${d.slug}/${w.workspace}` },
-    el("span", { class: `dot ${making ? "blue" : running ? (says ? says.color : "gray") : "hollow"}`, title: making ? "starting" : says ? says.color : running ? "no status set" : "stopped" }),
+    el("span", { class: `dot ${making ? "blue" : running ? (says ? says.color : "gray") : "hollow"}`, title: making ? w.doing || "busy" : says ? says.color : running ? "no status set" : "stopped" }),
     el("div", { class: "what" },
-      el("div", { class: "name" }, w.workspace, " ", el("span", { class: "sub", "data-making": making ? "" : null }, making ? "starting..." : !state.hostConnected ? `${w.state} (as last known)` : w.state === "planned" && !running ? "not made yet" : (host.status || w.state)), " ",
+      el("div", { class: "name" }, w.workspace, pill(word, colour, explain, { "data-making": making ? "" : null }),
         // Who started it: you, or a workspace of the domain (desolate spawn in it); and a
         // warning when that one is gone and this one is still here.
         w.startedBy
-          ? el("span", { class: `chip ${w.outlived ? "warn" : ""}`, "data-started-by": w.startedBy, title: w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)` }, w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`)
-          : el("span", { class: "chip", "data-started-by": "" }, "started by you")),
-      w.checkouts.map((c) => el("div", { class: "line", "data-checkout": c.repo }, checkoutLine(c),
-        landedOf(d, c) ? [" ", el("span", { class: "chip merged", "data-merged": landedOf(d, c) }, `merged into ${landedOf(d, c)}`)] : null,
-        c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)
-          ? [" ", el("button", { class: "quiet small", "data-diff-checkout": c.repo, onclick: () => openReview({ domain: d.slug, repo: c.repo, branch: c.head.branch }) }, "Diff")] : null)),
+          ? pill(w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`, w.outlived ? "orange" : "", w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)`, { "data-started-by": w.startedBy })
+          : pill("started by you", "", "you started it: from here, or desolate up", { "data-started-by": "" })),
       making && w.making ? el("div", { class: "line sub", "data-making-step": "" }, redact(w.making)) : null,
-      says ? el("div", { class: "line", "data-says": "" }, says.message) : null,
-      allLanded(d, w) ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. ", running ? "Stop frees its memory; " : "", el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " removes it, with anything uncommitted in it.") : null,
-      host.devcontainer ? el("div", { class: "line" }, `devcontainer: ${host.devcontainer}`) : null,
+      w.checkouts.map((c) => el("div", { class: "checkout", "data-checkout": c.repo }, checkoutLine(d, w, c),
+        landedOf(d, c) ? pill(`merged into ${landedOf(d, c)}`, "green", "its branch, at this commit, is merged on the remote", { "data-merged": landedOf(d, c) }) : null,
+        c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)
+          ? el("button", { class: "quiet small", "data-diff-checkout": c.repo, title: `What ${c.head.branch} changes against the remote's ${(state.repos.find((r) => r.repo === c.repo) || {}).defaultBranch || "default branch"}`, onclick: () => openReview({ domain: d.slug, repo: c.repo, branch: c.head.branch }) }, "Diff") : null)),
+      says ? el("div", { class: "line", "data-says": "" }, pill(says.color, says.color === "gray" ? "" : says.color, "what the workspace said about itself (desolate status set)"), " ", says.message) : null,
+      allLanded(d, w) ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. ", running ? "Stop frees its memory; " : "", "Delete removes it.") : null,
+      host.devcontainer ? el("div", { class: "line" }, pill(/^FAILED/.test(host.devcontainer) ? "devcontainer failed" : "devcontainer", /^FAILED/.test(host.devcontainer) ? "red" : "", "the project's devcontainer, in its VM"), " ", host.devcontainer.replace(/^up \(/, "(")) : null,
       w.size ? el("div", { class: "line" }, `${w.size.cpus} CPUs, ${Math.round(w.size.memoryMiB / 1024)} GiB memory, ${w.size.diskGiB} GiB disk`) : null,
-      (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? ", " : "", el("a", { href: p.url, target: "_blank", rel: "noopener" }, `:${p.port}`)])) : null,
+      (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? " " : "", el("a", { href: p.url, target: "_blank", rel: "noopener", class: "pill accent", title: `its server on port ${p.port}, at its own name` }, `:${p.port}`)])) : null,
       // A port this Mac holds (another user's program, often, on a shared Mac): the
       // workspace's server on it is not forwarded, and its address reaches that program.
       ...(host.heldOnMac || []).map((h) => el("div", { class: "line warn", "data-held-on-mac": String(h.port) }, `not forwarded: :${h.port}. This Mac's port ${h.port} is held (${h.by}), so the workspace's address on it reaches that program, not this workspace. Run it on another port.`))),
     el("div", { class: "buttons" }, making ? null : [
       running && host.editor ? el("a", { class: "button", href: host.editor, target: "_blank", rel: "noopener", "data-editor": "" }, "Open editor") : null,
-      running ? button("Stop", key, "workspace.stop", target, true) : button("Start", key, "workspace.start", target)]));
+      running ? button("Stop", key, "workspace.stop", target, true) : button("Start", key, "workspace.start", target),
+      remove]));
 };
 
-/** Every branch the domain has (its own list), offered or not: each one reviewable. */
+/** Every branch a domain has (its own list), offered or not: each one reviewable. */
 const branchList = (d) => {
   const list = d.branches || [];
   if (!list.length) return null;
@@ -478,33 +578,103 @@ const branchList = (d) => {
     el("ul", { class: "rows" }, list.map((b) => el("li", { "data-branch": `${b.repo}/${b.branch}` },
       el("span", { class: `dot ${offered(b) ? "blue" : "hollow"}`, title: offered(b) ? "offered" : "not offered" }),
       el("div", { class: "what" },
-        el("div", { class: "name" }, el("span", { class: "mono" }, b.branch), " ", el("span", { class: "sub" }, b.repo)),
-        el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), offered(b) ? " · offered" : "", b.landed ? ` · merged into ${b.landed}` : "", where(b).length ? ` · checked out in ${where(b).join(", ")}` : "")),
+        el("div", { class: "name" }, pill(b.branch, "mono", "the branch"), pill(b.repo, "repo mono", "the repository"),
+          offered(b) ? pill("offered", "blue", "a workspace offered it for you to review and push") : null,
+          b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null),
+        el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? ` · checked out in ${where(b).join(", ")}` : "")),
       el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"), gitLink(b.repo))))));
 };
 const branchesOpen = new Set();
 
+/** The workspace a domain starts with: each repository on its default branch (its main
+ *  checkout), named after those branches. Repositories whose default branches differ (main
+ *  and master) give a name of both, and the card says so. */
+const defaultsOf = (d) => d.repos.map((repo) => ({ repo, branch: (state.repos.find((r) => r.repo === repo) || {}).defaultBranch || "main" }));
+const defaultWorkspaceName = (branches) => {
+  const name = [...new Set(branches)].join("-").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "main";
+  return name === "template" ? "template-ws" : name;
+};
+const firstWorkspace = (d) => {
+  const defaults = defaultsOf(d);
+  const branches = [...new Set(defaults.map((x) => x.branch))];
+  const name = defaultWorkspaceName(defaults.map((x) => x.branch));
+  const key = `up:${d.slug}`;
+  return el("div", { class: "empty-ws", "data-first-workspace": d.slug },
+    el("div", {}, el("b", {}, "No workspaces yet."), " Start with the default branch: the domain's own checkout of each repository, where its work lands."),
+    branches.length > 1 ? el("div", { class: "line warn" }, "Its repositories' default branches differ: ", defaults.map((x, i) => [i ? ", " : "", el("span", { class: "mono" }, x.repo), " on ", el("span", { class: "mono" }, x.branch)]), `. The workspace, named ${name}, has each on its own.`) : null,
+    el("button", { disabled: busy.has(key), "data-default-workspace": name, title: `desolate up ${d.slug} --name ${name}: a workspace with ${branches.length > 1 ? "each repository on its default branch" : `${branches[0]} checked out`}, named ${name}`, onclick: () => act(key, "workspace.up", { domain: d.slug, workspace: name }) },
+      busy.has(key) ? "Starting..." : `Workspace on ${branches.join(" + ")}`));
+};
+
+/** The domain `desolate clone` made a repository (owner--repo), for that repository alone. */
+const homeTip = (repo) => `${repo}'s home domain: desolate made it when ${repo} was cloned, for that repository alone. Its workspaces see ${repo} and nothing else, with this domain's own secrets and network rules. To work on ${repo} together with other repositories, make a new domain with them (New domain below): each domain is a trust boundary of its own.`;
+
 const domainCard = (d) => {
   const key = `up:${d.slug}`;
+  const foldKey = `domain:${d.slug}`;
+  const isFolded = folded.has(foldKey);
   const others = state.repos.filter((r) => !d.repos.includes(r.repo));
+  const running = d.workspaces.filter((w) => w.host && w.host.status === "running").length;
+  const head = el("div", { class: "top fold-head", title: isFolded ? "Show this domain" : "", onclick: (event) => { if (!event.target.closest("button, a, input, select, label, .pill[title]")) toggleFold(foldKey); } },
+    el("button", { class: "fold", type: "button", "aria-expanded": String(!isFolded), "aria-label": isFolded ? "show this domain" : "hide this domain", onclick: () => toggleFold(foldKey) }),
+    el("h3", {}, d.title || d.slug), pill(d.slug, "mono", `the domain's name (desolate domain ${d.slug} show)`),
+    d.home ? pill("home domain", "accent", homeTip(d.home), { "data-home": d.home }) : null,
+    el("span", { class: "grow" }),
+    d.building ? pill("building", "blue pulse", "its environment is being built for its first workspace")
+      : d.workspaces.length ? pill(`${running} of ${d.workspaces.length} running`, running ? "green" : "", "its workspaces: running, of all") : pill("no workspaces", "", "nothing made in it yet"));
+  const repos = el("div", { class: "repos" }, d.repos.length ? d.repos.map((r) => pill(r, "repo mono", d.home === r ? homeTip(r) : "a repository of this domain")) : el("span", { class: "sub" }, "No repositories yet."));
+  if (isFolded) return el("div", { class: "card", "data-domain": d.slug, "data-folded": "" }, head, repos);
+  const firstOne = !d.building && d.workspaces.length === 0 && d.repos.length > 0;
   return el("div", { class: "card", "data-domain": d.slug },
-    el("div", { class: "top" }, el("h3", {}, d.title || d.slug), el("span", { class: "sub mono" }, d.slug),
-      el("span", { class: "chip" }, d.net === "enforce" ? "network: listed hosts only" : "network: open"),
-      d.secrets.map((s) => el("span", { class: `chip ${s.on ? "" : "off"}`, title: s.on ? "a secret this domain's workspaces may use by name" : "switched off" }, s.name))),
-    el("div", { class: "sub" }, d.repos.length ? d.repos.join(", ") : "No repositories yet."),
+    head, repos,
+    el("div", { class: "meta" },
+      d.net === "enforce" ? pill("network: listed hosts only", "green", "its workspaces reach only the hosts on its list (desolate domain net)") : pill("network: open", "yellow", "its workspaces reach any host; its proxy logs where they went (desolate net log)"),
+      d.secrets.map((s) => pill(s.name, s.on ? "accent" : "", s.on ? "a secret its workspaces may use by name: the value is put in by the proxy, never in a workspace" : "a secret, switched off", { "data-secret": s.name }))),
     el("ul", { class: "rows" },
       // The domain's environment, built once, before its first workspace (host/templates.ts).
       d.building ? el("li", { "data-building": d.slug }, el("span", { class: "dot blue", title: "building" }),
-        el("div", { class: "what" }, el("div", { class: "name" }, "Building this domain's environment", " ", el("span", { class: "sub" }, "once: its workspaces start from it")),
+        el("div", { class: "what" }, el("div", { class: "name" }, "Building this domain's environment", pill("being built", "blue pulse", "once, before its first workspace: its workspaces start from it")),
           d.building.line ? el("div", { class: "line sub" }, redact(d.building.line)) : null)) : null,
       d.workspaces.map((w) => workspaceRow(d, w))),
+    firstOne ? firstWorkspace(d) : null,
     (state.issues || []).some((i) => i.domain === d.slug && i.state === "published") ? el("div", { class: "line sub", "data-published-issues": "" }, "Issues published lately: ",
       (state.issues || []).filter((i) => i.domain === d.slug && i.state === "published").map((i, n) => [n ? ", " : "", i.url && /^https:\/\/github\.com\//.test(i.url) ? el("a", { href: i.url, target: "_blank", rel: "noopener noreferrer" }, i.title) : i.title])) : null,
     branchList(d),
-    el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); } },
-      d.repos.length ? [el("input", { name: "name", placeholder: "name (optional)", pattern: "[a-z0-9][a-z0-9-]{0,39}", "aria-label": "workspace name" }), el("button", { disabled: busy.has(key) }, busy.has(key) ? "Starting..." : "New workspace")] : null),
-    others.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); act(`add:${d.slug}`, "domain.add", { domain: d.slug, repo: event.target.elements.repo.value }); } },
-      el("select", { name: "repo", "aria-label": "repository to add" }, others.map((r) => el("option", { value: r.repo }, r.repo))), el("button", { class: "quiet" }, "Add repository")) : null);
+    d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); } },
+      el("input", { name: "name", placeholder: "name (optional)", pattern: "[a-z0-9][a-z0-9-]{0,39}", "aria-label": "workspace name" }),
+      el("button", { class: firstOne ? "quiet" : "", disabled: busy.has(key), title: "A workspace of its own: a VM with the repositories, each on a branch named after it" }, busy.has(key) ? "Starting..." : "New workspace")) : null,
+    // Adding a repository is set apart from making a workspace: it changes the domain.
+    d.home ? [el("hr", { class: "split" }), el("div", { class: "inline sub", "data-home-note": "" }, "This is ", el("span", { class: "mono" }, d.home), "'s home domain: it holds that repository alone. ",
+      el("button", { class: "quiet small", type: "button", "data-new-domain-with": d.home, onclick: () => openNewDomain([d.home]) }, `New domain with ${d.home}...`), " to work on it with others.")]
+      : others.length ? [el("hr", { class: "split" }), el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); act(`add:${d.slug}`, "domain.add", { domain: d.slug, repo: event.target.elements.repo.value }); } },
+        el("select", { name: "repo", "aria-label": "repository to add" }, others.map((r) => el("option", { value: r.repo }, r.repo))), el("button", { class: "quiet", title: "Its workspaces made from now on have it too (running ones do not)" }, "Add repository"))] : null);
+};
+
+// ------------------------------------------------------------------ a new domain
+// Built once when it opens, so what is typed is never redrawn away.
+let newDomain = null; // { element }
+const openNewDomain = (repos = []) => {
+  const slug = el("input", { name: "slug", required: true, pattern: "[a-z0-9][a-z0-9-]{0,39}", placeholder: "name: lower-case letters, digits, dashes", "aria-label": "the new domain's name", class: "wide" });
+  const title = el("input", { name: "title", maxlength: "80", placeholder: "title (optional)", "aria-label": "its title", class: "wide" });
+  const boxes = state.repos.map((r) => el("label", { class: "choice" }, el("input", { type: "checkbox", value: r.repo, checked: repos.includes(r.repo) }), el("span", { class: "mono" }, r.repo)));
+  const status = el("div", { class: "sub" });
+  const element = el("form", { class: "card new-domain", "data-new-domain": "", onsubmit: (event) => {
+    event.preventDefault();
+    const chosen = boxes.map((b) => b.querySelector("input")).filter((i) => i.checked).map((i) => i.value);
+    act(`new:${slug.value}`, "domain.create", { domain: slug.value.trim(), title: title.value.trim(), repos: chosen.join(",") });
+    newDomain = null;
+    render();
+  } },
+    el("div", { class: "top" }, el("h3", {}, "New domain"), el("span", { class: "grow" }), el("button", { class: "quiet", type: "button", onclick: () => { newDomain = null; render(); } }, "Cancel")),
+    el("div", { class: "sub" }, "A domain is a trust boundary: its workspaces share its repositories, its secrets and its network rules, and see nothing of another domain's. Make one to work on several repositories together."),
+    slug, title,
+    el("div", { class: "field" }, "Its repositories (those cloned on this Mac; more with desolate clone)", el("div", { class: "choices" }, boxes.length ? boxes : el("span", { class: "sub" }, "none cloned yet"))),
+    status,
+    el("div", { class: "buttons" }, el("button", { type: "submit" }, "Create domain")));
+  newDomain = { element };
+  render();
+  slug.focus();
+  element.scrollIntoView({ block: "nearest" });
 };
 
 const firstRun = () => {
@@ -536,7 +706,10 @@ const render = () => {
   if (issue && document.getElementById("issue").firstChild !== issue) document.getElementById("issue").replaceChildren(issue);
   const panel = reviewPanel();
   document.getElementById("review").hidden = !panel;
-  document.getElementById("review").replaceChildren(...(panel ? [panel] : []));
+  document.body.classList.toggle("reviewing", Boolean(panel));
+  const body = document.getElementById("review-body");
+  if (panel) body.replaceChildren(panel);
+  else body.replaceChildren();
   for (const [node, top, left] of scrolled) if (node.isConnected) { node.scrollTop = top; node.scrollLeft = left; }
   const first = firstRun();
   document.getElementById("first-run").hidden = !first;
@@ -544,17 +717,30 @@ const render = () => {
   // What is typed into a form survives a redraw.
   const typed = new Map([...document.querySelectorAll("#domains input")].map((input) => [`${input.closest("[data-domain]")?.dataset.domain}:${input.name}`, input.value]));
   const focused = document.activeElement && document.activeElement.closest ? `${document.activeElement.closest("[data-domain]")?.dataset.domain}:${document.activeElement.name}` : null;
-  document.getElementById("domains").replaceChildren(el("h2", {}, state.domains.length ? "Domains" : ""), ...state.domains.map(domainCard));
+  // The sections the person folded, and what they filter by.
+  for (const section of document.querySelectorAll(".foldable")) section.classList.toggle("folded", folded.has(section.dataset.foldKey));
+  const shown = state.domains.filter((d) => !domainFilter || [d.slug, d.title || "", ...d.repos].some((text) => text.toLowerCase().includes(domainFilter)));
+  document.getElementById("domain-count").textContent = domainFilter ? `${shown.length} of ${state.domains.length}` : String(state.domains.length);
+  const newOne = document.getElementById("new-domain");
+  newOne.hidden = !newDomain;
+  if (newDomain && newOne.firstChild !== newDomain.element) newOne.replaceChildren(newDomain.element);
+  if (!newDomain) newOne.replaceChildren();
+  document.getElementById("domains").replaceChildren(...shown.map(domainCard),
+    shown.length === 0 && state.domains.length ? el("div", { class: "sub" }, `No domain matches “${domainFilter}”.`) : null);
   for (const input of document.querySelectorAll("#domains input")) {
     const key = `${input.closest("[data-domain]")?.dataset.domain}:${input.name}`;
     if (typed.has(key)) input.value = typed.get(key);
     if (key === focused) input.focus();
   }
-  const recent = state.actions.slice().reverse();
-  document.getElementById("activity").hidden = recent.length === 0;
+  const all = state.actions.slice().reverse();
+  const recent = all.filter((a) => !activityFilter || redact(a.command).toLowerCase().includes(activityFilter));
+  document.getElementById("activity").hidden = all.length === 0;
+  document.getElementById("activity-count").textContent = activityFilter ? `${recent.length} of ${all.length}` : String(all.length);
   document.getElementById("activity-list").replaceChildren(...recent.map((a) => el("li", { "data-action-state": a.state },
     el("span", { class: `dot ${a.state === "done" ? "green" : a.state === "failed" ? "red" : "blue"}` }),
-    el("div", { class: "what" }, el("div", { class: "name mono" }, redact(a.command)), el("div", { class: "line" }, a.state === "queued" ? "queued for the host..." : a.state === "running" ? "running..." : a.state === "done" ? "done" : `failed${a.code !== undefined ? ` (exit ${a.code})` : ""}`),
+    el("div", { class: "what" }, el("div", { class: "name" }, el("span", { class: "mono" }, redact(a.command)),
+      a.state === "queued" ? pill("queued", "blue pulse", "waiting for the host to take it") : a.state === "running" ? pill("running", "blue pulse", "the host is running it") : a.state === "done" ? pill("done", "green") : pill(`failed${a.code !== undefined ? ` (exit ${a.code})` : ""}`, "red", "what it said is below"),
+      a.at ? el("span", { class: "sub" }, ago(a.at)) : null),
       a.lines.length ? el("pre", { class: "mono" }, a.lines.map(redact).join("\n")) : null),
     el("div", { class: "buttons" }, typeof a.link === "string" && a.link.startsWith("https://github.com/")
       ? el("a", { class: "button", href: a.link, target: "_blank", rel: "noopener noreferrer", "data-pull-request": "" }, "Open pull request") : null))));
@@ -569,6 +755,11 @@ let pending = asked.has("review");
 const arrived = (now) => {
   state = now;
   render();
+  // The remote was fetched while its review is open (Fetch now): the review again, against it.
+  if (reviewing && !reviewing.loading) {
+    const fetchedAt = (state.repos.find((r) => r.repo === reviewing.offer.repo) || {}).fetchedAt || null;
+    if (fetchedAt && fetchedAt !== reviewing.fetchedAt) openReview(reviewing.offer, reviewing.against);
+  }
   if (!pending) return;
   const offer = state.offers.find((o) => o.domain === asked.get("domain") && o.repo === asked.get("repo") && o.branch === asked.get("branch"));
   if (offer) { pending = false; openReview(offer); }
@@ -578,6 +769,42 @@ const listen = () => {
   events.onmessage = (event) => arrived(JSON.parse(event.data));
   events.onerror = () => { events.close(); setTimeout(listen, 1500); };
 };
+// The page's own controls, made once: folding a section, the filters, a new domain, and the
+// review's width.
+for (const button of document.querySelectorAll("button.fold[data-fold]")) button.addEventListener("click", () => toggleFold(button.dataset.fold));
+document.getElementById("domain-filter").addEventListener("input", (event) => { domainFilter = event.target.value.trim().toLowerCase(); render(); });
+document.getElementById("activity-filter").addEventListener("input", (event) => { activityFilter = event.target.value.trim().toLowerCase(); render(); });
+document.getElementById("new-domain-open").addEventListener("click", () => (newDomain ? ((newDomain = null), render()) : openNewDomain()));
+(() => {
+  const root = document.documentElement;
+  try {
+    const kept = Number(localStorage.getItem("desolate-review-width"));
+    if (kept >= 360) root.style.setProperty("--review-w", `${kept}px`);
+  } catch {
+    /* the default width */
+  }
+  const handle = document.querySelector("#review .resizer");
+  handle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("dragging");
+    const move = (e) => root.style.setProperty("--review-w", `${Math.round(Math.min(window.innerWidth * 0.92, Math.max(360, window.innerWidth - e.clientX)))}px`);
+    const up = () => {
+      handle.classList.remove("dragging");
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+      try {
+        localStorage.setItem("desolate-review-width", String(parseInt(getComputedStyle(root).getPropertyValue("--review-w"), 10) || ""));
+      } catch {
+        /* kept for now */
+      }
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && reviewing) { reviewing = null; render(); } });
+})();
+
 // `?once`: the state as it is now, drawn once, with no stream left open. For a screenshot
 // or a printed page; the dashboard itself always listens.
 if (asked.has("once")) fetch("/state").then((response) => response.json()).then(arrived);

@@ -3059,8 +3059,11 @@ const serve = async () => {
     for (const vm of vms) {
       if (vm.name === ROOT_VM) continue;
       const entry = entries.get(vm.name);
+      // What a remove would lose, as last looked at (workspaces.ts look): for Delete.
+      const looked = (await import("./workspaces.ts")).lookedAt(vm.name);
       workspaces[vm.name] = {
         status: vm.status,
+        ...(looked ? { looked } : {}),
         ...(entry
           ? {
               devcontainer: entry.devcontainer || undefined,
@@ -3106,6 +3109,37 @@ const serve = async () => {
     sentFacts = text;
     sentAt = Date.now();
   };
+
+  // What each running workspace holds that a remove would lose (uncommitted changes,
+  // untracked files, stashes), looked at in its own VM every 30 s, for the dashboard's Delete
+  // (workspaces.ts look). One at a time, and never two rounds at once.
+  let looking = false;
+  setInterval(async () => {
+    if (looking || !rootUp) return;
+    looking = true;
+    try {
+      const ws = await import("./workspaces.ts");
+      const running = new Set(
+        (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
+      );
+      for (const entry of entries.values()) {
+        if (!running.has(entry.vm)) continue;
+        try {
+          const w = await rootctl<import("./workspaces.ts").Workspace>(
+            "workspace.get",
+            { domain: entry.domain, name: entry.workspace },
+            { quiet: true },
+          );
+          await ws.look(w);
+        } catch {
+          /* gone meanwhile, or not answering: looked at next time */
+        }
+      }
+      void tellRoot().catch(() => {});
+    } finally {
+      looking = false;
+    }
+  }, 30_000).unref();
 
   /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
    *  running workspaces, with the new one's (its domain's size, else the stack's), within

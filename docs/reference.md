@@ -116,6 +116,24 @@ the host). Reviewing an offer shows its commits, its files, warnings, and the di
 git made in the root: nothing in it is run or rendered. It shows the command behind every
 button.
 
+- **A workspace's state** is a pill: running, stopped, or what the dashboard is doing to it
+  (being made, starting, stopping, deleting) with the step it is at, and no buttons until
+  that is done. Each checkout says whether its commits are on the remote.
+- **Delete** removes a workspace only when nothing in it would be lost: no uncommitted
+  changes, untracked files or stashes (looked at in its own VM while it runs, and again as it
+  stops), and every commit on the remote (counted in the root). Otherwise the button is off,
+  and hovering it says why. It runs `desolate rm <d>/<w> --if-clean --if-pushed`, which checks
+  again. A workspace stopped before this existed was not looked at as it stopped: start and
+  stop it once.
+- **A domain with no workspaces** offers one on its default branch, named after it (`main`;
+  `main-master` when its repositories' default branches differ, which the card says).
+- **New domain** makes a domain with the repositories you tick. A repository's **home
+  domain** (the `owner--repo` one `desolate clone` made) holds that repository alone: the
+  card offers a new domain with it instead of adding others to it.
+- Domains and the activity fold and filter; the review opens as a panel on the right, as wide
+  as you drag it, and compares with the remote's default branch as last fetched (Fetch now
+  fetches it).
+
 ![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
 
 **What the root takes from a workspace** is data, and it is checked before it is the
