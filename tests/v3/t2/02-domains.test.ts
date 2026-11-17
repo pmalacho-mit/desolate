@@ -152,7 +152,11 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     const head = inWs("nests-dev/after-merge", "cd /workspaces/acme/consumer/.worktrees/after-merge && git rev-parse HEAD && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>&1 | head -1");
     const [at, upstream] = head.stdout.trim().split("\n");
     assert.equal(at, merged, "it has the merge");
-    assert.doesNotMatch(upstream ?? "", /^origin\//, "and no upstream of another name, so a plain git push still offers it");
+    assert.doesNotMatch(upstream ?? "", /^origin\//, "and no upstream of another name");
+    // A plain `git push`, as a person types it on a new branch: offered, not "no upstream".
+    const pushed = inWs("nests-dev/after-merge", "cd /workspaces/acme/consumer/.worktrees/after-merge && git commit -q --allow-empty -m 'a change' && git push 2>&1");
+    assert.doesNotMatch(pushed.stdout, /no upstream/, pushed.stdout);
+    assert.match(pushed.stdout, /offered/, pushed.stdout);
     assert.equal(stack.quiet("rm", "nests-dev/after-merge").code, 0);
   });
 
