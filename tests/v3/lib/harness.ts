@@ -184,9 +184,12 @@ export const newStack = (label: string): Stack => {
     { mode: 0o755 },
   );
 
-  // A free port, asked of the system (it hands out one nobody holds), unless one is given.
+  // A free port, asked of the system (it hands out one nobody holds), unless the test run is
+  // given one (DESOLATE_TEST_EDITOR_PORT). Not DESOLATE_EDITOR_PORT: that is the person's own
+  // stack's, set in their shell when two stacks share a Mac, and a test stack on it collided
+  // with the stack it was set for (2026-11-17).
   const editorPort =
-    process.env.DESOLATE_EDITOR_PORT ??
+    process.env.DESOLATE_TEST_EDITOR_PORT ??
     execFileSync(
       process.execPath,
       [

@@ -106,12 +106,14 @@ docker build -t desolate/base:latest -f release/image/Dockerfile release   # onc
 tests/v3/run.sh t2                           # T2: the whole stack in containers. About 18 min
 ```
 
-One T2 suite (`run.sh` sets `TMPDIR` to `/desolate/scratch/tests` in a workspace; set it
-yourself when running a suite directly):
+One T2 suite. In a workspace, `run.sh` sets `TMPDIR` to `/desolate/scratch/tests`, and
+`DOCKER_HOST` to the VM's own Docker socket: the devcontainer's relay in front of it closes a
+connection half a second after its input ends, and loses the fake root's answers. Set both
+yourself when running a suite directly, and run it with no terminal, as `run.sh` does:
 
 ```bash
-TMPDIR=/desolate/scratch/tests DESOLATE_TIER=T2 \
-  node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/v3/t2/04-offers.test.ts
+TMPDIR=/desolate/scratch/tests DOCKER_HOST=unix:///var/run/docker-host.sock DESOLATE_TIER=T2 \
+  setsid node --disable-warning=ExperimentalWarning --test --test-concurrency=1 tests/v3/t2/04-offers.test.ts </dev/null
 ```
 
 - A transcript that changed fails its suite and leaves `<name>.txt.actual` beside it. Read the

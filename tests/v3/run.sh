@@ -33,6 +33,16 @@ if [ "${DESOLATE_WORKSPACE:-}" = 1 ] && [ -z "${TMPDIR:-}" ] && [ -w /desolate/s
   export TMPDIR=/desolate/scratch/tests
   mkdir -p "$TMPDIR"
 fi
+# Docker itself, not the devcontainer feature's relay in front of it. docker-outside-of-docker
+# gives a container user who is not root a socat relay at /var/run/docker.sock (its
+# docker-init.sh), and socat closes a connection half a second after one side ends: a
+# `docker exec -i` whose input has ended then loses everything printed after that, which is
+# every request the fake backend sends its root (stack.ts: "the root took 'repo.fetch' and its
+# answer was lost"). Every T2 suite failed in its first seconds so (2026-11-17, inside
+# desolate/t2). The socket behind the relay is the VM's own, open to the docker group.
+if [ "${DESOLATE_WORKSPACE:-}" = 1 ] && [ -z "${DOCKER_HOST:-}" ] && [ -S /var/run/docker-host.sock ] && [ -w /var/run/docker-host.sock ]; then
+  export DOCKER_HOST=unix:///var/run/docker-host.sock
+fi
 # A Chromium the setup script fetched where the distribution has none (arm64 Ubuntu's is a snap).
 if [ -z "${DESOLATE_CHROME:-}" ]; then
   for c in /desolate/scratch/playwright/chromium-*/chrome-linux/chrome "$HOME"/.cache/ms-playwright/chromium-*/chrome-linux/chrome; do
@@ -87,6 +97,11 @@ docker_ready() {
   [ "$(id -u)" != 0 ] || need "the end-to-end tiers refuse to run as root: the stack's unprivileged user would be root, and nothing about users could be tested" "run as an ordinary user who can use Docker"
   docker info >/dev/null 2>&1 || need "no Docker daemon answers (the stand-in forge and the fake backend run in containers)" "start Docker, and make sure this user can reach it"
   docker image inspect desolate/base:latest >/dev/null 2>&1 || need "the base image desolate/base:latest is not in Docker's image store" "sudo release/image/build.sh --out <dir>   (on Linux; it imports the image)"
+  # What the fake backend relies on in every request to its root: a command run with `-i`
+  # still delivers what it prints after its input has ended. A relay that closes early (see
+  # DOCKER_HOST above) loses it, and every suite then fails in its setup with a lost answer.
+  [ "$(echo request | docker run --rm -i --network none desolate/base:latest sh -c 'cat >/dev/null; sleep 1; echo answered' 2>/dev/null)" = answered ] \
+    || need "Docker here loses what a command prints after its input ends (docker run/exec -i): the fake backend's root answers would be lost" "talk to Docker directly, not through a relay that closes early: DOCKER_HOST=unix:///var/run/docker-host.sock (a devcontainer's docker-outside-of-docker)"
   command -v git-lfs >/dev/null 2>&1 || need "git-lfs is needed on this machine to make the test repositories" "apt-get install git-lfs  /  brew install git-lfs"
   command -v python3 >/dev/null 2>&1 || need "python3 is needed (tests/v3/lib/person.py plays the person at a terminal)" "install python3"
   command -v jq >/dev/null 2>&1 || need "jq is needed (the recipes in release/recipes/ use it, and T2 runs one)" "apt-get install jq  /  brew install jq"
