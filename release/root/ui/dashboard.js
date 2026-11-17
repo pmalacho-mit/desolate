@@ -416,7 +416,7 @@ const reviewPanel = () => {
   if (!reviewing) return null;
   const { offer, review, loading } = reviewing;
   const close = el("button", { class: "quiet", onclick: () => { reviewing = null; render(); } }, "Close");
-  const header = (...title) => el("div", { class: "review-head" }, el("div", { class: "top" }, ...title, el("span", { class: "grow" }), close));
+  const header = (...title) => el("div", { class: "review-head" }, el("div", { class: "title-row" }, el("div", { class: "title" }, ...title), close));
   if (loading) return el("div", { class: "card" }, header(el("h3", {}, `Reviewing ${offer.repo} ${offer.branch}`)), el("div", { class: "sub" }, "reading what a push would send..."));
   if (review.error) return el("div", { class: "card" }, header(el("h3", {}, `${offer.repo} ${offer.branch}`)), el("div", { class: "warn" }, review.error));
   const key = `push:${offer.domain}:${offer.repo}:${offer.branch}`;

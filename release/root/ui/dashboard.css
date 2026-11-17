@@ -118,7 +118,8 @@ textarea.wide { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; 
 /* ---- Sections and cards that fold. */
 .section-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
 .section-head h2 { margin: 0; }
-button.fold { background: transparent; border: 0; color: var(--soft); padding: 0 4px; font-size: 14px; width: 22px; }
+button.fold { background: transparent; border: 0; color: var(--soft); padding: 0; font-size: 18px; line-height: 1; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border-radius: 6px; }
+button.fold:hover { background: color-mix(in srgb, var(--soft) 15%, transparent); color: var(--ink); }
 button.fold::before { content: "\25BE"; }
 .folded > .section-head button.fold::before, .card[data-folded] button.fold::before { content: "\25B8"; }
 .foldable.folded > .section-body { display: none; }
@@ -147,6 +148,8 @@ hr.split { border: 0; border-top: 1px solid var(--line); margin: 12px 0 0; }
 #review-body .sbs, #review-body pre.diff { max-height: none; }
 body.reviewing main { margin-right: var(--review-w, min(820px, 56vw)); max-width: none; }
 @media (max-width: 900px) { body.reviewing main { margin-right: 0; } #review { width: 100vw; } #review .resizer { display: none; } }
+#review-body .title-row { display: flex; align-items: flex-start; gap: 12px; }
+#review-body .title { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
 .stat { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; margin: 6px 0; font-size: 13px; }
 .warnbox { border: 1px solid color-mix(in srgb, var(--orange) 60%, transparent); background: color-mix(in srgb, var(--orange) 9%, transparent); border-radius: 8px; padding: 8px 12px; margin: 8px 0; color: var(--ink); }
