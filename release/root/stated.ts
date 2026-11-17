@@ -223,6 +223,161 @@ const settled = (key: string, head: Head | null): Head | null => {
   return head ?? heads.get(key) ?? null;
 };
 
+/** The name of a domain's environment build (host/templates.ts): planned as a workspace for
+ *  as long as it is being built, and refused as a workspace's name. */
+export const TEMPLATE_BUILD = "template";
+
+type Making = Pick<Action, "kind" | "args" | "state" | "lines" | "at">;
+
+/** What a workspace waits on while the dashboard makes or starts it: the last line its
+ *  action printed ("" before the first), or null when no action of the dashboard's is still
+ *  at it. `desolate up` without a name makes a workspace named after it starts, so that one
+ *  is the domain's workspace planned since. Dogfooding, 2026-11-17: the row said "planned",
+ *  then "running" with Stop, a minute before its editor came, and none of it said it was
+ *  still being made. */
+export const makingOf = (
+  w: { workspace: string; createdAt?: string },
+  domain: string,
+  list: readonly Making[],
+): string | null => {
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    const a = list[i]!;
+    if ((a.state !== "queued" && a.state !== "running") || a.args.domain !== domain) continue;
+    const named = a.args.workspace ?? "";
+    const mine =
+      a.kind === "workspace.start"
+        ? named === w.workspace
+        : a.kind === "workspace.up"
+          ? // The environment is built by whichever up comes first, named or not.
+            w.workspace === TEMPLATE_BUILD ||
+            (named ? named === w.workspace : (w.createdAt ?? "") >= a.at)
+          : false;
+    if (!mine) continue;
+    if (a.state === "queued") return "waiting for the Mac";
+    const last = [...a.lines].reverse().find((line) => line.trim() !== "") ?? "";
+    return printable(last.replace(/^progress:\s*/, "").trim()).slice(0, 200);
+  }
+  return null;
+};
+
+declare namespace makingOf {
+  /** the dashboard's New workspace (no name) makes the one planned after it began; a named
+   *  one, or a Start, is that workspace's; the environment build is the domain's first up's */
+  export type Whose = Table<
+    typeof makingOf,
+    [
+      [
+        args: [
+          w: { workspace: "w1"; createdAt: "2026-11-17T20:00:05.000Z" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.up";
+              args: { domain: "acme"; workspace: "" };
+              state: "running";
+              lines: ["  its VM is up (10 s)", "progress:   docker (0.3 s)", ""];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: "docker (0.3 s)",
+      ],
+      [
+        args: [
+          w: { workspace: "template"; createdAt: "2026-11-17T20:00:01.000Z" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.up";
+              args: { domain: "acme"; workspace: "w2" };
+              state: "running";
+              lines: ["  building acme's environment once"];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: "building acme's environment once",
+      ],
+      [
+        args: [
+          w: { workspace: "w1"; createdAt: "2026-11-16T09:00:00.000Z" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.start";
+              args: { domain: "acme"; workspace: "w1" };
+              state: "queued";
+              lines: [];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: "waiting for the Mac",
+      ],
+    ]
+  >;
+  /** not this workspace's: one made before the action began, another domain's, another
+   *  name's, a stop, or an action that is over */
+  export type NotItsOwn = Table<
+    typeof makingOf,
+    [
+      [
+        args: [
+          w: { workspace: "w1"; createdAt: "2026-11-16T09:00:00.000Z" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.up";
+              args: { domain: "acme" };
+              state: "running";
+              lines: ["docker"];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          w: { workspace: "w1"; createdAt: "2026-11-17T20:00:05.000Z" },
+          domain: "acme",
+          list: [
+            {
+              kind: "workspace.up";
+              args: { domain: "other" };
+              state: "running";
+              lines: ["docker"];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+            {
+              kind: "workspace.up";
+              args: { domain: "acme"; workspace: "w2" };
+              state: "running";
+              lines: ["docker"];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+            {
+              kind: "workspace.stop";
+              args: { domain: "acme"; workspace: "w1" };
+              state: "running";
+              lines: [];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+            {
+              kind: "workspace.up";
+              args: { domain: "acme" };
+              state: "done";
+              lines: ["made"];
+              at: "2026-11-17T20:00:00.000Z";
+            },
+          ],
+        ],
+        expected: null,
+      ],
+    ]
+  >;
+}
+
 const snapshot = () => {
   // What was pushed and has since landed in the branch it was for (pushed.ts): a branch
   // still at that commit is marked "merged into <base>".
@@ -237,28 +392,38 @@ const snapshot = () => {
     })),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
-    workspaces: domains.workspaces(d.slug).map((w, _, all) => {
-      const says = statusView(path.join(domainPath(d.slug), "repos"), w);
-      return {
-        workspace: w.workspace,
-        vm: w.vm,
-        state: w.state,
-        size: w.size ?? null,
-        // Who asked for it (null: the person), and whether that one is gone before it.
-        startedBy: w.startedBy?.workspace ?? null,
-        outlived: outlived(all, w),
-        // `branch` is what the checkout started on; `head`, what it has checked out now (its
-        // HEAD, read as data: the host's daemon nudges when one changes).
-        checkouts: w.checkouts.map((c, i) => ({
-          repo: c.repo,
-          branch: c.branch,
-          kind: c.kind,
-          head: settled(`${d.slug}/${w.workspace}/${c.repo}`, says.checkouts[i]?.head ?? null),
-        })),
-        says,
-        host: facts.workspaces?.[w.vm] ?? null,
-      };
-    }),
+    // The domain's environment, while it is built for its first workspace: shown as that,
+    // not as a workspace named "template" with a Start button (dogfooding, 2026-11-17).
+    building: domains.workspaces(d.slug).some((w) => w.workspace === TEMPLATE_BUILD)
+      ? { line: makingOf({ workspace: TEMPLATE_BUILD }, d.slug, actions) ?? "" }
+      : null,
+    workspaces: domains
+      .workspaces(d.slug)
+      .filter((w) => w.workspace !== TEMPLATE_BUILD)
+      .map((w, _, all) => {
+        const says = statusView(path.join(domainPath(d.slug), "repos"), w);
+        return {
+          workspace: w.workspace,
+          vm: w.vm,
+          state: w.state,
+          // Still being made or started by the dashboard's action: what it is at.
+          making: makingOf(w, d.slug, actions),
+          size: w.size ?? null,
+          // Who asked for it (null: the person), and whether that one is gone before it.
+          startedBy: w.startedBy?.workspace ?? null,
+          outlived: outlived(all, w),
+          // `branch` is what the checkout started on; `head`, what it has checked out now (its
+          // HEAD, read as data: the host's daemon nudges when one changes).
+          checkouts: w.checkouts.map((c, i) => ({
+            repo: c.repo,
+            branch: c.branch,
+            kind: c.kind,
+            head: settled(`${d.slug}/${w.workspace}/${c.repo}`, says.checkouts[i]?.head ?? null),
+          })),
+          says,
+          host: facts.workspaces?.[w.vm] ?? null,
+        };
+      }),
   }));
   return {
     stack: facts.stack ?? null,

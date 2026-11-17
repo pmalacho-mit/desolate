@@ -686,28 +686,33 @@ export const list = async (out: Out, json: boolean, only?: string) => {
     domain: d.slug,
     title: d.title,
     repos: d.repos,
-    workspaces: d.workspaces.map((w) => ({
-      workspace: w.workspace,
-      vm: w.vm,
-      status: vms.get(w.vm) ?? "missing",
-      isolated: b.isolated,
-      size: w.size ?? null,
-      startedBy: w.startedBy?.workspace ?? null,
-      outlived: outlived(d.workspaces, w),
-      // What each checkout has checked out now (its HEAD, read here as data), beside what it
-      // started on.
-      checkouts: w.checkouts.map((c) => {
-        const head = readHead(paths.domainRepos(d.slug), c);
-        return {
-          ...c,
-          head,
-          now: head
-            ? (head.branch ?? (head.commit ? `(detached ${head.commit.slice(0, 12)})` : "(?)"))
-            : c.branch,
-        };
-      }),
-      urls: urlsOf(w),
-    })),
+    // Its environment, while it is built for its first workspace (templates.ts): planned
+    // as a workspace named "template" meanwhile, and not one.
+    building: d.workspaces.some((w) => w.workspace === "template"),
+    workspaces: d.workspaces
+      .filter((w) => w.workspace !== "template")
+      .map((w) => ({
+        workspace: w.workspace,
+        vm: w.vm,
+        status: vms.get(w.vm) ?? "missing",
+        isolated: b.isolated,
+        size: w.size ?? null,
+        startedBy: w.startedBy?.workspace ?? null,
+        outlived: outlived(d.workspaces, w),
+        // What each checkout has checked out now (its HEAD, read here as data), beside what it
+        // started on.
+        checkouts: w.checkouts.map((c) => {
+          const head = readHead(paths.domainRepos(d.slug), c);
+          return {
+            ...c,
+            head,
+            now: head
+              ? (head.branch ?? (head.commit ? `(detached ${head.commit.slice(0, 12)})` : "(?)"))
+              : c.branch,
+          };
+        }),
+        urls: urlsOf(w),
+      })),
   }));
   if (json) return out(JSON.stringify(view));
   if (view.length === 0) return out("no domains yet. Start with: desolate domain create <slug>");
@@ -715,7 +720,11 @@ export const list = async (out: Out, json: boolean, only?: string) => {
     out(
       `${d.domain}  "${d.title}"  ${d.repos.length ? d.repos.join(", ") : "(no repositories: desolate domain " + d.domain + " add --repo <owner>/<repo>)"}`,
     );
-    if (d.workspaces.length === 0) out(`  (no workspaces: desolate up ${d.domain})`);
+    if (d.building)
+      out(
+        `  (building its environment, once: its first workspace, and every later one, starts from it)`,
+      );
+    else if (d.workspaces.length === 0) out(`  (no workspaces: desolate up ${d.domain})`);
     for (const w of d.workspaces)
       out(
         `  ${d.domain}/${w.workspace}  ${w.status}${w.isolated ? "" : "  [not isolated]"}  ${w.checkouts.map((c) => `${c.repo}@${c.now}`).join(", ")}${w.size ? `  (${w.size.cpus} CPU, ${Math.round(w.size.memoryMiB / 1024)} GiB)` : ""}  ${w.startedBy ? `started by ${w.startedBy}${w.outlived ? " (removed since: this one outlived it)" : ""}` : "started by you"}`,
