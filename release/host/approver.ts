@@ -18,7 +18,14 @@
 //             key that is also out of reach (docs/v3/decisions.md, section 5.3), and it has
 //             never been compiled or run.
 import { spawnSync } from "node:child_process";
-import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign as signWith, verify } from "node:crypto";
+import {
+  createHash,
+  createPrivateKey,
+  createPublicKey,
+  generateKeyPairSync,
+  sign as signWith,
+  verify,
+} from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatApproval, parseApproval } from "../shared/approval.ts";
@@ -33,7 +40,12 @@ import type { refusalOf } from "../.harness/refusal.ts";
 
 export type Kind = "touchid" | "terminal";
 const DIR = path.join(paths.home, "approver");
-const FILES = { kind: path.join(DIR, "kind"), pub: path.join(DIR, "approver.pub"), key: path.join(DIR, "key"), helper: path.join(DIR, "desolate-touchid") } as const;
+const FILES = {
+  kind: path.join(DIR, "kind"),
+  pub: path.join(DIR, "approver.pub"),
+  key: path.join(DIR, "key"),
+  helper: path.join(DIR, "desolate-touchid"),
+} as const;
 
 export const kind = (): Kind | null => {
   try {
@@ -45,12 +57,23 @@ export const kind = (): Kind | null => {
 };
 declare namespace kind {
   /** none until bootstrap makes one; a kind file that names neither kind is none */
-  export type NoneYet = Given<Invoke<typeof emptyHome>, [Expect<Invoke<typeof kind>, "=", null>, Expect<Invoke<typeof publicKey>, "=", null>]>;
-  export type NotAKind = Given<[Invoke<typeof emptyHome>, Invoke<typeof writeInHome, [name: "approver/kind", text: "yubikey\n"]>], Expect<Invoke<typeof kind>, "=", null>>;
+  export type NoneYet = Given<
+    Invoke<typeof emptyHome>,
+    [Expect<Invoke<typeof kind>, "=", null>, Expect<Invoke<typeof publicKey>, "=", null>]
+  >;
+  export type NotAKind = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeInHome, [name: "approver/kind", text: "yubikey\n"]>,
+    ],
+    Expect<Invoke<typeof kind>, "=", null>
+  >;
 }
 export const publicKey = (): string | null => {
   try {
-    return createPublicKey(fs.readFileSync(FILES.pub, "utf8")).export({ type: "spki", format: "pem" }).toString();
+    return createPublicKey(fs.readFileSync(FILES.pub, "utf8"))
+      .export({ type: "spki", format: "pem" })
+      .toString();
   } catch {
     return null;
   }
@@ -64,23 +87,40 @@ export const fingerprint = (pem: string) => createHash("sha256").update(pem).dig
 export const init = (log: (line: string) => void): boolean => {
   if (kind() && publicKey()) return false;
   const asked = process.env.DESOLATE_APPROVER;
-  if (asked !== undefined && asked !== "touchid" && asked !== "terminal") refuse(`DESOLATE_APPROVER is '${asked}'`, "use touchid or terminal");
+  if (asked !== undefined && asked !== "touchid" && asked !== "terminal")
+    refuse(`DESOLATE_APPROVER is '${asked}'`, "use touchid or terminal");
   const chosen: Kind = (asked as Kind | undefined) ?? "terminal";
   fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(DIR, 0o700);
   if (chosen === "touchid") {
     const weaker = "or use the default approver: unset DESOLATE_APPROVER and bootstrap again";
-    if (process.platform !== "darwin") refuse("the touchid approver needs a Mac", "DESOLATE_APPROVER=terminal");
-    const built = spawnSync("swiftc", ["-O", "-o", FILES.helper, path.join(RELEASE_DIR, "host", "approver", "touchid.swift")], { encoding: "utf8" });
-    if (built.status !== 0) refuse(`the Touch ID approver did not compile: ${(built.stderr || String(built.error ?? "")).trim().split("\n").slice(-3).join(" | ")}`, `install the Xcode command line tools (xcode-select --install) and bootstrap again; ${weaker}`);
+    if (process.platform !== "darwin")
+      refuse("the touchid approver needs a Mac", "DESOLATE_APPROVER=terminal");
+    const built = spawnSync(
+      "swiftc",
+      ["-O", "-o", FILES.helper, path.join(RELEASE_DIR, "host", "approver", "touchid.swift")],
+      { encoding: "utf8" },
+    );
+    if (built.status !== 0)
+      refuse(
+        `the Touch ID approver did not compile: ${(built.stderr || String(built.error ?? "")).trim().split("\n").slice(-3).join(" | ")}`,
+        `install the Xcode command line tools (xcode-select --install) and bootstrap again; ${weaker}`,
+      );
     const made = spawnSync(FILES.helper, ["init", FILES.key], { encoding: "utf8" });
-    if (made.status !== 0 || !made.stdout.includes("BEGIN PUBLIC KEY")) refuse(`the Secure Enclave did not make a key: ${made.stderr.trim()}`, weaker);
+    if (made.status !== 0 || !made.stdout.includes("BEGIN PUBLIC KEY"))
+      refuse(`the Secure Enclave did not make a key: ${made.stderr.trim()}`, weaker);
     fs.writeFileSync(FILES.pub, made.stdout, { mode: 0o644 });
-    log("approver: a Secure Enclave key; every push will ask for Touch ID (or your login password)");
+    log(
+      "approver: a Secure Enclave key; every push will ask for Touch ID (or your login password)",
+    );
   } else {
     const pair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-    fs.writeFileSync(FILES.key, pair.privateKey.export({ type: "pkcs8", format: "pem" }), { mode: 0o600 });
-    fs.writeFileSync(FILES.pub, pair.publicKey.export({ type: "spki", format: "pem" }), { mode: 0o644 });
+    fs.writeFileSync(FILES.key, pair.privateKey.export({ type: "pkcs8", format: "pem" }), {
+      mode: 0o600,
+    });
+    fs.writeFileSync(FILES.pub, pair.publicKey.export({ type: "spki", format: "pem" }), {
+      mode: 0o644,
+    });
     log(`approver: a software key in ${DIR}; every push will ask on your terminal`);
   }
   fs.writeFileSync(FILES.kind, `${chosen}\n`, { mode: 0o644 });
@@ -100,8 +140,15 @@ declare namespace init {
   >;
   /** a kind asked for by a name it does not know is refused, never read as the default */
   export type UnknownKind = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: "yubikey"]>],
-    Expect<Invoke<typeof refusalOf, [run: typeof init, args: [log: typeof collect]]>, "=", { message: "DESOLATE_APPROVER is 'yubikey'"; fix: "use touchid or terminal"; code: 1 }>
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: "yubikey"]>,
+    ],
+    Expect<
+      Invoke<typeof refusalOf, [run: typeof init, args: [log: typeof collect]]>,
+      "=",
+      { message: "DESOLATE_APPROVER is 'yubikey'"; fix: "use touchid or terminal"; code: 1 }
+    >
   >;
 }
 
@@ -112,16 +159,55 @@ const clean = (text: string) => text.replace(/[^\x20-\x7e]/g, "?").slice(0, 300)
 export const sign = async (message: string, summary?: string): Promise<string> => {
   const push = parseApproval(message);
   const which = kind();
-  if (!push) throw new Refusal("the root sent something that is not a push approval; nothing was signed", "desolate doctor", EXIT.unconfirmed);
-  if (!which) throw new Refusal("this stack has no approver, so no push can be approved", "desolate bootstrap", EXIT.unconfirmed);
-  const shown = ["", "desolate: this push needs your confirmation.", `  repository  ${push.repo}`, `  branch      ${push.branch}`, `  commit      ${push.commit}`, push.onto ? `  onto        ${push.onto}  (the remote's ${push.branch} now: it moves from this to the commit, or not at all)` : `  onto        none: the remote has no ${push.branch} yet`, ...(summary ? [`  sends       ${clean(summary)}`, "              (desolate's reviewer, in the root)"] : []), ""];
-  const unconfirmed = (why: string, fix: string) => new Refusal(`${why}\ndesolate: no person confirmed the push, so nothing was pushed`, fix, EXIT.unconfirmed);
+  if (!push)
+    throw new Refusal(
+      "the root sent something that is not a push approval; nothing was signed",
+      "desolate doctor",
+      EXIT.unconfirmed,
+    );
+  if (!which)
+    throw new Refusal(
+      "this stack has no approver, so no push can be approved",
+      "desolate bootstrap",
+      EXIT.unconfirmed,
+    );
+  const shown = [
+    "",
+    "desolate: this push needs your confirmation.",
+    `  repository  ${push.repo}`,
+    `  branch      ${push.branch}`,
+    `  commit      ${push.commit}`,
+    push.onto
+      ? `  onto        ${push.onto}  (the remote's ${push.branch} now: it moves from this to the commit, or not at all)`
+      : `  onto        none: the remote has no ${push.branch} yet`,
+    ...(summary
+      ? [`  sends       ${clean(summary)}`, "              (desolate's reviewer, in the root)"]
+      : []),
+    "",
+  ];
+  const unconfirmed = (why: string, fix: string) =>
+    new Refusal(
+      `${why}\ndesolate: no person confirmed the push, so nothing was pushed`,
+      fix,
+      EXIT.unconfirmed,
+    );
 
   if (which === "touchid") {
-    process.stderr.write(shown.join("\n") + "\nConfirm with Touch ID (or your login password) in the dialog macOS is showing.\n");
+    process.stderr.write(
+      shown.join("\n") +
+        "\nConfirm with Touch ID (or your login password) in the dialog macOS is showing.\n",
+    );
     const reason = `approve pushing ${push.branch} of ${push.repo} to ${push.commit.slice(0, 12)}, from ${push.onto ? push.onto.slice(0, 12) : "nothing (a new branch)"}`;
-    const signed = spawnSync(FILES.helper, ["sign", FILES.key, reason], { input: message, encoding: "utf8", timeout: 120_000 });
-    if (signed.status !== 0 || !signed.stdout.trim()) throw unconfirmed(`the Touch ID prompt was not confirmed${signed.stderr ? ` (${signed.stderr.trim()})` : ""}`, "run the push again and confirm it");
+    const signed = spawnSync(FILES.helper, ["sign", FILES.key, reason], {
+      input: message,
+      encoding: "utf8",
+      timeout: 120_000,
+    });
+    if (signed.status !== 0 || !signed.stdout.trim())
+      throw unconfirmed(
+        `the Touch ID prompt was not confirmed${signed.stderr ? ` (${signed.stderr.trim()})` : ""}`,
+        "run the push again and confirm it",
+      );
     return signed.stdout.trim();
   }
 
@@ -131,9 +217,17 @@ export const sign = async (message: string, summary?: string): Promise<string> =
   try {
     tty = fs.openSync("/dev/tty", "r+");
   } catch {
-    throw unconfirmed("a push needs a person's confirmation, and there is no terminal to ask on", "run it from a terminal of your own, on the host");
+    throw unconfirmed(
+      "a push needs a person's confirmation, and there is no terminal to ask on",
+      "run it from a terminal of your own, on the host",
+    );
   }
-  fs.writeSync(tty, [...shown, `Type the branch name (${push.branch}) to push, or anything else to refuse: `].join("\n"));
+  fs.writeSync(
+    tty,
+    [...shown, `Type the branch name (${push.branch}) to push, or anything else to refuse: `].join(
+      "\n",
+    ),
+  );
   const answer = await new Promise<string>((resolve) => {
     let text = "";
     const input = fs.createReadStream("", { fd: tty, autoClose: false });
@@ -148,8 +242,13 @@ export const sign = async (message: string, summary?: string): Promise<string> =
     input.on("end", () => resolve(text.trim()));
     input.on("error", () => resolve(""));
   });
-  if (answer !== push.branch) throw unconfirmed("not confirmed", "run the push again, and type the branch name when it asks");
-  return signWith("sha256", Buffer.from(message), createPrivateKey(fs.readFileSync(FILES.key, "utf8"))).toString("base64");
+  if (answer !== push.branch)
+    throw unconfirmed("not confirmed", "run the push again, and type the branch name when it asks");
+  return signWith(
+    "sha256",
+    Buffer.from(message),
+    createPrivateKey(fs.readFileSync(FILES.key, "utf8")),
+  ).toString("base64");
 };
 
 declare namespace sign {
@@ -157,8 +256,32 @@ declare namespace sign {
   export type Refuses = Given<
     Invoke<typeof emptyHome>,
     [
-      Expect<Invoke<typeof refusalOf, [run: typeof sign, args: [message: "approve everything"]]>, "=", { message: "the root sent something that is not a push approval; nothing was signed"; fix: "desolate doctor"; code: 78 }>,
-      Expect<Invoke<typeof refusalOf, [run: typeof sign, args: [message: "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n"]]>, "=", { message: "this stack has no approver, so no push can be approved"; fix: "desolate bootstrap"; code: 78 }>,
+      Expect<
+        Invoke<typeof refusalOf, [run: typeof sign, args: [message: "approve everything"]]>,
+        "=",
+        {
+          message: "the root sent something that is not a push approval; nothing was signed";
+          fix: "desolate doctor";
+          code: 78;
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof sign,
+            args: [
+              message: "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n",
+            ],
+          ]
+        >,
+        "=",
+        {
+          message: "this stack has no approver, so no push can be approved";
+          fix: "desolate bootstrap";
+          code: 78;
+        }
+      >,
     ]
   >;
 }
@@ -171,28 +294,74 @@ export const signClicked = (message: string): string => {
   const which = kind();
   if (!push) throw new Error("not a push approval; nothing was signed");
   if (which === "touchid") {
-    const signed = spawnSync(FILES.helper, ["sign", FILES.key, `approve pushing ${push.branch} of ${push.repo} to ${push.commit.slice(0, 12)}, from ${push.onto ? push.onto.slice(0, 12) : "nothing (a new branch)"}`], { input: message, encoding: "utf8", timeout: 120_000 });
-    if (signed.status !== 0 || !signed.stdout.trim()) throw new Error(`the Touch ID prompt was not confirmed${signed.stderr ? ` (${signed.stderr.trim()})` : ""}`);
+    const signed = spawnSync(
+      FILES.helper,
+      [
+        "sign",
+        FILES.key,
+        `approve pushing ${push.branch} of ${push.repo} to ${push.commit.slice(0, 12)}, from ${push.onto ? push.onto.slice(0, 12) : "nothing (a new branch)"}`,
+      ],
+      { input: message, encoding: "utf8", timeout: 120_000 },
+    );
+    if (signed.status !== 0 || !signed.stdout.trim())
+      throw new Error(
+        `the Touch ID prompt was not confirmed${signed.stderr ? ` (${signed.stderr.trim()})` : ""}`,
+      );
     return signed.stdout.trim();
   }
   if (which !== "terminal") throw new Error("this stack has no approver");
-  return signWith("sha256", Buffer.from(message), createPrivateKey(fs.readFileSync(FILES.key, "utf8"))).toString("base64");
+  return signWith(
+    "sha256",
+    Buffer.from(message),
+    createPrivateKey(fs.readFileSync(FILES.key, "utf8")),
+  ).toString("base64");
 };
 
 declare namespace signClicked {
-  type Push = "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n";
+  type Push =
+    "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n";
   /** the approver's signature over exactly the text the page showed, and no other */
   export type Signs = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: null]>, Invoke<typeof init, [log: typeof collect]>],
     [
-      Expect<Invoke<typeof keyringTakes, [message: Push, signature: Invoke<typeof signClicked, [message: Push]>]>, "=", true>,
-      Expect<Invoke<typeof keyringTakes, [message: "desolate push approval v2\nrepo: acme/web\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n", signature: Invoke<typeof signClicked, [message: Push]>]>, "=", false>,
+      Invoke<typeof emptyHome>,
+      Invoke<typeof setEnv, [name: "DESOLATE_APPROVER", value: null]>,
+      Invoke<typeof init, [log: typeof collect]>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof keyringTakes,
+          [message: Push, signature: Invoke<typeof signClicked, [message: Push]>]
+        >,
+        "=",
+        true
+      >,
+      Expect<
+        Invoke<
+          typeof keyringTakes,
+          [
+            message: "desolate push approval v2\nrepo: acme/web\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n",
+            signature: Invoke<typeof signClicked, [message: Push]>,
+          ]
+        >,
+        "=",
+        false
+      >,
     ]
   >;
   /** nothing that is not a push approval is signed, and nothing at all without an approver */
   export type Refuses = [
-    Given<[Invoke<typeof emptyHome>, Invoke<typeof init, [log: typeof collect]>], Throws<Invoke<typeof signClicked, [message: "approve everything"]>, "not a push approval; nothing was signed">>,
-    Given<Invoke<typeof emptyHome>, Throws<Invoke<typeof signClicked, [message: Push]>, "this stack has no approver">>,
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof init, [log: typeof collect]>],
+      Throws<
+        Invoke<typeof signClicked, [message: "approve everything"]>,
+        "not a push approval; nothing was signed"
+      >
+    >,
+    Given<
+      Invoke<typeof emptyHome>,
+      Throws<Invoke<typeof signClicked, [message: Push]>, "this stack has no approver">
+    >,
   ];
 }
 
@@ -201,10 +370,22 @@ declare namespace signClicked {
  *  first real push needs it. */
 export const selftest = async (out: (line: string) => void): Promise<number> => {
   // A commit no repository has (every digit 1), on a repository that is not one of yours.
-  const message = formatApproval({ repo: "desolate/selftest", branch: "selftest", commit: "1".repeat(40), onto: null, nonce: "0".repeat(32) });
+  const message = formatApproval({
+    repo: "desolate/selftest",
+    branch: "selftest",
+    commit: "1".repeat(40),
+    onto: null,
+    nonce: "0".repeat(32),
+  });
   const signature = await sign(message, "nothing: this is the approver's self-test");
   const pem = publicKey();
-  const ok = pem !== null && verify("sha256", Buffer.from(message), createPublicKey(pem), Buffer.from(signature, "base64"));
-  out(ok ? `approver (${kind()}): the signature verifies against ${FILES.pub}` : "approver: THE SIGNATURE DID NOT VERIFY against the recorded public key");
+  const ok =
+    pem !== null &&
+    verify("sha256", Buffer.from(message), createPublicKey(pem), Buffer.from(signature, "base64"));
+  out(
+    ok
+      ? `approver (${kind()}): the signature verifies against ${FILES.pub}`
+      : "approver: THE SIGNATURE DID NOT VERIFY against the recorded public key",
+  );
   return ok ? 0 : 1;
 };

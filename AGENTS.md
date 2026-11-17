@@ -62,9 +62,9 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   `release/.suede/core`, `release/.github/workflows`. Update them all with
   `bash .suede/core/sync.sh`, on `main` (git-subrepo 0.4.9 needed). Never by hand, and never by
   checking out `release`.
-- **Dependencies:** all three are for development only, installed with suede's installer and
-  `--dev` (so no declaring symlink): `suede.nests` (the in-source tests' DSL and Vitest
-  plugin), `devcontainers-suede` and `docs/typescript2mermaid-suede`.
+- **Dependencies:** for development only, installed with suede's installer and `--dev` (so no
+  declaring symlink): `suede.nests` (the in-source tests' DSL and Vitest plugin) and
+  `suede.vsix.format-on-save` (the editor formats a file as on save, from the command line).
   `bash .suede/core/list.sh` lists them. None ships or is declared for consumers. The release
   type-checks without suede.nests through `release/nests.d.ts`, its stub. The tests' harness
   ships, in `release/.harness` ([its README](release/.harness/README.md)), and is imported by
@@ -91,6 +91,10 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
   `declare namespace` of its name shows a reviewer what it takes, answers and refuses
   ([`release/.harness/README.md`](release/.harness/README.md)). Add or change them with the
   function.
+- **TypeScript is formatted by Prettier** (`.prettierrc.json`), as the editor does on save. After
+  editing outside an editor, `make format`; T1 fails on a file that is not formatted. With
+  the editor open on the repository, `node suede.vsix.format-on-save/cli.mjs format <files>`
+  has it format exactly those (its README says how).
 - **Comments say why**, in plain sentences, and record what was measured. Transcripts record
   every message a person sees. A changed message is a reviewed change.
 

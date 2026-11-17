@@ -12,16 +12,26 @@ let home = "";
 /** What bash would offer for this command line, with the cursor after the last word. */
 const complete = (...words: string[]): string[] => {
   const program = `source "${SCRIPT}"; COMP_WORDS=(desolate ${words.map((word) => `'${word.replace(/'/g, "'\\''")}'`).join(" ")}); COMP_CWORD=${words.length}; _desolate; printf '%s\\n' "\${COMPREPLY[@]}"`;
-  const result = spawnSync("bash", ["--norc", "--noprofile", "-c", program], { encoding: "utf8", env: { PATH: process.env.PATH, DESOLATE_HOME: home, HOME: home } });
+  const result = spawnSync("bash", ["--norc", "--noprofile", "-c", program], {
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, DESOLATE_HOME: home, HOME: home },
+  });
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.split("\n").filter(Boolean).sort();
 };
 
 before(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-completion-"));
-  for (const [domain, workspaces] of [["dev", ["issue-12", "w1"]], ["docs", ["w1"]]] as [string, string[]][]) {
+  for (const [domain, workspaces] of [
+    ["dev", ["issue-12", "w1"]],
+    ["docs", ["w1"]],
+  ] as [string, string[]][]) {
     fs.mkdirSync(path.join(home, "domains", domain, "inbox", "workspaces"), { recursive: true });
-    for (const workspace of workspaces) fs.writeFileSync(path.join(home, "domains", domain, "inbox", "workspaces", `${workspace}.json`), "{}");
+    for (const workspace of workspaces)
+      fs.writeFileSync(
+        path.join(home, "domains", domain, "inbox", "workspaces", `${workspace}.json`),
+        "{}",
+      );
   }
   fs.mkdirSync(path.join(home, "mirrors", "acme", "widgets.git"), { recursive: true });
   // Names a program could have chosen. None may reach a command line.
@@ -37,7 +47,8 @@ after(() => fs.rmSync(home, { recursive: true, force: true }));
 describe("T1 tab completion", () => {
   it("offers the verbs, and narrows them", () => {
     const verbs = complete("");
-    for (const verb of ["bootstrap", "up", "exec", "editor", "push", "approve", "down", "domain"]) assert.ok(verbs.includes(verb), verb);
+    for (const verb of ["bootstrap", "up", "exec", "editor", "push", "approve", "down", "domain"])
+      assert.ok(verbs.includes(verb), verb);
     assert.deepEqual(complete("ap"), ["approve"]);
     assert.deepEqual(complete("domain", "dev", ""), ["add", "net", "secret", "show"]);
     assert.deepEqual(complete("domain", "dev", "secret", "o"), ["off", "on"]);
@@ -51,10 +62,28 @@ describe("T1 tab completion", () => {
     assert.deepEqual(complete("review", "dev", "a"), ["acme/widgets"]);
   });
   it("never offers a name that is not a slug: nothing a program chose reaches the command line", () => {
-    const everything = [...complete("up", ""), ...complete("exec", ""), ...complete("rm", ""), ...complete("domain", ""), ...complete("fetch", ""), ...complete("status", "")];
-    for (const word of everything) assert.match(word, /^(--json|create|[a-z0-9][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)?|acme\/widgets)$/, word);
-    assert.ok(!fs.existsSync(path.join(home, "pwned")) && !fs.existsSync("pwned"), "and nothing was run to find them");
-    assert.ok(!everything.includes("no-inbox"), "a directory that is not a domain the root made is not one");
+    const everything = [
+      ...complete("up", ""),
+      ...complete("exec", ""),
+      ...complete("rm", ""),
+      ...complete("domain", ""),
+      ...complete("fetch", ""),
+      ...complete("status", ""),
+    ];
+    for (const word of everything)
+      assert.match(
+        word,
+        /^(--json|create|[a-z0-9][a-z0-9-]*(\/[a-z0-9][a-z0-9-]*)?|acme\/widgets)$/,
+        word,
+      );
+    assert.ok(
+      !fs.existsSync(path.join(home, "pwned")) && !fs.existsSync("pwned"),
+      "and nothing was run to find them",
+    );
+    assert.ok(
+      !everything.includes("no-inbox"),
+      "a directory that is not a domain the root made is not one",
+    );
   });
   it("leaves the command after -- alone", () => {
     assert.deepEqual(complete("exec", "dev/w1", "--", "gi"), []);

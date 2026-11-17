@@ -24,14 +24,18 @@ import type { Expect, Given, Invoke, Table } from "../../../suede.nests/dsl.impo
 import type { emptyRoot, makeDirIn, readIn, textIn, writeIn } from "../../.harness/root-state.ts";
 
 /** A domain's proxies' user: what root/proxy-user.sh makes for it. */
-export const proxyUserOf = (domain: string) => `dsp-${createHash("sha256").update(domain).digest("hex").slice(0, 10)}`;
+export const proxyUserOf = (domain: string) =>
+  `dsp-${createHash("sha256").update(domain).digest("hex").slice(0, 10)}`;
 declare namespace proxyUserOf {
   /** a user of each domain's own, named by a hash: never another domain's, and short enough
    *  for useradd */
-  export type Users = Table<typeof proxyUserOf, [
-    [args: [domain: "acme"], expected: "dsp-822b33ad87"],
-    [args: [domain: "acme-2"], expected: "dsp-89683d3644"],
-  ]>;
+  export type Users = Table<
+    typeof proxyUserOf,
+    [
+      [args: [domain: "acme"], expected: "dsp-822b33ad87"],
+      [args: [domain: "acme-2"], expected: "dsp-89683d3644"],
+    ]
+  >;
 }
 
 /** The domain's directory of what its proxies read: policy, secrets, token, the secrets
@@ -46,9 +50,19 @@ export const proxyOutDir = (domain: string) => `${ROOT.proxies}/out/${domain}`;
 
 /** `command` as the proxies' user, with exactly `env` (sudo resets the rest), detached, its
  *  output to `log`. The pid is sudo's, which waits for the command and ends with it. */
-export const spawnAsProxy = (domain: string, command: string, args: string[], env: Record<string, string>, log: number): ChildProcess => {
+export const spawnAsProxy = (
+  domain: string,
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  log: number,
+): ChildProcess => {
   const vars = Object.entries(env).map(([key, value]) => `${key}=${value}`);
-  const child = spawn("sudo", ["-n", "-u", proxyUserOf(domain), "--", "env", "-i", ...vars, command, ...args], { detached: true, stdio: ["ignore", log, log] });
+  const child = spawn(
+    "sudo",
+    ["-n", "-u", proxyUserOf(domain), "--", "env", "-i", ...vars, command, ...args],
+    { detached: true, stdio: ["ignore", log, log] },
+  );
   child.unref();
   return child;
 };
@@ -68,11 +82,15 @@ export const alive = (pid: number) => {
  *  to signal, and sudo ends with it. */
 export const stopProxy = (domain: string, pid: number) => {
   if (!Number.isInteger(pid) || pid < 2) return;
-  spawnSync("sudo", ["-n", "-u", proxyUserOf(domain), "pkill", "-TERM", "-P", String(pid)], { stdio: "ignore", timeout: 10_000 });
+  spawnSync("sudo", ["-n", "-u", proxyUserOf(domain), "pkill", "-TERM", "-P", String(pid)], {
+    stdio: "ignore",
+    timeout: 10_000,
+  });
 };
 
 /** Whether root has made this domain's proxies' user (root/proxy-user.sh). */
-export const hasProxyUser = (domain: string) => spawnSync("id", ["-u", proxyUserOf(domain)], { stdio: "ignore" }).status === 0;
+export const hasProxyUser = (domain: string) =>
+  spawnSync("id", ["-u", proxyUserOf(domain)], { stdio: "ignore" }).status === 0;
 
 /** The token a workspace's proxy shows its domain's secrets proxy: made once, in the
  *  domain's directory (its proxies' to read, nobody else's). */
@@ -97,18 +115,49 @@ declare namespace ensureLinkToken {
    *  there is kept */
   export type Made = Given<
     [Fresh, Dir, Invoke<typeof ensureLinkToken, [domain: "acme"]>],
-    Expect<Invoke<typeof textIn, [where: "proxies", name: "domains/acme/link-token"]>["length"], "=", 65>
+    Expect<
+      Invoke<typeof textIn, [where: "proxies", name: "domains/acme/link-token"]>["length"],
+      "=",
+      65
+    >
   >;
   export type Kept = Given<
-    [Fresh, Invoke<typeof writeIn, [where: "proxies", name: "domains/acme/link-token", text: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"]>, Invoke<typeof ensureLinkToken, [domain: "acme"]>],
-    Expect<Invoke<typeof readIn, [where: "proxies", name: "domains/acme/link-token"]>, "=", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n">
+    [
+      Fresh,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "proxies",
+          name: "domains/acme/link-token",
+          text: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n",
+        ]
+      >,
+      Invoke<typeof ensureLinkToken, [domain: "acme"]>,
+    ],
+    Expect<
+      Invoke<typeof readIn, [where: "proxies", name: "domains/acme/link-token"]>,
+      "=",
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+    >
   >;
   /** one that is not a token (short, or guessable) is replaced */
   export type Replaced = Given<
-    [Fresh, Invoke<typeof writeIn, [where: "proxies", name: "domains/acme/link-token", text: "secret"]>, Invoke<typeof ensureLinkToken, [domain: "acme"]>],
     [
-      Expect<Invoke<typeof textIn, [where: "proxies", name: "domains/acme/link-token"]>["length"], "=", 65>,
-      Expect<Invoke<typeof textIn, [where: "proxies", name: "domains/acme/link-token"]>, "excludes", "secret">,
+      Fresh,
+      Invoke<typeof writeIn, [where: "proxies", name: "domains/acme/link-token", text: "secret"]>,
+      Invoke<typeof ensureLinkToken, [domain: "acme"]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof textIn, [where: "proxies", name: "domains/acme/link-token"]>["length"],
+        "=",
+        65
+      >,
+      Expect<
+        Invoke<typeof textIn, [where: "proxies", name: "domains/acme/link-token"]>,
+        "excludes",
+        "secret"
+      >,
     ]
   >;
 }
@@ -140,7 +189,8 @@ export const listenerIn = (table: string, port: number): number | null => {
 declare namespace listenerIn {
   // /proc/net/tcp: a heading, then a row a socket, its local address in hex (127.0.0.1 is
   // 0100007F), its state (0A: listening) and the uid that owns it.
-  type Table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:55F0 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4242 1\n   1: 0100007F:55F1 0100007F:9C40 01 00000000:00000000 00:00000000 00000000  1002        0 4243 1\n   2: 00000000:55F2 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1003        0 4244 1\n";
+  type Table =
+    "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n   0: 0100007F:55F0 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1001        0 4242 1\n   1: 0100007F:55F1 0100007F:9C40 01 00000000:00000000 00:00000000 00000000  1002        0 4243 1\n   2: 00000000:55F2 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1003        0 4244 1\n";
   /** who listens on the secrets proxy's port, on loopback: the uid believed */
   export type Listening = Expect<Invoke<typeof listenerIn, [table: Table, port: 22000]>, "=", 1001>;
   /** a connection on the port (not a listener), a listener on every address rather than

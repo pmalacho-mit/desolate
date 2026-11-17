@@ -6,6 +6,6 @@ import { defineConfig } from "vitest/config";
 import namespaceTests from "./suede.nests/vite-plugin/plugin.mts";
 
 export default defineConfig({
-  plugins: [namespaceTests({ exclude: ["tests/**", "samples/**", "demo-out/**", "suede.nests/**", "devcontainers-suede/**", ".suede/**"] })],
+  plugins: [namespaceTests({ exclude: ["tests/**", "suede.nests/**", ".suede/**"] })],
   test: { include: [], passWithNoTests: false, setupFiles: ["release/.harness/setup.ts"] },
 });

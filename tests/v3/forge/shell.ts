@@ -9,7 +9,12 @@ import type { Key } from "./common.ts";
 const key = readJson<Key[]>("keys.json", [])[Number(process.argv[2])];
 const command = process.env.SSH_ORIGINAL_COMMAND ?? "";
 const deny = (why: string): never => {
-  append("access.log", { key: key ? `${key.role}:${key.repo}` : "unknown", command, verdict: "denied", why });
+  append("access.log", {
+    key: key ? `${key.role}:${key.repo}` : "unknown",
+    command,
+    verdict: "denied",
+    why,
+  });
   console.error(`ERROR: ${why}`);
   process.exit(1);
 };
@@ -23,17 +28,23 @@ if (!REPO.test(repo)) deny("not a repository name");
 // A deploy key belongs to one repository. It is no use for another, read or write.
 if (repo !== key!.repo) deny(`this deploy key is for ${key!.repo}, not ${repo}`);
 const writes = pack?.[1] === "git-receive-pack" || lfs?.[2] === "upload";
-if (writes && key!.role !== "write") deny(`this deploy key is read-only; it cannot write to ${repo}`);
+if (writes && key!.role !== "write")
+  deny(`this deploy key is read-only; it cannot write to ${repo}`);
 
 append("access.log", { key: `${key!.role}:${key!.repo}`, command, verdict: "allowed" });
 if (lfs) {
   const { host, lfsPort } = config();
-  process.stdout.write(JSON.stringify({
-    href: `http://${host}:${lfsPort}/${repo}.git/info/lfs`,
-    header: { Authorization: `Bearer ${mintToken(repo, lfs[2] as "download" | "upload")}` },
-    expires_in: 600,
-  }));
+  process.stdout.write(
+    JSON.stringify({
+      href: `http://${host}:${lfsPort}/${repo}.git/info/lfs`,
+      header: { Authorization: `Bearer ${mintToken(repo, lfs[2] as "download" | "upload")}` },
+      expires_in: 600,
+    }),
+  );
   process.exit(0);
 }
-const result = spawnSync(pack![1]!, [repoDir(repo)], { stdio: "inherit", env: { ...process.env, FORGE_PUSH_KEY: `${key!.role}:${key!.repo}`, FORGE_REPO: repo } });
+const result = spawnSync(pack![1]!, [repoDir(repo)], {
+  stdio: "inherit",
+  env: { ...process.env, FORGE_PUSH_KEY: `${key!.role}:${key!.repo}`, FORGE_REPO: repo },
+});
 process.exit(result.status ?? 1);

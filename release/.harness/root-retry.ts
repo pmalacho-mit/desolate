@@ -12,7 +12,11 @@ export const attemptsThat = (outcomes: Outcome[]) => {
   let calls = 0;
   const attempt = async () => {
     const next = outcomes[Math.min(calls++, outcomes.length - 1)]!;
-    if (typeof next.fails === "string") throw Object.assign(new Error(`connect ${next.fails}`), { code: next.fails, connected: next.connected === true });
+    if (typeof next.fails === "string")
+      throw Object.assign(new Error(`connect ${next.fails}`), {
+        code: next.fails,
+        connected: next.connected === true,
+      });
     return next;
   };
   return { attempt, calls: () => calls };

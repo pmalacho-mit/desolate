@@ -18,63 +18,137 @@ const clientHello = (servername: string | undefined): Promise<Buffer> =>
     });
     server.listen(0, "127.0.0.1", () => {
       const { port } = server.address() as net.AddressInfo;
-      const client = tls.connect({ host: "127.0.0.1", port, servername, rejectUnauthorized: false });
+      const client = tls.connect({
+        host: "127.0.0.1",
+        port,
+        servername,
+        rejectUnauthorized: false,
+      });
       client.on("error", () => {});
     });
   });
 
 describe("T1 sniff", () => {
   it("HTTP: the Host header, lowercased, without its port", () => {
-    assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.1\r\nHost: Web-One-abc123.localhost:5173\r\nAccept: */*\r\n\r\n")), { kind: "http", name: "web-one-abc123.localhost" });
-    assert.deepEqual(sniff(Buffer.from("POST /x HTTP/1.0\nhost:a.localhost\n\n")), { kind: "http", name: "a.localhost" });
+    assert.deepEqual(
+      sniff(
+        Buffer.from("GET / HTTP/1.1\r\nHost: Web-One-abc123.localhost:5173\r\nAccept: */*\r\n\r\n"),
+      ),
+      { kind: "http", name: "web-one-abc123.localhost" },
+    );
+    assert.deepEqual(sniff(Buffer.from("POST /x HTTP/1.0\nhost:a.localhost\n\n")), {
+      kind: "http",
+      name: "a.localhost",
+    });
   });
 
   it("HTTP with no Host, or a Host that is not a hostname, names nothing", () => {
     assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.0\r\n\r\n")), { kind: "http", name: null });
     for (const host of ["[::1]:80", "a b", "a/b", "evil.example:port", "", "-a.localhost", "a..b"])
-      assert.deepEqual(sniff(Buffer.from(`GET / HTTP/1.1\r\nHost: ${host}\r\n\r\n`)), { kind: "http", name: null }, host);
+      assert.deepEqual(
+        sniff(Buffer.from(`GET / HTTP/1.1\r\nHost: ${host}\r\n\r\n`)),
+        { kind: "http", name: null },
+        host,
+      );
     // A header that only looks like Host.
-    assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.1\r\nX-Host: a.localhost\r\n\r\n")), { kind: "http", name: null });
+    assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.1\r\nX-Host: a.localhost\r\n\r\n")), {
+      kind: "http",
+      name: null,
+    });
   });
 
   it("HTTP: the first Host header is the one that counts, and the body cannot supply one", () => {
-    assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.1\r\nHost: one.localhost\r\nHost: two.localhost\r\n\r\n")), { kind: "http", name: "one.localhost" });
-    assert.deepEqual(sniff(Buffer.from("POST / HTTP/1.1\r\nContent-Length: 30\r\n\r\nHost: smuggled.localhost\r\n\r\n")), { kind: "http", name: null });
+    assert.deepEqual(
+      sniff(Buffer.from("GET / HTTP/1.1\r\nHost: one.localhost\r\nHost: two.localhost\r\n\r\n")),
+      { kind: "http", name: "one.localhost" },
+    );
+    assert.deepEqual(
+      sniff(
+        Buffer.from(
+          "POST / HTTP/1.1\r\nContent-Length: 30\r\n\r\nHost: smuggled.localhost\r\n\r\n",
+        ),
+      ),
+      { kind: "http", name: null },
+    );
   });
 
   it("an incomplete request asks for more; a complete one never does", () => {
     assert.deepEqual(sniff(Buffer.from("GET / HT")), { kind: "more" });
-    assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.1\r\nHost: a.localhost\r\n")), { kind: "more" });
+    assert.deepEqual(sniff(Buffer.from("GET / HTTP/1.1\r\nHost: a.localhost\r\n")), {
+      kind: "more",
+    });
     assert.deepEqual(sniff(Buffer.alloc(0)), { kind: "more" });
   });
 
   it("TLS: the SNI of a real ClientHello", async () => {
-    assert.deepEqual(sniff(await clientHello("web-two-0a1b2c.localhost")), { kind: "tls", name: "web-two-0a1b2c.localhost" });
-    assert.deepEqual(sniff(await clientHello(undefined)), { kind: "tls", name: null }, "no SNI names nothing");
+    assert.deepEqual(sniff(await clientHello("web-two-0a1b2c.localhost")), {
+      kind: "tls",
+      name: "web-two-0a1b2c.localhost",
+    });
+    assert.deepEqual(
+      sniff(await clientHello(undefined)),
+      { kind: "tls", name: null },
+      "no SNI names nothing",
+    );
     const hello = await clientHello("a.localhost");
-    assert.deepEqual(sniff(hello.subarray(0, 40)), { kind: "more" }, "a partial record asks for more");
+    assert.deepEqual(
+      sniff(hello.subarray(0, 40)),
+      { kind: "more" },
+      "a partial record asks for more",
+    );
   });
 
   it("anything else is raw: a protocol with no name in it", () => {
-    for (const bytes of [Buffer.from([0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f]), Buffer.from("*1\r\n$4\r\nPING\r\n"), Buffer.from("SSH-2.0-OpenSSH_9.6\r\n"), Buffer.from([0x16, 0x01, 0x00])])
+    for (const bytes of [
+      Buffer.from([0x00, 0x00, 0x00, 0x08, 0x04, 0xd2, 0x16, 0x2f]),
+      Buffer.from("*1\r\n$4\r\nPING\r\n"),
+      Buffer.from("SSH-2.0-OpenSSH_9.6\r\n"),
+      Buffer.from([0x16, 0x01, 0x00]),
+    ])
       assert.deepEqual(sniff(bytes), { kind: "raw" });
   });
 
   it("what starts like HTTP is HTTP: a request too long, or malformed, names no one (refused), never raw", () => {
     // A 20 KB path: the request line never ends within LIMIT. It was raw, and went to the
     // port's first workspace with no name checked (audit, 2026-11-16).
-    assert.deepEqual(sniff(Buffer.from(`GET /${"x".repeat(20_000)} HTTP/1.1\r\nHost: b.localhost\r\n\r\n`)), { kind: "http", name: null });
-    assert.deepEqual(sniff(Buffer.from(`GET /${"x".repeat(3000)}`)), { kind: "more" }, "a first line still arriving asks for more");
-    assert.deepEqual(sniff(Buffer.from("GET / HTTP/9\r\n\r\n")), { kind: "http", name: null }, "malformed: names no one");
-    assert.deepEqual(sniff(Buffer.from("PURGE /cache HTTP/1.1\r\nHost: a.localhost\r\n\r\n")), { kind: "http", name: "a.localhost" }, "any method is routed by its Host");
+    assert.deepEqual(
+      sniff(Buffer.from(`GET /${"x".repeat(20_000)} HTTP/1.1\r\nHost: b.localhost\r\n\r\n`)),
+      { kind: "http", name: null },
+    );
+    assert.deepEqual(
+      sniff(Buffer.from(`GET /${"x".repeat(3000)}`)),
+      { kind: "more" },
+      "a first line still arriving asks for more",
+    );
+    assert.deepEqual(
+      sniff(Buffer.from("GET / HTTP/9\r\n\r\n")),
+      { kind: "http", name: null },
+      "malformed: names no one",
+    );
+    assert.deepEqual(
+      sniff(Buffer.from("PURGE /cache HTTP/1.1\r\nHost: a.localhost\r\n\r\n")),
+      { kind: "http", name: "a.localhost" },
+      "any method is routed by its Host",
+    );
     const partialHello = Buffer.alloc(LIMIT, 0);
     partialHello.set([0x16, 0x03, 0x01, 0xff, 0xff]);
-    assert.deepEqual(sniff(partialHello), { kind: "tls", name: null }, "a TLS hello that never completes names no one");
+    assert.deepEqual(
+      sniff(partialHello),
+      { kind: "tls", name: null },
+      "a TLS hello that never completes names no one",
+    );
   });
 
   it("normalizeName", () => {
     assert.equal(normalizeName("A.Localhost."), "a.localhost");
     assert.equal(normalizeName("a.localhost:8080"), "a.localhost");
-    for (const bad of ["a.localhost:http", "a_b.localhost", "a.localhost:80:80", "a".repeat(254), ".localhost"]) assert.equal(normalizeName(bad), null, bad);
+    for (const bad of [
+      "a.localhost:http",
+      "a_b.localhost",
+      "a.localhost:80:80",
+      "a".repeat(254),
+      ".localhost",
+    ])
+      assert.equal(normalizeName(bad), null, bad);
   });
 });

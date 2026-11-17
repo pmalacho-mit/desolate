@@ -38,13 +38,19 @@ describe("T1 taking in a file another side wrote", () => {
   it("a link, even to a good file, is not followed", () => {
     const link = path.join(dir, "link");
     fs.symlinkSync(path.join(dir, "good"), link);
-    assert.equal(takeHashed(link, target(), oid, 1024), "not a plain file of a size desolate takes");
+    assert.equal(
+      takeHashed(link, target(), oid, 1024),
+      "not a plain file of a size desolate takes",
+    );
   });
   it("a FIFO is refused at once: the reader does not block on it", () => {
     const fifo = path.join(dir, "fifo");
     execFileSync("mkfifo", [fifo]);
     const started = Date.now();
-    assert.equal(takeHashed(fifo, target(), oid, 1024), "not a plain file of a size desolate takes");
+    assert.equal(
+      takeHashed(fifo, target(), oid, 1024),
+      "not a plain file of a size desolate takes",
+    );
     assert.ok(Date.now() - started < 1000);
   });
   it("a file over the size is refused before a byte is copied", () => {

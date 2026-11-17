@@ -30,7 +30,12 @@ export const daemonAnswering = (reply: Record<string, unknown>) =>
     });
     server.once("error", reject);
     server.listen(socket, () => resolve());
-    onTestFinished(() => new Promise<void>((done) => server.close(() => (fs.rmSync(socket, { force: true }), done()))));
+    onTestFinished(
+      () =>
+        new Promise<void>((done) =>
+          server.close(() => (fs.rmSync(socket, { force: true }), done())),
+        ),
+    );
   });
 
 // ------------------------------------------------------------------ a VM that answers
@@ -97,14 +102,33 @@ export const answerOf = async (handler: (req: IncomingMessage, res: ServerRespon
 // workspace written so have no dash of their own.)
 const SUFFIX = HOSTNAME_SUFFIX.replace(/\./g, "\\.");
 const named = (text: string) =>
-  text.replace(/([a-z0-9]+)-([a-z0-9]+)-(editor-)?HEX\.localhost|\.localhost\b/g, (whole, domain?: string, workspace?: string, editor?: string) =>
-    domain === undefined ? `.${HOSTNAME_SUFFIX}` : (editor ? editorHostname : devHostname)(INSTANCE, domain, workspace!));
-const unnamed = (text: string) => text.replace(new RegExp(`-[0-9a-f]{6}\\.${SUFFIX}|\\.${SUFFIX}`, "g"), (whole) => (whole.startsWith("-") ? "-HEX.localhost" : ".localhost"));
+  text.replace(
+    /([a-z0-9]+)-([a-z0-9]+)-(editor-)?HEX\.localhost|\.localhost\b/g,
+    (whole, domain?: string, workspace?: string, editor?: string) =>
+      domain === undefined
+        ? `.${HOSTNAME_SUFFIX}`
+        : (editor ? editorHostname : devHostname)(INSTANCE, domain, workspace!),
+  );
+const unnamed = (text: string) =>
+  text.replace(new RegExp(`-[0-9a-f]{6}\\.${SUFFIX}|\\.${SUFFIX}`, "g"), (whole) =>
+    whole.startsWith("-") ? "-HEX.localhost" : ".localhost",
+  );
 
 /** A workspace as the daemon keeps it (`at`: "domain/workspace"), listening on `listening`. */
-export const ws = (at: string, listening: number[], more: { reserved?: number[]; editorTokenEpoch?: number } = {}) => {
+export const ws = (
+  at: string,
+  listening: number[],
+  more: { reserved?: number[]; editorTokenEpoch?: number } = {},
+) => {
   const [domain = "", workspace = ""] = at.split("/");
-  return { vm: workspaceVmName(INSTANCE, domain, workspace), domain, workspace, listeners: new Set(listening), reserved: new Set(more.reserved ?? []), editorTokenEpoch: more.editorTokenEpoch ?? 0 };
+  return {
+    vm: workspaceVmName(INSTANCE, domain, workspace),
+    domain,
+    workspace,
+    listeners: new Set(listening),
+    reserved: new Set(more.reserved ?? []),
+    editorTokenEpoch: more.editorTokenEpoch ?? 0,
+  };
 };
 
 /** What a connection said first, as sniffSocket hands it over: `text` (names written as above)
@@ -113,7 +137,8 @@ export const said = (text: string, undecided = false) => {
   const head = Buffer.from(named(text), "latin1");
   if (undecided) return { sniffed: { kind: "raw" } as Sniffed, head, undecided: true };
   const sniffed = sniff(head);
-  if (sniffed.kind === "more") throw new Error(`the harness: ${JSON.stringify(text)} is not all of a first message`);
+  if (sniffed.kind === "more")
+    throw new Error(`the harness: ${JSON.stringify(text)} is not all of a first message`);
   return { sniffed, head };
 };
 /** A TLS ClientHello with `name` (written as above) as its server name, or none. */
@@ -145,7 +170,13 @@ export const shown = (value: unknown): any => {
   if (Array.isArray(value)) return value.map(shown);
   if (value !== null && typeof value === "object") {
     const o = value as Record<string, unknown>;
-    if (typeof o.vm === "string" && typeof o.domain === "string" && typeof o.workspace === "string" && o.listeners instanceof Set) return `${o.domain}/${o.workspace}`;
+    if (
+      typeof o.vm === "string" &&
+      typeof o.domain === "string" &&
+      typeof o.workspace === "string" &&
+      o.listeners instanceof Set
+    )
+      return `${o.domain}/${o.workspace}`;
     return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, shown(v)]));
   }
   return value;

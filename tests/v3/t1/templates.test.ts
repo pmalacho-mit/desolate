@@ -18,9 +18,17 @@ describe("T1 a domain's template", () => {
   it("is named for its domain and key, never like a workspace's VM, and as long as one", () => {
     const name = templateVm("web", keyOf(env));
     assert.match(name, /^dsl-[a-z0-9]+-t[0-9a-f]{9}$/);
-    assert.notEqual(name, templateVm("api", keyOf(env)), "one domain's template is never another's");
+    assert.notEqual(
+      name,
+      templateVm("api", keyOf(env)),
+      "one domain's template is never another's",
+    );
     const workspace = workspaceVmName("main", "web", "w1");
     assert.equal(name.replace(/^dsl-main-/, "").length, workspace.replace(/^dsl-main-/, "").length);
-    assert.doesNotMatch(name, /^dsl-[a-z0-9]+-[0-9a-f]{10}$/, "a workspace VM's name is ten hex digits; a template's starts with t");
+    assert.doesNotMatch(
+      name,
+      /^dsl-[a-z0-9]+-[0-9a-f]{10}$/,
+      "a workspace VM's name is ten hex digits; a template's starts with t",
+    );
   });
 });

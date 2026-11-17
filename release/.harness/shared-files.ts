@@ -38,7 +38,8 @@ export const readScratch = (name: string): string | null => {
 export const scratchFiles = (dir = ""): string[] => fs.readdirSync(scratch(dir)).sort();
 
 /** A symbolic link at `name` to `target`, another name under scratch/. */
-export const linkScratch = (name: string, target: string) => fs.symlinkSync(scratch(target), scratch(name));
+export const linkScratch = (name: string, target: string) =>
+  fs.symlinkSync(scratch(target), scratch(name));
 
 /** A FIFO at `name`: a reader that opened it without O_NONBLOCK would wait for a writer. */
 export const fifoScratch = (name: string) => execFileSync("mkfifo", [scratch(name)]);

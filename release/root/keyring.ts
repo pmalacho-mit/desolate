@@ -40,7 +40,8 @@ const isRole = (value: unknown): value is Role => value === "read" || value === 
 
 const log = (message: string) => console.error(`keyring: ${message}`);
 const keyFile = (repo: Repo, role: Role) => path.join(KEYRING.keys, repo.owner, repo.name, role);
-const pubFile = (repo: Repo, role: Role) => path.join(KEYRING.pub, repo.owner, repo.name, `${role}.pub`);
+const pubFile = (repo: Repo, role: Role) =>
+  path.join(KEYRING.pub, repo.owner, repo.name, `${role}.pub`);
 /** ssh-agent's own socket for a role. Only the keyring's user can open it. */
 const agentOf = (role: Role) => path.join(KEYRING.private, `${role}-agent.sock`);
 /** The key's comment is how keyring-askpass learns which repository a signature is for. */
@@ -48,14 +49,27 @@ export const commentOf = (repo: Repo, role: Role) => `desolate-${role}:${repoId(
 
 declare namespace commentOf {
   /** what keyring-askpass reads to learn which repository a write signature is for */
-  export type Names = Table<typeof commentOf, [
-    [args: [repo: { owner: "acme"; name: "app" }, role: "write"], expected: "desolate-write:acme/app"],
-    [args: [repo: { owner: "acme"; name: "app" }, role: "read"], expected: "desolate-read:acme/app"],
-  ]>;
+  export type Names = Table<
+    typeof commentOf,
+    [
+      [
+        args: [repo: { owner: "acme"; name: "app" }, role: "write"],
+        expected: "desolate-write:acme/app",
+      ],
+      [
+        args: [repo: { owner: "acme"; name: "app" }, role: "read"],
+        expected: "desolate-read:acme/app",
+      ],
+    ]
+  >;
 }
 
 const audit = (entry: Record<string, unknown>) => {
-  fs.appendFileSync(KEYRING.audit, JSON.stringify({ time: new Date().toISOString(), ...entry }) + "\n", { mode: 0o640 });
+  fs.appendFileSync(
+    KEYRING.audit,
+    JSON.stringify({ time: new Date().toISOString(), ...entry }) + "\n",
+    { mode: 0o640 },
+  );
 };
 
 const publish = (repo: Repo, role: Role) => {
@@ -68,14 +82,21 @@ const publish = (repo: Repo, role: Role) => {
 const load = (repo: Repo, role: Role) => {
   // -c: confirm before each use. ssh-agent then runs $SSH_ASKPASS for every signature.
   const args = role === "write" ? ["-c", keyFile(repo, role)] : [keyFile(repo, role)];
-  execFileSync("ssh-add", args, { env: { ...process.env, SSH_AUTH_SOCK: agentOf(role) }, stdio: ["ignore", "ignore", "pipe"] });
+  execFileSync("ssh-add", args, {
+    env: { ...process.env, SSH_AUTH_SOCK: agentOf(role) },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
 };
 
 const held = (): { repo: Repo; role: Role }[] => {
   const out: { repo: Repo; role: Role }[] = [];
   const dirs = (dir: string) => {
     try {
-      return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort();
     } catch {
       return [];
     }
@@ -84,7 +105,8 @@ const held = (): { repo: Repo; role: Role }[] => {
     for (const name of dirs(path.join(KEYRING.keys, owner))) {
       const repo = parseRepo(`${owner}/${name}`);
       if (!repo) continue;
-      for (const role of ["read", "write"] as const) if (fs.existsSync(`${keyFile(repo, role)}.pub`)) out.push({ repo, role });
+      for (const role of ["read", "write"] as const)
+        if (fs.existsSync(`${keyFile(repo, role)}.pub`)) out.push({ repo, role });
     }
   return out;
 };
@@ -93,7 +115,11 @@ const create = (repo: Repo, role: Role): string => {
   const key = keyFile(repo, role);
   fs.mkdirSync(path.dirname(key), { recursive: true, mode: 0o700 });
   if (!fs.existsSync(key)) {
-    execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-f", key, "-N", "", "-C", commentOf(repo, role)], { stdio: ["ignore", "ignore", "pipe"] });
+    execFileSync(
+      "ssh-keygen",
+      ["-q", "-t", "ed25519", "-f", key, "-N", "", "-C", commentOf(repo, role)],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
     fs.chmodSync(key, 0o600);
     log(`generated the ${role} key for ${repoId(repo)}`);
     audit({ event: "created", repo: repoId(repo), role });
@@ -106,7 +132,17 @@ const create = (repo: Repo, role: Role): string => {
 // ---------------------------------------------------------------- approvals (P2)
 /** `claimed`: the pusher has begun the push (pusherOps). Only then may the write key sign,
  *  and from then the approval lasts as long as a push may (CLAIMED_MS), for that one push. */
-export type Approval = { id: string; repo: string; ref: string; commit: string; onto: string | null; expires: number; uses: number; by: string; claimed: boolean };
+export type Approval = {
+  id: string;
+  repo: string;
+  ref: string;
+  commit: string;
+  onto: string | null;
+  expires: number;
+  uses: number;
+  by: string;
+  claimed: boolean;
+};
 const CLAIMED_MS = 35 * 60_000;
 const approvals = new Map<string, Approval>();
 /** A push opens a few ssh connections (the push itself, LFS's authenticate calls), each one
@@ -120,14 +156,32 @@ const CHALLENGE = { lifeMs: 120_000, outstanding: 32 } as const;
 
 const challenge = (request: Record<string, unknown>): Record<string, unknown> => {
   const repo = parseRepo(request.repo);
-  if (!repo || !isBranch(request.ref) || !isCommit(request.commit) || /^0{40}$/.test(request.commit)) return { ok: false, error: "a challenge names a repository, a branch and a 40-hex commit" };
-  if (!fs.existsSync(keyFile(repo, "write"))) return { ok: false, error: `${repoId(repo)} has no write key: it is not pushable` };
+  if (
+    !repo ||
+    !isBranch(request.ref) ||
+    !isCommit(request.commit) ||
+    /^0{40}$/.test(request.commit)
+  )
+    return { ok: false, error: "a challenge names a repository, a branch and a 40-hex commit" };
+  if (!fs.existsSync(keyFile(repo, "write")))
+    return { ok: false, error: `${repoId(repo)} has no write key: it is not pushable` };
   for (const [nonce, entry] of challenges) if (entry.expires < Date.now()) challenges.delete(nonce);
-  while (challenges.size >= CHALLENGE.outstanding) challenges.delete(challenges.keys().next().value!);
+  while (challenges.size >= CHALLENGE.outstanding)
+    challenges.delete(challenges.keys().next().value!);
   const onto = request.onto ?? null;
-  if (onto !== null && (!isCommit(onto) || /^0{40}$/.test(onto))) return { ok: false, error: "a push names what the remote's branch is now (a commit), or null for a new branch" };
+  if (onto !== null && (!isCommit(onto) || /^0{40}$/.test(onto)))
+    return {
+      ok: false,
+      error: "a push names what the remote's branch is now (a commit), or null for a new branch",
+    };
   const nonce = randomBytes(16).toString("hex");
-  const message = formatApproval({ repo: repoId(repo), branch: request.ref, commit: request.commit, onto: onto as string | null, nonce });
+  const message = formatApproval({
+    repo: repoId(repo),
+    branch: request.ref,
+    commit: request.commit,
+    onto: onto as string | null,
+    nonce,
+  });
   challenges.set(nonce, { message, expires: Date.now() + CHALLENGE.lifeMs });
   return { ok: true, message };
 };
@@ -135,40 +189,176 @@ const challenge = (request: Record<string, unknown>): Record<string, unknown> =>
 declare namespace challenge {
   // A repository is pushable when the keyring holds its write key (made by `create`).
   type Fresh = Invoke<typeof emptyRoot>;
-  type Pushable = Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write", text: "a private key"]>;
-  type Issued = Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null }]>;
+  type Pushable = Invoke<
+    typeof writeIn,
+    [where: "sys", name: "keyring/acme/app/write", text: "a private key"]
+  >;
+  type Issued = Invoke<
+    typeof challenge,
+    [
+      request: {
+        repo: "acme/app";
+        ref: "feature/login";
+        commit: "0123456789abcdef0123456789abcdef01234567";
+        onto: null;
+      },
+    ]
+  >;
   /** anyone may ask: the challenge is the text the host's approver will show and sign,
    *  naming exactly this push and a nonce of the keyring's */
   export type Issues = Given<
     [Fresh, Pushable, Issued],
     [
       Expect<Issued, "matches", { ok: true }>,
-      Expect<Invoke<typeof parseApproval, [text: Issued["message"]]>, "matches", { repo: "acme/app"; branch: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null }>,
+      Expect<
+        Invoke<typeof parseApproval, [text: Issued["message"]]>,
+        "matches",
+        {
+          repo: "acme/app";
+          branch: "feature/login";
+          commit: "0123456789abcdef0123456789abcdef01234567";
+          onto: null;
+        }
+      >,
     ]
   >;
   /** what the remote's branch is now, when it is not new: the push moves it from exactly that */
   export type Onto = Given<
     [Fresh, Pushable],
-    Expect<Invoke<typeof parseApproval, [text: Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: "89abcdef0123456789abcdef0123456789abcdef" }]>["message"]]>, "matches", { onto: "89abcdef0123456789abcdef0123456789abcdef" }>
+    Expect<
+      Invoke<
+        typeof parseApproval,
+        [
+          text: Invoke<
+            typeof challenge,
+            [
+              request: {
+                repo: "acme/app";
+                ref: "main";
+                commit: "0123456789abcdef0123456789abcdef01234567";
+                onto: "89abcdef0123456789abcdef0123456789abcdef";
+              },
+            ]
+          >["message"],
+        ]
+      >,
+      "matches",
+      { onto: "89abcdef0123456789abcdef0123456789abcdef" }
+    >
   >;
   /** a repository with no write key is not pushable, and gets no challenge */
   export type NotPushable = Given<
     Fresh,
-    Expect<Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "acme/app has no write key: it is not pushable" }>
+    Expect<
+      Invoke<
+        typeof challenge,
+        [
+          request: {
+            repo: "acme/app";
+            ref: "main";
+            commit: "0123456789abcdef0123456789abcdef01234567";
+          },
+        ]
+      >,
+      "=",
+      { ok: false; error: "acme/app has no write key: it is not pushable" }
+    >
   >;
   /** nothing that is not a repository, a branch and a whole commit; never the all-zero id
    *  (git's "no such ref", which would make a push a deletion) */
-  export type Refuses = Table<typeof challenge, [
-    [args: [request: { repo: "acme/../x"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
-    [args: [request: { repo: "acme/app"; ref: "--upload-pack=x"; commit: "0123456789abcdef0123456789abcdef01234567" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
-    [args: [request: { repo: "acme/app"; ref: "main"; commit: "HEAD" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
-    [args: [request: { repo: "acme/app"; ref: "main"; commit: "0000000000000000000000000000000000000000" }], expected: { ok: false; error: "a challenge names a repository, a branch and a 40-hex commit" }],
-  ]>;
+  export type Refuses = Table<
+    typeof challenge,
+    [
+      [
+        args: [
+          request: {
+            repo: "acme/../x";
+            ref: "main";
+            commit: "0123456789abcdef0123456789abcdef01234567";
+          },
+        ],
+        expected: {
+          ok: false;
+          error: "a challenge names a repository, a branch and a 40-hex commit";
+        },
+      ],
+      [
+        args: [
+          request: {
+            repo: "acme/app";
+            ref: "--upload-pack=x";
+            commit: "0123456789abcdef0123456789abcdef01234567";
+          },
+        ],
+        expected: {
+          ok: false;
+          error: "a challenge names a repository, a branch and a 40-hex commit";
+        },
+      ],
+      [
+        args: [request: { repo: "acme/app"; ref: "main"; commit: "HEAD" }],
+        expected: {
+          ok: false;
+          error: "a challenge names a repository, a branch and a 40-hex commit";
+        },
+      ],
+      [
+        args: [
+          request: {
+            repo: "acme/app";
+            ref: "main";
+            commit: "0000000000000000000000000000000000000000";
+          },
+        ],
+        expected: {
+          ok: false;
+          error: "a challenge names a repository, a branch and a 40-hex commit";
+        },
+      ],
+    ]
+  >;
   /** and `onto` is a whole commit or null: never git's all-zero id, never a branch name */
-  export type BadOnto = Given<[Fresh, Pushable], [
-    Expect<Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: "0000000000000000000000000000000000000000" }]>, "=", { ok: false; error: "a push names what the remote's branch is now (a commit), or null for a new branch" }>,
-    Expect<Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "main"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: "main" }]>, "=", { ok: false; error: "a push names what the remote's branch is now (a commit), or null for a new branch" }>,
-  ]>;
+  export type BadOnto = Given<
+    [Fresh, Pushable],
+    [
+      Expect<
+        Invoke<
+          typeof challenge,
+          [
+            request: {
+              repo: "acme/app";
+              ref: "main";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+              onto: "0000000000000000000000000000000000000000";
+            },
+          ]
+        >,
+        "=",
+        {
+          ok: false;
+          error: "a push names what the remote's branch is now (a commit), or null for a new branch";
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof challenge,
+          [
+            request: {
+              repo: "acme/app";
+              ref: "main";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+              onto: "main";
+            },
+          ]
+        >,
+        "=",
+        {
+          ok: false;
+          error: "a push names what the remote's branch is now (a commit), or null for a new branch";
+        }
+      >,
+    ]
+  >;
 }
 
 /** The approver's public key. Trusted only as root installed it: a file this VM's ordinary
@@ -177,11 +367,14 @@ const approverKey = (): { key: ReturnType<typeof createPublicKey> } | { error: s
   try {
     for (const file of [path.dirname(KEYRING.approver), KEYRING.approver]) {
       const stat = fs.statSync(file);
-      if (stat.uid !== 0 || (stat.mode & 0o022) !== 0) return { error: `${file} is not root's alone to write, so it is not trusted` };
+      if (stat.uid !== 0 || (stat.mode & 0o022) !== 0)
+        return { error: `${file} is not root's alone to write, so it is not trusted` };
     }
     return { key: createPublicKey(fs.readFileSync(KEYRING.approver, "utf8")) };
   } catch (error) {
-    return { error: `no approver key is installed at ${KEYRING.approver} (${(error as Error).message}); run \`desolate bootstrap\` on the host` };
+    return {
+      error: `no approver key is installed at ${KEYRING.approver} (${(error as Error).message}); run \`desolate bootstrap\` on the host`,
+    };
   }
 };
 
@@ -189,25 +382,50 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
   const parsed = parseApproval(request.message);
   if (!parsed) return { ok: false, error: "that is not an approval message" };
   const refused = (reason: string) => {
-    audit({ event: "refused", repo: parsed.repo, ref: parsed.branch, commit: parsed.commit, reason });
+    audit({
+      event: "refused",
+      repo: parsed.repo,
+      ref: parsed.branch,
+      commit: parsed.commit,
+      reason,
+    });
     return { ok: false, error: reason };
   };
   const issued = challenges.get(parsed.nonce);
-  if (!issued || issued.expires < Date.now() || issued.message !== request.message) return refused("that challenge is not outstanding: each lasts two minutes and approves once");
+  if (!issued || issued.expires < Date.now() || issued.message !== request.message)
+    return refused("that challenge is not outstanding: each lasts two minutes and approves once");
   const approver = approverKey();
   if ("error" in approver) return refused(approver.error);
   let valid = false;
   try {
-    valid = typeof request.signature === "string" && verify("sha256", Buffer.from(issued.message), approver.key, Buffer.from(request.signature, "base64"));
+    valid =
+      typeof request.signature === "string" &&
+      verify(
+        "sha256",
+        Buffer.from(issued.message),
+        approver.key,
+        Buffer.from(request.signature, "base64"),
+      );
   } catch {
     valid = false;
   }
   if (!valid) return refused("the approval's signature is not the host approver's");
   challenges.delete(parsed.nonce);
   const repo = parseRepo(parsed.repo)!;
-  if (!fs.existsSync(keyFile(repo, "write"))) return refused(`${parsed.repo} has no write key: it is not pushable`);
+  if (!fs.existsSync(keyFile(repo, "write")))
+    return refused(`${parsed.repo} has no write key: it is not pushable`);
   const id = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
-  const approval: Approval = { id, repo: parsed.repo, ref: parsed.branch, commit: parsed.commit, onto: parsed.onto, expires: Date.now() + APPROVAL.lifeMs, uses: APPROVAL.uses, by: "host approver", claimed: false };
+  const approval: Approval = {
+    id,
+    repo: parsed.repo,
+    ref: parsed.branch,
+    commit: parsed.commit,
+    onto: parsed.onto,
+    expires: Date.now() + APPROVAL.lifeMs,
+    uses: APPROVAL.uses,
+    by: "host approver",
+    claimed: false,
+  };
   approvals.set(id, approval);
   audit({ event: "approved", ...approval, expires: new Date(approval.expires).toISOString() });
   return { ok: true, id };
@@ -215,8 +433,21 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
 
 declare namespace approve {
   type Fresh = Invoke<typeof emptyRoot>;
-  type Pushable = Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write", text: "a private key"]>;
-  type Issued = Invoke<typeof challenge, [request: { repo: "acme/app"; ref: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null }]>;
+  type Pushable = Invoke<
+    typeof writeIn,
+    [where: "sys", name: "keyring/acme/app/write", text: "a private key"]
+  >;
+  type Issued = Invoke<
+    typeof challenge,
+    [
+      request: {
+        repo: "acme/app";
+        ref: "feature/login";
+        commit: "0123456789abcdef0123456789abcdef01234567";
+        onto: null;
+      },
+    ]
+  >;
   /** a challenge the keyring issued, answered with a signature that is not the host
    *  approver's, files no approval: the push it names is still not approved. (The approver's
    *  key is root's, at /etc/desolate: a test cannot install one, so the signature that would
@@ -224,8 +455,28 @@ declare namespace approve {
   export type NotTheApprovers = Given<
     [Fresh, Pushable, Issued],
     [
-      Expect<Invoke<typeof approve, [request: { message: Issued["message"]; signature: "c2lnbmVkIGJ5IHNvbWVvbmUgZWxzZQ==" }]>, "matches", { ok: false }>,
-      Expect<Invoke<typeof approved, [request: { repo: "acme/app"; ref: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567" }]>, "=", { ok: false; error: "no approval on file for that push" }>,
+      Expect<
+        Invoke<
+          typeof approve,
+          [request: { message: Issued["message"]; signature: "c2lnbmVkIGJ5IHNvbWVvbmUgZWxzZQ==" }]
+        >,
+        "matches",
+        { ok: false }
+      >,
+      Expect<
+        Invoke<
+          typeof approved,
+          [
+            request: {
+              repo: "acme/app";
+              ref: "feature/login";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+            },
+          ]
+        >,
+        "=",
+        { ok: false; error: "no approval on file for that push" }
+      >,
     ]
   >;
   /** a well-formed approval text the keyring never issued (or issued and has forgotten) is
@@ -233,18 +484,49 @@ declare namespace approve {
   export type NotIssued = Given<
     Fresh,
     [
-      Expect<Invoke<typeof approve, [request: { message: "desolate push approval v2\nrepo: acme/app\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n"; signature: "AAAA" }]>, "=", { ok: false; error: "that challenge is not outstanding: each lasts two minutes and approves once" }>,
-      Expect<Invoke<typeof readIn, [where: "sys", name: "keyring/audit.log"]>, "includes", '"event":"refused","repo":"acme/app","ref":"main"'>,
+      Expect<
+        Invoke<
+          typeof approve,
+          [
+            request: {
+              message: "desolate push approval v2\nrepo: acme/app\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n";
+              signature: "AAAA";
+            },
+          ]
+        >,
+        "=",
+        {
+          ok: false;
+          error: "that challenge is not outstanding: each lasts two minutes and approves once";
+        }
+      >,
+      Expect<
+        Invoke<typeof readIn, [where: "sys", name: "keyring/audit.log"]>,
+        "includes",
+        '"event":"refused","repo":"acme/app","ref":"main"'
+      >,
     ]
   >;
   /** text that is not an approval is not one */
-  export type NotAnApproval = Expect<Invoke<typeof approve, [request: { message: "approve everything"; signature: "AAAA" }]>, "=", { ok: false; error: "that is not an approval message" }>;
+  export type NotAnApproval = Expect<
+    Invoke<typeof approve, [request: { message: "approve everything"; signature: "AAAA" }]>,
+    "=",
+    { ok: false; error: "that is not an approval message" }
+  >;
 }
 
 /** Whether a live approval names exactly this push. The pre-push hook's question. */
 const approved = (request: Record<string, unknown>): Record<string, unknown> => {
   for (const approval of approvals.values())
-    if (approval.expires >= Date.now() && approval.uses > 0 && approval.repo === request.repo && approval.ref === request.ref && approval.commit === request.commit && approval.onto === (request.onto ?? null)) return { ok: true, id: approval.id };
+    if (
+      approval.expires >= Date.now() &&
+      approval.uses > 0 &&
+      approval.repo === request.repo &&
+      approval.ref === request.ref &&
+      approval.commit === request.commit &&
+      approval.onto === (request.onto ?? null)
+    )
+      return { ok: true, id: approval.id };
   return { ok: false, error: "no approval on file for that push" };
 };
 
@@ -258,7 +540,13 @@ const consume = (request: Record<string, unknown>): Record<string, unknown> => {
     }
     if (approval.repo !== repo || !approval.claimed) continue;
     approval.uses -= 1;
-    audit({ event: "signed", repo, approval: approval.id, ref: approval.ref, commit: approval.commit });
+    audit({
+      event: "signed",
+      repo,
+      approval: approval.id,
+      ref: approval.ref,
+      commit: approval.commit,
+    });
     return { ok: true, approval: approval.id };
   }
   audit({ event: "refused", repo, reason: "no approval on file" });
@@ -272,8 +560,16 @@ declare namespace consume {
   export type NoApproval = Given<
     Fresh,
     [
-      Expect<Invoke<typeof consume, [request: { repo: "acme/app" }]>, "=", { ok: false; error: "no person has approved a push to acme/app" }>,
-      Expect<Invoke<typeof readIn, [where: "sys", name: "keyring/audit.log"]>, "includes", '"event":"refused","repo":"acme/app","reason":"no approval on file"'>,
+      Expect<
+        Invoke<typeof consume, [request: { repo: "acme/app" }]>,
+        "=",
+        { ok: false; error: "no person has approved a push to acme/app" }
+      >,
+      Expect<
+        Invoke<typeof readIn, [where: "sys", name: "keyring/audit.log"]>,
+        "includes",
+        '"event":"refused","repo":"acme/app","reason":"no approval on file"'
+      >,
     ]
   >;
 }
@@ -287,7 +583,8 @@ const revoke = (request: Record<string, unknown>) => {
 // ---------------------------------------------------------------- the sockets
 const publicOps = (request: Record<string, unknown>): Record<string, unknown> => {
   const { op } = request;
-  if (op === "list") return { ok: true, keys: held().map(({ repo, role }) => ({ repo: repoId(repo), role })) };
+  if (op === "list")
+    return { ok: true, keys: held().map(({ repo, role }) => ({ repo: repoId(repo), role })) };
   if (op === "audit") {
     let lines: string[] = [];
     try {
@@ -308,51 +605,135 @@ const publicOps = (request: Record<string, unknown>): Record<string, unknown> =>
     const repo = parseRepo(request.repo);
     if (!repo) return { ok: false, error: `not a repository: ${String(request.repo)}` };
     if (!isRole(request.role)) return { ok: false, error: "role is 'read' or 'write'" };
-    if (op === "create") return { ok: true, pubkey: create(repo, request.role), identity: pubFile(repo, request.role) };
+    if (op === "create")
+      return {
+        ok: true,
+        pubkey: create(repo, request.role),
+        identity: pubFile(repo, request.role),
+      };
     if (op === "pubkey") {
-      if (!fs.existsSync(`${keyFile(repo, request.role)}.pub`)) return { ok: false, error: `no ${request.role} key for ${repoId(repo)}` };
+      if (!fs.existsSync(`${keyFile(repo, request.role)}.pub`))
+        return { ok: false, error: `no ${request.role} key for ${repoId(repo)}` };
       publish(repo, request.role);
-      return { ok: true, pubkey: fs.readFileSync(`${keyFile(repo, request.role)}.pub`, "utf8").trim(), identity: pubFile(repo, request.role) };
+      return {
+        ok: true,
+        pubkey: fs.readFileSync(`${keyFile(repo, request.role)}.pub`, "utf8").trim(),
+        identity: pubFile(repo, request.role),
+      };
     }
   }
-  return { ok: false, error: `unknown op '${String(op)}': this socket has no operation that returns private key material, by design (see keyring.ts)` };
+  return {
+    ok: false,
+    error: `unknown op '${String(op)}': this socket has no operation that returns private key material, by design (see keyring.ts)`,
+  };
 };
 
 declare namespace publicOps {
   type Fresh = Invoke<typeof emptyRoot>;
   /** there is no operation that returns a private key: asking for one is an unknown op, said so */
   export type NoExport = [
-    Expect<Invoke<typeof publicOps, [request: { op: "export"; repo: "acme/app"; role: "write" }]>, "=", { ok: false; error: "unknown op 'export': this socket has no operation that returns private key material, by design (see keyring.ts)" }>,
-    Expect<Invoke<typeof publicOps, [request: { op: "consume"; repo: "acme/app" }]>, "matches", { ok: false; error: "unknown op 'consume': this socket has no operation that returns private key material, by design (see keyring.ts)" }>,
+    Expect<
+      Invoke<typeof publicOps, [request: { op: "export"; repo: "acme/app"; role: "write" }]>,
+      "=",
+      {
+        ok: false;
+        error: "unknown op 'export': this socket has no operation that returns private key material, by design (see keyring.ts)";
+      }
+    >,
+    Expect<
+      Invoke<typeof publicOps, [request: { op: "consume"; repo: "acme/app" }]>,
+      "matches",
+      {
+        ok: false;
+        error: "unknown op 'consume': this socket has no operation that returns private key material, by design (see keyring.ts)";
+      }
+    >,
   ];
   /** the keys held, by repository and role: names only, and only under names that are a
    *  repository's */
   export type Lists = Given<
-    [Fresh, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read.pub", text: "ssh-ed25519 AAAA desolate-read:acme/app"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write.pub", text: "ssh-ed25519 BBBB desolate-write:acme/app"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/..bad/read.pub", text: "x"]>],
-    Expect<Invoke<typeof publicOps, [request: { op: "list" }]>, "=", { ok: true; keys: [{ repo: "acme/app"; role: "read" }, { repo: "acme/app"; role: "write" }] }>
+    [
+      Fresh,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "sys",
+          name: "keyring/acme/app/read.pub",
+          text: "ssh-ed25519 AAAA desolate-read:acme/app",
+        ]
+      >,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "sys",
+          name: "keyring/acme/app/write.pub",
+          text: "ssh-ed25519 BBBB desolate-write:acme/app",
+        ]
+      >,
+      Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/..bad/read.pub", text: "x"]>,
+    ],
+    Expect<
+      Invoke<typeof publicOps, [request: { op: "list" }]>,
+      "=",
+      { ok: true; keys: [{ repo: "acme/app"; role: "read" }, { repo: "acme/app"; role: "write" }] }
+    >
   >;
   /** a public half, for the forge's deploy keys; a key that was never made is said so */
   export type Pubkey = Given<
-    [Fresh, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read", text: "PRIVATE"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read.pub", text: "ssh-ed25519 AAAA desolate-read:acme/app\n"]>],
     [
-      Expect<Invoke<typeof publicOps, [request: { op: "pubkey"; repo: "acme/app"; role: "read" }]>, "matches", { ok: true; pubkey: "ssh-ed25519 AAAA desolate-read:acme/app" }>,
-      Expect<Invoke<typeof publicOps, [request: { op: "pubkey"; repo: "acme/app"; role: "write" }]>, "=", { ok: false; error: "no write key for acme/app" }>,
+      Fresh,
+      Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read", text: "PRIVATE"]>,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "sys",
+          name: "keyring/acme/app/read.pub",
+          text: "ssh-ed25519 AAAA desolate-read:acme/app\n",
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<typeof publicOps, [request: { op: "pubkey"; repo: "acme/app"; role: "read" }]>,
+        "matches",
+        { ok: true; pubkey: "ssh-ed25519 AAAA desolate-read:acme/app" }
+      >,
+      Expect<
+        Invoke<typeof publicOps, [request: { op: "pubkey"; repo: "acme/app"; role: "write" }]>,
+        "=",
+        { ok: false; error: "no write key for acme/app" }
+      >,
     ]
   >;
   /** a key is named by a repository and one of two roles, nothing else */
-  export type Names = Table<typeof publicOps, [
-    [args: [request: { op: "pubkey"; repo: "../../etc"; role: "read" }], expected: { ok: false; error: "not a repository: ../../etc" }],
-    [args: [request: { op: "pubkey"; repo: "acme/app"; role: "admin" }], expected: { ok: false; error: "role is 'read' or 'write'" }],
-  ]>;
+  export type Names = Table<
+    typeof publicOps,
+    [
+      [
+        args: [request: { op: "pubkey"; repo: "../../etc"; role: "read" }],
+        expected: { ok: false; error: "not a repository: ../../etc" },
+      ],
+      [
+        args: [request: { op: "pubkey"; repo: "acme/app"; role: "admin" }],
+        expected: { ok: false; error: "role is 'read' or 'write'" },
+      ],
+    ]
+  >;
 }
 
 declare namespace internalOps {
   /** the askpass's socket answers the askpass's one question and nothing else: not even a
    *  challenge or an approval */
-  export type OnlyConsume = Table<typeof internalOps, [
-    [args: [request: { op: "approve"; message: "x" }], expected: { ok: false; error: "unknown op 'approve'" }],
-    [args: [request: { op: "list" }], expected: { ok: false; error: "unknown op 'list'" }],
-  ]>;
+  export type OnlyConsume = Table<
+    typeof internalOps,
+    [
+      [
+        args: [request: { op: "approve"; message: "x" }],
+        expected: { ok: false; error: "unknown op 'approve'" },
+      ],
+      [args: [request: { op: "list" }], expected: { ok: false; error: "unknown op 'list'" }],
+    ]
+  >;
 }
 
 /** The pusher's questions (root/pusher.ts), on a socket only it reaches: what approval <id>
@@ -363,8 +744,13 @@ declare namespace internalOps {
 const pusherOps = (request: Record<string, unknown>): Record<string, unknown> => {
   if (request.op === "approval") {
     const approval = approvals.get(String(request.id ?? ""));
-    if (!approval || approval.expires < Date.now() || approval.uses <= 0) return { ok: false, error: "no live approval with that id" };
-    if (approval.claimed) return { ok: false, error: "that approval's push was begun already: each approval is pushed once" };
+    if (!approval || approval.expires < Date.now() || approval.uses <= 0)
+      return { ok: false, error: "no live approval with that id" };
+    if (approval.claimed)
+      return {
+        ok: false,
+        error: "that approval's push was begun already: each approval is pushed once",
+      };
     const repo = parseRepo(approval.repo)!;
     // The write key's public half, which names the key in the agent: the pusher cannot read
     // KEYRING.pub (the root's user's), and needs nothing else of the keyring's.
@@ -376,8 +762,24 @@ const pusherOps = (request: Record<string, unknown>): Record<string, unknown> =>
     }
     approval.claimed = true;
     approval.expires = Date.now() + CLAIMED_MS;
-    audit({ event: "claimed", approval: approval.id, repo: approval.repo, ref: approval.ref, commit: approval.commit });
-    return { ok: true, approval: { id: approval.id, repo: approval.repo, ref: approval.ref, commit: approval.commit, onto: approval.onto, pubkey } };
+    audit({
+      event: "claimed",
+      approval: approval.id,
+      repo: approval.repo,
+      ref: approval.ref,
+      commit: approval.commit,
+    });
+    return {
+      ok: true,
+      approval: {
+        id: approval.id,
+        repo: approval.repo,
+        ref: approval.ref,
+        commit: approval.commit,
+        onto: approval.onto,
+        pubkey,
+      },
+    };
   }
   if (request.op === "revoke") return revoke(request);
   return { ok: false, error: `unknown op '${String(request.op)}'` };
@@ -385,14 +787,28 @@ const pusherOps = (request: Record<string, unknown>): Record<string, unknown> =>
 
 declare namespace pusherOps {
   /** the pusher asks what an approval names; one that is not live names nothing */
-  export type NoApproval = Expect<Invoke<typeof pusherOps, [request: { op: "approval"; id: "mgx1abc-0123456789ab" }]>, "=", { ok: false; error: "no live approval with that id" }>;
+  export type NoApproval = Expect<
+    Invoke<typeof pusherOps, [request: { op: "approval"; id: "mgx1abc-0123456789ab" }]>,
+    "=",
+    { ok: false; error: "no live approval with that id" }
+  >;
   /** and it may revoke one, which only ever takes capability away */
-  export type Revokes = Expect<Invoke<typeof pusherOps, [request: { op: "revoke"; id: "mgx1abc-0123456789ab" }]>, "=", { ok: true; existed: false }>;
+  export type Revokes = Expect<
+    Invoke<typeof pusherOps, [request: { op: "revoke"; id: "mgx1abc-0123456789ab" }]>,
+    "=",
+    { ok: true; existed: false }
+  >;
   /** asking for a challenge or filing an approval is the control socket's, not the pusher's */
-  export type Only = Table<typeof pusherOps, [
-    [args: [request: { op: "challenge"; repo: "acme/app" }], expected: { ok: false; error: "unknown op 'challenge'" }],
-    [args: [request: { op: "approve" }], expected: { ok: false; error: "unknown op 'approve'" }],
-  ]>;
+  export type Only = Table<
+    typeof pusherOps,
+    [
+      [
+        args: [request: { op: "challenge"; repo: "acme/app" }],
+        expected: { ok: false; error: "unknown op 'challenge'" },
+      ],
+      [args: [request: { op: "approve" }], expected: { ok: false; error: "unknown op 'approve'" }],
+    ]
+  >;
 }
 
 /** The reviewer's one question (root/reviewer.ts), on a socket only it reaches: a read key's
@@ -412,12 +828,46 @@ declare namespace reviewerOps {
   type Fresh = Invoke<typeof emptyRoot>;
   /** a read key's public half, and only a read key's: the write key is never named here */
   export type ReadKey = Given<
-    [Fresh, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/read.pub", text: "ssh-ed25519 AAAA desolate-read:acme/app\n"]>, Invoke<typeof writeIn, [where: "sys", name: "keyring/acme/app/write.pub", text: "ssh-ed25519 BBBB desolate-write:acme/app\n"]>],
     [
-      Expect<Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/app" }]>, "=", { ok: true; pubkey: "ssh-ed25519 AAAA desolate-read:acme/app" }>,
-      Expect<Invoke<typeof reviewerOps, [request: { op: "writekey"; repo: "acme/app" }]>, "=", { ok: false; error: "unknown op 'writekey'" }>,
-      Expect<Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/other" }]>, "=", { ok: false; error: "acme/other has no read key" }>,
-      Expect<Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/../../x" }]>, "=", { ok: false; error: "not a repository" }>,
+      Fresh,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "sys",
+          name: "keyring/acme/app/read.pub",
+          text: "ssh-ed25519 AAAA desolate-read:acme/app\n",
+        ]
+      >,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "sys",
+          name: "keyring/acme/app/write.pub",
+          text: "ssh-ed25519 BBBB desolate-write:acme/app\n",
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/app" }]>,
+        "=",
+        { ok: true; pubkey: "ssh-ed25519 AAAA desolate-read:acme/app" }
+      >,
+      Expect<
+        Invoke<typeof reviewerOps, [request: { op: "writekey"; repo: "acme/app" }]>,
+        "=",
+        { ok: false; error: "unknown op 'writekey'" }
+      >,
+      Expect<
+        Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/other" }]>,
+        "=",
+        { ok: false; error: "acme/other has no read key" }
+      >,
+      Expect<
+        Invoke<typeof reviewerOps, [request: { op: "readkey"; repo: "acme/../../x" }]>,
+        "=",
+        { ok: false; error: "not a repository" }
+      >,
     ]
   >;
 }
@@ -430,9 +880,14 @@ const internalOps = (request: Record<string, unknown>): Record<string, unknown> 
 
 const LIMIT = { bytes: 4096, concurrent: 16 } as const;
 
-const serve = (socketPath: string, mode: number, handle: (request: Record<string, unknown>) => Record<string, unknown>): Promise<void> => {
+const serve = (
+  socketPath: string,
+  mode: number,
+  handle: (request: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> => {
   let open = 0;
-  const reply = (connection: Socket, value: unknown) => connection.write(JSON.stringify(value) + "\n");
+  const reply = (connection: Socket, value: unknown) =>
+    connection.write(JSON.stringify(value) + "\n");
   const server = createServer((connection) => {
     if (open >= LIMIT.concurrent) {
       reply(connection, { ok: false, error: "too many connections" });
@@ -506,7 +961,8 @@ const relay = (publicPath: string, agentPath: string, mode = 0o660): Promise<voi
         if (pending.length < 4 + length) return;
         const frame = pending.subarray(0, 4 + length);
         pending = pending.subarray(4 + length);
-        if (frame[4] === AGENT.requestIdentities || frame[4] === AGENT.signRequest) agent.write(frame);
+        if (frame[4] === AGENT.requestIdentities || frame[4] === AGENT.signRequest)
+          agent.write(frame);
         else client.write(Buffer.from([0, 0, 0, 1, AGENT.failure]));
       }
     });
@@ -525,13 +981,18 @@ const relay = (publicPath: string, agentPath: string, mode = 0o660): Promise<voi
 };
 
 const startAgent = (socketPath: string, env: NodeJS.ProcessEnv) => {
-  const agent = spawn("ssh-agent", ["-D", "-a", socketPath], { stdio: ["ignore", "ignore", "inherit"], env });
+  const agent = spawn("ssh-agent", ["-D", "-a", socketPath], {
+    stdio: ["ignore", "ignore", "inherit"],
+    env,
+  });
   agent.on("error", (error) => {
     log(`could not start ssh-agent: ${error.message} (the image must provide openssh-client)`);
     process.exit(1);
   });
   agent.on("exit", (code) => {
-    log(`ssh-agent for ${path.basename(socketPath)} exited (${code}); stopping, so the keyring is restarted whole`);
+    log(
+      `ssh-agent for ${path.basename(socketPath)} exited (${code}); stopping, so the keyring is restarted whole`,
+    );
     process.exit(1);
   });
   process.once("exit", () => agent.kill("SIGTERM"));
@@ -546,10 +1007,12 @@ export const keysDirRefusal = (dir: string, uid: number): string | null => {
   const stat = fs.lstatSync(dir);
   if (!stat.isDirectory()) return `${dir} is not a directory`;
   if (stat.uid !== uid) return `${dir} is not the keyring's (owner ${stat.uid})`;
-  if ((stat.mode & 0o077) !== 0) return `${dir} is open to others (mode ${(stat.mode & 0o777).toString(8)})`;
+  if ((stat.mode & 0o077) !== 0)
+    return `${dir} is open to others (mode ${(stat.mode & 0o777).toString(8)})`;
   for (let up = path.dirname(dir); ; up = path.dirname(up)) {
     const parent = fs.lstatSync(up);
-    if (parent.isSymbolicLink() || parent.uid !== 0 || (parent.mode & 0o022) !== 0) return `${up} could be changed by someone other than root`;
+    if (parent.isSymbolicLink() || parent.uid !== 0 || (parent.mode & 0o022) !== 0)
+      return `${up} could be changed by someone other than root`;
     if (up === path.dirname(up)) return null;
   }
 };
@@ -559,12 +1022,43 @@ declare namespace keysDirRefusal {
   /** the keys directory must be a directory, the keyring's, closed to others, and every
    *  directory above it root's alone. (That last can be met only as root, in the root VM: a
    *  test's directories are its user's, so even the closed one is refused, for its parent.) */
-  export type Refuses = Given<Fresh, [
-    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "file"]>, uid: Invoke<typeof myUid>]>, "endsWith", "keys-file is not a directory">,
-    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "closed"]>, uid: 99999]>, "includes", "keys-closed is not the keyring's (owner ">,
-    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "open"]>, uid: Invoke<typeof myUid>]>, "endsWith", "keys-open is open to others (mode 755)">,
-    Expect<Invoke<typeof keysDirRefusal, [dir: Invoke<typeof aKeysDir, [shape: "closed"]>, uid: Invoke<typeof myUid>]>, "endsWith", "could be changed by someone other than root">,
-  ]>;
+  export type Refuses = Given<
+    Fresh,
+    [
+      Expect<
+        Invoke<
+          typeof keysDirRefusal,
+          [dir: Invoke<typeof aKeysDir, [shape: "file"]>, uid: Invoke<typeof myUid>]
+        >,
+        "endsWith",
+        "keys-file is not a directory"
+      >,
+      Expect<
+        Invoke<
+          typeof keysDirRefusal,
+          [dir: Invoke<typeof aKeysDir, [shape: "closed"]>, uid: 99999]
+        >,
+        "includes",
+        "keys-closed is not the keyring's (owner "
+      >,
+      Expect<
+        Invoke<
+          typeof keysDirRefusal,
+          [dir: Invoke<typeof aKeysDir, [shape: "open"]>, uid: Invoke<typeof myUid>]
+        >,
+        "endsWith",
+        "keys-open is open to others (mode 755)"
+      >,
+      Expect<
+        Invoke<
+          typeof keysDirRefusal,
+          [dir: Invoke<typeof aKeysDir, [shape: "closed"]>, uid: Invoke<typeof myUid>]
+        >,
+        "endsWith",
+        "could be changed by someone other than root"
+      >,
+    ]
+  >;
 }
 
 const main = async () => {
@@ -579,7 +1073,18 @@ const main = async () => {
   fs.mkdirSync(KEYRING.pub, { recursive: true, mode: 0o755 });
   fs.mkdirSync(KEYRING.private, { recursive: true, mode: 0o700 });
   fs.chmodSync(KEYRING.private, 0o700);
-  for (const stale of [KEYRING.readAgent, KEYRING.writeAgent, KEYRING.pusher, KEYRING.reviewerReadAgent, KEYRING.reviewer, KEYRING.control, KEYRING.internal, agentOf("read"), agentOf("write")]) fs.rmSync(stale, { force: true });
+  for (const stale of [
+    KEYRING.readAgent,
+    KEYRING.writeAgent,
+    KEYRING.pusher,
+    KEYRING.reviewerReadAgent,
+    KEYRING.reviewer,
+    KEYRING.control,
+    KEYRING.internal,
+    agentOf("read"),
+    agentOf("write"),
+  ])
+    fs.rmSync(stale, { force: true });
 
   const here = path.dirname(new URL(import.meta.url).pathname);
   startAgent(agentOf("read"), { ...process.env });
@@ -617,4 +1122,5 @@ const main = async () => {
   for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => process.exit(0));
 };
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname) void main();
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname)
+  void main();

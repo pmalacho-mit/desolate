@@ -21,15 +21,24 @@ const need = (repo: string | undefined) => {
 };
 const lines = (name: string) => {
   try {
-    return fs.readFileSync(path.join(STATE, name), "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+    return fs
+      .readFileSync(path.join(STATE, name), "utf8")
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
   } catch {
     return [];
   }
 };
 const rewriteAuthorizedKeys = (keys: Key[]) => {
   const here = path.dirname(new URL(import.meta.url).pathname);
-  const text = keys.map((key, index) =>
-    `command="FORGE_STATE=${STATE} node --disable-warning=ExperimentalWarning ${here}/shell.ts ${index}",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ${key.pubkey}`).join("\n");
+  const text = keys
+    .map(
+      (key, index) =>
+        `command="FORGE_STATE=${STATE} node --disable-warning=ExperimentalWarning ${here}/shell.ts ${index}",no-port-forwarding,no-agent-forwarding,no-X11-forwarding,no-pty ${key.pubkey}`,
+    )
+    .join("\n");
   fs.writeFileSync(path.join(STATE, "authorized_keys"), text + "\n", { mode: 0o644 });
 };
 
@@ -52,14 +61,18 @@ if (verb === "create-repo") {
   // The stand-in for a repository's Actions: every accepted push is logged, and a push of a
   // `downstream/...` branch opens a "pull request", as suede's downstream-to-main does.
   const hook = path.join(dir, "hooks", "post-receive");
-  fs.writeFileSync(hook, `#!/bin/sh
+  fs.writeFileSync(
+    hook,
+    `#!/bin/sh
 while read old new ref; do
   printf '{"time":"%s","repo":"%s","ref":"%s","old":"%s","new":"%s","key":"%s"}\\n' "$(date -u +%FT%TZ)" "$FORGE_REPO" "$ref" "$old" "$new" "$FORGE_PUSH_KEY" >>"${STATE}/pushes.log"
   case "$ref" in refs/heads/downstream/*)
     printf '{"repo":"%s","head":"%s","commit":"%s","title":"downstream proposal"}\\n' "$FORGE_REPO" "\${ref#refs/heads/}" "$new" >>"${STATE}/pulls.log" ;;
   esac
 done
-`, { mode: 0o755 });
+`,
+    { mode: 0o755 },
+  );
   execFileSync("chown", ["-R", "git:git", dir, path.join(STATE, "lfs")], { stdio: "ignore" });
   console.log(`created ${repo}`);
 } else if (verb === "add-key") {
@@ -68,11 +81,20 @@ done
   if (role !== "read" && role !== "write") throw new Error("role is read or write");
   if (!fs.existsSync(repoDir(repo))) throw new Error(`no such repository: ${repo}`);
   const pubkey = args.slice(2).join(" ").trim();
-  if (!/^ssh-ed25519 [A-Za-z0-9+/=]+( .*)?$/.test(pubkey)) throw new Error("not an ed25519 public key");
+  if (!/^ssh-ed25519 [A-Za-z0-9+/=]+( .*)?$/.test(pubkey))
+    throw new Error("not an ed25519 public key");
   const keys = readJson<Key[]>("keys.json", []);
   // GitHub refuses a deploy key that is already in use anywhere.
-  if (keys.some((key) => key.pubkey.split(" ")[1] === pubkey.split(" ")[1] && (key.repo !== repo || key.role !== role))) throw new Error("key is already in use");
-  if (!keys.some((key) => key.pubkey.split(" ")[1] === pubkey.split(" ")[1])) keys.push({ repo, role, pubkey });
+  if (
+    keys.some(
+      (key) =>
+        key.pubkey.split(" ")[1] === pubkey.split(" ")[1] &&
+        (key.repo !== repo || key.role !== role),
+    )
+  )
+    throw new Error("key is already in use");
+  if (!keys.some((key) => key.pubkey.split(" ")[1] === pubkey.split(" ")[1]))
+    keys.push({ repo, role, pubkey });
   writeJson("keys.json", keys);
   rewriteAuthorizedKeys(keys);
   console.log(`added a ${role} key to ${repo}`);
@@ -82,7 +104,12 @@ done
   const [, branch, file, content] = args;
   const work = fs.mkdtempSync("/tmp/forge-commit-");
   const env = { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
-  const git = (...argv: string[]) => execFileSync("git", ["-C", work, "-c", "user.name=someone", "-c", "user.email=someone@example.invalid", ...argv], { encoding: "utf8", env });
+  const git = (...argv: string[]) =>
+    execFileSync(
+      "git",
+      ["-C", work, "-c", "user.name=someone", "-c", "user.email=someone@example.invalid", ...argv],
+      { encoding: "utf8", env },
+    );
   execFileSync("git", ["clone", "--quiet", repoDir(repo), work], { env });
   try {
     git("checkout", "--quiet", branch!);
@@ -104,7 +131,12 @@ done
   const [, branch, into] = args;
   const work = fs.mkdtempSync("/tmp/forge-merge-");
   const env = { ...process.env, GIT_LFS_SKIP_SMUDGE: "1" };
-  const git = (...argv: string[]) => execFileSync("git", ["-C", work, "-c", "user.name=someone", "-c", "user.email=someone@example.invalid", ...argv], { encoding: "utf8", env });
+  const git = (...argv: string[]) =>
+    execFileSync(
+      "git",
+      ["-C", work, "-c", "user.name=someone", "-c", "user.email=someone@example.invalid", ...argv],
+      { encoding: "utf8", env },
+    );
   execFileSync("git", ["clone", "--quiet", repoDir(repo), work], { env });
   git("checkout", "--quiet", into!);
   git("merge", "--quiet", "--squash", `origin/${branch}`);
@@ -114,7 +146,9 @@ done
   fs.rmSync(work, { recursive: true, force: true });
   execFileSync("chown", ["-R", "git:git", repoDir(repo)], { stdio: "ignore" });
 } else if (verb === "pulls") {
-  console.log(JSON.stringify(lines("pulls.log").filter((pull) => !args[0] || pull.repo === args[0])));
+  console.log(
+    JSON.stringify(lines("pulls.log").filter((pull) => !args[0] || pull.repo === args[0])),
+  );
 } else if (verb === "pushes") {
   console.log(JSON.stringify(lines("pushes.log")));
 } else if (verb === "upstream") {
@@ -122,10 +156,22 @@ done
 } else if (verb === "access") {
   console.log(JSON.stringify(lines("access.log")));
 } else if (verb === "refs") {
-  process.stdout.write(execFileSync("git", ["-c", "safe.directory=*", "-C", repoDir(need(args[0])), "for-each-ref", "--format=%(refname:short) %(objectname)", "refs/heads"]));
+  process.stdout.write(
+    execFileSync("git", [
+      "-c",
+      "safe.directory=*",
+      "-C",
+      repoDir(need(args[0])),
+      "for-each-ref",
+      "--format=%(refname:short) %(objectname)",
+      "refs/heads",
+    ]),
+  );
 } else if (verb === "lfs-has") {
   const oid = String(args[1]);
-  process.exit(fs.existsSync(path.join(lfsDir(need(args[0])), oid.slice(0, 2), oid.slice(2, 4), oid)) ? 0 : 1);
+  process.exit(
+    fs.existsSync(path.join(lfsDir(need(args[0])), oid.slice(0, 2), oid.slice(2, 4), oid)) ? 0 : 1,
+  );
 } else {
   console.error("usage: admin.ts create-repo|add-key|pulls|pushes|access|refs|lfs-has ...");
   process.exit(64);

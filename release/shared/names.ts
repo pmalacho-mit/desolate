@@ -3,7 +3,13 @@
 // v2's `owner/repo` as `owner__repo` needed a whole rule set, so v3 never encodes one).
 import { createHash } from "node:crypto";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Table,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { setEnv } from "../.harness/env.ts";
 
 export const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
@@ -14,7 +20,12 @@ const REPO_PART = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
  *  and a slug's single dashes collapse runs, so it is never ambiguous. Never `xn--` first: a
  *  hostname label that starts so is punycode to a browser. */
 export const isSlug = (value: unknown): value is string =>
-  typeof value === "string" && SLUG.test(value) && !value.endsWith("-") && value.split("--").length <= 2 && !value.startsWith("xn--") && !/-{3}/.test(value);
+  typeof value === "string" &&
+  SLUG.test(value) &&
+  !value.endsWith("-") &&
+  value.split("--").length <= 2 &&
+  !value.startsWith("xn--") &&
+  !/-{3}/.test(value);
 
 export type Repo = { owner: string; name: string };
 
@@ -24,105 +35,157 @@ export const parseRepo = (value: unknown): Repo | null => {
   if (parts.length !== 2) return null;
   const [owner, name] = parts as [string, string];
   for (const part of [owner, name])
-    if (!REPO_PART.test(part) || part.includes("..") || part.endsWith(".git") || part.endsWith(".")) return null;
+    if (!REPO_PART.test(part) || part.includes("..") || part.endsWith(".git") || part.endsWith("."))
+      return null;
   return { owner, name };
 };
 
 declare namespace isSlug {
   /** what a domain or workspace may be called: it becomes a VM name, a hostname and a path */
-  export type Names = Table<typeof isSlug, [
-    [args: [value: "acme"], expected: true],
-    [args: [value: "issue-12"], expected: true],
-    [args: [value: "Acme"], expected: false],
-    [args: [value: "-acme"], expected: false],
-    [args: [value: "acme-"], expected: false],
-    [args: [value: "acme--widgets"], expected: true],
-    [args: [value: "a--b--c"], expected: false],
-    [args: [value: "a---b"], expected: false],
-    [args: [value: "xn--widgets"], expected: false],
-    [args: [value: "a.b"], expected: false],
-    [args: [value: "x234567890123456789012345678901234567890"], expected: true],
-    [args: [value: "x2345678901234567890123456789012345678901"], expected: false],
-  ]>;
+  export type Names = Table<
+    typeof isSlug,
+    [
+      [args: [value: "acme"], expected: true],
+      [args: [value: "issue-12"], expected: true],
+      [args: [value: "Acme"], expected: false],
+      [args: [value: "-acme"], expected: false],
+      [args: [value: "acme-"], expected: false],
+      [args: [value: "acme--widgets"], expected: true],
+      [args: [value: "a--b--c"], expected: false],
+      [args: [value: "a---b"], expected: false],
+      [args: [value: "xn--widgets"], expected: false],
+      [args: [value: "a.b"], expected: false],
+      [args: [value: "x234567890123456789012345678901234567890"], expected: true],
+      [args: [value: "x2345678901234567890123456789012345678901"], expected: false],
+    ]
+  >;
 }
 
 declare namespace parseRepo {
   /** owner/name, and nothing that could leave the directory it names */
-  export type Accepts = Expect<Invoke<typeof parseRepo, [value: "acme/widgets"]>, "=", { owner: "acme"; name: "widgets" }>;
-  export type Refuses = Table<typeof parseRepo, [
-    [args: [value: "acme"], expected: null],
-    [args: [value: "acme/widgets/x"], expected: null],
-    [args: [value: "../widgets"], expected: null],
-    [args: [value: "acme/.."], expected: null],
-    [args: [value: "acme/widgets.git"], expected: null],
-    [args: [value: "-acme/widgets"], expected: null],
-    [args: [value: ".hidden/widgets"], expected: null],
-    [args: [value: "acme/widgets."], expected: null],
-    [args: [value: "acme/a..b"], expected: null],
-    [args: [value: "acme/my widgets"], expected: null],
-    [args: [value: 42], expected: null],
-  ]>;
+  export type Accepts = Expect<
+    Invoke<typeof parseRepo, [value: "acme/widgets"]>,
+    "=",
+    { owner: "acme"; name: "widgets" }
+  >;
+  export type Refuses = Table<
+    typeof parseRepo,
+    [
+      [args: [value: "acme"], expected: null],
+      [args: [value: "acme/widgets/x"], expected: null],
+      [args: [value: "../widgets"], expected: null],
+      [args: [value: "acme/.."], expected: null],
+      [args: [value: "acme/widgets.git"], expected: null],
+      [args: [value: "-acme/widgets"], expected: null],
+      [args: [value: ".hidden/widgets"], expected: null],
+      [args: [value: "acme/widgets."], expected: null],
+      [args: [value: "acme/a..b"], expected: null],
+      [args: [value: "acme/my widgets"], expected: null],
+      [args: [value: 42], expected: null],
+    ]
+  >;
 }
 
 export const repoId = (repo: Repo) => `${repo.owner}/${repo.name}`;
 
 declare namespace repoId {
   /** a repository as text, its own case kept: what parseRepo read */
-  export type Spelled = Expect<Invoke<typeof repoId, [repo: { owner: "Acme"; name: "My_App.js" }]>, "=", "Acme/My_App.js">;
+  export type Spelled = Expect<
+    Invoke<typeof repoId, [repo: { owner: "Acme"; name: "My_App.js" }]>,
+    "=",
+    "Acme/My_App.js"
+  >;
 }
-
 
 /** The domain `clone` makes a repository: `owner--repo`, each part a slug (its runs of
  *  anything else one dash, so `--` is only ever the separator). Too long for a slug: cut, and
  *  a hash of the whole keeps it apart from another cut the same way. Never `owner/repo`
  *  itself: a domain's name is a VM label, a hostname and a path. */
 export const domainNameFor = (repo: Repo): string => {
-  const part = (text: string) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "x";
+  const part = (text: string) =>
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "x";
   let name = `${part(repo.owner)}--${part(repo.name)}`;
   if (name.startsWith("xn--")) name = `gh-${name}`;
-  if (name.length > 40) name = `${name.slice(0, 33).replace(/-+$/, "")}-${hex(repoId(repo).toLowerCase(), 6)}`;
+  if (name.length > 40)
+    name = `${name.slice(0, 33).replace(/-+$/, "")}-${hex(repoId(repo).toLowerCase(), 6)}`;
   return name;
 };
 
 declare namespace domainNameFor {
   /** owner and name, a double dash between */
-  export type Names = Table<typeof domainNameFor, [
-    [args: [repo: { owner: "acme"; name: "widgets" }], expected: "acme--widgets"],
-    [args: [repo: { owner: "pmalacho-mit"; name: "suede.nests" }], expected: "pmalacho-mit--suede-nests"],
-    [args: [repo: { owner: "Acme"; name: "My__App" }], expected: "acme--my-app"],
-    [args: [repo: { owner: "acme"; name: "a--b" }], expected: "acme--a-b"],
-    [args: [repo: { owner: "xn"; name: "app" }], expected: "gh-xn--app"],
-    /** too long for a slug: cut, and a hash of the whole keeps two names cut alike apart */
-    [args: [repo: { owner: "a-very-long-organisation-name"; name: "and-an-even-longer-repository-name" }], expected: "a-very-long-organisation-name--an-1ab687"],
-    [args: [repo: { owner: "a-very-long-organisation-name"; name: "and-an-even-longer-repository-other" }], expected: "a-very-long-organisation-name--an-08ee6f"],
-  ]>;
+  export type Names = Table<
+    typeof domainNameFor,
+    [
+      [args: [repo: { owner: "acme"; name: "widgets" }], expected: "acme--widgets"],
+      [
+        args: [repo: { owner: "pmalacho-mit"; name: "suede.nests" }],
+        expected: "pmalacho-mit--suede-nests",
+      ],
+      [args: [repo: { owner: "Acme"; name: "My__App" }], expected: "acme--my-app"],
+      [args: [repo: { owner: "acme"; name: "a--b" }], expected: "acme--a-b"],
+      [args: [repo: { owner: "xn"; name: "app" }], expected: "gh-xn--app"],
+      /** too long for a slug: cut, and a hash of the whole keeps two names cut alike apart */
+      [
+        args: [
+          repo: {
+            owner: "a-very-long-organisation-name";
+            name: "and-an-even-longer-repository-name";
+          },
+        ],
+        expected: "a-very-long-organisation-name--an-1ab687",
+      ],
+      [
+        args: [
+          repo: {
+            owner: "a-very-long-organisation-name";
+            name: "and-an-even-longer-repository-other";
+          },
+        ],
+        expected: "a-very-long-organisation-name--an-08ee6f",
+      ],
+    ]
+  >;
 }
 
 export const isBranch = (value: unknown): value is string =>
   typeof value === "string" &&
-  value.length > 0 && value.length <= 200 &&
+  value.length > 0 &&
+  value.length <= 200 &&
   /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) &&
-  !value.includes("..") && !value.includes("//") && !value.endsWith("/") &&
-  !value.endsWith(".lock") && !value.endsWith(".") && !value.includes("@{");
+  !value.includes("..") &&
+  !value.includes("//") &&
+  !value.endsWith("/") &&
+  !value.endsWith(".lock") &&
+  !value.endsWith(".") &&
+  !value.includes("@{");
 
 declare namespace isBranch {
   /** a branch an agent may name and the root may carry: safe as an argv word and in a refspec */
-  export type Carries = Table<typeof isBranch, [
-    [args: [value: "main"], expected: true],
-    [args: [value: "feature/greet-by-name"], expected: true],
-    [args: [value: "v1.2_rc-3"], expected: true],
-  ]>;
-  export type Refuses = Table<typeof isBranch, [
-    [args: [value: "--upload-pack=touch x"], expected: false],
-    [args: [value: "a..b"], expected: false],
-    [args: [value: "a//b"], expected: false],
-    [args: [value: "feature/"], expected: false],
-    [args: [value: "x.lock"], expected: false],
-    [args: [value: "x@{1}"], expected: false],
-    [args: [value: "a b"], expected: false],
-    [args: [value: "a;rm -rf"], expected: false],
-    [args: [value: ""], expected: false],
-  ]>;
+  export type Carries = Table<
+    typeof isBranch,
+    [
+      [args: [value: "main"], expected: true],
+      [args: [value: "feature/greet-by-name"], expected: true],
+      [args: [value: "v1.2_rc-3"], expected: true],
+    ]
+  >;
+  export type Refuses = Table<
+    typeof isBranch,
+    [
+      [args: [value: "--upload-pack=touch x"], expected: false],
+      [args: [value: "a..b"], expected: false],
+      [args: [value: "a//b"], expected: false],
+      [args: [value: "feature/"], expected: false],
+      [args: [value: "x.lock"], expected: false],
+      [args: [value: "x@{1}"], expected: false],
+      [args: [value: "a b"], expected: false],
+      [args: [value: "a;rm -rf"], expected: false],
+      [args: [value: ""], expected: false],
+    ]
+  >;
 }
 
 export const isCommit = (value: unknown): value is string =>
@@ -130,12 +193,15 @@ export const isCommit = (value: unknown): value is string =>
 
 declare namespace isCommit {
   /** a full object id, lower case: never an abbreviation, never a ref */
-  export type Ids = Table<typeof isCommit, [
-    [args: [value: "0123456789abcdef0123456789abcdef01234567"], expected: true],
-    [args: [value: "0123456789ABCDEF0123456789ABCDEF01234567"], expected: false],
-    [args: [value: "0123456"], expected: false],
-    [args: [value: "HEAD"], expected: false],
-  ]>;
+  export type Ids = Table<
+    typeof isCommit,
+    [
+      [args: [value: "0123456789abcdef0123456789abcdef01234567"], expected: true],
+      [args: [value: "0123456789ABCDEF0123456789ABCDEF01234567"], expected: false],
+      [args: [value: "0123456"], expected: false],
+      [args: [value: "HEAD"], expected: false],
+    ]
+  >;
 }
 
 /** GitHub's page for opening a pull request of `branch` into `base`, filled in: the person
@@ -144,24 +210,52 @@ declare namespace isCommit {
  *  two branches, and for suede's `downstream/...` branches: the dependency's own Action
  *  opens that pull request, and a second one made from this link would be a duplicate
  *  (dogfooding: `desolate upstream` printed it beside "the Action opens the pull request"). */
-export const pullRequestUrl = (repo: string, branch: string, base: string | null): string | null => {
+export const pullRequestUrl = (
+  repo: string,
+  branch: string,
+  base: string | null,
+): string | null => {
   const r = parseRepo(repo);
-  if (!r || !isBranch(branch) || !base || !isBranch(base) || base === branch || branch.startsWith("downstream/")) return null;
+  if (
+    !r ||
+    !isBranch(branch) ||
+    !base ||
+    !isBranch(base) ||
+    base === branch ||
+    branch.startsWith("downstream/")
+  )
+    return null;
   const part = (b: string) => b.split("/").map(encodeURIComponent).join("/");
   return `https://github.com/${encodeURIComponent(r.owner)}/${encodeURIComponent(r.name)}/compare/${part(base)}...${part(branch)}?expand=1`;
 };
 
 declare namespace pullRequestUrl {
   /** a branch into its base, on GitHub; nothing for a branch into itself or a bad name */
-  export type Links = Table<typeof pullRequestUrl, [
-    [args: [repo: "acme/widgets", branch: "mac/push-label", base: "v3"], expected: "https://github.com/acme/widgets/compare/v3...mac/push-label?expand=1"],
-    [args: [repo: "acme/widgets", branch: "issue/12", base: "main"], expected: "https://github.com/acme/widgets/compare/main...issue/12?expand=1"],
-    [args: [repo: "acme/widgets", branch: "main", base: "main"], expected: null],
-    [args: [repo: "acme/widgets", branch: "a..b", base: "main"], expected: null],
-    [args: [repo: "acme/widgets", branch: "x", base: null], expected: null],
-    [args: [repo: "not a repo", branch: "x", base: "main"], expected: null],
-    [args: [repo: "acme/lib", branch: "downstream/acme/app-0123456789abcdef0123456789abcdef01234567", base: "main"], expected: null],
-  ]>;
+  export type Links = Table<
+    typeof pullRequestUrl,
+    [
+      [
+        args: [repo: "acme/widgets", branch: "mac/push-label", base: "v3"],
+        expected: "https://github.com/acme/widgets/compare/v3...mac/push-label?expand=1",
+      ],
+      [
+        args: [repo: "acme/widgets", branch: "issue/12", base: "main"],
+        expected: "https://github.com/acme/widgets/compare/main...issue/12?expand=1",
+      ],
+      [args: [repo: "acme/widgets", branch: "main", base: "main"], expected: null],
+      [args: [repo: "acme/widgets", branch: "a..b", base: "main"], expected: null],
+      [args: [repo: "acme/widgets", branch: "x", base: null], expected: null],
+      [args: [repo: "not a repo", branch: "x", base: "main"], expected: null],
+      [
+        args: [
+          repo: "acme/lib",
+          branch: "downstream/acme/app-0123456789abcdef0123456789abcdef01234567",
+          base: "main",
+        ],
+        expected: null,
+      ],
+    ]
+  >;
 }
 
 export const isLfsOid = (value: unknown): value is string =>
@@ -169,12 +263,24 @@ export const isLfsOid = (value: unknown): value is string =>
 
 declare namespace isLfsOid {
   /** an LFS object's id: a sha256, in full and in lower case, and so a safe file name */
-  export type Ids = Table<typeof isLfsOid, [
-    [args: [value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"], expected: true],
-    [args: [value: "2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824"], expected: false],
-    [args: [value: "0123456789abcdef0123456789abcdef01234567"], expected: false],
-    [args: [value: "../../2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b98"], expected: false],
-  ]>;
+  export type Ids = Table<
+    typeof isLfsOid,
+    [
+      [
+        args: [value: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"],
+        expected: true,
+      ],
+      [
+        args: [value: "2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824"],
+        expected: false,
+      ],
+      [args: [value: "0123456789abcdef0123456789abcdef01234567"], expected: false],
+      [
+        args: [value: "../../2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b98"],
+        expected: false,
+      ],
+    ]
+  >;
 }
 
 const hex = (text: string, length: number) =>
@@ -200,11 +306,14 @@ declare namespace gitVmName {
 declare namespace workspaceVmName {
   /** short and opaque, the same for the same workspace every time; the domain and the
    *  workspace kept apart in what is hashed, so `a-b`'s `c` is not `a`'s `b-c` */
-  export type Names = Table<typeof workspaceVmName, [
-    [args: [instance: "t1", domain: "acme", workspace: "w1"], expected: "dsl-t1-ddb30a57cc"],
-    [args: [instance: "t1", domain: "a-b", workspace: "c"], expected: "dsl-t1-695274f6b8"],
-    [args: [instance: "t1", domain: "a", workspace: "b-c"], expected: "dsl-t1-02654a5c0c"],
-  ]>;
+  export type Names = Table<
+    typeof workspaceVmName,
+    [
+      [args: [instance: "t1", domain: "acme", workspace: "w1"], expected: "dsl-t1-ddb30a57cc"],
+      [args: [instance: "t1", domain: "a-b", workspace: "c"], expected: "dsl-t1-695274f6b8"],
+      [args: [instance: "t1", domain: "a", workspace: "b-c"], expected: "dsl-t1-02654a5c0c"],
+    ]
+  >;
 }
 
 /** One hostname per surface (section 4.4). The hex is not a secret: it keeps two stacks, or
@@ -219,10 +328,15 @@ export const surfaceHex = (instance: string, domain: string, workspace: string) 
  *    DESOLATE_HOSTNAME_SUFFIX=$DESOLATE_DEV_HOSTNAME desolate bootstrap
  *  Everything under it is that workspace's (its domain's), the inner stack's pages included. */
 export const isLocalhostSuffix = (value: unknown): value is string =>
-  typeof value === "string" && value.length <= 120 && /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*localhost$/.test(value);
+  typeof value === "string" &&
+  value.length <= 120 &&
+  /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*localhost$/.test(value);
 export const HOSTNAME_SUFFIX = (() => {
   const value = process.env.DESOLATE_HOSTNAME_SUFFIX || "localhost";
-  if (!isLocalhostSuffix(value)) throw new Error(`DESOLATE_HOSTNAME_SUFFIX must be localhost or a name under it, not '${value}'`);
+  if (!isLocalhostSuffix(value))
+    throw new Error(
+      `DESOLATE_HOSTNAME_SUFFIX must be localhost or a name under it, not '${value}'`,
+    );
   return value;
 })();
 export const devHostname = (instance: string, domain: string, workspace: string) =>
@@ -232,11 +346,19 @@ export const editorHostname = (instance: string, domain: string, workspace: stri
 
 declare namespace devHostname {
   /** a workspace's dev servers: readable, and a hex that keeps another stack's apart */
-  export type Name = Expect<Invoke<typeof devHostname, [instance: "t1", domain: "acme", workspace: "w1"]>, "=", "acme-w1-96fd85.localhost">;
+  export type Name = Expect<
+    Invoke<typeof devHostname, [instance: "t1", domain: "acme", workspace: "w1"]>,
+    "=",
+    "acme-w1-96fd85.localhost"
+  >;
 }
 declare namespace editorHostname {
   /** its editor: the same hex, a name of its own, so the two share no cookies */
-  export type Name = Expect<Invoke<typeof editorHostname, [instance: "t1", domain: "acme", workspace: "w1"]>, "=", "acme-w1-editor-96fd85.localhost">;
+  export type Name = Expect<
+    Invoke<typeof editorHostname, [instance: "t1", domain: "acme", workspace: "w1"]>,
+    "=",
+    "acme-w1-editor-96fd85.localhost"
+  >;
 }
 export const ROOT_HOSTNAME = `desolate.${HOSTNAME_SUFFIX}`;
 /** The approval page (host/approve-web.ts), served by the host daemon itself on the editors'
@@ -253,19 +375,37 @@ export const GIT_HOSTNAME = `desolate-git.${HOSTNAME_SUFFIX}`;
 export const EDITOR = { server: 31580, gate: 31581 } as const;
 export const editorHostPort = () => {
   const port = Number(process.env.DESOLATE_EDITOR_PORT ?? 31581);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error(`DESOLATE_EDITOR_PORT must be a port from 1024 to 65535, not '${process.env.DESOLATE_EDITOR_PORT}'`);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535)
+    throw new Error(
+      `DESOLATE_EDITOR_PORT must be a port from 1024 to 65535, not '${process.env.DESOLATE_EDITOR_PORT}'`,
+    );
   return port;
 };
 
 declare namespace editorHostPort {
   /** the gate's own port unless the person moves it */
-  export type Default = Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: null]>, Expect<Invoke<typeof editorHostPort>, "=", 31581>>;
+  export type Default = Given<
+    Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: null]>,
+    Expect<Invoke<typeof editorHostPort>, "=", 31581>
+  >;
   /** or another, for a second stack beside the first */
-  export type Moved = Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "41581"]>, Expect<Invoke<typeof editorHostPort>, "=", 41581>>;
+  export type Moved = Given<
+    Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "41581"]>,
+    Expect<Invoke<typeof editorHostPort>, "=", 41581>
+  >;
   /** a port that needs root, or is not a port: refused, saying what was given */
   export type Refuses = [
-    Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "80"]>, Throws<Invoke<typeof editorHostPort>, "DESOLATE_EDITOR_PORT must be a port from 1024 to 65535, not '80'">>,
-    Given<Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "31581x"]>, Throws<Invoke<typeof editorHostPort>, "not '31581x'">>,
+    Given<
+      Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "80"]>,
+      Throws<
+        Invoke<typeof editorHostPort>,
+        "DESOLATE_EDITOR_PORT must be a port from 1024 to 65535, not '80'"
+      >
+    >,
+    Given<
+      Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "31581x"]>,
+      Throws<Invoke<typeof editorHostPort>, "not '31581x'">
+    >,
   ];
 }
 
@@ -277,13 +417,16 @@ export const ROOT_UI = { port: 31590 } as const;
 
 declare namespace isLocalhostSuffix {
   /** localhost, or names under it: never another domain, a port or anything a URL could escape by */
-  export type Names = Table<typeof isLocalhostSuffix, [
-    [args: [value: "localhost"], expected: true],
-    [args: [value: "acme--app-w1-0a1b2c.localhost"], expected: true],
-    [args: [value: "example.com"], expected: false],
-    [args: [value: "localhost.example.com"], expected: false],
-    [args: [value: "a.localhost:80"], expected: false],
-    [args: [value: "A.localhost"], expected: false],
-    [args: [value: ".localhost"], expected: false],
-  ]>;
+  export type Names = Table<
+    typeof isLocalhostSuffix,
+    [
+      [args: [value: "localhost"], expected: true],
+      [args: [value: "acme--app-w1-0a1b2c.localhost"], expected: true],
+      [args: [value: "example.com"], expected: false],
+      [args: [value: "localhost.example.com"], expected: false],
+      [args: [value: "a.localhost:80"], expected: false],
+      [args: [value: "A.localhost"], expected: false],
+      [args: [value: ".localhost"], expected: false],
+    ]
+  >;
 }

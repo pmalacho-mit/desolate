@@ -1,6 +1,11 @@
 // Exit codes a harness can rely on (section 9.1). v2's, kept.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Construct, Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Construct,
+  Expect,
+  Invoke,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export const EXIT = {
   ok: 0,
@@ -29,8 +34,14 @@ export class Refusal extends Error {
 }
 
 declare namespace Refusal {
-  type Busy = Construct<typeof Refusal, [message: "another push holds acme/app", fix: "wait, then run `desolate push` again", code: 75]>;
-  type Plain = Construct<typeof Refusal, [message: "no such domain: dev", fix: "desolate domain create dev"]>;
+  type Busy = Construct<
+    typeof Refusal,
+    [message: "another push holds acme/app", fix: "wait, then run `desolate push` again", code: 75]
+  >;
+  type Plain = Construct<
+    typeof Refusal,
+    [message: "no such domain: dev", fix: "desolate domain create dev"]
+  >;
   /** what went wrong, for the person; what to run; the exit code a script reads */
   export type Says = [
     Expect<Busy["message"], "=", "another push holds acme/app">,
@@ -47,5 +58,11 @@ export function refuse(message: string, fix: string, code?: number): never {
 
 declare namespace refuse {
   /** it never returns: it throws a Refusal, which the CLI prints with its fix */
-  export type ThrowsARefusal = Throws<Invoke<typeof refuse, [message: "no such domain: dev", fix: "desolate domain create dev", code: 64]>, { instanceOf: Refusal; message: "no such domain: dev" }>;
+  export type ThrowsARefusal = Throws<
+    Invoke<
+      typeof refuse,
+      [message: "no such domain: dev", fix: "desolate domain create dev", code: 64]
+    >,
+    { instanceOf: Refusal; message: "no such domain: dev" }
+  >;
 }

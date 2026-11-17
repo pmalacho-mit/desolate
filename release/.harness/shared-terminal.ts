@@ -11,7 +11,9 @@ export const inChunks = (make: () => (chunk: Buffer) => Buffer, chunks: string[]
 /** The bytes of `text`, split into reads of one byte each: the worst a read can do. */
 export const byteByByte = (make: () => (chunk: Buffer) => Buffer, text: string): string => {
   const filter = make();
-  return Buffer.concat([...Buffer.from(text, "utf8")].map((byte) => filter(Buffer.from([byte])))).toString("utf8");
+  return Buffer.concat(
+    [...Buffer.from(text, "utf8")].map((byte) => filter(Buffer.from([byte]))),
+  ).toString("utf8");
 };
 
 /** `count` copies of `text`: output that goes on. */

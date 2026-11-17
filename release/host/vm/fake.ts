@@ -71,13 +71,37 @@ const execArgs = (name: string, argv: string[], options: ExecOptions, interactiv
 declare namespace execArgs {
   /** the guest user by default, with its own HOME; each variable one -e word, never a shell line */
   export type AsTheUser = Expect<
-    Invoke<typeof execArgs, [name: "dsl-main-w", argv: ["git", "status"], options: { cwd: "/workspaces/acme/web"; env: { A: "x; rm -rf /" } }, interactive: false]>,
+    Invoke<
+      typeof execArgs,
+      [
+        name: "dsl-main-w",
+        argv: ["git", "status"],
+        options: { cwd: "/workspaces/acme/web"; env: { A: "x; rm -rf /" } },
+        interactive: false,
+      ]
+    >,
     "=",
-    ["exec", "-u", "desolate", "-w", "/workspaces/acme/web", "-e", "HOME=/home/desolate", "-e", "A=x; rm -rf /", "dsl-main-w", "git", "status"]
+    [
+      "exec",
+      "-u",
+      "desolate",
+      "-w",
+      "/workspaces/acme/web",
+      "-e",
+      "HOME=/home/desolate",
+      "-e",
+      "A=x; rm -rf /",
+      "dsl-main-w",
+      "git",
+      "status",
+    ]
   >;
   /** root only when asked for, and stdin kept open only when there is input to give */
   export type AsRoot = Expect<
-    Invoke<typeof execArgs, [name: "dsl-main-root", argv: ["id"], options: { root: true }, interactive: true]>,
+    Invoke<
+      typeof execArgs,
+      [name: "dsl-main-root", argv: ["id"], options: { root: true }, interactive: true]
+    >,
     "=",
     ["exec", "-i", "-u", "0:0", "-e", "HOME=/root", "dsl-main-root", "id"]
   >;
@@ -86,17 +110,31 @@ declare namespace execArgs {
 export const fakeBackend = (): Backend => {
   const containerArgs = (spec: VmSpec, image: string) => {
     const args = [
-      "create", "--name", spec.name, "--hostname", spec.name,
-      "--label", `${LABEL}=${INSTANCE}`, "--label", `desolate.role=${spec.role}`,
+      "create",
+      "--name",
+      spec.name,
+      "--hostname",
+      spec.name,
+      "--label",
+      `${LABEL}=${INSTANCE}`,
+      "--label",
+      `desolate.role=${spec.role}`,
       // dockerd (workspaces) and nftables (the root) need it. This is the fake backend: the
       // container is not a boundary and does not pretend to be one.
       "--privileged",
-      "--tmpfs", "/run:exec,mode=755", "--tmpfs", "/tmp:exec,mode=1777",
-      "--network", spec.egress === "open" ? "bridge" : "none",
+      "--tmpfs",
+      "/run:exec,mode=755",
+      "--tmpfs",
+      "/tmp:exec,mode=1777",
+      "--network",
+      spec.egress === "open" ? "bridge" : "none",
     ];
-    for (const [key, value] of Object.entries(spec.labels)) args.push("--label", `desolate.${key}=${value}`);
-    for (const share of spec.shares) args.push("-v", `${share.host}:${share.guest}${share.writable ? "" : ":ro"}`);
-    for (const socket of spec.sockets) args.push("-v", `${path.dirname(socket.host)}:${path.dirname(socket.guest)}:ro`);
+    for (const [key, value] of Object.entries(spec.labels))
+      args.push("--label", `desolate.${key}=${value}`);
+    for (const share of spec.shares)
+      args.push("-v", `${share.host}:${share.guest}${share.writable ? "" : ":ro"}`);
+    for (const socket of spec.sockets)
+      args.push("-v", `${path.dirname(socket.host)}:${path.dirname(socket.guest)}:ro`);
     if (spec.role === "workspace") args.push("-v", `${spec.name}-docker:/var/lib/docker`);
     if (spec.cpus) args.push("--cpus", String(spec.cpus));
     if (spec.memoryMiB) args.push("--memory", `${spec.memoryMiB}m`);
@@ -108,7 +146,10 @@ export const fakeBackend = (): Backend => {
   const ensureUser = async (name: string) => {
     const uid = process.getuid!();
     const gid = process.getgid!();
-    if (uid === 0) throw new Error("the fake backend refuses to run as root: its guest user would be root, and nothing about users could be tested. Run desolate as an ordinary user in the docker group.");
+    if (uid === 0)
+      throw new Error(
+        "the fake backend refuses to run as root: its guest user would be root, and nothing about users could be tested. Run desolate as an ordinary user in the docker group.",
+      );
     const script = [
       `getent group ${gid} >/dev/null || groupadd -g ${gid} ${GUEST_USER}`,
       // The image may already have a user with this uid (Ubuntu's own uid 1000): it becomes
@@ -134,7 +175,8 @@ export const fakeBackend = (): Backend => {
     if (result.code !== 0) return {};
     const all = JSON.parse(result.stdout) as Record<string, string>;
     const out: Record<string, string> = {};
-    for (const [key, value] of Object.entries(all)) if (key.startsWith("desolate.")) out[key.slice(9)] = value;
+    for (const [key, value] of Object.entries(all))
+      if (key.startsWith("desolate.")) out[key.slice(9)] = value;
     return out;
   };
 
@@ -146,15 +188,20 @@ export const fakeBackend = (): Backend => {
       const checks: Check[] = [];
       const info = await docker(["info", "--format", "{{.ServerVersion}}"], { timeoutMs: 15_000 });
       checks.push({
-        name: "docker daemon", ok: info.code === 0,
+        name: "docker daemon",
+        ok: info.code === 0,
         detail: info.code === 0 ? `docker ${info.stdout.trim()}` : "no Docker daemon answers",
         fix: "start Docker (the fake backend runs each VM as a container)",
       });
       if (info.code === 0) {
         const image = await docker(["image", "inspect", "-f", "{{.Id}}", IMAGE]);
         checks.push({
-          name: "base image", ok: image.code === 0,
-          detail: image.code === 0 ? `${IMAGE} ${image.stdout.trim().slice(7, 19)}` : `${IMAGE} is not in the image store`,
+          name: "base image",
+          ok: image.code === 0,
+          detail:
+            image.code === 0
+              ? `${IMAGE} ${image.stdout.trim().slice(7, 19)}`
+              : `${IMAGE} is not in the image store`,
           fix: "desolate bootstrap --backend fake",
         });
       }
@@ -163,19 +210,29 @@ export const fakeBackend = (): Backend => {
 
     async ensureImage(log) {
       const have = await docker(["image", "inspect", "-f", "{{.Id}}", IMAGE]);
-      if (have.code === 0) return log(`base image ${IMAGE} present (${have.stdout.trim().slice(7, 19)})`);
+      if (have.code === 0)
+        return log(`base image ${IMAGE} present (${have.stdout.trim().slice(7, 19)})`);
       const built = process.env.DESOLATE_IMAGE_DIR;
       if (built && fs.existsSync(path.join(built, "rootfs.tar"))) {
         log(`importing ${built}/rootfs.tar as ${IMAGE}`);
-        await must("docker", ["import", "-c", 'CMD ["sleep","infinity"]', path.join(built, "rootfs.tar"), IMAGE]);
+        await must("docker", [
+          "import",
+          "-c",
+          'CMD ["sleep","infinity"]',
+          path.join(built, "rootfs.tar"),
+          IMAGE,
+        ]);
         return;
       }
-      throw new Error(`the base image ${IMAGE} is missing. Build it: sudo release/image/build.sh --out <dir>, then set DESOLATE_IMAGE_DIR=<dir> and run bootstrap again.`);
+      throw new Error(
+        `the base image ${IMAGE} is missing. Build it: sudo release/image/build.sh --out <dir>, then set DESOLATE_IMAGE_DIR=<dir> and run bootstrap again.`,
+      );
     },
 
     async create(spec) {
       for (const share of spec.shares) fs.mkdirSync(share.host, { recursive: true });
-      for (const socket of spec.sockets) fs.mkdirSync(path.dirname(socket.host), { recursive: true });
+      for (const socket of spec.sockets)
+        fs.mkdirSync(path.dirname(socket.host), { recursive: true });
       await must("docker", containerArgs(spec, IMAGE));
     },
 
@@ -183,7 +240,8 @@ export const fakeBackend = (): Backend => {
       const image = `desolate/clone-${from}:latest`;
       await must("docker", ["commit", from, image]);
       for (const share of spec.shares) fs.mkdirSync(share.host, { recursive: true });
-      for (const socket of spec.sockets) fs.mkdirSync(path.dirname(socket.host), { recursive: true });
+      for (const socket of spec.sockets)
+        fs.mkdirSync(path.dirname(socket.host), { recursive: true });
       await must("docker", containerArgs(spec, image));
     },
 
@@ -211,29 +269,54 @@ export const fakeBackend = (): Backend => {
     },
 
     async list() {
-      const result = await must("docker", ["ps", "-a", "--filter", `label=${LABEL}=${INSTANCE}`, "--format", "{{.Names}}"]);
+      const result = await must("docker", [
+        "ps",
+        "-a",
+        "--filter",
+        `label=${LABEL}=${INSTANCE}`,
+        "--format",
+        "{{.Names}}",
+      ]);
       const names = result.split("\n").filter(Boolean).sort();
       return Promise.all(names.map((name) => backend.info(name)));
     },
 
     exec(name, argv, options = {}): Promise<RunResult> {
       return run("docker", execArgs(name, argv, options, options.input !== undefined), {
-        input: options.input, timeoutMs: options.timeoutMs, inheritStderr: options.inheritStderr,
+        input: options.input,
+        timeoutMs: options.timeoutMs,
+        inheritStderr: options.inheritStderr,
       });
     },
 
     spawn(name, argv, options = {}) {
-      return spawn("docker", execArgs(name, argv, options, true), { stdio: ["pipe", "pipe", "pipe"] });
+      return spawn("docker", execArgs(name, argv, options, true), {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
     },
 
     attach(name, argv, options = {}) {
-      const args = ["exec", "-i", ...(process.stdin.isTTY ? ["-t"] : []), "-u", GUEST_USER, "-e", `HOME=/home/${GUEST_USER}`, "-e", `TERM=${process.env.TERM ?? "xterm"}`];
+      const args = [
+        "exec",
+        "-i",
+        ...(process.stdin.isTTY ? ["-t"] : []),
+        "-u",
+        GUEST_USER,
+        "-e",
+        `HOME=/home/${GUEST_USER}`,
+        "-e",
+        `TERM=${process.env.TERM ?? "xterm"}`,
+      ];
       if (options.cwd) args.push("-w", options.cwd);
       return attachFiltered("docker", [...args, name, ...argv]);
     },
 
     dial(name, target) {
-      return duplexOf(spawn("docker", ["exec", "-i", "-u", "0:0", name, "socat", "STDIO", socatAddress(target)], { stdio: ["pipe", "pipe", "ignore"] }));
+      return duplexOf(
+        spawn("docker", ["exec", "-i", "-u", "0:0", name, "socat", "STDIO", socatAddress(target)], {
+          stdio: ["pipe", "pipe", "ignore"],
+        }),
+      );
     },
 
     link() {
@@ -241,8 +324,11 @@ export const fakeBackend = (): Backend => {
     },
 
     async listeners(name): Promise<Listener[]> {
-      const result = await docker(["exec", "-u", "0:0", name, "ss", "-H", "-ltn"], { timeoutMs: 10_000 });
-      if (result.code !== 0) throw new Error(`cannot list listeners in ${name}: ${result.stderr.trim()}`);
+      const result = await docker(["exec", "-u", "0:0", name, "ss", "-H", "-ltn"], {
+        timeoutMs: 10_000,
+      });
+      if (result.code !== 0)
+        throw new Error(`cannot list listeners in ${name}: ${result.stderr.trim()}`);
       return parseSs(result.stdout);
     },
 
@@ -262,7 +348,10 @@ export const parseSs = (text: string): Listener[] => {
     const at = local.lastIndexOf(":");
     const port = Number(local.slice(at + 1));
     if (!Number.isInteger(port) || port < 1) continue;
-    const address = local.slice(0, at).replace(/^\[|\]$/g, "").replace(/%.*$/, "");
+    const address = local
+      .slice(0, at)
+      .replace(/^\[|\]$/g, "")
+      .replace(/%.*$/, "");
     seen.set(`${address}:${port}`, { port, address });
   }
   return [...seen.values()].sort((a, b) => a.port - b.port);
@@ -271,13 +360,28 @@ export const parseSs = (text: string): Listener[] => {
 declare namespace parseSs {
   /** each listener once, by port: IPv4, IPv6 in brackets, and a link-local zone dropped */
   export type Listeners = Expect<
-    Invoke<typeof parseSs, [text: "LISTEN 0 511 0.0.0.0:5173 0.0.0.0:*\nLISTEN 0 4096 [::]:5173 [::]:*\nLISTEN 0 128 127.0.0.1:31580 0.0.0.0:*\nLISTEN 0 128 [fe80::1%eth0]:8080 [::]:*\n"]>,
+    Invoke<
+      typeof parseSs,
+      [
+        text: "LISTEN 0 511 0.0.0.0:5173 0.0.0.0:*\nLISTEN 0 4096 [::]:5173 [::]:*\nLISTEN 0 128 127.0.0.1:31580 0.0.0.0:*\nLISTEN 0 128 [fe80::1%eth0]:8080 [::]:*\n",
+      ]
+    >,
     "=",
-    [{ port: 5173; address: "0.0.0.0" }, { port: 5173; address: "::" }, { port: 8080; address: "fe80::1" }, { port: 31580; address: "127.0.0.1" }]
+    [
+      { port: 5173; address: "0.0.0.0" },
+      { port: 5173; address: "::" },
+      { port: 8080; address: "fe80::1" },
+      { port: 31580; address: "127.0.0.1" },
+    ]
   >;
   /** the same address and port twice is one listener; a line that names no port is none */
   export type Ignores = Expect<
-    Invoke<typeof parseSs, [text: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 1 *:* *:*\ngarbage\n\n"]>,
+    Invoke<
+      typeof parseSs,
+      [
+        text: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 1 *:* *:*\ngarbage\n\n",
+      ]
+    >,
     "=",
     [{ port: 80; address: "0.0.0.0" }]
   >;

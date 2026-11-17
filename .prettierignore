@@ -1,0 +1,8 @@
+# Others' code, kept as it came: suede's machinery and the vendored dependencies.
+suede.nests/
+suede.vsix.format-on-save/
+.suede/
+release/.suede/
+.github/workflows/
+release/.github/workflows/
+release/host/git-ui/vendor/

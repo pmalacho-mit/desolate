@@ -16,7 +16,12 @@ export const ask = (input: string, socket: string, write: (text: string) => void
   connection.on("data", (chunk) => (output += chunk));
   connection.on("end", () => write(output));
   connection.on("error", (error) => {
-    write(JSON.stringify({ ok: false, error: `the workspace daemon is not answering: ${error.message}` }) + "\n");
+    write(
+      JSON.stringify({
+        ok: false,
+        error: `the workspace daemon is not answering: ${error.message}`,
+      }) + "\n",
+    );
   });
   return connection;
 };
@@ -25,14 +30,38 @@ declare namespace ask {
   /** the request goes as one line, whatever whitespace stdin had around it; the reply comes
    *  back as the daemon wrote it */
   export type Relays = Expect<
-    Invoke<typeof wsctlAsking, [ask: typeof ask, input: '\n{"op":"ports","reserve":[5173]}\n\n', reply: '{"ok":true,"listeners":[3000]}\n']>,
+    Invoke<
+      typeof wsctlAsking,
+      [
+        ask: typeof ask,
+        input: '\n{"op":"ports","reserve":[5173]}\n\n',
+        reply: '{"ok":true,"listeners":[3000]}\n',
+      ]
+    >,
     "=",
-    { daemonGot: '{"op":"ports","reserve":[5173]}\n'; written: ['{"ok":true,"listeners":[3000]}\n'] }
+    {
+      daemonGot: '{"op":"ports","reserve":[5173]}\n';
+      written: ['{"ok":true,"listeners":[3000]}\n'];
+    }
   >;
   /** no daemon: still one JSON line, which says so */
   export type NoDaemon = [
-    Expect<Invoke<typeof wsctlAsking, [ask: typeof ask, input: '{"op":"ports"}', reply: null]>["written"]["length"], "=", 1>,
-    Expect<Invoke<typeof wsctlAsking, [ask: typeof ask, input: '{"op":"ports"}', reply: null]>["written"][0], "matches", '^\\{"ok":false,"error":"the workspace daemon is not answering: connect ENOENT .*"\\}\\n$'>,
+    Expect<
+      Invoke<
+        typeof wsctlAsking,
+        [ask: typeof ask, input: '{"op":"ports"}', reply: null]
+      >["written"]["length"],
+      "=",
+      1
+    >,
+    Expect<
+      Invoke<
+        typeof wsctlAsking,
+        [ask: typeof ask, input: '{"op":"ports"}', reply: null]
+      >["written"][0],
+      "matches",
+      '^\\{"ok":false,"error":"the workspace daemon is not answering: connect ENOENT .*"\\}\\n$'
+    >,
   ];
 }
 
@@ -42,4 +71,5 @@ const main = async () => {
   ask(input, "/run/desolate/wsd.sock", (text) => process.stdout.write(text));
 };
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) await main();
+if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
+  await main();

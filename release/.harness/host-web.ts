@@ -14,22 +14,43 @@ import { Readable } from "node:stream";
 import type { Backend, Summary } from "../host/approve-web.ts";
 
 /** `body`: text as it is sent, or an object sent as its JSON. */
-type Request = { method: string; url: string; headers?: Record<string, string>; body?: string | Record<string, unknown> };
-export type Answer = { status: number; headers: Record<string, string>; text: string; json: unknown };
+type Request = {
+  method: string;
+  url: string;
+  headers?: Record<string, string>;
+  body?: string | Record<string, unknown>;
+};
+export type Answer = {
+  status: number;
+  headers: Record<string, string>;
+  text: string;
+  json: unknown;
+};
 
 /** One request to a handler, and its whole answer (`json`: the body read as JSON, if it is). */
-export const ask = (handler: (req: IncomingMessage, res: ServerResponse) => unknown, request: Request): Promise<Answer> =>
+export const ask = (
+  handler: (req: IncomingMessage, res: ServerResponse) => unknown,
+  request: Request,
+): Promise<Answer> =>
   new Promise((resolve, reject) => {
     const body = typeof request.body === "object" ? JSON.stringify(request.body) : request.body;
-    const req = Readable.from(body === undefined ? [] : [Buffer.from(body)]) as unknown as IncomingMessage;
-    Object.assign(req, { method: request.method, url: request.url, headers: request.headers ?? {} });
+    const req = Readable.from(
+      body === undefined ? [] : [Buffer.from(body)],
+    ) as unknown as IncomingMessage;
+    Object.assign(req, {
+      method: request.method,
+      url: request.url,
+      headers: request.headers ?? {},
+    });
     let status = 0;
     let headers: Record<string, string> = {};
     let text = "";
     const res = {
       writeHead(code: number, fields: Record<string, string | number> = {}) {
         status = code;
-        headers = Object.fromEntries(Object.entries(fields).map(([k, v]) => [k.toLowerCase(), String(v)]));
+        headers = Object.fromEntries(
+          Object.entries(fields).map(([k, v]) => [k.toLowerCase(), String(v)]),
+        );
         return res;
       },
       write(chunk: string | Buffer) {

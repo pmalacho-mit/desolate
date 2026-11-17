@@ -1,9 +1,0 @@
-src/**
-node_modules/**
-tsconfig.json
-build.mjs
-install.mjs
-install.sh
-.vscode/**
-*.vsix
-.DS_Store

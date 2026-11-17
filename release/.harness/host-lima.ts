@@ -24,9 +24,14 @@ const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
 
 /** limactl, for this test: every call written down, each argument a line, and done. */
 const fakeLimactl = () => {
-  if (process.env.DESOLATE_LIMACTL) throw new Error("DESOLATE_LIMACTL is set: the backend would run it, not the stand-in");
+  if (process.env.DESOLATE_LIMACTL)
+    throw new Error("DESOLATE_LIMACTL is set: the backend would run it, not the stand-in");
   fs.mkdirSync(bin(), { recursive: true });
-  fs.writeFileSync(path.join(bin(), "limactl"), `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >>'${log()}'\nprintf '%s\\n' '--end--' >>'${log()}'\nexit 0\n`, { mode: 0o755 });
+  fs.writeFileSync(
+    path.join(bin(), "limactl"),
+    `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >>'${log()}'\nprintf '%s\\n' '--end--' >>'${log()}'\nexit 0\n`,
+    { mode: 0o755 },
+  );
   fs.writeFileSync(log(), "");
   const before = process.env.PATH;
   process.env.PATH = `${bin()}:${before}`;
@@ -35,16 +40,39 @@ const fakeLimactl = () => {
   });
 };
 const calls = (): string[][] =>
-  fs.readFileSync(log(), "utf8").split("--end--\n").filter(Boolean).map((call) => call.replace(/\n$/, "").split("\n"));
+  fs
+    .readFileSync(log(), "utf8")
+    .split("--end--\n")
+    .filter(Boolean)
+    .map((call) => call.replace(/\n$/, "").split("\n"));
 
 const inHome = (spec: VmSpec): VmSpec => {
   const at = (p: string) => p.replace(/^<home>/, home());
-  return { ...spec, shares: spec.shares.map((s) => ({ ...s, host: at(s.host) })), sockets: spec.sockets.map((s) => ({ ...s, host: at(s.host) })) };
+  return {
+    ...spec,
+    shares: spec.shares.map((s) => ({ ...s, host: at(s.host) })),
+    sockets: spec.sockets.map((s) => ({ ...s, host: at(s.host) })),
+  };
 };
-const meta = (name: string) => JSON.parse(fs.readFileSync(path.join(limaHome(), name, "desolate.json"), "utf8")) as { sshPort: number; linkPort: number };
+const meta = (name: string) =>
+  JSON.parse(fs.readFileSync(path.join(limaHome(), name, "desolate.json"), "utf8")) as {
+    sshPort: number;
+    linkPort: number;
+  };
 const shown = (text: string, ports?: { sshPort: number; linkPort: number }) => {
-  let out = text.split(home()).join("<home>").split(release).join("<release>").split(arch).join("<arch>");
-  if (ports) out = out.split(String(ports.sshPort)).join("<ssh port>").split(String(ports.linkPort)).join("<link port>");
+  let out = text
+    .split(home())
+    .join("<home>")
+    .split(release)
+    .join("<release>")
+    .split(arch)
+    .join("<arch>");
+  if (ports)
+    out = out
+      .split(String(ports.sshPort))
+      .join("<ssh port>")
+      .split(String(ports.linkPort))
+      .join("<link port>");
   return out;
 };
 
@@ -53,7 +81,11 @@ export const cloneCall = async (backend: Backend, spec: VmSpec): Promise<string[
   fakeLimactl();
   await backend.create(inHome(spec));
   const m = meta(spec.name);
-  return calls().map((call) => call.map((arg) => shown(arg, m))).find((call) => call.includes("clone")) ?? [];
+  return (
+    calls()
+      .map((call) => call.map((arg) => shown(arg, m)))
+      .find((call) => call.includes("clone")) ?? []
+  );
 };
 
 /** The base VM's configuration, as `ensureImage` writes it for Lima. (The qemu kind needs a
@@ -62,7 +94,8 @@ export const baseYaml = async (backend: Backend): Promise<string> => {
   fakeLimactl();
   const images = path.join(home(), "images", arch);
   fs.mkdirSync(images, { recursive: true });
-  for (const file of ["disk.raw", "vmlinuz", "initrd"]) fs.writeFileSync(path.join(images, file), "");
+  for (const file of ["disk.raw", "vmlinuz", "initrd"])
+    fs.writeFileSync(path.join(images, file), "");
   // (The stand-in makes no VM, so a vz base's stamp has no directory to go in: that is where
   // it stops, after the configuration is written.)
   await backend.ensureImage(() => {}).catch(() => {});
@@ -75,11 +108,21 @@ export const confinement = async (backend: Backend, spec: VmSpec): Promise<strin
   fakeLimactl();
   await backend.create(inHome(spec));
   await backend.start(spec.name).catch(() => {});
-  return shown(fs.readFileSync(path.join(limaHome(), spec.name, "confine.sb"), "utf8"), meta(spec.name));
+  return shown(
+    fs.readFileSync(path.join(limaHome(), spec.name, "confine.sb"), "utf8"),
+    meta(spec.name),
+  );
 };
 
 /** A VM an older desolate made: its record has no link token. */
 export const madeWithoutLinkToken = (name: string) => {
   fs.mkdirSync(path.join(limaHome(), name), { recursive: true });
-  fs.writeFileSync(path.join(limaHome(), name, "desolate.json"), JSON.stringify({ spec: { name, role: "workspace", egress: "none", shares: [], sockets: [], labels: {} }, sshPort: 60022, linkPort: 60023 }));
+  fs.writeFileSync(
+    path.join(limaHome(), name, "desolate.json"),
+    JSON.stringify({
+      spec: { name, role: "workspace", egress: "none", shares: [], sockets: [], labels: {} },
+      sshPort: 60022,
+      linkPort: 60023,
+    }),
+  );
 };

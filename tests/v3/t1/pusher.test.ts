@@ -15,14 +15,30 @@ const ZERO = "0".repeat(40);
 let dir = "";
 let remote = "";
 let work = "";
-const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", args, {
+    cwd,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@t",
+    },
+  }).trim();
 const commit = (message: string) => {
   fs.writeFileSync(path.join(work, "file.txt"), `${message}\n`);
   git(work, "add", "-A");
   git(work, "commit", "--quiet", "-m", message);
   return git(work, "rev-parse", "HEAD");
 };
-const pack = (tip: string, ...have: string[]) => execFileSync("git", ["pack-objects", "--stdout", "--revs", "--delta-base-offset", "--quiet"], { cwd: work, input: [tip, ...have.map((h) => `^${h}`), ""].join("\n") });
+const pack = (tip: string, ...have: string[]) =>
+  execFileSync("git", ["pack-objects", "--stdout", "--revs", "--delta-base-offset", "--quiet"], {
+    cwd: work,
+    input: [tip, ...have.map((h) => `^${h}`), ""].join("\n"),
+  });
 const tipOf = (branch: string) => {
   try {
     return git(remote, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
@@ -33,7 +49,13 @@ const tipOf = (branch: string) => {
 
 /** One push, as the pusher makes it, to the local remote. `after`: what goes wrong once the
  *  pack is on the wire. */
-const push = async (branch: string, onto: string | null, target: string, bytes: Buffer, after?: () => Promise<void>) => {
+const push = async (
+  branch: string,
+  onto: string | null,
+  target: string,
+  bytes: Buffer,
+  after?: () => Promise<void>,
+) => {
   const forge = spawn("git", ["receive-pack", remote], { stdio: ["pipe", "pipe", "pipe"] });
   forge.stdin.on("error", () => {});
   const closed = new Promise((resolve) => forge.on("close", resolve));
@@ -60,17 +82,39 @@ after(() => fs.rmSync(dir, { recursive: true, force: true }));
 describe("T1 the pusher speaks receive-pack, and asks for one ref update", () => {
   it("pkt-lines and the forge's two kinds of answer are read strictly", () => {
     assert.equal(pkt("abc\n").toString(), "0008abc\n");
-    const list = [`${"1".repeat(40)} refs/heads/main\0report-status delete-refs\n`, `${"2".repeat(40)} refs/heads/x\n`];
+    const list = [
+      `${"1".repeat(40)} refs/heads/main\0report-status delete-refs\n`,
+      `${"2".repeat(40)} refs/heads/x\n`,
+    ];
     assert.equal(advertised(list, "main"), "1".repeat(40));
     assert.equal(advertised(list, "x"), "2".repeat(40));
     assert.equal(advertised(list, "y"), ZERO);
-    assert.equal(advertised([`${ZERO} capabilities^{}\0report-status\n`], "main"), ZERO, "an empty repository's list");
+    assert.equal(
+      advertised([`${ZERO} capabilities^{}\0report-status\n`], "main"),
+      ZERO,
+      "an empty repository's list",
+    );
     assert.throws(() => advertised(["not a ref line\n"], "main"));
     assert.throws(() => advertised([`${"1".repeat(40)} refs/heads/main extra\n`], "main"));
-    assert.deepEqual(reported(["unpack ok\n", "ok refs/heads/main\n"], "refs/heads/main"), { ok: true });
-    assert.equal(reported(["unpack ok\n", "ok refs/heads/other\n"], "refs/heads/main").ok, false, "an ok for another ref is not this one's");
+    assert.deepEqual(reported(["unpack ok\n", "ok refs/heads/main\n"], "refs/heads/main"), {
+      ok: true,
+    });
+    assert.equal(
+      reported(["unpack ok\n", "ok refs/heads/other\n"], "refs/heads/main").ok,
+      false,
+      "an ok for another ref is not this one's",
+    );
     assert.equal(reported(["ok refs/heads/main\n"], "refs/heads/main").ok, false, "no unpack line");
-    assert.match(String((reported(["unpack ok\n", "ng refs/heads/main hook declined\n"], "refs/heads/main") as { error: string }).error), /hook declined/);
+    assert.match(
+      String(
+        (
+          reported(["unpack ok\n", "ng refs/heads/main hook declined\n"], "refs/heads/main") as {
+            error: string;
+          }
+        ).error,
+      ),
+      /hook declined/,
+    );
   });
 
   it("control: a new branch, then a fast-forward of it, land as asked", async () => {
@@ -107,7 +151,12 @@ describe("T1 the pusher speaks receive-pack, and asks for one ref update", () =>
 
   it("bytes that are not a pack are refused by the forge, and nothing moves", async () => {
     const before = tipOf("main");
-    const result = await push("main", before, commit("junk"), Buffer.from("PACK this is not a pack at all, only bytes"));
+    const result = await push(
+      "main",
+      before,
+      commit("junk"),
+      Buffer.from("PACK this is not a pack at all, only bytes"),
+    );
     assert.equal(result.ok, false);
     assert.equal(tipOf("main"), before);
   });
@@ -142,9 +191,12 @@ describe("T1 the pusher speaks receive-pack, and asks for one ref update", () =>
     // claim to know: it says the push is uncertain.
     const half = commit("half");
     const bytes = pack(half, landed);
-    await assert.rejects(push("main", landed, half, bytes.subarray(0, Math.floor(bytes.length / 2)), async () => {
-      throw new Error("the connection ended before everything arrived");
-    }), (error: Error) => error instanceof Uncertain);
+    await assert.rejects(
+      push("main", landed, half, bytes.subarray(0, Math.floor(bytes.length / 2)), async () => {
+        throw new Error("the connection ended before everything arrived");
+      }),
+      (error: Error) => error instanceof Uncertain,
+    );
     assert.equal(tipOf("main"), landed);
   });
 });

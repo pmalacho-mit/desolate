@@ -13,7 +13,9 @@ const OTHER = "f".repeat(32);
 const listen = (onSocket: (socket: Socket) => void): Promise<{ server: Server; port: number }> =>
   new Promise((resolve) => {
     const server = createServer(onSocket);
-    server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as AddressInfo).port }));
+    server.listen(0, "127.0.0.1", () =>
+      resolve({ server, port: (server.address() as AddressInfo).port }),
+    );
   });
 
 /** The host's end: after the handshake, everything is echoed back in capitals. */
@@ -31,7 +33,11 @@ before(async () => {
 after(() => host.server.close());
 
 /** A guest that opens the link with `token`, then sends `text`; what came back. */
-const guest = (port: number, token: string, text: string): Promise<{ opened: boolean; got: string }> =>
+const guest = (
+  port: number,
+  token: string,
+  text: string,
+): Promise<{ opened: boolean; got: string }> =>
   new Promise((resolve) => {
     const socket = connect(port, "127.0.0.1");
     let got = "";
@@ -69,14 +75,28 @@ const raw = (first: string, then?: (seen: string) => string): Promise<string> =>
 
 describe("T1 the link's handshake", () => {
   it("a link address is read strictly", () => {
-    assert.deepEqual(parseLink("unix:/desolate/link/proxy.sock"), { unix: "/desolate/link/proxy.sock" });
-    assert.deepEqual(parseLink(`tcp:192.168.5.2:5123#${TOKEN}`), { host: "192.168.5.2", port: 5123, token: TOKEN });
-    assert.deepEqual(parseLink("tcp:192.168.5.2:5123"), { host: "192.168.5.2", port: 5123, token: null });
-    for (const bad of ["", "tcp:", "tcp:host:1#short", "udp:1.2.3.4:5", `tcp:1.2.3.4:5#${TOKEN}x`]) assert.equal(parseLink(bad), null, bad);
+    assert.deepEqual(parseLink("unix:/desolate/link/proxy.sock"), {
+      unix: "/desolate/link/proxy.sock",
+    });
+    assert.deepEqual(parseLink(`tcp:192.168.5.2:5123#${TOKEN}`), {
+      host: "192.168.5.2",
+      port: 5123,
+      token: TOKEN,
+    });
+    assert.deepEqual(parseLink("tcp:192.168.5.2:5123"), {
+      host: "192.168.5.2",
+      port: 5123,
+      token: null,
+    });
+    for (const bad of ["", "tcp:", "tcp:host:1#short", "udp:1.2.3.4:5", `tcp:1.2.3.4:5#${TOKEN}x`])
+      assert.equal(parseLink(bad), null, bad);
   });
 
   it("control: the workspace's guest and its host open the link, and bytes flow both ways", async () => {
-    assert.deepEqual(await guest(host.port, TOKEN, "connect a\n"), { opened: true, got: "CONNECT A\n" });
+    assert.deepEqual(await guest(host.port, TOKEN, "connect a\n"), {
+      opened: true,
+      got: "CONNECT A\n",
+    });
   });
 
   it("a program holding the port learns nothing from the guest: not the token, not where it wants to go", async () => {
@@ -86,7 +106,11 @@ describe("T1 the link's handshake", () => {
       socket.on("data", (chunk) => {
         heard.push(chunk.toString());
         const nonce = /^DESOLATE-LINK2 ([0-9a-f]{32})\n$/.exec(chunk.toString())?.[1] ?? "";
-        socket.write(`${"1".repeat(32)} ${createHmac("sha256", Buffer.from(OTHER, "hex")).update(`host ${nonce} ${"1".repeat(32)}`).digest("hex")}\n`);
+        socket.write(
+          `${"1".repeat(32)} ${createHmac("sha256", Buffer.from(OTHER, "hex"))
+            .update(`host ${nonce} ${"1".repeat(32)}`)
+            .digest("hex")}\n`,
+        );
       });
     });
     const result = await guest(squatter.port, TOKEN, "CONNECT api.secret-host.example:443\r\n\r\n");
@@ -101,9 +125,24 @@ describe("T1 the link's handshake", () => {
   it("a program connecting to the host's port gets nothing through: no hello, a wrong answer, another token, an answer too late", async () => {
     assert.equal(await raw("CONNECT api.example.com:443 HTTP/1.1\r\n\r\n"), "", "no hello");
     assert.equal(await raw("DESOLATE-LINK pretend-old-hello\n"), "", "the first version's hello");
-    const proofLine = await raw(`DESOLATE-LINK2 ${"a".repeat(32)}\n`, () => `${"0".repeat(64)}\nconnect\n`);
-    assert.match(proofLine, /^[0-9a-f]{32} [0-9a-f]{64}\n$/, "the host proves itself, and echoes nothing after a wrong answer");
-    assert.deepEqual(await guest(host.port, OTHER, "connect\n"), { opened: false, got: "" }, "a guest with another workspace's token does not accept the host's proof");
-    assert.equal(await raw(`DESOLATE-LINK2 ${"a".repeat(32)}`), "", "a hello that never ends is dropped when its time is up");
+    const proofLine = await raw(
+      `DESOLATE-LINK2 ${"a".repeat(32)}\n`,
+      () => `${"0".repeat(64)}\nconnect\n`,
+    );
+    assert.match(
+      proofLine,
+      /^[0-9a-f]{32} [0-9a-f]{64}\n$/,
+      "the host proves itself, and echoes nothing after a wrong answer",
+    );
+    assert.deepEqual(
+      await guest(host.port, OTHER, "connect\n"),
+      { opened: false, got: "" },
+      "a guest with another workspace's token does not accept the host's proof",
+    );
+    assert.equal(
+      await raw(`DESOLATE-LINK2 ${"a".repeat(32)}`),
+      "",
+      "a hello that never ends is dropped when its time is up",
+    );
   });
 });

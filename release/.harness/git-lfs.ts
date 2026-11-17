@@ -9,11 +9,21 @@ import { onTestFinished } from "./vitest.ts";
 type Fetch = (oid: string, size: number, stores: string[], gitDir: string) => string | null;
 /** An object in a store: a file of that content at the oid's place, a link there to a file
  *  of that content elsewhere, or a directory there. */
-type Placed = [store: "mirror" | "root", oid: string, content: string, kind: "file" | "link" | "dir"];
+type Placed = [
+  store: "mirror" | "root",
+  oid: string,
+  content: string,
+  kind: "file" | "link" | "dir",
+];
 
 /** What `fetch` copied out (read back), and how many files it left in the clone's LFS temp
  *  directory besides it. */
-export const fetchedFrom = (fetch: Fetch, objects: Placed[], oid: string, size: number): { copied: string | null; leftovers: number } => {
+export const fetchedFrom = (
+  fetch: Fetch,
+  objects: Placed[],
+  oid: string,
+  size: number,
+): { copied: string | null; leftovers: number } => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-lfs-"));
   onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
   const stores = { mirror: path.join(dir, "mirror"), root: path.join(dir, "root") };
@@ -31,7 +41,10 @@ export const fetchedFrom = (fetch: Fetch, objects: Placed[], oid: string, size: 
   const file = fetch(oid, size, [stores.mirror, stores.root], gitDir);
   const tmp = path.join(gitDir, "lfs", "tmp");
   const copied = file === null ? null : fs.readFileSync(file, "utf8");
-  return { copied, leftovers: fs.readdirSync(tmp).filter((name) => path.join(tmp, name) !== file).length };
+  return {
+    copied,
+    leftovers: fs.readdirSync(tmp).filter((name) => path.join(tmp, name) !== file).length,
+  };
 };
 
 /** A fetchOne that finds every object, at a path named for it. */

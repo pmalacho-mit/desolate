@@ -11,22 +11,55 @@ import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const forgeRefs = (repo: string) => Object.fromEntries(stack.forge("refs", repo).trim().split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string]));
+const forgeRefs = (repo: string) =>
+  Object.fromEntries(
+    stack
+      .forge("refs", repo)
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split(" ") as [string, string]),
+  );
 
 /** HTTP to one of the host daemon's pages, by its name, as the browser would send it. */
 const client = (name: string, port: number) => {
   let cookie = "";
-  const call = (method: string, url: string, headers: Record<string, string> = {}, body?: string, untilMs?: number): Promise<{ status: number; headers: Record<string, unknown>; body: string }> =>
+  const call = (
+    method: string,
+    url: string,
+    headers: Record<string, string> = {},
+    body?: string,
+    untilMs?: number,
+  ): Promise<{ status: number; headers: Record<string, unknown>; body: string }> =>
     new Promise((resolve, reject) => {
       // (A fresh connection each time: the daemon routes a connection by its first request's
       // name, and each page refuses a request for another, which is what a test of one
       // page's answers must not stumble on.)
-      const req = httpRequest({ agent: false, host: "127.0.0.1", port, method, path: url, headers: { host: `${name}:${port}`, ...(cookie ? { cookie } : {}), ...headers } }, (res) => {
-        let text = "";
-        res.on("data", (chunk) => (text += chunk));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
-        if (untilMs) setTimeout(() => (req.destroy(), resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text })), untilMs);
-      });
+      const req = httpRequest(
+        {
+          agent: false,
+          host: "127.0.0.1",
+          port,
+          method,
+          path: url,
+          headers: { host: `${name}:${port}`, ...(cookie ? { cookie } : {}), ...headers },
+        },
+        (res) => {
+          let text = "";
+          res.on("data", (chunk) => (text += chunk));
+          res.on("end", () =>
+            resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }),
+          );
+          if (untilMs)
+            setTimeout(
+              () => (
+                req.destroy(),
+                resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text })
+              ),
+              untilMs,
+            );
+        },
+      );
       req.on("error", (error) => (untilMs ? undefined : reject(error)));
       req.end(body);
     });
@@ -37,8 +70,19 @@ const client = (name: string, port: number) => {
       assert.equal(answer.status, 303);
       cookie = String(answer.headers["set-cookie"]).split(";")[0]!;
     },
-    get: (url: string, untilMs?: number) => call("GET", url, { "sec-fetch-site": "same-origin" }, undefined, untilMs),
-    post: (url: string, body: unknown) => call("POST", url, { "sec-fetch-site": "same-origin", origin: `http://${name}:${port}`, "content-type": "application/json" }, JSON.stringify(body)),
+    get: (url: string, untilMs?: number) =>
+      call("GET", url, { "sec-fetch-site": "same-origin" }, undefined, untilMs),
+    post: (url: string, body: unknown) =>
+      call(
+        "POST",
+        url,
+        {
+          "sec-fetch-site": "same-origin",
+          origin: `http://${name}:${port}`,
+          "content-type": "application/json",
+        },
+        JSON.stringify(body),
+      ),
   };
 };
 
@@ -60,19 +104,45 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
   it("desolate git makes the VM and the person's clone, with no network and the root's clones read-only", () => {
     const made = stack.desolate("git", "acme/widgets");
     assert.equal(made.code, 0, made.stderr);
-    assert.match(made.stdout, /^git {10}http:\/\/desolate-git\.localhost:\d+\/\?tkn=[0-9a-f]{48}&repo=acme%2Fwidgets\n$/);
+    assert.match(
+      made.stdout,
+      /^git {10}http:\/\/desolate-git\.localhost:\d+\/\?tkn=[0-9a-f]{48}&repo=acme%2Fwidgets\n$/,
+    );
     // Fetching works, from the mirror and from the root's clone (it did not, once: an empty
     // setting made upload-pack try to run nothing).
-    const fetched = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && git fetch origin 2>&1 && git fetch root 2>&1 && echo FETCHED"]);
+    const fetched = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && git fetch origin 2>&1 && git fetch root 2>&1 && echo FETCHED",
+    ]);
     assert.match(fetched.stdout, /FETCHED/, fetched.stdout + fetched.stderr);
-    const inside = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && git log --oneline -1 && git config remote.origin.pushurl && git config --get-all remote.root.fetch"]);
+    const inside = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && git log --oneline -1 && git config remote.origin.pushurl && git config --get-all remote.root.fetch",
+    ]);
     assert.equal(inside.code, 0, inside.stderr);
-    assert.match(inside.stdout, /seed\ndesolate-out::acme\/widgets\n\+refs\/remotes\/\*:refs\/remotes\/root\/\*\n/);
+    assert.match(
+      inside.stdout,
+      /seed\ndesolate-out::acme\/widgets\n\+refs\/remotes\/\*:refs\/remotes\/root\/\*\n/,
+    );
     // No way out, and nothing of the root's to change.
-    const closed = stack.inVm(gitVm(), ["bash", "-c", "curl -sS -m 5 https://example.com >/dev/null 2>&1 && echo NET; touch /desolate/root/x 2>/dev/null && echo ROOT-WRITABLE; touch /desolate/mirrors/x 2>/dev/null && echo MIRRORS-WRITABLE; echo done"]);
-    assert.equal(closed.stdout.trim(), "done", "no network; the root's clones and the mirrors are read-only");
+    const closed = stack.inVm(gitVm(), [
+      "bash",
+      "-c",
+      "curl -sS -m 5 https://example.com >/dev/null 2>&1 && echo NET; touch /desolate/root/x 2>/dev/null && echo ROOT-WRITABLE; touch /desolate/mirrors/x 2>/dev/null && echo MIRRORS-WRITABLE; echo done",
+    ]);
+    assert.equal(
+      closed.stdout.trim(),
+      "done",
+      "no network; the root's clones and the mirrors are read-only",
+    );
     // git runs no hook in a clone's own hooks directory: only the git VM's (empty) one.
-    const trap = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && mkdir -p .git/hooks && printf '#!/bin/sh\\ntouch /tmp/PWNED-hook\\n' > .git/hooks/post-checkout && chmod +x .git/hooks/post-checkout && git checkout -q -b probe && git checkout -q main && git branch -q -D probe; rm .git/hooks/post-checkout; ls /tmp/PWNED-hook 2>/dev/null; true"]);
+    const trap = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && mkdir -p .git/hooks && printf '#!/bin/sh\\ntouch /tmp/PWNED-hook\\n' > .git/hooks/post-checkout && chmod +x .git/hooks/post-checkout && git checkout -q -b probe && git checkout -q main && git branch -q -D probe; rm .git/hooks/post-checkout; ls /tmp/PWNED-hook 2>/dev/null; true",
+    ]);
     assert.equal(trap.stdout.trim(), "", "a clone's own hook does not run");
   });
 
@@ -80,7 +150,10 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const port = Number(stack.env.DESOLATE_EDITOR_PORT);
     // A script on the Mac, listening: `desolate events`.
     const heard: Record<string, unknown>[] = [];
-    const listener = spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["events"], { env: { ...process.env, ...stack.env }, stdio: ["ignore", "pipe", "ignore"] });
+    const listener = spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["events"], {
+      env: { ...process.env, ...stack.env },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
     let partial = "";
     listener.stdout.on("data", (chunk: Buffer) => {
       partial += chunk.toString();
@@ -96,12 +169,17 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const opened = await terminal.post("/session", { repo: "acme/widgets" });
     assert.equal(opened.status, 200, opened.body);
     const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
-    const type = (text: string) => terminal.post(`/session/${id}/input`, { token, data: Buffer.from(text).toString("base64") });
+    const type = (text: string) =>
+      terminal.post(`/session/${id}/input`, { token, data: Buffer.from(text).toString("base64") });
     const screen = async (pattern: RegExp, ms = 20_000) => {
       let said = "";
-      for (const until = Date.now() + ms; Date.now() < until; ) {
+      for (const until = Date.now() + ms; Date.now() < until;) {
         const stream = await terminal.get(`/session/${id}/stream?token=${token}`, 700);
-        said = stream.body.split("\n").filter((line) => line.startsWith("data: ")).map((line) => Buffer.from(line.slice(6), "base64").toString()).join("")
+        said = stream.body
+          .split("\n")
+          .filter((line) => line.startsWith("data: "))
+          .map((line) => Buffer.from(line.slice(6), "base64").toString())
+          .join("")
           // eslint-disable-next-line no-control-regex
           .replace(/\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g, "");
         if (pattern.test(said)) return said;
@@ -111,30 +189,64 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.equal((await type("pwd; git status --short --branch\n")).status, 200);
     await screen(/\/git\/acme\/widgets[\s\S]*## main\.\.\.origin\/main/);
     // A commit, and a push of it, typed as anyone would.
-    await type("echo from-the-git-vm > note.txt && git add note.txt && git -c user.name=person -c user.email=p@example.invalid commit -qm 'from the git VM' && git push origin HEAD:refs/heads/from-git\n");
+    await type(
+      "echo from-the-git-vm > note.txt && git add note.txt && git -c user.name=person -c user.email=p@example.invalid commit -qm 'from the git VM' && git push origin HEAD:refs/heads/from-git\n",
+    );
     await screen(/handed to the root\. Approve it beside this terminal/);
-    const commit = stack.inVm(gitVm(), ["git", "-C", "/git/acme/widgets", "rev-parse", "HEAD"]).stdout.trim();
-    assert.equal(forgeRefs("acme/widgets")["from-git"], undefined, "nothing reached the remote before the approval");
+    const commit = stack
+      .inVm(gitVm(), ["git", "-C", "/git/acme/widgets", "rev-parse", "HEAD"])
+      .stdout.trim();
+    assert.equal(
+      forgeRefs("acme/widgets")["from-git"],
+      undefined,
+      "nothing reached the remote before the approval",
+    );
 
     const approvals = client("desolate-approve.localhost", port);
-    await approvals.login(/approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!);
-    type Waiting = { nonce: string; token: string; branch: string; commit: string; summary: { waiting?: boolean; ok: boolean; commits?: { subject: string }[] } };
+    await approvals.login(
+      /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!,
+    );
+    type Waiting = {
+      nonce: string;
+      token: string;
+      branch: string;
+      commit: string;
+      summary: { waiting?: boolean; ok: boolean; commits?: { subject: string }[] };
+    };
     let push: Waiting | undefined;
     for (let i = 0; i < 120 && !push; i++) {
-      push = (JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }).pending.find((p) => p.branch === "from-git" && !p.summary.waiting);
+      push = (
+        JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
+      ).pending.find((p) => p.branch === "from-git" && !p.summary.waiting);
       if (!push) await sleep(250);
     }
     assert.ok(push, "the push waits on the approval page");
     assert.equal(push!.commit, commit);
     assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary));
-    assert.deepEqual(push!.summary.commits!.map((c) => c.subject), ["from the git VM"], "the reviewer says what it is");
-    assert.equal((await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status, 200);
+    assert.deepEqual(
+      push!.summary.commits!.map((c) => c.subject),
+      ["from the git VM"],
+      "the reviewer says what it is",
+    );
+    assert.equal(
+      (await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status,
+      200,
+    );
     await screen(/\* \[new branch\]\s+HEAD -> from-git/, 60_000);
-    assert.equal(forgeRefs("acme/widgets")["from-git"], commit, "the remote has exactly that commit");
+    assert.equal(
+      forgeRefs("acme/widgets")["from-git"],
+      commit,
+      "the remote has exactly that commit",
+    );
     // What the script heard, and from whom.
     const said = async (type: string, source: string) => {
       for (let i = 0; i < 40; i++) {
-        const found = heard.find((e) => e.type === type && e.source === source && (e.commit === undefined || e.commit === commit));
+        const found = heard.find(
+          (e) =>
+            e.type === type &&
+            e.source === source &&
+            (e.commit === undefined || e.commit === commit),
+        );
         if (found) return found;
         await sleep(250);
       }
@@ -144,7 +256,11 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.equal((await said("approval-waiting", "root")).branch, "from-git");
     assert.equal((await said("approved", "host")).branch, "from-git");
     const pushed = await said("pushed", "pusher");
-    assert.deepEqual([pushed.repo, pushed.branch, pushed.commit, pushed.onto], ["acme/widgets", "from-git", commit, null], "the pusher says what the remote now has");
+    assert.deepEqual(
+      [pushed.repo, pushed.branch, pushed.commit, pushed.onto],
+      ["acme/widgets", "from-git", commit, null],
+      "the pusher says what the remote now has",
+    );
   });
 
   it("the terminal answers nothing to another origin, or without its cookie", async () => {
@@ -161,36 +277,80 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const canary = path.join(stack.work, "canary.txt");
     fs.writeFileSync(canary, "the person's file\n");
     const id = "aaaaaaaaaaaaaaaa";
-    const request = JSON.stringify({ repo: "acme/widgets", branch: "linked", commit: "b".repeat(40), forced: false, lfs: ["c".repeat(64)] });
-    const planted = stack.inVm(gitVm(), ["bash", "-c", `cd /desolate/out && ln -s ${canary} ${id}.bundle && ln -s ${canary} ${id}.${"c".repeat(64)}.lfs && printf '%s' '${request}' > ${id}.json && ln -s ${canary} /desolate/answers/${id}.json 2>/dev/null; echo planted`]);
+    const request = JSON.stringify({
+      repo: "acme/widgets",
+      branch: "linked",
+      commit: "b".repeat(40),
+      forced: false,
+      lfs: ["c".repeat(64)],
+    });
+    const planted = stack.inVm(gitVm(), [
+      "bash",
+      "-c",
+      `cd /desolate/out && ln -s ${canary} ${id}.bundle && ln -s ${canary} ${id}.${"c".repeat(64)}.lfs && printf '%s' '${request}' > ${id}.json && ln -s ${canary} /desolate/answers/${id}.json 2>/dev/null; echo planted`,
+    ]);
     assert.match(planted.stdout, /planted/);
     let answer = "";
     for (let i = 0; i < 40 && !answer; i++) {
-      answer = stack.inVm(gitVm(), ["bash", "-c", `cat /desolate/answers/${id}.json 2>/dev/null; true`]).stdout;
+      answer = stack.inVm(gitVm(), [
+        "bash",
+        "-c",
+        `cat /desolate/answers/${id}.json 2>/dev/null; true`,
+      ]).stdout;
       if (!answer) await sleep(250);
     }
     assert.match(answer, /not a plain file/, "refused, and said so where the git VM reads it");
-    assert.equal(fs.readFileSync(canary, "utf8"), "the person's file\n", "the file the links named is as it was, and where it was");
-    assert.ok(!fs.lstatSync(path.join(stack.home, "git-answers", `${id}.json`)).isSymbolicLink(), "the answers are the host's: the git VM could not leave a link there");
+    assert.equal(
+      fs.readFileSync(canary, "utf8"),
+      "the person's file\n",
+      "the file the links named is as it was, and where it was",
+    );
+    assert.ok(
+      !fs.lstatSync(path.join(stack.home, "git-answers", `${id}.json`)).isSymbolicLink(),
+      "the answers are the host's: the git VM could not leave a link there",
+    );
   });
 
   it("a new branch at a commit the remote has already (main's, which two of its refs name) is described, not left blank", async () => {
     // Found recording the demo: the reviewer was sent origin/HEAD and origin/main at one
     // commit, and refused the whole bundle; the page could not say what the push was.
     const port = Number(stack.env.DESOLATE_EDITOR_PORT);
-    stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && (timeout 150 git push origin origin/main:refs/heads/same-as-main >/tmp/same.log 2>&1 &)"]);
+    stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && (timeout 150 git push origin origin/main:refs/heads/same-as-main >/tmp/same.log 2>&1 &)",
+    ]);
     const approvals = client("desolate-approve.localhost", port);
-    await approvals.login(/approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!);
-    type Waiting = { nonce: string; token: string; branch: string; commit: string; summary: { waiting?: boolean; ok: boolean; error?: string; commits?: unknown[] } };
+    await approvals.login(
+      /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!,
+    );
+    type Waiting = {
+      nonce: string;
+      token: string;
+      branch: string;
+      commit: string;
+      summary: { waiting?: boolean; ok: boolean; error?: string; commits?: unknown[] };
+    };
     let push: Waiting | undefined;
     for (let i = 0; i < 120 && !push; i++) {
-      push = (JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }).pending.find((p) => p.branch === "same-as-main" && !p.summary.waiting);
+      push = (
+        JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
+      ).pending.find((p) => p.branch === "same-as-main" && !p.summary.waiting);
       if (!push) await sleep(250);
     }
     assert.ok(push, "the push waits on the approval page");
     assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary));
     assert.deepEqual(push!.summary.commits, [], "no commit the remote does not have");
-    assert.equal((await approvals.post("/refuse", { nonce: push!.nonce, token: push!.token, commit: push!.commit })).status, 200);
+    assert.equal(
+      (
+        await approvals.post("/refuse", {
+          nonce: push!.nonce,
+          token: push!.token,
+          commit: push!.commit,
+        })
+      ).status,
+      200,
+    );
   });
 
   it("every branch a workspace makes reaches the git VM unoffered; a branch from there is delivered to a domain; desolate fetch refreshes", async () => {
@@ -198,24 +358,46 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.equal(stack.quiet("domain", "create", "dev", "--repo", "acme/widgets").code, 0);
     const up = stack.quiet("up", "dev", "--name", "w1", "--branch", "task/one");
     assert.equal(up.code, 0, up.stderr);
-    assert.match(stack.desolate("list", "dev").stdout, /dev\/w1 {2}running.*acme\/widgets@task\/one/, "the checkout is on the branch --branch named");
-    const ws = (script: string) => stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
+    assert.match(
+      stack.desolate("list", "dev").stdout,
+      /dev\/w1 {2}running.*acme\/widgets@task\/one/,
+      "the checkout is on the branch --branch named",
+    );
+    const ws = (script: string) =>
+      stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
     // An agent's branch, never offered: the root imports it as the workspace writes it out.
-    const made = ws("git switch -q -c wip/unoffered && git -c user.name=a -c user.email=a@a commit -q --allow-empty -m 'work in progress' && git rev-parse HEAD");
+    const made = ws(
+      "git switch -q -c wip/unoffered && git -c user.name=a -c user.email=a@a commit -q --allow-empty -m 'work in progress' && git rev-parse HEAD",
+    );
     assert.equal(made.code, 0, made.stderr);
     const wip = made.stdout.trim();
     // (A new remote for the new domain: desolate git sets the clone up again.)
     assert.equal(stack.desolate("git", "acme/widgets").code, 0);
     let seen = "";
     for (let i = 0; i < 60 && !seen.includes(wip); i++) {
-      seen = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && git fetch -q dev 2>&1; git rev-parse dev/wip/unoffered 2>/dev/null; true"]).stdout;
+      seen = stack.inVm(gitVm(), [
+        "bash",
+        "-lc",
+        "cd /git/acme/widgets && git fetch -q dev 2>&1; git rev-parse dev/wip/unoffered 2>/dev/null; true",
+      ]).stdout;
       if (!seen.includes(wip)) await sleep(500);
     }
-    assert.match(seen, new RegExp(wip), "the unoffered branch is the git VM's to read, as dev/wip/unoffered");
+    assert.match(
+      seen,
+      new RegExp(wip),
+      "the unoffered branch is the git VM's to read, as dev/wip/unoffered",
+    );
     const branches = stack.desolate("branches", "dev");
-    assert.match(branches.stdout, /dev {2}acme\/widgets {2}wip\/unoffered {2}[0-9a-f]{12} {2}checked out in w1/);
+    assert.match(
+      branches.stdout,
+      /dev {2}acme\/widgets {2}wip\/unoffered {2}[0-9a-f]{12} {2}checked out in w1/,
+    );
     // A branch from the git VM, delivered: no approval, and the workspace has it as root/<branch>.
-    const sent = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && git switch -q -c review/notes origin/main && echo notes > NOTES.md && git add NOTES.md && git -c user.name=r -c user.email=r@r commit -qm 'Review notes' && git push dev review/notes 2>&1 && git rev-parse HEAD; git switch -q main"]);
+    const sent = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && git switch -q -c review/notes origin/main && echo notes > NOTES.md && git add NOTES.md && git -c user.name=r -c user.email=r@r commit -qm 'Review notes' && git push dev review/notes 2>&1 && git rev-parse HEAD; git switch -q main",
+    ]);
     assert.match(sent.stdout, /delivered to dev/, sent.stdout + sent.stderr);
     const notes = sent.stdout.trim().split("\n").pop()!;
     let there = "";
@@ -224,42 +406,79 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       if (!there.includes(notes)) await sleep(500);
     }
     assert.match(there, new RegExp(notes), "the workspace sees the delivery as root/review/notes");
-    assert.equal(forgeRefs("acme/widgets")["refs/heads/review/notes"], undefined, "a delivery goes nowhere near the remote");
+    assert.equal(
+      forgeRefs("acme/widgets")["refs/heads/review/notes"],
+      undefined,
+      "a delivery goes nowhere near the remote",
+    );
     // A delivery to a domain without the repository is refused by the root.
     assert.equal(stack.quiet("domain", "create", "empty").code, 0);
-    const refused = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && git push desolate-out::acme/widgets@empty review/notes 2>&1; true"]);
+    const refused = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && git push desolate-out::acme/widgets@empty review/notes 2>&1; true",
+    ]);
     assert.match(refused.stdout, /not in the domain 'empty'/);
     // desolate fetch: the root refreshes the mirror, and every remote is fetched.
-    const fetched = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && desolate fetch 2>&1; echo EXIT=$?"]);
-    assert.match(fetched.stdout, /asking the root to refresh acme\/widgets[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/, fetched.stdout);
+    const fetched = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git/acme/widgets && desolate fetch 2>&1; echo EXIT=$?",
+    ]);
+    assert.match(
+      fetched.stdout,
+      /asking the root to refresh acme\/widgets[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/,
+      fetched.stdout,
+    );
   });
 
   it("an offered branch's new LFS file checks out in the git VM, from the root's store, whole", async () => {
     // (git-lfs's own file transfer runs git inside the bare mirror, which the git VM's
     // safe.bareRepository refuses: no LFS file was ever checked out there. desolate's agent,
     // git/lfs-file.ts, reads the mirror's store and the root clone's.)
-    const ws = (script: string) => stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
-    const made = ws("git switch -q -c lfs/art && git lfs track '*.bin' >/dev/null && head -c 40000 /dev/urandom > art.bin && git add .gitattributes art.bin && git -c user.name=a -c user.email=a@a commit -qm art && sha256sum art.bin | cut -d' ' -f1 && desolate offer >/dev/null && echo OFFERED");
+    const ws = (script: string) =>
+      stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
+    const made = ws(
+      "git switch -q -c lfs/art && git lfs track '*.bin' >/dev/null && head -c 40000 /dev/urandom > art.bin && git add .gitattributes art.bin && git -c user.name=a -c user.email=a@a commit -qm art && sha256sum art.bin | cut -d' ' -f1 && desolate offer >/dev/null && echo OFFERED",
+    );
     assert.match(made.stdout, /OFFERED/, made.stdout + made.stderr);
     const oid = made.stdout.trim().split("\n")[0]!;
     assert.equal(stack.desolate("git", "acme/widgets").code, 0);
     let got = "";
     for (let i = 0; i < 40 && !got.includes(oid); i++) {
-      got = stack.inVm(gitVm(), ["bash", "-lc", "cd /git/acme/widgets && git fetch -q dev 2>&1; git switch -q -c look dev/lfs/art 2>&1 && sha256sum art.bin; git switch -q main 2>/dev/null; git branch -q -D look 2>/dev/null; true"]).stdout;
+      got = stack.inVm(gitVm(), [
+        "bash",
+        "-lc",
+        "cd /git/acme/widgets && git fetch -q dev 2>&1; git switch -q -c look dev/lfs/art 2>&1 && sha256sum art.bin; git switch -q main 2>/dev/null; git branch -q -D look 2>/dev/null; true",
+      ]).stdout;
       if (!got.includes(oid)) await sleep(500);
     }
-    assert.match(got, new RegExp(`^${oid}  art\\.bin$`, "m"), `the file itself, not its pointer: ${got}`);
+    assert.match(
+      got,
+      new RegExp(`^${oid}  art\\.bin$`, "m"),
+      `the file itself, not its pointer: ${got}`,
+    );
   });
 
   it("a review against the domain's own main still warns about, and counts, everything a push would send", async () => {
     // (The domain's main is the agent's to write: a workflow hidden there, then a harmless
     // branch on top, reviewed --against domain. Found by the audit of #92.)
-    const ws = (script: string) => stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
-    const made = ws("git switch -q -c hide origin/main && mkdir -p .github/workflows && echo 'on: push' > .github/workflows/x.yml && git add -A && git -c user.name=a -c user.email=a@a commit -qm ci && git update-ref refs/heads/main HEAD && git switch -q -c harmless && echo hi > hi.txt && git add hi.txt && git -c user.name=a -c user.email=a@a commit -qm hi && echo MADE");
+    const ws = (script: string) =>
+      stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
+    const made = ws(
+      "git switch -q -c hide origin/main && mkdir -p .github/workflows && echo 'on: push' > .github/workflows/x.yml && git add -A && git -c user.name=a -c user.email=a@a commit -qm ci && git update-ref refs/heads/main HEAD && git switch -q -c harmless && echo hi > hi.txt && git add hi.txt && git -c user.name=a -c user.email=a@a commit -qm hi && echo MADE",
+    );
     assert.match(made.stdout, /MADE/, made.stdout + made.stderr);
     let out = "";
     for (let i = 0; i < 40 && !/beyond/.test(out); i++) {
-      const asked = stack.desolate("review", "dev", "acme/widgets", "harmless", "--against", "domain");
+      const asked = stack.desolate(
+        "review",
+        "dev",
+        "acme/widgets",
+        "harmless",
+        "--against",
+        "domain",
+      );
       out = asked.stdout || asked.stderr;
       if (!/beyond/.test(out)) await sleep(500);
     }

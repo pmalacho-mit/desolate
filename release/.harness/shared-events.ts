@@ -5,7 +5,12 @@
 /** A root state with `count` new offers in each domain named. */
 export const offersIn = (counts: Record<string, number>) => ({
   offers: Object.entries(counts).flatMap(([domain, count]) =>
-    Array.from({ length: count }, (_, i) => ({ domain, repo: "acme/app", branch: `b${i}`, commit: i.toString(16).padStart(40, "0") })),
+    Array.from({ length: count }, (_, i) => ({
+      domain,
+      repo: "acme/app",
+      branch: `b${i}`,
+      commit: i.toString(16).padStart(40, "0"),
+    })),
   ),
 });
 

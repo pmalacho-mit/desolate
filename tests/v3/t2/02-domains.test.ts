@@ -13,10 +13,13 @@ import type { Stack } from "../lib/harness.ts";
 let stack: Stack;
 const vmOf = (target: string) => {
   const [domain] = target.split("/");
-  const list = JSON.parse(stack.quiet("list", domain!, "--json").stdout) as { workspaces: { workspace: string; vm: string }[] }[];
+  const list = JSON.parse(stack.quiet("list", domain!, "--json").stdout) as {
+    workspaces: { workspace: string; vm: string }[];
+  }[];
   return list[0]!.workspaces.find((w) => `${domain}/${w.workspace}` === target)!.vm;
 };
-const inWs = (target: string, script: string, root = false) => stack.inVm(vmOf(target), ["bash", "-c", script], { root });
+const inWs = (target: string, script: string, root = false) =>
+  stack.inVm(vmOf(target), ["bash", "-c", script], { root });
 
 describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
   before(() => {
@@ -40,24 +43,38 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
       git(dir, "commit", "--quiet", "-m", "seed");
     });
     assert.equal(bootstrap(stack).code, 0);
-    for (const repo of ["acme/widgets", "acme/consumer", "acme/private"]) assert.equal(stack.quiet("clone", repo, "--no-domain").code, 0);
+    for (const repo of ["acme/widgets", "acme/consumer", "acme/private"])
+      assert.equal(stack.quiet("clone", repo, "--no-domain").code, 0);
   });
   after(() => stack.destroy());
 
   it("a domain, two repositories, and its first workspace", () => {
     stack.step("create a domain and start a workspace");
-    assert.equal(stack.desolate("domain", "create", "nests-dev", "--title", "suede.nests agentic development").code, 0);
+    assert.equal(
+      stack.desolate("domain", "create", "nests-dev", "--title", "suede.nests agentic development")
+        .code,
+      0,
+    );
     assert.equal(stack.desolate("domain", "nests-dev", "add", "--repo", "acme/widgets").code, 0);
     assert.equal(stack.desolate("domain", "nests-dev", "add", "--repo", "acme/consumer").code, 0);
     const up = stack.desolate("up", "nests-dev");
     assert.equal(up.code, 0, up.stderr);
     assert.match(up.stdout, /workspace nests-dev\/w1 is up {2}\[NOT ISOLATED: fake backend\]/);
-    assert.match(up.stdout, /acme\/widgets {2}main checkout \(main\) {2}\/workspaces\/acme\/widgets/);
-    assert.match(up.stdout, /the start took [\d.]+ s: asked the root [\d.]+ s, VM booted [\d.]+ s, services, checkouts, devcontainer and editor [\d.]+ s/);
+    assert.match(
+      up.stdout,
+      /acme\/widgets {2}main checkout \(main\) {2}\/workspaces\/acme\/widgets/,
+    );
+    assert.match(
+      up.stdout,
+      /the start took [\d.]+ s: asked the root [\d.]+ s, VM booted [\d.]+ s, services, checkouts, devcontainer and editor [\d.]+ s/,
+    );
   });
 
   it("the domain clone borrows the mirror: nothing of its own until its first commit; LFS checks out", () => {
-    const counts = inWs("nests-dev/w1", "cd /workspaces/acme/widgets && git count-objects -v && cat .git/objects/info/alternates && stat -c %s big.bin && git lfs env | grep Endpoint=");
+    const counts = inWs(
+      "nests-dev/w1",
+      "cd /workspaces/acme/widgets && git count-objects -v && cat .git/objects/info/alternates && stat -c %s big.bin && git lfs env | grep Endpoint=",
+    );
     assert.equal(counts.code, 0, counts.stderr);
     assert.match(counts.stdout, /^count: 0$/m);
     assert.match(counts.stdout, /^in-pack: 0$/m);
@@ -67,18 +84,37 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
   });
 
   it("git fetch works from the mirror, with no key and no network; a commit stays in the domain clone", () => {
-    const before = fs.readdirSync(path.join(stack.home, "mirrors/acme/widgets.git/objects"), { recursive: true }).length;
-    const work = inWs("nests-dev/w1", "cd /workspaces/acme/widgets && git fetch origin && echo change >> README.md && git commit -qam 'a change in the domain' && git count-objects -v | head -1 && ip -o link | grep -cvE ': (docker0|br-[0-9a-f]+|veth[0-9a-f]+)[@:]'");
+    const before = fs.readdirSync(path.join(stack.home, "mirrors/acme/widgets.git/objects"), {
+      recursive: true,
+    }).length;
+    const work = inWs(
+      "nests-dev/w1",
+      "cd /workspaces/acme/widgets && git fetch origin && echo change >> README.md && git commit -qam 'a change in the domain' && git count-objects -v | head -1 && ip -o link | grep -cvE ': (docker0|br-[0-9a-f]+|veth[0-9a-f]+)[@:]'",
+    );
     assert.equal(work.code, 0, work.stderr);
     assert.match(work.stdout, /^count: [1-9]/m, "the commit's objects are the domain clone's own");
-    assert.match(work.stdout, /^1$/m, "the workspace has one interface that leads anywhere, and it is loopback (the VM's own docker bridge leads only to its containers). Its fetch used no network");
-    const after = fs.readdirSync(path.join(stack.home, "mirrors/acme/widgets.git/objects"), { recursive: true }).length;
+    assert.match(
+      work.stdout,
+      /^1$/m,
+      "the workspace has one interface that leads anywhere, and it is loopback (the VM's own docker bridge leads only to its containers). Its fetch used no network",
+    );
+    const after = fs.readdirSync(path.join(stack.home, "mirrors/acme/widgets.git/objects"), {
+      recursive: true,
+    }).length;
     assert.equal(after, before, "the mirror did not change");
   });
 
   it("T2 the mirror and the inbox are read-only in the workspace, to root too", () => {
     // Controls: the same writes succeed where the workspace MAY write.
-    assert.equal(inWs("nests-dev/w1", "touch /workspaces/.probe && rm /workspaces/.probe && touch /desolate/outbox/.probe && rm /desolate/outbox/.probe", true).code, 0, "control: /workspaces and the outbox are writable");
+    assert.equal(
+      inWs(
+        "nests-dev/w1",
+        "touch /workspaces/.probe && rm /workspaces/.probe && touch /desolate/outbox/.probe && rm /desolate/outbox/.probe",
+        true,
+      ).code,
+      0,
+      "control: /workspaces and the outbox are writable",
+    );
     for (const attempt of [
       "touch /desolate/mirrors/acme/widgets.git/planted",
       "echo x >> /desolate/mirrors/acme/widgets.git/HEAD",
@@ -86,75 +122,162 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
       "touch /desolate/inbox/forged-delivery",
       "echo '{}' > /desolate/inbox/workspaces/w1.json",
       "touch /desolate/release/planted",
-    ]) assert.notEqual(inWs("nests-dev/w1", attempt, true).code, 0, `root in the workspace must not be able to: ${attempt}`);
+    ])
+      assert.notEqual(
+        inWs("nests-dev/w1", attempt, true).code,
+        0,
+        `root in the workspace must not be able to: ${attempt}`,
+      );
     assert.equal(fs.existsSync(path.join(stack.home, "mirrors/acme/widgets.git/planted")), false);
   });
 
   it("a workspace sees the mirrors of its own domain's repositories, and no others", () => {
     const seen = inWs("nests-dev/w1", "ls /desolate/mirrors/acme/");
     assert.deepEqual(seen.stdout.trim().split("\n").sort(), ["consumer.git", "widgets.git"]);
-    assert.ok(fs.existsSync(path.join(stack.home, "mirrors/acme/private.git")), "control: the other mirror exists on the host");
+    assert.ok(
+      fs.existsSync(path.join(stack.home, "mirrors/acme/private.git")),
+      "control: the other mirror exists on the host",
+    );
   });
 
   it("the main checkout is refused to a second workspace, which can take a worktree", () => {
     stack.step("a second workspace in the domain");
-    const refused = stack.desolate("up", "nests-dev", "--name", "issue-12", "--checkout", "acme/widgets=main");
+    const refused = stack.desolate(
+      "up",
+      "nests-dev",
+      "--name",
+      "issue-12",
+      "--checkout",
+      "acme/widgets=main",
+    );
     assert.equal(refused.code, 75, "busy");
     assert.match(refused.stderr, /held by the workspace 'nests-dev\/w1'/);
-    assert.match(refused.stderr, /fix: take a worktree instead: --checkout acme\/widgets=worktree:<branch>/);
-    const up = stack.desolate("up", "nests-dev", "--name", "issue-12", "--checkout", "acme/widgets=worktree:issue/12");
+    assert.match(
+      refused.stderr,
+      /fix: take a worktree instead: --checkout acme\/widgets=worktree:<branch>/,
+    );
+    const up = stack.desolate(
+      "up",
+      "nests-dev",
+      "--name",
+      "issue-12",
+      "--checkout",
+      "acme/widgets=worktree:issue/12",
+    );
     assert.equal(up.code, 0, up.stderr);
-    assert.match(up.stdout, /acme\/widgets {2}worktree issue\/12 from main {2}\/workspaces\/acme\/widgets\/\.worktrees\/issue-12/);
+    assert.match(
+      up.stdout,
+      /acme\/widgets {2}worktree issue\/12 from main {2}\/workspaces\/acme\/widgets\/\.worktrees\/issue-12/,
+    );
     // Not named, and its main checkout is held: none (it was a fresh worktree named for the
     // workspace: an empty branch in each repository the work was not about).
     assert.doesNotMatch(up.stdout, /acme\/consumer/);
-    assert.doesNotMatch(stack.quiet("branches", "nests-dev").stdout, /acme\/consumer {2}issue-12 /, "no empty issue-12 branch in acme/consumer");
+    assert.doesNotMatch(
+      stack.quiet("branches", "nests-dev").stdout,
+      /acme\/consumer {2}issue-12 /,
+      "no empty issue-12 branch in acme/consumer",
+    );
   });
 
   it("two workspaces commit to one repository at once, in their own worktrees, without corruption", async () => {
-    const worker = (target: string, dir: string, tag: string) => new Promise<number>((resolve) => {
-      const child = spawn("docker", ["exec", "-u", "desolate", "-e", "HOME=/home/desolate", vmOf(target), "bash", "-c",
-        `cd ${dir} && for i in $(seq 1 60); do echo "${tag} $i" > ${tag}.txt && git add ${tag}.txt && git commit -qm "${tag} $i" || exit 1; done`], { stdio: "ignore" });
-      child.on("close", (code) => resolve(code ?? 1));
-    });
+    const worker = (target: string, dir: string, tag: string) =>
+      new Promise<number>((resolve) => {
+        const child = spawn(
+          "docker",
+          [
+            "exec",
+            "-u",
+            "desolate",
+            "-e",
+            "HOME=/home/desolate",
+            vmOf(target),
+            "bash",
+            "-c",
+            `cd ${dir} && for i in $(seq 1 60); do echo "${tag} $i" > ${tag}.txt && git add ${tag}.txt && git commit -qm "${tag} $i" || exit 1; done`,
+          ],
+          { stdio: "ignore" },
+        );
+        child.on("close", (code) => resolve(code ?? 1));
+      });
     const [a, b] = await Promise.all([
       worker("nests-dev/w1", "/workspaces/acme/widgets", "one"),
       worker("nests-dev/issue-12", "/workspaces/acme/widgets/.worktrees/issue-12", "two"),
     ]);
     assert.deepEqual([a, b], [0, 0], "every commit succeeded in both workspaces");
-    const check = inWs("nests-dev/issue-12", "cd /workspaces/acme/widgets && git fsck --full --strict 2>&1 | grep -v '^Checking' ; git rev-list --count main && git rev-list --count issue/12");
+    const check = inWs(
+      "nests-dev/issue-12",
+      "cd /workspaces/acme/widgets && git fsck --full --strict 2>&1 | grep -v '^Checking' ; git rev-list --count main && git rev-list --count issue/12",
+    );
     const [mainCount, branchCount] = check.stdout.trim().split("\n").slice(-2).map(Number);
     assert.equal(mainCount, 62, "seed + the earlier change + 60");
-    assert.equal(branchCount, 62, "it branched from the domain's local main (seed + the earlier change), + 60");
+    assert.equal(
+      branchCount,
+      62,
+      "it branched from the domain's local main (seed + the earlier change), + 60",
+    );
     assert.doesNotMatch(check.stdout, /error|missing|dangling commit|corrupt/i);
   });
 
   it("--base origin/main --fetch: a worktree from what the remote has now", () => {
     stack.step("fetch, then start from the remote's main");
-    const pushed = stack.forge("commit", "acme/widgets", "main", "UPSTREAM.md", "pushed by someone else\n").trim();
-    const up = stack.desolate("up", "nests-dev", "--name", "fresh", "--fetch", "--base", "origin/main", "--checkout", "acme/widgets=worktree:issue/13");
+    const pushed = stack
+      .forge("commit", "acme/widgets", "main", "UPSTREAM.md", "pushed by someone else\n")
+      .trim();
+    const up = stack.desolate(
+      "up",
+      "nests-dev",
+      "--name",
+      "fresh",
+      "--fetch",
+      "--base",
+      "origin/main",
+      "--checkout",
+      "acme/widgets=worktree:issue/13",
+    );
     assert.equal(up.code, 0, up.stderr);
     assert.match(up.stdout, /mirrors refreshed/);
-    const head = inWs("nests-dev/fresh", "cd /workspaces/acme/widgets/.worktrees/issue-13 && git rev-parse HEAD && cat UPSTREAM.md");
-    assert.equal(head.stdout.split("\n")[0], pushed, "the worktree starts at the commit the remote just published");
+    const head = inWs(
+      "nests-dev/fresh",
+      "cd /workspaces/acme/widgets/.worktrees/issue-13 && git rev-parse HEAD && cat UPSTREAM.md",
+    );
+    assert.equal(
+      head.stdout.split("\n")[0],
+      pushed,
+      "the worktree starts at the commit the remote just published",
+    );
   });
 
   it("without --base: a local main that is only behind the remote's is not where a branch starts", () => {
     // A pull request merged on the forge: the remote's main moves; the domain clone's own main
     // (nothing of its own) is now only behind. A new branch starts from what was merged.
     // (Test 7 is the other case: a local main with work of its own is where branches start.)
-    const merged = stack.forge("commit", "acme/consumer", "main", "MERGED.md", "merged on the forge\n").trim();
+    const merged = stack
+      .forge("commit", "acme/consumer", "main", "MERGED.md", "merged on the forge\n")
+      .trim();
     // The mirror has it (the root's own fetch, every 15 minutes; here by hand); the domain's
     // clone has not fetched since. No --fetch: the clone catches up from the mirror itself.
     assert.equal(stack.quiet("fetch", "acme/consumer").code, 0);
-    const up = stack.quiet("up", "nests-dev", "--name", "after-merge", "--checkout", "acme/consumer=worktree:after-merge");
+    const up = stack.quiet(
+      "up",
+      "nests-dev",
+      "--name",
+      "after-merge",
+      "--checkout",
+      "acme/consumer=worktree:after-merge",
+    );
     assert.equal(up.code, 0, up.stderr);
-    const head = inWs("nests-dev/after-merge", "cd /workspaces/acme/consumer/.worktrees/after-merge && git rev-parse HEAD && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>&1 | head -1");
+    const head = inWs(
+      "nests-dev/after-merge",
+      "cd /workspaces/acme/consumer/.worktrees/after-merge && git rev-parse HEAD && git rev-parse --abbrev-ref --symbolic-full-name @{u} 2>&1 | head -1",
+    );
     const [at, upstream] = head.stdout.trim().split("\n");
     assert.equal(at, merged, "it has the merge");
     assert.doesNotMatch(upstream ?? "", /^origin\//, "and no upstream of another name");
     // A plain `git push`, as a person types it on a new branch: offered, not "no upstream".
-    const pushed = inWs("nests-dev/after-merge", "cd /workspaces/acme/consumer/.worktrees/after-merge && git commit -q --allow-empty -m 'a change' && git push 2>&1");
+    const pushed = inWs(
+      "nests-dev/after-merge",
+      "cd /workspaces/acme/consumer/.worktrees/after-merge && git commit -q --allow-empty -m 'a change' && git push 2>&1",
+    );
     assert.doesNotMatch(pushed.stdout, /no upstream/, pushed.stdout);
     assert.match(pushed.stdout, /offered/, pushed.stdout);
     assert.equal(stack.quiet("rm", "nests-dev/after-merge").code, 0);
@@ -162,42 +285,101 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
 
   it("two domains, one repository: separate clones, one mirror, neither sees the other's work", () => {
     stack.step("a second domain with the same repository");
-    assert.equal(stack.desolate("domain", "create", "other", "--title", "another boundary").code, 0);
+    assert.equal(
+      stack.desolate("domain", "create", "other", "--title", "another boundary").code,
+      0,
+    );
     assert.equal(stack.desolate("domain", "other", "add", "--repo", "acme/widgets").code, 0);
     assert.equal(stack.desolate("domain", "other", "add", "--repo", "acme/private").code, 0);
     assert.equal(stack.desolate("up", "other").code, 0);
-    const other = inWs("other/w1", "cd /workspaces/acme/widgets && git branch -a --format='%(refname:short)' && cat .git/objects/info/alternates && ls /workspaces/acme && git log --oneline | wc -l");
+    const other = inWs(
+      "other/w1",
+      "cd /workspaces/acme/widgets && git branch -a --format='%(refname:short)' && cat .git/objects/info/alternates && ls /workspaces/acme && git log --oneline | wc -l",
+    );
     const lines = other.stdout.trim().split("\n");
-    assert.ok(!lines.includes("issue/12") && !lines.includes("issue/13"), "the other domain's branches are not here");
-    assert.ok(lines.includes("/desolate/mirrors/acme/widgets.git/objects"), "it borrows the same mirror");
-    assert.ok(lines.includes("private") && !lines.includes("consumer"), "it has its own repositories, not the first domain's");
+    assert.ok(
+      !lines.includes("issue/12") && !lines.includes("issue/13"),
+      "the other domain's branches are not here",
+    );
+    assert.ok(
+      lines.includes("/desolate/mirrors/acme/widgets.git/objects"),
+      "it borrows the same mirror",
+    );
+    assert.ok(
+      lines.includes("private") && !lines.includes("consumer"),
+      "it has its own repositories, not the first domain's",
+    );
     // Control: the first domain does have those branches, so their absence above means something.
-    assert.match(inWs("nests-dev/w1", "cd /workspaces/acme/widgets && git branch --format='%(refname:short)'").stdout, /issue\/12/);
+    assert.match(
+      inWs("nests-dev/w1", "cd /workspaces/acme/widgets && git branch --format='%(refname:short)'")
+        .stdout,
+      /issue\/12/,
+    );
     assert.notEqual(inWs("nests-dev/w1", "ls /workspaces/acme/private").code, 0);
   });
 
   it("exec carries stdin, stdout and the exit code; list shows every workspace", () => {
     stack.step("exec and list");
-    const echo = stack.desolate("exec", "nests-dev/issue-12", "--checkout", "acme/widgets", "--", "bash", "-c", "pwd; git branch --show-current; exit 7");
+    const echo = stack.desolate(
+      "exec",
+      "nests-dev/issue-12",
+      "--checkout",
+      "acme/widgets",
+      "--",
+      "bash",
+      "-c",
+      "pwd; git branch --show-current; exit 7",
+    );
     assert.equal(echo.code, 7);
     assert.match(echo.stdout, /\/workspaces\/acme\/widgets\/\.worktrees\/issue-12\nissue\/12/);
     const list = stack.desolate("list");
     assert.match(list.stdout, /nests-dev\/issue-12 {2}running {2}\[not isolated\]/);
-    const json = JSON.parse(stack.quiet("list", "--json").stdout) as { domain: string; workspaces: { status: string; isolated: boolean }[] }[];
-    assert.deepEqual(json.map((d) => [d.domain, d.workspaces.length]), [["nests-dev", 3], ["other", 1]]);
-    assert.ok(json.every((d) => d.workspaces.every((w) => w.isolated === false)), "every workspace on the fake backend is labelled not isolated");
+    const json = JSON.parse(stack.quiet("list", "--json").stdout) as {
+      domain: string;
+      workspaces: { status: string; isolated: boolean }[];
+    }[];
+    assert.deepEqual(
+      json.map((d) => [d.domain, d.workspaces.length]),
+      [
+        ["nests-dev", 3],
+        ["other", 1],
+      ],
+    );
+    assert.ok(
+      json.every((d) => d.workspaces.every((w) => w.isolated === false)),
+      "every workspace on the fake backend is labelled not isolated",
+    );
   });
 
   it("stop keeps a workspace's checkouts held; rm frees them", () => {
     stack.step("stop, start, rm");
     assert.equal(stack.desolate("stop", "nests-dev/w1").code, 0);
-    assert.equal(stack.desolate("up", "nests-dev", "--name", "taker", "--checkout", "acme/widgets=main").code, 75, "a stopped workspace still holds its checkout");
+    assert.equal(
+      stack.desolate("up", "nests-dev", "--name", "taker", "--checkout", "acme/widgets=main").code,
+      75,
+      "a stopped workspace still holds its checkout",
+    );
     assert.equal(stack.desolate("start", "nests-dev/w1").code, 0);
-    assert.match(inWs("nests-dev/w1", "cd /workspaces/acme/widgets && git log -1 --format=%s").stdout, /one 60/, "its work is where it left it");
+    assert.match(
+      inWs("nests-dev/w1", "cd /workspaces/acme/widgets && git log -1 --format=%s").stdout,
+      /one 60/,
+      "its work is where it left it",
+    );
     assert.equal(stack.desolate("rm", "nests-dev/w1").code, 0);
-    const taken = stack.desolate("up", "nests-dev", "--name", "taker", "--checkout", "acme/widgets=main");
+    const taken = stack.desolate(
+      "up",
+      "nests-dev",
+      "--name",
+      "taker",
+      "--checkout",
+      "acme/widgets=main",
+    );
     assert.equal(taken.code, 0, taken.stderr);
-    assert.match(inWs("nests-dev/taker", "cd /workspaces/acme/widgets && git log -1 --format=%s").stdout, /one 60/, "the main checkout carries on from the domain's clone");
+    assert.match(
+      inWs("nests-dev/taker", "cd /workspaces/acme/widgets && git log -1 --format=%s").stdout,
+      /one 60/,
+      "the main checkout carries on from the domain's clone",
+    );
   });
 
   it("a domain is removed only when no workspace is left in it; the root keeps its own clone", () => {
@@ -208,21 +390,45 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     assert.equal(stack.desolate("rm", "other/w1").code, 0);
     assert.equal(stack.desolate("rm", "other").code, 0);
     assert.equal(fs.existsSync(path.join(stack.home, "domains/other")), false);
-    assert.ok(fs.existsSync(path.join(stack.home, "root/acme/widgets/.git")), "the root clone is untouched");
-    assert.ok(fs.existsSync(path.join(stack.home, "mirrors/acme/widgets.git/HEAD")), "the mirror is untouched");
+    assert.ok(
+      fs.existsSync(path.join(stack.home, "root/acme/widgets/.git")),
+      "the root clone is untouched",
+    );
+    assert.ok(
+      fs.existsSync(path.join(stack.home, "mirrors/acme/widgets.git/HEAD")),
+      "the mirror is untouched",
+    );
   });
 
   it("a domain with several repositories names whose devcontainer.json its workspaces run", () => {
     stack.step("the domain's environment");
-    assert.match(stack.desolate("domain", "nests-dev", "env").stdout, /its workspaces run the devcontainer\.json of the first checkout that has one\. To choose: desolate domain nests-dev env --from <owner>\/<repo>/);
+    assert.match(
+      stack.desolate("domain", "nests-dev", "env").stdout,
+      /its workspaces run the devcontainer\.json of the first checkout that has one\. To choose: desolate domain nests-dev env --from <owner>\/<repo>/,
+    );
     const refused = stack.desolate("domain", "nests-dev", "env", "--from", "acme/elsewhere");
     assert.notEqual(refused.code, 0);
     assert.match(refused.stderr, /acme\/elsewhere is not in the domain nests-dev/);
-    assert.match(stack.desolate("domain", "nests-dev", "env", "--from", "acme/widgets").stdout, /its workspaces run acme\/widgets's devcontainer\.json/);
+    assert.match(
+      stack.desolate("domain", "nests-dev", "env", "--from", "acme/widgets").stdout,
+      /its workspaces run acme\/widgets's devcontainer\.json/,
+    );
     assert.equal(stack.quiet("up", "nests-dev", "--name", "env-check").code, 0);
-    const plan = JSON.parse(fs.readFileSync(path.join(stack.home, "domains/nests-dev/inbox/workspaces/env-check.json"), "utf8")) as { env?: string };
-    assert.equal(plan.env, "acme/widgets", "the workspace's plan, which the domain cannot write, carries it");
-    assert.match(stack.desolate("domain", "nests-dev", "env", "compose").stderr, /composing one environment from several specs is not built yet/);
+    const plan = JSON.parse(
+      fs.readFileSync(
+        path.join(stack.home, "domains/nests-dev/inbox/workspaces/env-check.json"),
+        "utf8",
+      ),
+    ) as { env?: string };
+    assert.equal(
+      plan.env,
+      "acme/widgets",
+      "the workspace's plan, which the domain cannot write, carries it",
+    );
+    assert.match(
+      stack.desolate("domain", "nests-dev", "env", "compose").stderr,
+      /composing one environment from several specs is not built yet/,
+    );
     assert.equal(stack.quiet("rm", "nests-dev/env-check").code, 0);
   });
 

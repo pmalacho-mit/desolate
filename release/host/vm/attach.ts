@@ -11,32 +11,51 @@ import type { Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** The child's stdio: the terminal (stdin) always its own; stdout and stderr piped here, to be
  *  filtered, only where they are a terminal. */
-export const stdioFor = (out: boolean, err: boolean): ["inherit", "pipe" | "inherit", "pipe" | "inherit"] => ["inherit", out ? "pipe" : "inherit", err ? "pipe" : "inherit"];
+export const stdioFor = (
+  out: boolean,
+  err: boolean,
+): ["inherit", "pipe" | "inherit", "pipe" | "inherit"] => [
+  "inherit",
+  out ? "pipe" : "inherit",
+  err ? "pipe" : "inherit",
+];
 
 declare namespace stdioFor {
   /** a terminal gets only what a screen needs; a pipe or a file gets the bytes as they are */
-  export type Streams = Table<typeof stdioFor, [
-    [args: [out: true, err: true], expected: ["inherit", "pipe", "pipe"]],
-    [args: [out: false, err: true], expected: ["inherit", "inherit", "pipe"]],
-    [args: [out: false, err: false], expected: ["inherit", "inherit", "inherit"]],
-  ]>;
+  export type Streams = Table<
+    typeof stdioFor,
+    [
+      [args: [out: true, err: true], expected: ["inherit", "pipe", "pipe"]],
+      [args: [out: false, err: true], expected: ["inherit", "inherit", "pipe"]],
+      [args: [out: false, err: false], expected: ["inherit", "inherit", "inherit"]],
+    ]
+  >;
 }
 
-export const attachFiltered = (command: string, args: string[], env?: NodeJS.ProcessEnv): Promise<number> => {
-  const out = process.stdout.isTTY, err = process.stderr.isTTY;
+export const attachFiltered = (
+  command: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<number> => {
+  const out = process.stdout.isTTY,
+    err = process.stderr.isTTY;
   const child = spawn(command, args, { stdio: stdioFor(out, err), env: env ?? process.env });
-  const shown = terminalFilter(), said = terminalFilter();
+  const shown = terminalFilter(),
+    said = terminalFilter();
   let drew = false;
-  if (out) child.stdout!.on("data", (chunk: Buffer) => {
-    const passed = shown(chunk);
-    drew ||= passed.includes(0x1b);
-    process.stdout.write(passed);
-  });
+  if (out)
+    child.stdout!.on("data", (chunk: Buffer) => {
+      const passed = shown(chunk);
+      drew ||= passed.includes(0x1b);
+      process.stdout.write(passed);
+    });
   if (err) child.stderr!.on("data", (chunk: Buffer) => process.stderr.write(said(chunk)));
-  return new Promise((resolve) => child.on("close", (code) => {
-    // A full-screen program's modes, off again: the terminal is the person's shell's. (Only
-    // after one that sent escapes at all: plain output changed no mode.)
-    if (out && drew) process.stdout.write(shown.reset());
-    resolve(code ?? 1);
-  }));
+  return new Promise((resolve) =>
+    child.on("close", (code) => {
+      // A full-screen program's modes, off again: the terminal is the person's shell's. (Only
+      // after one that sent escapes at all: plain output changed no mode.)
+      if (out && drew) process.stdout.write(shown.reset());
+      resolve(code ?? 1);
+    }),
+  );
 };

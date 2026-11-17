@@ -1,0 +1,4 @@
+# Layout only: `git blame --ignore-revs-file .git-blame-ignore-revs` (GitHub reads it itself).
+# Prettier over the TypeScript (2026-11-17).
+9a80a9498afcebc9f82b76641e8f05bfd99dafe0
+91bdc47bdd4042e3553a9049d66f8f30bc0ad22f

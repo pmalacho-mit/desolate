@@ -13,7 +13,8 @@ export const RELEASE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.u
  *  with its own home, VM names and ports. */
 export const INSTANCE = (() => {
   const value = process.env.DESOLATE_INSTANCE ?? "main";
-  if (!/^[a-z0-9]{1,12}$/.test(value)) throw new Error(`DESOLATE_INSTANCE must be 1-12 of [a-z0-9], not '${value}'`);
+  if (!/^[a-z0-9]{1,12}$/.test(value))
+    throw new Error(`DESOLATE_INSTANCE must be 1-12 of [a-z0-9], not '${value}'`);
   return value;
 })();
 
@@ -48,9 +49,17 @@ export const paths = {
 
 declare namespace paths {
   /** everything is under the home (DESOLATE_HOME, else ~/.desolate): a mirror by owner and name */
-  export type Mirror = Expect<Invoke<typeof paths.mirror, [repo: { owner: "acme"; name: "widgets" }]>, "endsWith", "/mirrors/acme/widgets.git">;
+  export type Mirror = Expect<
+    Invoke<typeof paths.mirror, [repo: { owner: "acme"; name: "widgets" }]>,
+    "endsWith",
+    "/mirrors/acme/widgets.git"
+  >;
   /** a domain's clones, which its workspaces' shares are made of */
-  export type DomainRepos = Expect<Invoke<typeof paths.domainRepos, [domain: "dev"]>, "endsWith", "/domains/dev/repos">;
+  export type DomainRepos = Expect<
+    Invoke<typeof paths.domainRepos, [domain: "dev"]>,
+    "endsWith",
+    "/domains/dev/repos"
+  >;
 }
 
 /** The same places, as every VM sees them. The mirror's path must be identical in every VM,
@@ -74,5 +83,9 @@ export const guest = {
 
 declare namespace guest {
   /** the same in every VM, whatever the home on the Mac: a clone's alternates file names it */
-  export type Mirror = Expect<Invoke<typeof guest.mirror, [repo: { owner: "acme"; name: "widgets" }]>, "=", "/desolate/mirrors/acme/widgets.git">;
+  export type Mirror = Expect<
+    Invoke<typeof guest.mirror, [repo: { owner: "acme"; name: "widgets" }]>,
+    "=",
+    "/desolate/mirrors/acme/widgets.git"
+  >;
 }

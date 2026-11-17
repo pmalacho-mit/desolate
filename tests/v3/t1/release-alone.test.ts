@@ -18,8 +18,7 @@ const repo = path.resolve(import.meta.dirname, "../../..");
 const tsc = path.join(repo, "node_modules/.bin/tsc");
 let copy: string;
 
-const typeCheck = () =>
-  spawnSync(tsc, ["-p", copy], { encoding: "utf8" });
+const typeCheck = () => spawnSync(tsc, ["-p", copy], { encoding: "utf8" });
 
 describe("T1 release/ alone, without suede.nests", () => {
   before(() => {
@@ -29,16 +28,23 @@ describe("T1 release/ alone, without suede.nests", () => {
     const options = JSON.parse(
       fs.readFileSync(path.join(repo, "tsconfig.json"), "utf8").replace(/^\s*\/\/.*$/gm, ""),
     ).compilerOptions;
-    fs.writeFileSync(path.join(copy, "tsconfig.json"), JSON.stringify({
-      compilerOptions: { ...options, typeRoots: [path.join(repo, "node_modules/@types")] },
-      include: ["**/*.ts", ".harness/*.ts"],
-    }));
+    fs.writeFileSync(
+      path.join(copy, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: { ...options, typeRoots: [path.join(repo, "node_modules/@types")] },
+        include: ["**/*.ts", ".harness/*.ts"],
+      }),
+    );
   });
   after(() => fs.rmSync(copy, { recursive: true, force: true }));
 
   it("has in-source tests to check, importing the DSL from a path the copy does not have", () => {
-    const marked = execFileSync("grep", ["-rl", "--include=*.ts", "dsl.import.meta.vitest", copy], { encoding: "utf8" })
-      .trim().split("\n").filter((file) => !file.endsWith("nests.d.ts"));
+    const marked = execFileSync("grep", ["-rl", "--include=*.ts", "dsl.import.meta.vitest", copy], {
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n")
+      .filter((file) => !file.endsWith("nests.d.ts"));
     assert.ok(marked.length > 10, `files with in-source tests: ${marked.length}`);
     assert.ok(!fs.existsSync(path.join(copy, "../suede.nests")), "nothing beside the copy");
     assert.ok(fs.existsSync(path.join(copy, ".harness/home.ts")), "the harness is in the copy");
@@ -52,27 +58,45 @@ describe("T1 release/ alone, without suede.nests", () => {
   });
 
   it("runs: what node strips leaves no import of suede.nests or of the harness in any file", () => {
-    const marked = execFileSync("grep", ["-rlE", "--include=*.ts", "import\\.meta\\.vitest|\\.harness/", copy], { encoding: "utf8" })
-      .trim().split("\n").filter((file) => !file.endsWith(".d.ts") && !file.includes("/.harness/"));
+    const marked = execFileSync(
+      "grep",
+      ["-rlE", "--include=*.ts", "import\\.meta\\.vitest|\\.harness/", copy],
+      { encoding: "utf8" },
+    )
+      .trim()
+      .split("\n")
+      .filter((file) => !file.endsWith(".d.ts") && !file.includes("/.harness/"));
     assert.ok(marked.length > 10);
     for (const file of marked) {
       const ran = stripTypeScriptTypes(fs.readFileSync(file, "utf8"));
-      assert.doesNotMatch(ran, /dsl\.import\.meta\.vitest|\.harness\//, `${path.relative(copy, file)}: an import that is not \`import type\``);
+      assert.doesNotMatch(
+        ran,
+        /dsl\.import\.meta\.vitest|\.harness\//,
+        `${path.relative(copy, file)}: an import that is not \`import type\``,
+      );
     }
   });
 
   it("the control: a value import is not stripped, and would load the harness or fail", () => {
-    const ran = stripTypeScriptTypes(`import { Expect } from "../../suede.nests/dsl.import.meta.vitest.ts";\nimport { emptyHome } from "../.harness/home.ts";\nexport const x = 1;\n`);
+    const ran = stripTypeScriptTypes(
+      `import { Expect } from "../../suede.nests/dsl.import.meta.vitest.ts";\nimport { emptyHome } from "../.harness/home.ts";\nexport const x = 1;\n`,
+    );
     assert.match(ran, /dsl\.import\.meta\.vitest/);
     assert.match(ran, /\.harness\/home\.ts/);
   });
 
   it("the control: without the stub, the same copy does not type-check, and Vitest named plainly would not either", () => {
     fs.rmSync(path.join(copy, "nests.d.ts"));
-    fs.writeFileSync(path.join(copy, ".harness/plainly.ts"), `import { onTestFinished } from "vitest";\nexport const plainly = onTestFinished;\n`);
+    fs.writeFileSync(
+      path.join(copy, ".harness/plainly.ts"),
+      `import { onTestFinished } from "vitest";\nexport const plainly = onTestFinished;\n`,
+    );
     const run = typeCheck();
     assert.notEqual(run.status, 0);
-    assert.match(run.stdout, /TS2307: Cannot find module '[./]+suede\.nests\/dsl\.import\.meta\.vitest\.ts'/);
+    assert.match(
+      run.stdout,
+      /TS2307: Cannot find module '[./]+suede\.nests\/dsl\.import\.meta\.vitest\.ts'/,
+    );
     assert.match(run.stdout, /\.harness\/plainly\.ts.*TS2307: Cannot find module 'vitest'/);
   });
 });

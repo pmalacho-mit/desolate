@@ -13,7 +13,13 @@ import * as path from "node:path";
 
 /** Chrome or Chromium on this machine (DESOLATE_CHROME first), or "" if there is none. */
 export const findChrome = () =>
-  [process.env.DESOLATE_CHROME, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find((file) => file && fs.existsSync(file)) ?? "";
+  [
+    process.env.DESOLATE_CHROME,
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+    "/usr/bin/chromium-browser",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  ].find((file) => file && fs.existsSync(file)) ?? "";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -22,13 +28,31 @@ export type LoadOptions = { until?: RegExp; ms?: number; settle?: number; screen
 
 /** A headless Chrome with the profile `profile`, kept running: what one page is given (a
  *  cookie) the next page it loads has, as in a person's browser. `close` when done. */
-export const openBrowser = async (chrome: string, profile: string, size: { width?: number; height?: number } = {}) => {
+export const openBrowser = async (
+  chrome: string,
+  profile: string,
+  size: { width?: number; height?: number } = {},
+) => {
   const { width = 1280, height = 900 } = size;
   fs.mkdirSync(profile, { recursive: true });
   const portFile = path.join(profile, "DevToolsActivePort");
   fs.rmSync(portFile, { force: true });
-  const browser = spawn(chrome, ["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check", `--user-data-dir=${profile}`,
-    "--host-resolver-rules=MAP *.localhost 127.0.0.1", "--remote-debugging-port=0", `--window-size=${width},${height}`, "about:blank"], { stdio: "ignore" });
+  const browser = spawn(
+    chrome,
+    [
+      "--headless=new",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--no-first-run",
+      "--no-default-browser-check",
+      `--user-data-dir=${profile}`,
+      "--host-resolver-rules=MAP *.localhost 127.0.0.1",
+      "--remote-debugging-port=0",
+      `--window-size=${width},${height}`,
+      "about:blank",
+    ],
+    { stdio: "ignore" },
+  );
   const exited = new Promise((resolve) => browser.once("exit", resolve));
   let ws: WebSocket;
   try {
@@ -39,11 +63,15 @@ export const openBrowser = async (chrome: string, profile: string, size: { width
       if (fs.existsSync(portFile)) port = fs.readFileSync(portFile, "utf8").split("\n")[0]!.trim();
     }
     if (!port) throw new Error(`Chrome (${chrome}) did not start`);
-    const version = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as { webSocketDebuggerUrl: string };
+    const version = (await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()) as {
+      webSocketDebuggerUrl: string;
+    };
     ws = new WebSocket(version.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => {
       ws.addEventListener("open", resolve, { once: true });
-      ws.addEventListener("error", () => reject(new Error("DevTools did not answer")), { once: true });
+      ws.addEventListener("error", () => reject(new Error("DevTools did not answer")), {
+        once: true,
+      });
     });
   } catch (error) {
     browser.kill();
@@ -56,11 +84,19 @@ export const openBrowser = async (chrome: string, profile: string, size: { width
   type Listener = (method: string, params: Record<string, any>) => void;
   const listeners = new Map<string, Listener>(); // by session
   ws.addEventListener("message", (event) => {
-    const message = JSON.parse(String(event.data)) as { id?: number; result?: Record<string, unknown>; error?: { message: string }; method?: string; params?: Record<string, any>; sessionId?: string };
+    const message = JSON.parse(String(event.data)) as {
+      id?: number;
+      result?: Record<string, unknown>;
+      error?: { message: string };
+      method?: string;
+      params?: Record<string, any>;
+      sessionId?: string;
+    };
     if (message.id !== undefined) {
       pending.get(message.id)?.(message.result ?? { error: message.error?.message });
       pending.delete(message.id);
-    } else if (message.method && message.sessionId) listeners.get(message.sessionId)?.(message.method, message.params ?? {});
+    } else if (message.method && message.sessionId)
+      listeners.get(message.sessionId)?.(message.method, message.params ?? {});
   });
   const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
     new Promise<Record<string, unknown>>((resolve) => {
@@ -75,22 +111,51 @@ export const openBrowser = async (chrome: string, profile: string, size: { width
    *  the page does after (a worker's colours). `screenshot`: a PNG of the page, there, too. */
   const load = async (url: string, options: LoadOptions = {}): Promise<Loaded> => {
     const { until, ms = 6000, settle = 0 } = options;
-    const { targetId } = (await send("Target.createTarget", { url: "about:blank" })) as { targetId: string };
-    const { sessionId } = (await send("Target.attachToTarget", { targetId, flatten: true })) as { sessionId: string };
+    const { targetId } = (await send("Target.createTarget", { url: "about:blank" })) as {
+      targetId: string;
+    };
+    const { sessionId } = (await send("Target.attachToTarget", { targetId, flatten: true })) as {
+      sessionId: string;
+    };
     const said: string[] = [];
     let loaded = false;
     listeners.set(sessionId, (method, p) => {
       if (method === "Runtime.consoleAPICalled")
-        said.push(`INFO:CONSOLE(${p.type}) ${(p.args as { value?: unknown; description?: string }[]).map((a) => (a.value !== undefined ? String(a.value) : a.description ?? "")).join(" ")}`);
-      else if (method === "Runtime.exceptionThrown") said.push(`Uncaught ${p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? "exception"}`);
-      else if (method === "Log.entryAdded") said.push(`${String(p.entry?.level ?? "").toUpperCase()}:${p.entry?.source ?? "browser"} ${p.entry?.text ?? ""}`);
+        said.push(
+          `INFO:CONSOLE(${p.type}) ${(p.args as { value?: unknown; description?: string }[]).map((a) => (a.value !== undefined ? String(a.value) : (a.description ?? ""))).join(" ")}`,
+        );
+      else if (method === "Runtime.exceptionThrown")
+        said.push(
+          `Uncaught ${p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? "exception"}`,
+        );
+      else if (method === "Log.entryAdded")
+        said.push(
+          `${String(p.entry?.level ?? "").toUpperCase()}:${p.entry?.source ?? "browser"} ${p.entry?.text ?? ""}`,
+        );
       else if (method === "Page.loadEventFired") loaded = true;
     });
     try {
-      for (const domain of ["Page", "Runtime", "Log"]) await send(`${domain}.enable`, {}, sessionId);
-      await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
+      for (const domain of ["Page", "Runtime", "Log"])
+        await send(`${domain}.enable`, {}, sessionId);
+      await send(
+        "Emulation.setDeviceMetricsOverride",
+        { width, height, deviceScaleFactor: 1, mobile: false },
+        sessionId,
+      );
       await send("Page.navigate", { url }, sessionId);
-      const dom = async () => String(((await send("Runtime.evaluate", { expression: "document.documentElement ? document.documentElement.outerHTML : ''", returnByValue: true }, sessionId)) as { result?: { value?: unknown } }).result?.value ?? "");
+      const dom = async () =>
+        String(
+          (
+            (await send(
+              "Runtime.evaluate",
+              {
+                expression: "document.documentElement ? document.documentElement.outerHTML : ''",
+                returnByValue: true,
+              },
+              sessionId,
+            )) as { result?: { value?: unknown } }
+          ).result?.value ?? "",
+        );
       let html = "";
       for (const end = Date.now() + ms; ; await sleep(250)) {
         html = await dom();
@@ -102,7 +167,9 @@ export const openBrowser = async (chrome: string, profile: string, size: { width
         html = await dom();
       }
       if (options.screenshot) {
-        const shot = (await send("Page.captureScreenshot", { format: "png" }, sessionId)) as { data?: string };
+        const shot = (await send("Page.captureScreenshot", { format: "png" }, sessionId)) as {
+          data?: string;
+        };
         if (shot.data) fs.writeFileSync(options.screenshot, Buffer.from(shot.data, "base64"));
       }
       return { stdout: html, stderr: said.join("\n") };
@@ -122,7 +189,12 @@ export const openBrowser = async (chrome: string, profile: string, size: { width
 };
 
 /** One page in a Chrome of its own, with the profile `profile`, closed after. */
-export const loadPage = async (chrome: string, profile: string, url: string, options: LoadOptions & { width?: number; height?: number } = {}): Promise<Loaded> => {
+export const loadPage = async (
+  chrome: string,
+  profile: string,
+  url: string,
+  options: LoadOptions & { width?: number; height?: number } = {},
+): Promise<Loaded> => {
   const browser = await openBrowser(chrome, profile, options);
   try {
     return await browser.load(url, options);

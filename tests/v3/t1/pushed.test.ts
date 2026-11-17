@@ -12,11 +12,21 @@ import { run } from "../../../release/shared/run.ts";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-pushed-"));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 process.env.DESOLATE_ROOT_STATE = path.join(dir, "state");
-const { landedIn, landedFor, pushedList, recordPushed, settle, waiting } = await import("../../../release/root/pushed.ts");
+const { landedIn, landedFor, pushedList, recordPushed, settle, waiting } =
+  await import("../../../release/root/pushed.ts");
 
 const repo = path.join(dir, "repo");
-const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1", GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
-const sh = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", env }).trim();
+const env = {
+  ...process.env,
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@example.invalid",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@example.invalid",
+};
+const sh = (...args: string[]) =>
+  execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", env }).trim();
 const write = (file: string, text: string) => fs.writeFileSync(path.join(repo, file), text);
 const commit = (message: string) => {
   sh("add", "-A");
@@ -51,7 +61,8 @@ describe("T1 what was pushed, and whether it landed", () => {
     const halfwayTip = commit("halfway: f.txt");
     sh("switch", "-q", "main");
     // CONTROL: before anything is merged, nothing has landed.
-    for (const tip of [merged, squashed, rebased, open, halfwayTip]) assert.equal(await landedIn(gitIn, tip, "main"), false, tip);
+    for (const tip of [merged, squashed, rebased, open, halfwayTip])
+      assert.equal(await landedIn(gitIn, tip, "main"), false, tip);
 
     sh("merge", "-q", "--no-ff", "-m", "merge", "merged");
     sh("merge", "-q", "--squash", "squashed");
@@ -83,15 +94,29 @@ describe("T1 what was pushed, and whether it landed", () => {
     recordPushed({ repo: "acme/app", branch: "feature", commit: tip, base: "main" });
     recordPushed({ repo: "acme/app", branch: "solo", commit: tip, base: "solo" }); // a branch into itself: no base
     recordPushed({ repo: "acme/app", branch: "--evil", commit: tip, base: "main" }); // not a branch: not recorded
-    assert.deepEqual(pushedList().map((p) => [p.branch, p.commit, p.base]), [["feature", tip, "main"], ["solo", tip, null]]);
+    assert.deepEqual(
+      pushedList().map((p) => [p.branch, p.commit, p.base]),
+      [
+        ["feature", tip, "main"],
+        ["solo", tip, null],
+      ],
+    );
     assert.deepEqual(waiting(), ["acme/app"]);
     assert.equal(await settle("acme/app", gitIn), 0, "not merged yet");
     sh("merge", "-q", "--squash", "feature");
     commit("feature (#4)");
-    assert.equal(await settle("other/repo", gitIn), 0, "another repository's fetch looks at nothing of this one");
+    assert.equal(
+      await settle("other/repo", gitIn),
+      0,
+      "another repository's fetch looks at nothing of this one",
+    );
     assert.equal(await settle("acme/app", gitIn), 1);
     assert.equal(landedFor(pushedList(), "acme/app", "feature", tip), "main");
-    assert.equal(landedFor(pushedList(), "acme/app", "feature", "2".repeat(40)), null, "the branch moved on since: not marked");
+    assert.equal(
+      landedFor(pushedList(), "acme/app", "feature", "2".repeat(40)),
+      null,
+      "the branch moved on since: not marked",
+    );
     assert.equal(landedFor(pushedList(), "acme/app", "solo", tip), null);
     assert.deepEqual(waiting(), [], "nothing left to wait for");
   });

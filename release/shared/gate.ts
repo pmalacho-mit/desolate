@@ -22,14 +22,17 @@ export const sameSecret = (given: string, expected: string): boolean => {
 declare namespace sameSecret {
   /** the token a page was given, compared as bytes: equal only when every byte is, and never
    *  for an empty one (a token that could not be read is not a match for an empty cookie) */
-  export type Cases = Table<typeof sameSecret, [
-    [args: [given: "abc123", expected: "abc123"], expected: true],
-    [args: [given: "abc124", expected: "abc123"], expected: false],
-    [args: [given: "abc12", expected: "abc123"], expected: false],
-    /** one length in characters, another in bytes: false, not a thrown RangeError */
-    [args: [given: "abcé", expected: "abcd"], expected: false],
-    [args: [given: "", expected: ""], expected: false],
-  ]>;
+  export type Cases = Table<
+    typeof sameSecret,
+    [
+      [args: [given: "abc123", expected: "abc123"], expected: true],
+      [args: [given: "abc124", expected: "abc123"], expected: false],
+      [args: [given: "abc12", expected: "abc123"], expected: false],
+      /** one length in characters, another in bytes: false, not a thrown RangeError */
+      [args: [given: "abcé", expected: "abcd"], expected: false],
+      [args: [given: "", expected: ""], expected: false],
+    ]
+  >;
 }
 
 /** The hostname of a Host header or an Origin, lowercased; "" for none. */
@@ -44,8 +47,17 @@ export const hostnameOf = (value: string | undefined, isOrigin = false): string 
 
 /** A top-level GET of the editor's page whose address carries this editor's token: what
  *  following the editor's own address (from the dashboard, or `desolate editor`) sends. */
-export const openedWithToken = (request: { method?: string; url?: string; headers: IncomingMessage["headers"] }, token: string | null): boolean => {
-  if (!token || request.method !== "GET" || request.headers["sec-fetch-mode"] !== "navigate" || request.headers["sec-fetch-dest"] !== "document") return false;
+export const openedWithToken = (
+  request: { method?: string; url?: string; headers: IncomingMessage["headers"] },
+  token: string | null,
+): boolean => {
+  if (
+    !token ||
+    request.method !== "GET" ||
+    request.headers["sec-fetch-mode"] !== "navigate" ||
+    request.headers["sec-fetch-dest"] !== "document"
+  )
+    return false;
   let url: URL;
   try {
     url = new URL(request.url ?? "", "http://gate");
@@ -58,71 +70,285 @@ export const openedWithToken = (request: { method?: string; url?: string; header
 
 /** Why this request may not reach the editor, or undefined when it may. `opened`: it is a
  *  navigation that carried the editor's token (openedWithToken). */
-export const refusal = (editorHost: string, headers: IncomingMessage["headers"], opened = false): { status: number; why: string } | undefined => {
-  if (hostnameOf(headers.host) !== editorHost) return { status: 421, why: `this is the editor of ${editorHost}; open it by that name (\`desolate editor\` prints the address)` };
+export const refusal = (
+  editorHost: string,
+  headers: IncomingMessage["headers"],
+  opened = false,
+): { status: number; why: string } | undefined => {
+  if (hostnameOf(headers.host) !== editorHost)
+    return {
+      status: 421,
+      why: `this is the editor of ${editorHost}; open it by that name (\`desolate editor\` prints the address)`,
+    };
   const site = String(headers["sec-fetch-site"] ?? "");
-  if (site !== "" && site !== "same-origin" && site !== "none" && !opened) return { status: 403, why: `a request another site started (Sec-Fetch-Site: ${site.slice(0, 40)})` };
-  if (headers.origin !== undefined && hostnameOf(String(headers.origin), true) !== editorHost) return { status: 403, why: `a request from another origin (${String(headers.origin).slice(0, 80).replace(/[^\x20-\x7e]/g, "?")})` };
+  if (site !== "" && site !== "same-origin" && site !== "none" && !opened)
+    return {
+      status: 403,
+      why: `a request another site started (Sec-Fetch-Site: ${site.slice(0, 40)})`,
+    };
+  if (headers.origin !== undefined && hostnameOf(String(headers.origin), true) !== editorHost)
+    return {
+      status: 403,
+      why: `a request from another origin (${String(headers.origin)
+        .slice(0, 80)
+        .replace(/[^\x20-\x7e]/g, "?")})`,
+    };
   return undefined;
 };
 
 declare namespace hostnameOf {
   /** the name a Host header or an Origin is for, compared by the checks below; "" when there
    *  is none, and a value no hostname equals when it does not parse */
-  export type Cases = Table<typeof hostnameOf, [
-    /** what a browser would connect to: the name after any userinfo, without its port */
-    [args: [value: "e.localhost@evil.example:31580"], expected: "evil.example"],
-    [args: [value: "null", isOrigin: true], expected: "\0unparseable"],
-    [args: [value: "Acme-Web.Localhost:31580"], expected: "acme-web.localhost"],
-    [args: [value: "http://git.desolate.localhost:31580", isOrigin: true], expected: "git.desolate.localhost"],
-    [args: [value: undefined], expected: ""],
-    [args: [value: "a b"], expected: "\0unparseable"],
-  ]>;
+  export type Cases = Table<
+    typeof hostnameOf,
+    [
+      /** what a browser would connect to: the name after any userinfo, without its port */
+      [args: [value: "e.localhost@evil.example:31580"], expected: "evil.example"],
+      [args: [value: "null", isOrigin: true], expected: "\0unparseable"],
+      [args: [value: "Acme-Web.Localhost:31580"], expected: "acme-web.localhost"],
+      [
+        args: [value: "http://git.desolate.localhost:31580", isOrigin: true],
+        expected: "git.desolate.localhost",
+      ],
+      [args: [value: undefined], expected: ""],
+      [args: [value: "a b"], expected: "\0unparseable"],
+    ]
+  >;
 }
 
 declare namespace refusal {
   /** the editor's own name, typed or same-origin: let through */
   export type Allowed = [
-    Expect<Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "e.localhost:31580"; "sec-fetch-site": "same-origin"; origin: "http://e.localhost:31580" }]>, "=", undefined>,
-    Expect<Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "e.localhost:31580" }]>, "=", undefined>,
+    Expect<
+      Invoke<
+        typeof refusal,
+        [
+          editorHost: "e.localhost",
+          headers: {
+            host: "e.localhost:31580";
+            "sec-fetch-site": "same-origin";
+            origin: "http://e.localhost:31580";
+          },
+        ]
+      >,
+      "=",
+      undefined
+    >,
+    Expect<
+      Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "e.localhost:31580" }]>,
+      "=",
+      undefined
+    >,
     /** another site, but a navigation that carried the token */
-    Expect<Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "e.localhost"; "sec-fetch-site": "cross-site" }, opened: true]>, "=", undefined>,
+    Expect<
+      Invoke<
+        typeof refusal,
+        [
+          editorHost: "e.localhost",
+          headers: { host: "e.localhost"; "sec-fetch-site": "cross-site" },
+          opened: true,
+        ]
+      >,
+      "=",
+      undefined
+    >,
   ];
   export type Refused = [
-    Expect<Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "other.localhost" }]>, "=", { status: 421; why: "this is the editor of e.localhost; open it by that name (`desolate editor` prints the address)" }>,
-    Expect<Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "e.localhost"; "sec-fetch-site": "cross-site" }]>, "=", { status: 403; why: "a request another site started (Sec-Fetch-Site: cross-site)" }>,
-    Expect<Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "e.localhost"; origin: "http://evil.example" }]>, "=", { status: 403; why: "a request from another origin (http://evil.example)" }>,
+    Expect<
+      Invoke<typeof refusal, [editorHost: "e.localhost", headers: { host: "other.localhost" }]>,
+      "=",
+      {
+        status: 421;
+        why: "this is the editor of e.localhost; open it by that name (`desolate editor` prints the address)";
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof refusal,
+        [
+          editorHost: "e.localhost",
+          headers: { host: "e.localhost"; "sec-fetch-site": "cross-site" },
+        ]
+      >,
+      "=",
+      { status: 403; why: "a request another site started (Sec-Fetch-Site: cross-site)" }
+    >,
+    Expect<
+      Invoke<
+        typeof refusal,
+        [editorHost: "e.localhost", headers: { host: "e.localhost"; origin: "http://evil.example" }]
+      >,
+      "=",
+      { status: 403; why: "a request from another origin (http://evil.example)" }
+    >,
   ];
   /** more of what is let through: a name typed in another case, an address typed by hand */
-  export type AlsoAllowed = Table<typeof refusal, [
-    [args: [editorHost: "e.localhost", headers: { host: "E.LOCALHOST:31581" }], expected: undefined],
-    [args: [editorHost: "e.localhost", headers: { host: "e.localhost"; "sec-fetch-site": "none" }], expected: undefined],
-  ]>;
+  export type AlsoAllowed = Table<
+    typeof refusal,
+    [
+      [
+        args: [editorHost: "e.localhost", headers: { host: "E.LOCALHOST:31581" }],
+        expected: undefined,
+      ],
+      [
+        args: [
+          editorHost: "e.localhost",
+          headers: { host: "e.localhost"; "sec-fetch-site": "none" },
+        ],
+        expected: undefined,
+      ],
+    ]
+  >;
   /** and of what is not: a name that only starts with the editor's, no Host at all, a site
    *  that shares the editor's registrable domain, an opaque origin. The token lifts the site
    *  check only: with it, another name or another origin is still refused */
-  export type AlsoRefused = Table<typeof refusal, [
-    [args: [editorHost: "e.localhost", headers: { host: "e.localhost.evil.example" }], condition: "matches", expected: { status: 421 }],
-    [args: [editorHost: "e.localhost", headers: {}], condition: "matches", expected: { status: 421 }],
-    [args: [editorHost: "e.localhost", headers: { host: "e.localhost"; "sec-fetch-site": "same-site" }], condition: "matches", expected: { status: 403 }],
-    [args: [editorHost: "e.localhost", headers: { host: "e.localhost"; origin: "null" }], condition: "matches", expected: { status: 403 }],
-    [args: [editorHost: "e.localhost", headers: { host: "other.localhost"; "sec-fetch-site": "cross-site" }, opened: true], condition: "matches", expected: { status: 421 }],
-    [args: [editorHost: "e.localhost", headers: { host: "e.localhost"; "sec-fetch-site": "cross-site"; origin: "http://evil.example" }, opened: true], condition: "matches", expected: { status: 403 }],
-  ]>;
+  export type AlsoRefused = Table<
+    typeof refusal,
+    [
+      [
+        args: [editorHost: "e.localhost", headers: { host: "e.localhost.evil.example" }],
+        condition: "matches",
+        expected: { status: 421 },
+      ],
+      [
+        args: [editorHost: "e.localhost", headers: {}],
+        condition: "matches",
+        expected: { status: 421 },
+      ],
+      [
+        args: [
+          editorHost: "e.localhost",
+          headers: { host: "e.localhost"; "sec-fetch-site": "same-site" },
+        ],
+        condition: "matches",
+        expected: { status: 403 },
+      ],
+      [
+        args: [editorHost: "e.localhost", headers: { host: "e.localhost"; origin: "null" }],
+        condition: "matches",
+        expected: { status: 403 },
+      ],
+      [
+        args: [
+          editorHost: "e.localhost",
+          headers: { host: "other.localhost"; "sec-fetch-site": "cross-site" },
+          opened: true,
+        ],
+        condition: "matches",
+        expected: { status: 421 },
+      ],
+      [
+        args: [
+          editorHost: "e.localhost",
+          headers: {
+            host: "e.localhost";
+            "sec-fetch-site": "cross-site";
+            origin: "http://evil.example";
+          },
+          opened: true,
+        ],
+        condition: "matches",
+        expected: { status: 403 },
+      ],
+    ]
+  >;
 }
 
 declare namespace openedWithToken {
   /** the dashboard's "Open editor", followed in a browser: a top-level GET of the editor's
    *  page carrying its token. Nothing else passes as that */
-  export type Cases = Table<typeof openedWithToken, [
-    [args: [request: { method: "GET"; url: "/?tkn=0123abcd"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" } }, token: "0123abcd"], expected: true],
-    [args: [request: { method: "GET"; url: "/?tkn=0123abce"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" } }, token: "0123abcd"], expected: false],
-    /** a fetch, a frame, another path: not the dashboard's "Open editor" */
-    [args: [request: { method: "GET"; url: "/?tkn=0123abcd"; headers: { "sec-fetch-mode": "cors"; "sec-fetch-dest": "empty" } }, token: "0123abcd"], expected: false],
-    [args: [request: { method: "GET"; url: "/?tkn=0123abcd"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "iframe" } }, token: "0123abcd"], expected: false],
-    [args: [request: { method: "GET"; url: "/x?tkn=0123abcd"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" } }, token: "0123abcd"], expected: false],
-    [args: [request: { method: "GET"; url: "/?tkn=0123abcd"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" } }, token: null], expected: false],
-    [args: [request: { method: "POST"; url: "/?tkn=0123abcd"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" } }, token: "0123abcd"], expected: false],
-    [args: [request: { method: "GET"; url: "/?tkn=0123abc"; headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" } }, token: "0123abcd"], expected: false],
-  ]>;
+  export type Cases = Table<
+    typeof openedWithToken,
+    [
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/?tkn=0123abcd";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" };
+          },
+          token: "0123abcd",
+        ],
+        expected: true,
+      ],
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/?tkn=0123abce";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" };
+          },
+          token: "0123abcd",
+        ],
+        expected: false,
+      ],
+      /** a fetch, a frame, another path: not the dashboard's "Open editor" */
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/?tkn=0123abcd";
+            headers: { "sec-fetch-mode": "cors"; "sec-fetch-dest": "empty" };
+          },
+          token: "0123abcd",
+        ],
+        expected: false,
+      ],
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/?tkn=0123abcd";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "iframe" };
+          },
+          token: "0123abcd",
+        ],
+        expected: false,
+      ],
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/x?tkn=0123abcd";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" };
+          },
+          token: "0123abcd",
+        ],
+        expected: false,
+      ],
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/?tkn=0123abcd";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" };
+          },
+          token: null,
+        ],
+        expected: false,
+      ],
+      [
+        args: [
+          request: {
+            method: "POST";
+            url: "/?tkn=0123abcd";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" };
+          },
+          token: "0123abcd",
+        ],
+        expected: false,
+      ],
+      [
+        args: [
+          request: {
+            method: "GET";
+            url: "/?tkn=0123abc";
+            headers: { "sec-fetch-mode": "navigate"; "sec-fetch-dest": "document" };
+          },
+          token: "0123abcd",
+        ],
+        expected: false,
+      ],
+    ]
+  >;
 }

@@ -13,39 +13,58 @@ import { git } from "./git.ts";
 import { ask } from "./keyring-client.ts";
 import { clonePath, REVIEWER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Call,
+  Expect,
+  Given,
+  Invoke,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { attemptsThat } from "../.harness/root-retry.ts";
 
 const RETRY = new Set(["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"]);
 /** The reviewer is one request per process: between two, it is starting. */
 export const withReviewer = async <T>(attempt: () => Promise<T>): Promise<T> => {
-  for (const until = Date.now() + 30_000; ; ) {
+  for (const until = Date.now() + 30_000; ;) {
     try {
       return await attempt();
     } catch (error) {
-      if (!RETRY.has((error as NodeJS.ErrnoException).code ?? "") || Date.now() > until) throw error;
+      if (!RETRY.has((error as NodeJS.ErrnoException).code ?? "") || Date.now() > until)
+        throw error;
     }
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 };
 
 declare namespace withReviewer {
-  type Starting = Invoke<typeof attemptsThat, [outcomes: [{ fails: "ENOENT" }, { fails: "ECONNRESET" }, { tips: [] }]]>;
+  type Starting = Invoke<
+    typeof attemptsThat,
+    [outcomes: [{ fails: "ENOENT" }, { fails: "ECONNRESET" }, { tips: [] }]]
+  >;
   /** between two requests the reviewer is starting: a missing socket, or one that drops the
    *  connection, is asked again */
   export type Starts = Given<
     Starting,
-    [Expect<Invoke<typeof withReviewer, [attempt: Starting["attempt"]]>, "=", { tips: [] }>, Expect<Call<Starting, "calls">, "=", 3>]
+    [
+      Expect<Invoke<typeof withReviewer, [attempt: Starting["attempt"]]>, "=", { tips: [] }>,
+      Expect<Call<Starting, "calls">, "=", 3>,
+    ]
   >;
   type Denied = Invoke<typeof attemptsThat, [outcomes: [{ fails: "EACCES" }, { tips: [] }]]>;
   /** a failure that is not that is the caller's to report, at once */
   export type NotStarting = Given<
     Denied,
-    [Throws<Invoke<typeof withReviewer, [attempt: Denied["attempt"]]>, "connect EACCES">, Expect<Call<Denied, "calls">, "=", 1>]
+    [
+      Throws<Invoke<typeof withReviewer, [attempt: Denied["attempt"]]>, "connect EACCES">,
+      Expect<Call<Denied, "calls">, "=", 1>,
+    ]
   >;
 }
 
-const handOver = (header: Record<string, unknown>, file: string): Promise<Record<string, unknown>> =>
+const handOver = (
+  header: Record<string, unknown>,
+  file: string,
+): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {
     const socket = connect(REVIEWER.control);
     let answer = "";
@@ -68,10 +87,13 @@ const handOver = (header: Record<string, unknown>, file: string): Promise<Record
           finish(new Error("the reviewer's answer was not JSON"));
         }
     });
-    socket.on("close", () => finish(new Error("the reviewer closed the connection without an answer")));
+    socket.on("close", () =>
+      finish(new Error("the reviewer closed the connection without an answer")),
+    );
     socket.on("connect", async () => {
       socket.write(JSON.stringify(header) + "\n");
-      for await (const chunk of fs.createReadStream(file)) if (!socket.write(chunk)) await new Promise((r) => socket.once("drain", r));
+      for await (const chunk of fs.createReadStream(file))
+        if (!socket.write(chunk)) await new Promise((r) => socket.once("drain", r));
     });
   });
 
@@ -81,17 +103,37 @@ const handOver = (header: Record<string, unknown>, file: string): Promise<Record
 export const submitForReview = async (repo: Repo, commit: string): Promise<string | null> => {
   const clone = clonePath(repo);
   try {
-    const held = await withReviewer(() => ask(REVIEWER.control, { op: "tips", repo: repoId(repo) }, 30_000));
+    const held = await withReviewer(() =>
+      ask(REVIEWER.control, { op: "tips", repo: repoId(repo) }, 30_000),
+    );
     const have: string[] = [];
-    for (const tip of Array.isArray(held.tips) ? (held.tips as string[]) : []) if ((await git(clone, ["cat-file", "-e", `${tip}^{commit}`])).code === 0) have.push(tip);
+    for (const tip of Array.isArray(held.tips) ? (held.tips as string[]) : [])
+      if ((await git(clone, ["cat-file", "-e", `${tip}^{commit}`])).code === 0) have.push(tip);
     const ref = `refs/desolate/review/${randomBytes(8).toString("hex")}`;
     const work = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-review-"));
     try {
       await git(clone, ["update-ref", ref, commit]);
       const bundle = path.join(work, "review.bundle");
-      const made = await git(clone, ["bundle", "create", "--quiet", bundle, ref, "--remotes=origin", ...have.map((id) => `^${id}`)], { timeoutMs: 1_800_000 });
-      if (made.code !== 0) return /empty bundle/i.test(made.stderr) ? null : `cannot bundle for the reviewer: ${made.stderr.trim().split("\n").pop()}`;
-      const reply = await withReviewer(() => handOver({ op: "submit", repo: repoId(repo), bundle: fs.statSync(bundle).size }, bundle));
+      const made = await git(
+        clone,
+        [
+          "bundle",
+          "create",
+          "--quiet",
+          bundle,
+          ref,
+          "--remotes=origin",
+          ...have.map((id) => `^${id}`),
+        ],
+        { timeoutMs: 1_800_000 },
+      );
+      if (made.code !== 0)
+        return /empty bundle/i.test(made.stderr)
+          ? null
+          : `cannot bundle for the reviewer: ${made.stderr.trim().split("\n").pop()}`;
+      const reply = await withReviewer(() =>
+        handOver({ op: "submit", repo: repoId(repo), bundle: fs.statSync(bundle).size }, bundle),
+      );
       return reply.ok === true ? null : String(reply.error);
     } finally {
       await git(clone, ["update-ref", "-d", ref]).catch(() => {});

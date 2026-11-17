@@ -12,7 +12,15 @@ import { readPlain } from "../shared/status.ts";
 import { domainPath, ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { aDomain, emptyRoot, linkIn, pathIn, writeFilledIn, writeIn, writeJsonIn } from "../.harness/root-state.ts";
+import type {
+  aDomain,
+  emptyRoot,
+  linkIn,
+  pathIn,
+  writeFilledIn,
+  writeIn,
+  writeJsonIn,
+} from "../.harness/root-state.ts";
 
 export const outbox = (domain: string) => path.join(domainPath(domain), "outbox");
 export const inbox = (domain: string) => path.join(domainPath(domain), "inbox");
@@ -46,9 +54,16 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 export const openDir = (dir: string): Dir | null => {
   let fd: number | null = null;
   try {
-    const wanted = path.join(fs.realpathSync(ROOT.domains), path.relative(ROOT.domains, path.resolve(dir)));
-    fd = fs.openSync(dir, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
-    if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== wanted) throw new Error("not the directory that was asked for");
+    const wanted = path.join(
+      fs.realpathSync(ROOT.domains),
+      path.relative(ROOT.domains, path.resolve(dir)),
+    );
+    fd = fs.openSync(
+      dir,
+      fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
+    );
+    if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== wanted)
+      throw new Error("not the directory that was asked for");
     const held = fd;
     fd = null;
     return {
@@ -56,7 +71,11 @@ export const openDir = (dir: string): Dir | null => {
         if (!NAME.test(name)) throw new Error("not a file name");
         return `/proc/self/fd/${held}/${name}`;
       },
-      names: () => fs.readdirSync(`/proc/self/fd/${held}`).filter((name) => NAME.test(name)).sort(),
+      names: () =>
+        fs
+          .readdirSync(`/proc/self/fd/${held}`)
+          .filter((name) => NAME.test(name))
+          .sort(),
       close: () => fs.closeSync(held),
     };
   } catch {
@@ -70,7 +89,10 @@ export const openDir = (dir: string): Dir | null => {
 const openIn = (dir: Dir, name: string, max: number): { fd: number; size: number } | null => {
   let fd: number | null = null;
   try {
-    fd = fs.openSync(dir.at(name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    fd = fs.openSync(
+      dir.at(name),
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
+    );
     const stat = fs.fstatSync(fd);
     if (!stat.isFile() || stat.size > max) throw new Error("not a plain file within the limit");
     const opened = fd;
@@ -101,7 +123,11 @@ const readIn = (dir: Dir, name: string, max: number): Buffer | null => {
   try {
     const buffer = Buffer.alloc(Math.min(opened.size, max) + 1);
     let total = 0;
-    for (let read = fs.readSync(opened.fd, buffer, 0, buffer.length, 0); read > 0; read = fs.readSync(opened.fd, buffer, total, buffer.length - total, total)) {
+    for (
+      let read = fs.readSync(opened.fd, buffer, 0, buffer.length, 0);
+      read > 0;
+      read = fs.readSync(opened.fd, buffer, total, buffer.length - total, total)
+    ) {
       total += read;
       if (total >= buffer.length) return null;
     }
@@ -117,7 +143,11 @@ const readIn = (dir: Dir, name: string, max: number): Buffer | null => {
  *  `max` bytes: a file that grew after it was opened is not taken. */
 const copyOut = (fd: number, target: string, max: number): string | null => {
   const hash = createHash("sha256");
-  const out = fs.openSync(target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 0o600);
+  const out = fs.openSync(
+    target,
+    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+    0o600,
+  );
   let total = 0;
   try {
     const buffer = Buffer.alloc(1024 * 1024);
@@ -157,15 +187,23 @@ export const readData = <T>(file: string): T | null => {
 
 /** Every JSON file waiting in a directory of an outbox whose name matches, oldest name
  *  first, each read once and removed (its name, in that directory). */
-export const drain = <T>(directory: string, pattern: RegExp, most: number): { name: string; data: T | null }[] => {
+export const drain = <T>(
+  directory: string,
+  pattern: RegExp,
+  most: number,
+): { name: string; data: T | null }[] => {
   const dir = openDir(directory);
   if (!dir) return [];
   try {
-    return dir.names().filter((name) => pattern.test(name)).slice(0, most).map((name) => {
-      const data = parse<T>(readIn(dir, name, LIMIT.json));
-      removeIn(dir, name);
-      return { name, data };
-    });
+    return dir
+      .names()
+      .filter((name) => pattern.test(name))
+      .slice(0, most)
+      .map((name) => {
+        const data = parse<T>(readIn(dir, name, LIMIT.json));
+        removeIn(dir, name);
+        return { name, data };
+      });
   } finally {
     dir.close();
   }
@@ -179,7 +217,10 @@ export const listedRefs = (domain: string, repo: string): Record<string, string>
   const data = readData<{ refs?: unknown }>(path.join(syncDir(domain, repo), "refs.json"));
   const out: Record<string, string> = {};
   if (data && typeof data.refs === "object" && data.refs !== null)
-    for (const [branch, commit] of Object.entries(data.refs as Record<string, unknown>).slice(0, 5000))
+    for (const [branch, commit] of Object.entries(data.refs as Record<string, unknown>).slice(
+      0,
+      5000,
+    ))
       if (isBranch(branch) && isCommit(commit)) out[branch] = commit;
   return out;
 };
@@ -188,7 +229,11 @@ declare namespace listedRefs {
   // (A list that is there is read through openDir, which asks Linux's /proc where an open
   // directory is: on macOS it finds nothing, so only what is refused before that is here.)
   /** a repository is named as one, or nothing is read */
-  export type NotARepo = Expect<Invoke<typeof listedRefs, [domain: "acme", repo: "../../state"]>, "=", {}>;
+  export type NotARepo = Expect<
+    Invoke<typeof listedRefs, [domain: "acme", repo: "../../state"]>,
+    "=",
+    {}
+  >;
 }
 
 /** `incoming` is the root's own. A copy is deleted by whoever made it, minutes later; one
@@ -197,7 +242,8 @@ const sweep = (incoming: string) => {
   try {
     for (const name of fs.readdirSync(incoming)) {
       const file = path.join(incoming, name);
-      if (Date.now() - fs.lstatSync(file).mtimeMs > 6 * 3_600_000) fs.rmSync(file, { recursive: true, force: true });
+      if (Date.now() - fs.lstatSync(file).mtimeMs > 6 * 3_600_000)
+        fs.rmSync(file, { recursive: true, force: true });
     }
   } catch {
     /* another process tidied first */
@@ -210,7 +256,11 @@ const sweep = (incoming: string) => {
  *  The caller removes the copies. With `most`, at most that many are copied at once and
  *  `more` says whether others wait: the root's own disk then holds one bundle at a time,
  *  however many a domain leaves. */
-export const takeBundles = (domain: string, repo: string, most = Infinity): { copies: string[]; dropped: number; more: boolean } => {
+export const takeBundles = (
+  domain: string,
+  repo: string,
+  most = Infinity,
+): { copies: string[]; dropped: number; more: boolean } => {
   const dir = openDir(syncDir(domain, repo));
   if (!dir) return { copies: [], dropped: 0, more: false };
   const copies: string[] = [];
@@ -227,9 +277,13 @@ export const takeBundles = (domain: string, repo: string, most = Infinity): { co
       }
       const opened = openIn(dir, name, LIMIT.bundle);
       // A name of the root's own making, never one a domain chose, and never one already there.
-      const copy = path.join(incoming, `${Date.now().toString(36)}-${randomBytes(8).toString("hex")}.bundle`);
+      const copy = path.join(
+        incoming,
+        `${Date.now().toString(36)}-${randomBytes(8).toString("hex")}.bundle`,
+      );
       try {
-        if (!opened || copyOut(opened.fd, copy, LIMIT.bundle) === null) throw new Error("not a plain bundle file within the limit");
+        if (!opened || copyOut(opened.fd, copy, LIMIT.bundle) === null)
+          throw new Error("not a plain bundle file within the limit");
         copies.push(copy);
       } catch {
         fs.rmSync(copy, { force: true });
@@ -250,12 +304,21 @@ export const takeBundles = (domain: string, repo: string, most = Infinity): { co
 // that silently never arrives. Cleared for a repository when a bundle of it is next taken.
 export type Refusal = { domain: string; repo: string; at: string; why: string };
 const refusedFile = (domain: string) => path.join(ROOT.state, "refused", `${domain}.json`);
-export const refusalsOf = (domain: string): Refusal[] => readJson<Refusal[]>(refusedFile(domain), []);
+export const refusalsOf = (domain: string): Refusal[] =>
+  readJson<Refusal[]>(refusedFile(domain), []);
 export const noteRefusal = (domain: string, repo: string, why: string) => {
   fs.mkdirSync(path.dirname(refusedFile(domain)), { recursive: true, mode: 0o700 });
   // The reason is in part the bundle's author's text: printable ASCII only, and short.
-  const entry = { domain, repo, at: new Date().toISOString(), why: why.replace(/[^\x20-\x7e]/g, "?").slice(0, 300) };
-  writeJson(refusedFile(domain), [...refusalsOf(domain).filter((r) => r.repo !== repo), entry].slice(-20));
+  const entry = {
+    domain,
+    repo,
+    at: new Date().toISOString(),
+    why: why.replace(/[^\x20-\x7e]/g, "?").slice(0, 300),
+  };
+  writeJson(
+    refusedFile(domain),
+    [...refusalsOf(domain).filter((r) => r.repo !== repo), entry].slice(-20),
+  );
 };
 export const clearRefusal = (domain: string, repo: string) => {
   const kept = refusalsOf(domain).filter((r) => r.repo !== repo);
@@ -270,13 +333,20 @@ declare namespace noteRefusal {
     [
       Fresh,
       Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/app", why: "first"]>,
-      Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/web", why: "hasDotgit: contains '.git'"]>,
+      Invoke<
+        typeof noteRefusal,
+        [domain: "acme", repo: "acme/web", why: "hasDotgit: contains '.git'"]
+      >,
       Invoke<typeof noteRefusal, [domain: "acme", repo: "acme/app", why: "badTree\u001b[2J\u202e"]>,
     ],
-    Expect<Invoke<typeof refusalsOf, [domain: "acme"]>, "matches", [
-      { domain: "acme"; repo: "acme/web"; why: "hasDotgit: contains '.git'" },
-      { domain: "acme"; repo: "acme/app"; why: "badTree?[2J?" },
-    ]>
+    Expect<
+      Invoke<typeof refusalsOf, [domain: "acme"]>,
+      "matches",
+      [
+        { domain: "acme"; repo: "acme/web"; why: "hasDotgit: contains '.git'" },
+        { domain: "acme"; repo: "acme/app"; why: "badTree?[2J?" },
+      ]
+    >
   >;
   /** once a bundle of that repository is taken, its refusal goes; the others stay */
   export type Clears = Given<
@@ -294,17 +364,28 @@ declare namespace noteRefusal {
  *  name and its size is what the pointer said (section 6.3). The bytes that are hashed are
  *  the bytes that are kept: they are copied from one open descriptor, and the copy becomes
  *  `target` only after the hash agrees. */
-export const takeLfs = (domain: string, repo: string, oid: string, size: number, target: string): { ok: true } | { error: string } => {
+export const takeLfs = (
+  domain: string,
+  repo: string,
+  oid: string,
+  size: number,
+  target: string,
+): { ok: true } | { error: string } => {
   if (!isLfsOid(oid)) return { error: "not an LFS object id" };
   const dir = openDir(path.join(outbox(domain), "lfs", repo));
   const opened = dir ? openIn(dir, oid, LIMIT.lfs) : null;
   const tmp = `${target}.${process.pid}.tmp`;
   try {
-    if (!dir || !opened) return { error: `the LFS object ${oid.slice(0, 12)} is not in the outbox` };
-    if (opened.size !== size) return { error: `the LFS object ${oid.slice(0, 12)} is ${opened.size} bytes; its pointer says ${size}` };
+    if (!dir || !opened)
+      return { error: `the LFS object ${oid.slice(0, 12)} is not in the outbox` };
+    if (opened.size !== size)
+      return {
+        error: `the LFS object ${oid.slice(0, 12)} is ${opened.size} bytes; its pointer says ${size}`,
+      };
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.rmSync(tmp, { force: true });
-    if (copyOut(opened.fd, tmp, size) !== oid) return { error: `the LFS object ${oid.slice(0, 12)} does not hash to its id` };
+    if (copyOut(opened.fd, tmp, size) !== oid)
+      return { error: `the LFS object ${oid.slice(0, 12)} does not hash to its id` };
     fs.renameSync(tmp, target);
     removeIn(dir, oid);
     return { ok: true };
@@ -318,11 +399,43 @@ export const takeLfs = (domain: string, repo: string, oid: string, size: number,
 declare namespace takeLfs {
   type Fresh = Invoke<typeof emptyRoot>;
   /** an object is named by its sha256, which is checked before any path is made of it */
-  export type NotAnId = Expect<Invoke<typeof takeLfs, [domain: "acme", repo: "acme/app", oid: "../../../state/registry.json", size: 1, target: "/nowhere"]>, "=", { error: "not an LFS object id" }>;
+  export type NotAnId = Expect<
+    Invoke<
+      typeof takeLfs,
+      [
+        domain: "acme",
+        repo: "acme/app",
+        oid: "../../../state/registry.json",
+        size: 1,
+        target: "/nowhere",
+      ]
+    >,
+    "=",
+    { error: "not an LFS object id" }
+  >;
   /** one the domain did not stage is said so */
   export type NotStaged = Given<
     [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>],
-    Expect<Invoke<typeof takeLfs, [domain: "acme", repo: "acme/app", oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", size: 1, target: Invoke<typeof pathIn, [where: "state", name: "lfs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]>]>, "=", { error: "the LFS object aaaaaaaaaaaa is not in the outbox" }>
+    Expect<
+      Invoke<
+        typeof takeLfs,
+        [
+          domain: "acme",
+          repo: "acme/app",
+          oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          size: 1,
+          target: Invoke<
+            typeof pathIn,
+            [
+              where: "state",
+              name: "lfs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ]
+          >,
+        ]
+      >,
+      "=",
+      { error: "the LFS object aaaaaaaaaaaa is not in the outbox" }
+    >
   >;
 }
 
@@ -352,11 +465,13 @@ export const branchesOf = (slug: string, repoList: string[]) => {
     let refs: Record<string, unknown> = {};
     try {
       const parsed = JSON.parse(text) as { refs?: unknown };
-      if (parsed.refs && typeof parsed.refs === "object" && !Array.isArray(parsed.refs)) refs = parsed.refs as Record<string, unknown>;
+      if (parsed.refs && typeof parsed.refs === "object" && !Array.isArray(parsed.refs))
+        refs = parsed.refs as Record<string, unknown>;
     } catch {
       continue;
     }
-    for (const [branch, commit] of Object.entries(refs).slice(0, BRANCHES_PER_REPO)) if (isBranch(branch) && isCommit(commit)) out.push({ repo, branch, commit });
+    for (const [branch, commit] of Object.entries(refs).slice(0, BRANCHES_PER_REPO))
+      if (isBranch(branch) && isCommit(commit)) out.push({ repo, branch, commit });
   }
   return out;
 };
@@ -367,26 +482,83 @@ declare namespace branchesOf {
   /** the domain's own list of its branches, read as data: only names desolate carries, and
    *  whole commits, survive */
   export type Lists = Given<
-    [Fresh, Acme, Invoke<typeof writeJsonIn, [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", value: { refs: { main: "0123456789abcdef0123456789abcdef01234567"; "feature/login": "0123456789abcdef0123456789abcdef01234567"; "--upload-pack=x": "0123456789abcdef0123456789abcdef01234567"; "a..b": "0123456789abcdef0123456789abcdef01234567"; short: "0123456"; "x@{1}": "0123456789abcdef0123456789abcdef01234567" } }]>],
-    Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", [
-      { repo: "acme/app"; branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" },
-      { repo: "acme/app"; branch: "feature/login"; commit: "0123456789abcdef0123456789abcdef01234567" },
-    ]>
+    [
+      Fresh,
+      Acme,
+      Invoke<
+        typeof writeJsonIn,
+        [
+          where: "domains",
+          name: "acme/outbox/sync/acme/app/refs.json",
+          value: {
+            refs: {
+              main: "0123456789abcdef0123456789abcdef01234567";
+              "feature/login": "0123456789abcdef0123456789abcdef01234567";
+              "--upload-pack=x": "0123456789abcdef0123456789abcdef01234567";
+              "a..b": "0123456789abcdef0123456789abcdef01234567";
+              short: "0123456";
+              "x@{1}": "0123456789abcdef0123456789abcdef01234567";
+            };
+          },
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>,
+      "=",
+      [
+        { repo: "acme/app"; branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" },
+        {
+          repo: "acme/app";
+          branch: "feature/login";
+          commit: "0123456789abcdef0123456789abcdef01234567";
+        },
+      ]
+    >
   >;
   /** a list that is a link (to a file of the root's, say), too large, not JSON, or not a
    *  record of branches is no list: that repository shows none, the others theirs */
   export type NotAList = Given<
     [
-      Fresh, Acme,
-      Invoke<typeof writeJsonIn, [where: "state", name: "secret.json", value: { refs: { main: "0123456789abcdef0123456789abcdef01234567" } }]>,
-      Invoke<typeof linkIn, [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", target: Invoke<typeof pathIn, [where: "state", name: "secret.json"]>]>,
-      Invoke<typeof writeFilledIn, [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", bytes: 300000]>,
+      Fresh,
+      Acme,
+      Invoke<
+        typeof writeJsonIn,
+        [
+          where: "state",
+          name: "secret.json",
+          value: { refs: { main: "0123456789abcdef0123456789abcdef01234567" } },
+        ]
+      >,
+      Invoke<
+        typeof linkIn,
+        [
+          where: "domains",
+          name: "acme/outbox/sync/acme/app/refs.json",
+          target: Invoke<typeof pathIn, [where: "state", name: "secret.json"]>,
+        ]
+      >,
+      Invoke<
+        typeof writeFilledIn,
+        [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", bytes: 300000]
+      >,
     ],
     Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", []>
   >;
   /** a list that is not JSON, or whose refs are not a record, is none either */
   export type NotJson = Given<
-    [Fresh, Acme, Invoke<typeof writeIn, [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", text: "{"]>, Invoke<typeof writeJsonIn, [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", value: { refs: ["main"] }]>],
+    [
+      Fresh,
+      Acme,
+      Invoke<
+        typeof writeIn,
+        [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", text: "{"]
+      >,
+      Invoke<
+        typeof writeJsonIn,
+        [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", value: { refs: ["main"] }]
+      >,
+    ],
     Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", []>
   >;
 }
