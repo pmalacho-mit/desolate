@@ -11,10 +11,32 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-/** Chrome or Chromium on this machine (DESOLATE_CHROME first), or "" if there is none. */
+/** Playwright's Chromium, where .devcontainer/setup-test-tools.sh put it (the newest first). */
+const playwrightChromes = () =>
+  [
+    "/desolate/scratch/playwright",
+    path.join(process.env.HOME ?? "/", ".cache", "ms-playwright"),
+  ].flatMap((dir) => {
+    try {
+      return fs
+        .readdirSync(dir)
+        .filter((name) => name.startsWith("chromium-"))
+        .sort()
+        .reverse()
+        .map((name) => path.join(dir, name, "chrome-linux", "chrome"));
+    } catch {
+      return [];
+    }
+  });
+
+/** Chrome or Chromium on this machine (DESOLATE_CHROME first), or "" if there is none.
+ *  Playwright's before the distribution's: arm64 Ubuntu's `chromium-browser` is a stub for a
+ *  snap, which does not start in a container ("did not start": a suite run without run.sh,
+ *  which looked there itself, 2026-11-17). */
 export const findChrome = () =>
   [
     process.env.DESOLATE_CHROME,
+    ...playwrightChromes(),
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
     "/usr/bin/chromium-browser",
