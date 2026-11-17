@@ -69,3 +69,5 @@ $ desolate ui
 dashboard    http://desolate.localhost:31591/?tkn=<token>
 approvals    http://desolate-approve.localhost:31591/?tkn=<token>
 [exit 0]
+
+## delete from the dashboard
