@@ -206,7 +206,7 @@ $ desolate repos --json
 ## clone: the domain it makes
 
 $ desolate list --json
-[{"domain":"acme--consumer","title":"acme/consumer","repos":["acme/consumer"],"workspaces":[]},{"domain":"acme--widgets","title":"acme/widgets","repos":["acme/widgets"],"workspaces":[]}]
+[{"domain":"acme--consumer","title":"acme/consumer","repos":["acme/consumer"],"building":false,"workspaces":[]},{"domain":"acme--widgets","title":"acme/widgets","repos":["acme/widgets"],"building":false,"workspaces":[]}]
 [exit 0]
 
 $ desolate clone acme/widgets
@@ -242,7 +242,7 @@ fetching acme/loose with the read key
 [exit 0]
 
 $ desolate list --json
-[{"domain":"acme--consumer","title":"acme/consumer","repos":["acme/consumer"],"workspaces":[]},{"domain":"acme--widgets","title":"acme/widgets","repos":["acme/lib","acme/widgets"],"workspaces":[]},{"domain":"other--widgets","title":"other/widgets","repos":["other/widgets"],"workspaces":[]}]
+[{"domain":"acme--consumer","title":"acme/consumer","repos":["acme/consumer"],"building":false,"workspaces":[]},{"domain":"acme--widgets","title":"acme/widgets","repos":["acme/lib","acme/widgets"],"building":false,"workspaces":[]},{"domain":"other--widgets","title":"other/widgets","repos":["other/widgets"],"building":false,"workspaces":[]}]
 [exit 0]
 
 $ desolate clone acme/loose --domain x --no-domain
