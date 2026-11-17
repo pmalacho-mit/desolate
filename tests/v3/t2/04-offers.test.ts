@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
+import { findChrome, loadPage } from "../lib/browser.ts";
 
 let stack: Stack;
 let commit = "";
@@ -321,10 +322,10 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.deepEqual(push!.summary.commits, [], "the remote has every commit already, and the reviewer says so");
     assert.ok(push!.summary.files!.some((f) => f.path === "big.bin" || f.path === "README.md"), "the files it changes against the default branch");
     // In a real browser: the card is drawn as text, and Approve waits for a person.
-    const chrome = [process.env.DESOLATE_CHROME, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find((file) => file && fs.existsSync(file));
+    const chrome = findChrome();
     assert.ok(chrome, "this check needs Chrome or Chromium: install one, or set DESOLATE_CHROME to its path");
     const profile = fs.mkdtempSync(path.join(stack.work, "chrome-"));
-    const dom = spawnSync(chrome!, ["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--host-resolver-rules=MAP *.localhost 127.0.0.1", "--virtual-time-budget=6000", "--dump-dom", address![1]!], { encoding: "utf8", timeout: 60_000 });
+    const dom = await loadPage(chrome, profile, address![1]!, { until: /<dd class="branch">web-push<\/dd>/ });
     assert.match(dom.stdout, /<dd class="branch">web-push<\/dd>/, dom.stdout.slice(0, 600));
     assert.match(dom.stdout, /<button type="button" class="approve" disabled="">Approve push<\/button>/, "Approve is not armed by loading the page");
     assert.equal(forgeRefs("acme/widgets")["web-push"], undefined, "and loading it approved nothing");

@@ -128,10 +128,11 @@ your change is about them:
 | `07-secrets` | the fail-closed check, and its transcript | two log lines in another order; a refusal checked before it was on record. Fails on the Mac too |
 | `09-ui` | the side-by-side diff, and its transcript | never rendered in Playwright's Chromium 131 within five minutes. Renders on the Mac. **Not explained** |
 
-On the Mac since Chrome 157.0.8103.79 (2026-11-16): every check that reads a page with
-`chrome --dump-dom` (in `04-offers`, `06-editor` and `09-ui`) fails with an empty page, because
-that Chrome crashes in `--dump-dom` (exit 139) even on a `data:` URL. The same Chrome driven over
-the DevTools protocol works.
+The checks that read a page in a real browser (`04-offers`, `06-editor`, `09-ui`) drive headless
+Chrome over its DevTools protocol (`tests/v3/lib/browser.ts`), since Chrome 157.0.8103.79
+crashed in `--dump-dom` (2026-11-16). They wait for what they assert, not for a time budget:
+the `09` side-by-side failure above may have been the budget ending before the diff's colours
+came, and has not been run inside a workspace since.
 
 ## What has been tested, and what has not
 

@@ -13,6 +13,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
+import { findChrome, loadPage } from "../lib/browser.ts";
 
 let stack: Stack;
 let port = 0;
@@ -201,20 +202,19 @@ describe("T2 section 4.8: the root UI", () => {
 
   // The dashboard in a real browser. `?once` draws the current state and leaves no stream
   // open, so the browser finishes.
-  const browser = (query: string, ...extra: string[]) => {
-    const chrome = [process.env.DESOLATE_CHROME, "/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"].find((file) => file && fs.existsSync(file));
+  const browser = (query: string, until?: RegExp, screenshot?: string) => {
+    const chrome = findChrome();
     assert.ok(chrome, "this check needs Chrome or Chromium: install one, or set DESOLATE_CHROME to its path");
     const profile = fs.mkdtempSync(path.join(stack.work, "chrome-"));
-    return spawnSync(chrome!, ["--headless=new", "--no-sandbox", "--disable-gpu", "--no-first-run", `--user-data-dir=${profile}`, "--host-resolver-rules=MAP *.localhost 127.0.0.1", "--enable-logging=stderr", "--log-level=0", "--virtual-time-budget=4000", "--window-size=1180,1500", ...extra, `http://${HOST}:${port}/?tkn=${token}&${query}`], { encoding: "utf8", timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
+    return loadPage(chrome, profile, `http://${HOST}:${port}/?tkn=${token}&${query}`, { until, ms: 4000, width: 1180, height: 1500, screenshot });
   };
 
   it("in a browser: cards, Needs you, and a workspace's words shown as text, never run", async () => {
     stack.step("the dashboard in a browser");
-    const dump = (...extra: string[]) => browser("once", ...extra);
-    let page = dump("--dump-dom");
-    for (let i = 0; i < 4 && !/data-domain="web"/.test(page.stdout); i++) page = dump("--dump-dom");
+    let page = await browser("once", /data-domain="web"/);
+    for (let i = 0; i < 4 && !/data-domain="web"/.test(page.stdout); i++) page = await browser("once", /data-domain="web"/);
     // A picture of it, for a person to look at (section 4.8: the owner reviews screenshots).
-    if (process.env.DESOLATE_SCREENSHOTS) dump(`--screenshot=${path.join(process.env.DESOLATE_SCREENSHOTS, "dashboard.png")}`);
+    if (process.env.DESOLATE_SCREENSHOTS) await browser("once", /data-domain="web"/, path.join(process.env.DESOLATE_SCREENSHOTS, "dashboard.png"));
     const dom = page.stdout;
     assert.match(dom, /<div class="card" data-domain="web">[\s\S]*<h3>the web app<\/h3>/, dom.slice(0, 600));
     assert.match(dom, /<li data-workspace="web\/one"><span class="dot orange"/, "the workspace's colour, visible at a glance");
@@ -272,12 +272,14 @@ describe("T2 section 4.8: the root UI", () => {
     // In the browser: the review opens at the offer, side by side (the default layout), and
     // the diff's markup is text on the page, in a span, not an element of it.
     const at = "once&review&domain=web&repo=acme%2Fapp&branch=markup";
-    let page = browser(at, "--dump-dom");
-    for (let i = 0; i < 4 && !/data-diff/.test(page.stdout); i++) page = browser(at, "--dump-dom");
+    // Drawn, then coloured by a worker: wait for the coloured spans, not the first drawing.
+    const coloured = /<div class="sbs" data-diff="">[\s\S]*<span class="code add">/;
+    let page = await browser(at, coloured);
+    for (let i = 0; i < 4 && !coloured.test(page.stdout); i++) page = await browser(at, coloured);
     assert.match(page.stdout, /<div class="sbs" data-diff="">[\s\S]*<span class="code add">&lt;img src=x onerror=alert\(1\)&gt;<\/span>/, page.stdout.slice(0, 800));
     assert.doesNotMatch(page.stdout, /<img/i, "no element was made from the diff");
     assert.doesNotMatch(page.stderr, /alert|Uncaught/i, "and nothing of it ran");
-    if (process.env.DESOLATE_SCREENSHOTS) browser(at, `--screenshot=${path.join(process.env.DESOLATE_SCREENSHOTS, "review.png")}`);
+    if (process.env.DESOLATE_SCREENSHOTS) await browser(at, coloured, path.join(process.env.DESOLATE_SCREENSHOTS, "review.png"));
     // The state service is kept running: ended, it is back, and its log says what happened.
     assert.equal(stack.inRoot(["bash", "-c", "pkill -f '^node .*stated\\.ts$'"]).code, 0, "control: it was running, and was ended");
     assert.ok(await until(async () => (await http("GET", "/state").catch(() => ({ status: 0 }))).status === 200), "the dashboard answers again");
