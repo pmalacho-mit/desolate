@@ -402,10 +402,10 @@ const handle = async (client: Socket, head: string) => {
   const viaSecrets = viaSecretsProxy(port, host, secrets);
   // And only to a secrets proxy that is this domain's: the same user as this process is what
   // listens on that port (a port is anyone's to take first).
-  if (viaSecrets && listenerUid(secrets!.port) !== process.getuid!())
-    return refuse(
-      `${host} is a host of one of this domain's secrets, and what listens where its secrets proxy should is not this domain's`,
-    );
+  const notOurs = viaSecrets
+    ? secretsProxyRefusal(host, listenerUid(secrets!.port), process.getuid!())
+    : null;
+  if (notOurs) return refuse(notOurs);
   // To the address that was checked: a second lookup could answer differently.
   const upstream = viaSecrets
     ? connect({ host: "127.0.0.1", port: secrets!.port })
@@ -463,6 +463,44 @@ const handle = async (client: Socket, head: string) => {
   upstream.on("close", close);
   client.on("close", close);
 };
+
+/** Whether the connection to a secret's host may go to the domain's secrets proxy: only when
+ *  what listens on its port is this domain's proxies' user (`mine`). Nothing listening and
+ *  something else listening are both refused, each said as it is: the first is mended by
+ *  starting a workspace of the domain, the second is a program to look for. */
+export const secretsProxyRefusal = (
+  host: string,
+  listener: number | null,
+  mine: number,
+): string | null =>
+  listener === null
+    ? `${host} is a host of one of this domain's secrets, and the domain's secrets proxy is not running (starting a workspace of the domain starts it)`
+    : listener !== mine
+      ? `${host} is a host of one of this domain's secrets, and what listens where its secrets proxy should is not this domain's`
+      : null;
+
+declare namespace secretsProxyRefusal {
+  /** the domain's own proxy listens: the connection goes to it */
+  export type Ours = Expect<
+    Invoke<typeof secretsProxyRefusal, [host: "api.example.test", listener: 1001, mine: 1001]>,
+    "=",
+    null
+  >;
+  /** nothing listens (it was ended), or another user does (the port taken first): refused, each said as it is */
+  export type Refused = Table<
+    typeof secretsProxyRefusal,
+    [
+      [
+        args: [host: "api.example.test", listener: null, mine: 1001],
+        expected: "api.example.test is a host of one of this domain's secrets, and the domain's secrets proxy is not running (starting a workspace of the domain starts it)",
+      ],
+      [
+        args: [host: "api.example.test", listener: 1002, mine: 1001],
+        expected: "api.example.test is a host of one of this domain's secrets, and what listens where its secrets proxy should is not this domain's",
+      ],
+    ]
+  >;
+}
 
 if (running && socketArg) {
   // A unix socket, not a loopback port: a port in the root VM is any of its users' to

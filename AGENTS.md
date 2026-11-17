@@ -123,20 +123,15 @@ TMPDIR=/desolate/scratch/tests DESOLATE_TIER=T2 \
 - `.devcontainer/setup-test-tools.sh` installed shellcheck, jq, TypeScript and an arm64
   Chromium (Playwright's) when the container was made.
 
-Known failures inside a workspace, measured on 2026-11-13. These are not yours to chase unless
-your change is about them:
+T2 inside a workspace passed **142 of 142** on 2026-11-17 (13 minutes, on the owner's M1),
+under `desolate agent`. No failure is known there: one that appears is yours to look at. Three
+that used to fail there were the tests' own (a nested editor taken for a leak, a log read
+before it was written, a diff read before its colours came), and one was desolate's (a
+secrets proxy that was not running, said to be another program's): all fixed.
 
-| Suite | What fails | Why |
-|---|---|---|
-| `06-editor` | the check that nothing on the host reaches an editor around its gate | it finds the outer workspace's own editor on `127.0.0.1:31580`: nesting, not a fault |
-| `07-secrets` | the fail-closed check, and its transcript | two log lines in another order; a refusal checked before it was on record. Fails on the Mac too |
-| `09-ui` | the side-by-side diff, and its transcript | never rendered in Playwright's Chromium 131 within five minutes. Renders on the Mac. **Not explained** |
-
-The checks that read a page in a real browser (`04-offers`, `06-editor`, `09-ui`) drive headless
-Chrome over its DevTools protocol (`tests/v3/lib/browser.ts`), since Chrome 157.0.8103.79
-crashed in `--dump-dom` (2026-11-16). They wait for what they assert, not for a time budget:
-the `09` side-by-side failure above may have been the budget ending before the diff's colours
-came, and has not been run inside a workspace since.
+The tiers' checks that read a page drive headless Chrome over its DevTools protocol
+(`tests/v3/lib/browser.ts`) and wait for what they assert. The end-to-end tiers run with no
+terminal (`run.sh`): they play the person themselves.
 
 ## What has been tested, and what has not
 
@@ -148,10 +143,10 @@ table, feature by feature.
 
 - **T1:** all of it, on the Mac (on 2026-11-16: the node tests, and 1,420 in-source tests in
   99 files) and, earlier, inside a workspace.
-- **T2:** 120 of 126 inside a workspace when last run there (the three failures above). On the
-  Mac under Colima, 123 of 142 on 2026-11-17: every failure is in `05-egress`, `07-secrets`
-  or `08-devcontainer`, which cannot pass there ([T2 on a Mac](tests/v3/README.md#t2-on-a-mac-is-a-partial-tier)).
-- **T4** (`tests/v3/run.sh t4`, about 3 minutes, on the Mac), 15 of 15 on 2026-11-16:
+- **T2:** 142 of 142 inside a workspace on 2026-11-17, the way to run it from a Mac
+  ([T2 from a Mac](tests/v3/README.md#t2-from-a-mac-run-it-in-a-desolate-workspace)). Under
+  Colima on the Mac, 123 of 142: every failure in `05`, `07` or `08`, which cannot pass there.
+- **T4** (`tests/v3/run.sh t4`, about 3 minutes, on the Mac), 15 of 15 on 2026-11-17:
   read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path
   between domains, an offer over a real share, the editor, a secret.
 - **Upgrades, by hand on the M1:**
@@ -214,4 +209,3 @@ table, feature by feature.
 - **A compose service that is not glibc:** it gets no port relay and no editor.
 - **Safari and Firefox:** they cannot say whether the approval page's Approve button is covered,
   which Chrome can. Safari cannot resolve `*.localhost` at all.
-- The 09 Chromium failure above.

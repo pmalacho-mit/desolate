@@ -427,7 +427,8 @@ describe("T2 phase 4: a domain's secrets", () => {
       log("two").every((e) => e.via === undefined && e.verdict !== "substituted"),
       "the other domain's connections never went near a secrets proxy",
     );
-    const shown = stack.desolate("net", "log", "dev");
+    // Each request is logged by the workspace's proxy and the secrets proxy, whichever first.
+    const shown = stack.unordered("net", "log", "dev");
     assert.doesNotMatch(shown.stdout + JSON.stringify(entries), new RegExp(`${VALUE}|${TOKEN}`));
     const logs = stack.inRoot([
       "bash",
@@ -509,7 +510,7 @@ describe("T2 phase 4: a domain's secrets", () => {
     );
   });
 
-  it("fail closed: with the secrets proxy down its hosts are refused, not passed around it; a removed secret is a name again", () => {
+  it("fail closed: with the secrets proxy down its hosts are refused, not passed around it; a removed secret is a name again", async () => {
     stack.step("the secrets proxy stops; a secret is removed");
     const count = upstream().length;
     // (It runs as the proxies' user under sudo, whose pid is the one recorded: as root, end
@@ -530,11 +531,15 @@ describe("T2 phase 4: a domain's secrets", () => {
       "https://api.example.test/down -H 'Authorization: Bearer MYAPP-API-KEY'",
     );
     assert.notEqual(down.code, 0);
-    assert.ok(
+    // The proxy answers before it writes its log line: wait for the line, a few seconds at most.
+    const onRecord = () =>
       log("dev").some(
         (e) => e.verdict === "refused" && /secrets proxy is not running/.test(e.reason ?? ""),
-      ),
-      "refused, with the reason on record",
+      );
+    for (let i = 0; i < 20 && !onRecord(); i++) await new Promise((r) => setTimeout(r, 250));
+    assert.ok(
+      onRecord(),
+      `refused, with the reason on record; the log's last entries: ${JSON.stringify(log("dev").slice(-4))}`,
     );
     assert.equal(
       upstream().length,

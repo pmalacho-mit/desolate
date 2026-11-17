@@ -98,15 +98,33 @@ mkdir -p ~/t && TMPDIR=~/t tests/v3/run.sh t4
   lives under the test's home (`.../home/lima/<vm>/ssh.sock.<16 digits>`). With
   `~/tmp-desolate-tests` that was 106 bytes and Lima refused to start the base VM.
 
-### T2 on a Mac is a partial tier
+### T2 from a Mac: run it in a desolate workspace
 
-The fake backend's network link is a unix socket on the host, bind-mounted into a
-`--network none` container. Colima's containers run in a Linux VM, which cannot connect to
-a socket made on the Mac, so every test that sends traffic from a workspace (egress,
-secrets, the devcontainer's pulls) fails with "this workspace's proxy is not
-answering". Git, offers, the root's checks and most of the dashboard do run. Use T2 on
-Linux for the rest; on the Mac, the boundary tier is T4. On an M1 on 2026-11-17, 123 of 142
-passed, and what failed was in `05-egress`, `07-secrets` and `08-devcontainer`.
+T2 is Linux's tier. Its "VMs" are containers whose one way out is a unix socket on the host,
+bind-mounted into a `--network none` container. Colima runs its containers in a Linux VM
+that cannot connect to a socket made on the Mac, so under Colima every test that sends
+traffic from a workspace (egress, secrets, the devcontainer's pulls) fails with "this
+workspace's proxy is not answering" (123 of 142 passed there on 2026-11-17, every failure in
+`05`, `07` or `08`).
+
+So on a Mac, T2 runs where it was made to: in a workspace of desolate's own, on its VM's
+Linux Docker. Once:
+
+```bash
+desolate clone pmalacho-mit/desolate --anonymous --domain desolate   # public: no keys
+desolate up desolate --name t2 --cpus 4 --memory 12g --disk 60g
+desolate exec desolate/t2 -- bash -lc 'npm install --legacy-peer-deps && docker build -t desolate/base:latest -f release/image/Dockerfile release'
+```
+
+Then, for a branch you pushed (about 20 minutes; it keeps running if you close the terminal):
+
+```bash
+desolate exec desolate/t2 -- bash -lc 'git fetch -q origin && git checkout -q --detach origin/<branch>'
+desolate agent start desolate/t2 --name t2 -- bash -lc 'tests/v3/run.sh t2 > /desolate/scratch/t2.log 2>&1'
+desolate exec desolate/t2 -- tail -5 /desolate/scratch/t2.log
+```
+
+T4, the boundary tier, stays on the Mac: it needs the Mac's hypervisor.
 
 ## Debugging a failure
 

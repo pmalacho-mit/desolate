@@ -199,11 +199,22 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
         .filter((port) => port === 31580 || port === 31581 || port === e.port),
       [],
     );
-    assert.equal(
-      await accepts(31580),
-      false,
-      "nothing on the host leads to the editor's server around its gate",
-    );
+    // Nothing on the host leads to the editor's server around its gate. Inside a desolate
+    // workspace (developing desolate there), 31580 on the host is the outer workspace's own
+    // editor: what is asked then is that whatever answers there is not this stack's editor,
+    // which would open with this editor's token.
+    if (process.env.DESOLATE_WORKSPACE !== "1")
+      assert.equal(
+        await accepts(31580),
+        false,
+        "nothing on the host leads to the editor's server around its gate",
+      );
+    else if (await accepts(31580))
+      assert.notEqual(
+        status(await get(e, "/", [`Cookie: vscode-tkn=${e.token}`], "127.0.0.1", 31580)),
+        200,
+        "what answers on the host's 31580 is the outer workspace's editor, not this one",
+      );
     // A request that changes its name after the first one on a connection is the gate's to refuse.
     const second = await raw(e.port, [
       `GET / HTTP/1.1`,

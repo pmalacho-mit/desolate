@@ -24,6 +24,9 @@ export type Stack = {
   env: NodeJS.ProcessEnv;
   /** Run the CLI; the command, its output and exit code go into the transcript. */
   desolate: (...args: string[]) => Result;
+  /** The same, its output's lines recorded sorted: for output whose order is not the
+   *  command's own (a log two processes write at once). */
+  unordered: (...args: string[]) => Result;
   /** Run the CLI as a person at a terminal would: on a pseudo-terminal, typing `answer` when
    *  the output shows `wait`. Recorded in the transcript. */
   person: (wait: string, answer: string, ...args: string[]) => Result;
@@ -317,6 +320,20 @@ export const newStack = (label: string): Stack => {
           .trimEnd()
           .split("\n")
           .filter((line) => line.length > 0),
+        `[exit ${result.code}]`,
+        "",
+      );
+      return result;
+    },
+    unordered: (...args) => {
+      const result = sh(CLI, args, { env });
+      transcript.push(
+        scrub(`$ desolate ${args.join(" ")}    # its lines sorted: two processes write them`),
+        ...scrub(result.stdout + result.stderr)
+          .trimEnd()
+          .split("\n")
+          .filter((line) => line.length > 0)
+          .sort(),
         `[exit ${result.code}]`,
         "",
       );
