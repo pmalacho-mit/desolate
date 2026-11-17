@@ -7,8 +7,8 @@ import * as path from "node:path";
 import { parseApproval } from "../shared/approval.ts";
 import type { PushApproval } from "../shared/approval.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyRoot, makeDirIn, namesIn, pathIn, writeFilledIn, writeIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyRoot, makeDirIn, namesIn, pathIn, writeFilledIn, writeIn, writeJsonIn } from "../.harness/root-state.ts";
 
 export const APPROVAL_TTL_MS = 120_000;
 const FILE_MOST = 16 * 1024;

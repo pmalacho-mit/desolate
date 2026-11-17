@@ -15,9 +15,9 @@ import { parseApproval } from "../shared/approval.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import type { Issue } from "../shared/issues.ts";
-import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { collect, fakeStack, rootAnswers, said } from "../../tests/nests/host-stack.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, rootAnswers, said } from "../.harness/host-stack.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 type Offer = { domain: string; repo: string; branch: string; commit: string; workspace: string; lfs: number; at: string; base?: string };

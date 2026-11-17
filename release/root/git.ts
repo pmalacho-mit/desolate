@@ -8,8 +8,8 @@ import type { Repo } from "../shared/names.ts";
 import { readJson } from "../shared/json.ts";
 import { FORGE, GITCONFIG, KEYRING, ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Mock, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyRoot, linkIn, makeDirIn, mirrorsAndClonesHere, pathIn, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Mock, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyRoot, linkIn, makeDirIn, mirrorsAndClonesHere, pathIn, writeJsonIn } from "../.harness/root-state.ts";
 
 /** Which forge the root reaches. GitHub in real use; a stand-in in tests (section 13.2). */
 export type Forge = {

@@ -4,8 +4,8 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aBundle } from "../../tests/nests/root-git.harness.ts";
+import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aBundle } from "../.harness/root-git.ts";
 
 /** Check every object in a bundle BEFORE any of them enters a root clone (`gitDir`): index its
  *  pack, strictly, into a throwaway object directory that borrows that clone's objects.

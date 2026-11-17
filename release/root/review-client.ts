@@ -13,8 +13,8 @@ import { git } from "./git.ts";
 import { ask } from "./keyring-client.ts";
 import { clonePath, REVIEWER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { attemptsThat } from "../../tests/nests/root-retry.harness.ts";
+import type { Call, Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { attemptsThat } from "../.harness/root-retry.ts";
 
 const RETRY = new Set(["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"]);
 /** The reviewer is one request per process: between two, it is starting. */

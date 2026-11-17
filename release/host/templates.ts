@@ -33,8 +33,8 @@ import { imageFingerprint } from "./image.ts";
 import { INSTANCE, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
-import type { Expect, Given, Invoke, Mock } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { collect, fakeStack, noBuilder, rootAnswers, said } from "../../tests/nests/host-stack.harness.ts";
+import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { collect, fakeStack, noBuilder, rootAnswers, said } from "../.harness/host-stack.ts";
 
 type EnvKey = { repo: string; spec: string; id: string };
 export type Builder = {

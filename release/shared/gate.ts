@@ -8,7 +8,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** Is a secret what it should be, in constant time? Compared as UTF-8 bytes: two strings of
  *  one length can differ in bytes ("é" is two), and timingSafeEqual throws on unequal

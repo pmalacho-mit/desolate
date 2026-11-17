@@ -7,7 +7,7 @@
 // already did; to a pipe or a file, it is passed as it is.
 import { spawn } from "node:child_process";
 import { terminalFilter } from "../../shared/terminal-filter.ts";
-import type { Table } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** The child's stdio: the terminal (stdin) always its own; stdout and stderr piped here, to be
  *  filtered, only where they are a terminal. */

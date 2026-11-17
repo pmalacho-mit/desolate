@@ -3,8 +3,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyScratch, readScratch, scratch, scratchFiles, writeScratch } from "../../tests/nests/shared-files.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyScratch, readScratch, scratch, scratchFiles, writeScratch } from "../.harness/shared-files.ts";
 
 export const readJson = <T>(file: string, fallback: T): T => {
   try {

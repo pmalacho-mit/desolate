@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { parseRepo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** A push through desolate's own helpers (to a domain, or to `origin` as a root clone's push
  *  address names it) is gated there: this hook lets it be. */

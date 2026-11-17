@@ -7,8 +7,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { dirScratch, emptyScratch, fifoScratch, linkScratch, opened, readScratch, scratch, scratchFiles, writeScratch } from "../../tests/nests/shared-files.harness.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { dirScratch, emptyScratch, fifoScratch, linkScratch, opened, readScratch, scratch, scratchFiles, writeScratch } from "../.harness/shared-files.ts";
 
 const OPEN = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK;
 

@@ -9,10 +9,10 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
 import { limaBackend } from "./vm/lima.ts";
 import type { Backend, VmSpec } from "./vm/types.ts";
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome, writeState } from "../../tests/nests/home.harness.ts";
-import type { setEnv } from "../../tests/nests/env.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome, writeState } from "../.harness/home.ts";
+import type { setEnv } from "../.harness/env.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 export type ForgeConfig = {
   kind: "github" | "stand-in";

@@ -17,9 +17,9 @@ import type { RunResult } from "../shared/run.ts";
 import { forge } from "./git.ts";
 import { ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aRepoWhere } from "../../tests/nests/root-git.harness.ts";
-import type { emptyRoot, writeJsonIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aRepoWhere } from "../.harness/root-git.ts";
+import type { emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
 export type Pushed = {
   repo: string; branch: string; commit: string;

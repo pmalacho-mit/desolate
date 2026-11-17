@@ -29,8 +29,8 @@ import { INSTANCE, paths, RELEASE_DIR } from "../paths.ts";
 import { duplexOf, parseSs } from "./fake.ts";
 import { socatAddress } from "./types.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
-import type { Call, Expect, Given, Invoke, Throws } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { baseYaml, cloneCall, confinement, madeWithoutLinkToken } from "../../../tests/nests/host-lima.harness.ts";
+import type { Call, Expect, Given, Invoke, Throws } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { baseYaml, cloneCall, confinement, madeWithoutLinkToken } from "../../.harness/host-lima.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIMA_HOME = path.join(paths.home, "lima");

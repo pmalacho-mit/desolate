@@ -49,8 +49,8 @@ import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
 import { urlRules } from "./git-urls.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { projectWith } from "../../tests/nests/workspace-files.harness.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { projectWith } from "../.harness/workspace-files.ts";
 
 export const STATE = "/run/desolate/devcontainer.json";
 export type State =

@@ -16,9 +16,9 @@ import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
-import type { Expect, Given, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { setEnv } from "../../tests/nests/env.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { setEnv } from "../.harness/env.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 type Workspace = WorkspacePlan & { state: string };

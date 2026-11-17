@@ -22,8 +22,8 @@ import { createHmac, randomBytes } from "node:crypto";
 import type { Socket } from "node:net";
 import { sameSecret } from "./gate.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { handshake, heard, impostor, saysTooMuch, unconnected } from "../../tests/nests/shared-link.harness.ts";
+import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { handshake, heard, impostor, saysTooMuch, unconnected } from "../.harness/shared-link.ts";
 
 const PREFIX = "DESOLATE-LINK2 ";
 const TOKEN = /^[0-9a-f]{32}$/;

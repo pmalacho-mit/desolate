@@ -12,8 +12,8 @@ import { isSlug } from "../shared/names.ts";
 import { printable } from "../shared/text.ts";
 import { ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyRoot, namesIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyRoot, namesIn } from "../.harness/root-state.ts";
 
 const DIR = () => path.join(ROOT.state, "issues");
 const fileOf = (id: string) => path.join(DIR(), `${id}.json`);

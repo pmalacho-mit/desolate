@@ -21,9 +21,9 @@ import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, parseRepo } from "../sh
 import { embedAddress } from "./approve-web.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { writeState } from "../../tests/nests/home.harness.ts";
-import type { ask, gitVmDown, noShell, quiet } from "../../tests/nests/host-web.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { writeState } from "../.harness/home.ts";
+import type { ask, gitVmDown, noShell, quiet } from "../.harness/host-web.ts";
 
 export const TOKEN_FILE = path.join(paths.state, "git-token");
 const UI = path.join(RELEASE_DIR, "host", "git-ui");

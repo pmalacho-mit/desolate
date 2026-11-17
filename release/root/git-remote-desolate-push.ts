@@ -20,7 +20,7 @@ import { git as gitIn } from "./git.ts";
 import { mirrorPath } from "./layout.ts";
 import { pushCommit } from "./raw-push.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const fail = (message: string): never => {
   process.stderr.write(`git-remote-desolate-push: ${message}\n`);

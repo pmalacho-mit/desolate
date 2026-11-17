@@ -24,7 +24,7 @@ import type { Signed } from "../shared/spawn.ts";
 import { statsLines } from "../shared/stats.ts";
 import { branches, domainRepos, importDeliveries, INBOX, request, stageLfs, syncRepo } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const fail = (message: string, fix: string): never => {
   process.stderr.write(`desolate: ${message}\n  fix: ${fix}\n`);

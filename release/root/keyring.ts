@@ -32,8 +32,8 @@ import { parseRepo, repoId, isBranch, isCommit } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { KEYRING } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aKeysDir, emptyRoot, myUid, readIn, writeIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aKeysDir, emptyRoot, myUid, readIn, writeIn } from "../.harness/root-state.ts";
 
 export type Role = "read" | "write";
 const isRole = (value: unknown): value is Role => value === "read" || value === "write";

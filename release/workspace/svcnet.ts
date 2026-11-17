@@ -21,7 +21,7 @@ import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 type Listener = { port: number; address: string };
 /** /proc/net/tcp{,6}: state 0A is LISTEN; addresses are hex, in the kernel's byte order. */

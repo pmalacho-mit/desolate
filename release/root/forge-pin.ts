@@ -8,7 +8,7 @@
 import * as fs from "node:fs";
 import { PINNED_FORGE } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** What root pins, from the forge the host gave (JSON): the address, as three checked words,
  *  and its host keys, as known_hosts lines. Anything else is refused, said why. */

@@ -21,8 +21,8 @@ import { inbox } from "../outbox.ts";
 import { indexFile, storeFile } from "./secret-store.ts";
 import type { Indexed } from "./secret-store.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aDomain, emptyRoot, jsonListIn, linkIn, pathIn, readIn, writeIn, writeJsonIn } from "../../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aDomain, emptyRoot, jsonListIn, linkIn, pathIn, readIn, writeIn, writeJsonIn } from "../../.harness/root-state.ts";
 import { alive, ensureLinkToken, hasProxyUser, linkTokenFile, listenerUid, PROXY_CODE, proxyDomainDir, proxyOutDir, proxyUid, spawnAsProxy, stopProxy } from "./as-proxy.ts";
 
 const DIR = `${ROOT.state}/proxy`;

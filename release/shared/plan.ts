@@ -1,7 +1,7 @@
 // What the root tells a workspace VM to be: written by the root into the domain's inbox
 // (read-only to the domain), read by the workspace's init. Frozen when the workspace is made.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export type Checkout = {
   repo: string;

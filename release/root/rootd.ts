@@ -33,8 +33,8 @@ import { waiting } from "./pushed.ts";
 import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aDomain, aWorkspace, emptyRoot, jsonFilesIn } from "../../tests/nests/root-state.harness.ts";
+import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aDomain, aWorkspace, emptyRoot, jsonFilesIn } from "../.harness/root-state.ts";
 
 const RATE = { perMinute: 30 } as const;
 const recent = new Map<string, number[]>();

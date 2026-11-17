@@ -9,7 +9,7 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { createServer } from "node:net";
-import type { Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import { printable } from "../shared/text.ts";
 
 export const DEV_PORTS = [3000, 3001, 4200, 5000, 5173, 5174, 8000, 8080, 8888];

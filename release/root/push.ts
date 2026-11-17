@@ -27,8 +27,8 @@ import { remoteTip } from "./repos.ts";
 import { submitForReview } from "./review-client.ts";
 import { send } from "./send.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 /** The command line, read: which half (`prepare` or `run`), the push it names, and the flags.
  *  The approval's text arrives in base64 and is decoded here. */

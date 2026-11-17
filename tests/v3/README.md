@@ -57,10 +57,11 @@ declare namespace isBranch {
 }
 ```
 
-They are [suede.nests](https://github.com/pmalacho-mit/suede.nests), vendored at
-`release/.suede/nests` and run by Vitest (`npm run test:nests`, and as part of `make test`).
+They are [suede.nests](https://github.com/pmalacho-mit/suede.nests), a development dependency
+at `suede.nests/`, and run by Vitest (`npm run test:nests`, and as part of `make test`); their
+harness and conventions are in [`release/.harness`](../../release/.harness/README.md).
 Node never sees them: a declared namespace and an `import type` are erased. The DSL must be
-imported by its own path in each file (`../.suede/nests/dsl.import.meta.vitest.ts`), never
+imported by its own path in each file (`../../suede.nests/dsl.import.meta.vitest.ts`), never
 re-exported: that path is how Vitest finds the file. Vitest is pinned at 5.0.3 (5.1 hands
 plugins root-relative ids, and the library's generated test modules are then "not found");
 install with `npm install --legacy-peer-deps` (npm's peer resolution crashes on Vitest 5.0.3).

@@ -1,8 +1,8 @@
 // One request to one of the keyring's sockets.
 import { connect } from "node:net";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Call, Expect, Given, Invoke, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { aSocketAnswering } from "../../tests/nests/root-socket.harness.ts";
+import type { Call, Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aSocketAnswering } from "../.harness/root-socket.ts";
 
 export const ask = (socketPath: string, request: Record<string, unknown>, timeoutMs = 10_000): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {

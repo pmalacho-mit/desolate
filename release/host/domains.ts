@@ -3,10 +3,10 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import * as path from "node:path";
 import { guest, paths } from "./paths.ts";
 import { backend, changeSecrets, ensureProxyUser, rootctl } from "./stack.ts";
-import type { Expect, Given, Invoke, Mock, Table } from "../../.suede/nests/dsl.import.meta.vitest.ts";
-import type { emptyHome } from "../../tests/nests/home.harness.ts";
-import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../../tests/nests/host-stack.harness.ts";
-import type { refusalOf } from "../../tests/nests/refusal.harness.ts";
+import type { Expect, Given, Invoke, Mock, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { emptyHome } from "../.harness/home.ts";
+import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 

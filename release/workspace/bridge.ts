@@ -20,7 +20,7 @@ import { connect, createServer } from "node:net";
 import type { Server } from "node:net";
 import { readJson } from "../shared/json.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table, Throws } from "../../.suede/nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const STATE = "/run/desolate/devcontainer.json";
 /** desolate's own listeners in the VM, and the editor's gate: never mirrored. The editor's
