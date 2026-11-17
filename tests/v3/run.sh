@@ -39,7 +39,14 @@ if [ -z "${DESOLATE_CHROME:-}" ]; then
     [ -x "$c" ] && export DESOLATE_CHROME=$c && break
   done
 fi
+# The end-to-end tiers run with no terminal: they play the person themselves (lib/person.py,
+# in a terminal of its own). A terminal of the runner's would be found by the terminal
+# approver, which would wait at it for a person (04's "a push is impossible without a
+# person", run under `desolate agent`, waited there for ten minutes).
+detached() { python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@" </dev/null; }
 run_node_tests() { "$NODE" --disable-warning=ExperimentalWarning --test --test-concurrency=1 --test-reporter="${DESOLATE_TEST_REPORTER:-spec}" "$@"; }
+
+detached_node_tests() { detached "$NODE" --disable-warning=ExperimentalWarning --test --test-concurrency=1 --test-reporter="${DESOLATE_TEST_REPORTER:-spec}" "$@"; }
 
 t1() {
   echo "== T1: static and unit"
@@ -88,7 +95,7 @@ docker_ready() {
 t2() {
   echo "== T2: end to end, fake backend (NOT a test of any VM boundary)"
   docker_ready
-  DESOLATE_TIER=T2 run_node_tests tests/v3/t2/*.test.ts
+  DESOLATE_TIER=T2 detached_node_tests tests/v3/t2/*.test.ts
 }
 
 t3() {
@@ -99,7 +106,7 @@ t3() {
   local image=${DESOLATE_IMAGE_DIR:-$HOME/.desolate/images/$(uname -m)}
   [ -f "$image/disk.raw" ] || need "the base VM image is not at $image" "sudo release/image/build.sh --out <dir>, then DESOLATE_IMAGE_DIR=<dir> tests/v3/run.sh t3"
   [ -e /dev/kvm ] || echo "   no /dev/kvm: software emulation. Each VM takes minutes to boot; this tier takes tens of minutes."
-  DESOLATE_TIER=T3 DESOLATE_IMAGE_DIR=$image run_node_tests tests/v3/t3/*.test.ts
+  DESOLATE_TIER=T3 DESOLATE_IMAGE_DIR=$image detached_node_tests tests/v3/t3/*.test.ts
 }
 
 t4() {
@@ -107,7 +114,7 @@ t4() {
   [ "$(uname -s)" = Darwin ] || need "T4 is the Mac's tier" "run it on macOS; on Linux the real-VM tier is t3"
   docker_ready
   command -v limactl >/dev/null 2>&1 || need "limactl is not on PATH" "brew install lima"
-  DESOLATE_TIER=T4 run_node_tests tests/v3/t3/*.test.ts
+  DESOLATE_TIER=T4 detached_node_tests tests/v3/t3/*.test.ts
 }
 
 case "${1:-t1}" in
