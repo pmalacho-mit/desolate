@@ -1,5 +1,13 @@
 # sample-fastapi -- full-chain + secrets test
 
+**Out of date.** This page, and the comments in this sample's files, describe desolate v2:
+one Colima VM, sysbox, `./cli.sh secret add`, `./cli.sh desolate`, `./cli.sh proxy logs`.
+None of those exists in v3. In v3 a secret is
+`desolate domain <d> secret set SAMPLE-FASTAPI-OPENAI-KEY --hosts api.openai.com`, what a
+workspace reached is `desolate net log <d>`, and a placeholder sent toward a host its secret
+does not name is passed on as the name, not refused: `/exfil-test` gets example.com's own
+answer, not a `403`.
+
 Proves two things at once:
 
 1. the three-level path works: Mac browser -> dind relay -> devcontainer ->

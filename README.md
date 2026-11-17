@@ -84,15 +84,17 @@ suede dependency workflow, and must be respected when adding files.
 
 ```
 release/           THE SHIPPED TREE (see release/README.md for its layout)
-tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (real VMs, QEMU), t4 (the Mac's own VMs)
+tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (real VMs, QEMU); t4 runs t3's tests on the Mac's own VMs
 tests/probes/v3/   Phase 0 probes to run on a Mac
+suede.nests/       the in-source tests' DSL and Vitest plugin (a development dependency; release/.harness has their conventions)
+devcontainers-suede/  devcontainer templates (a development dependency)
 docs/v3/           the decisions, progress against the spec, and the first pass's handoff (a record)
 samples/           example devcontainers; fixtures
 .devcontainer/     this repository's devcontainer, for developing desolate in a desolate workspace
 ```
 
 ```bash
-npm install              # TypeScript, for the type check
+npm install              # TypeScript and Vitest, for T1
 make test                # T1: seconds, anywhere
 make e2e-fast            # T2: minutes; needs Docker and the base image (tests/v3/README.md)
 make e2e-slow            # T3: real VMs; run whenever something structural changes

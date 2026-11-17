@@ -122,8 +122,8 @@ without your approval.
 
 - **Watch or talk to it:** `desolate agent attach <domain>/<workspace>` (Ctrl-] lets go; it
   keeps working). Your terminal's own scrollback and copy work.
-- **Hear from it:** `desolate notify` turns its statuses into notifications: orange when it
-  asks you something, green when it has offered its branch.
+- **Hear from it:** `desolate notify` tells you when it asks you something (orange), when it
+  fails (red), and when it has offered its branch.
 - **Several at once:** each task is its own VM; run as many as your Mac holds
   (`desolate bootstrap` says what one costs).
 - **Done with it:** `desolate rm <domain>/<workspace>` (its branch stays).

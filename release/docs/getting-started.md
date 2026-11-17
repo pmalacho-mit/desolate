@@ -61,7 +61,7 @@ doctor: all checks passed.
 ```
 
 If macOS asks whether `limactl` may accept incoming network connections, **click Deny**:
-desolate listens only on your Mac's loopback ([why](../README.md#on-a-mac-if-macos-asks-about-limactl-and-incoming-connections)).
+desolate listens only on your Mac's loopback ([why](reference.md#on-a-mac-if-macos-asks-about-limactl-and-incoming-connections)).
 
 ## 3. Clone a repository: it is a domain
 
@@ -256,7 +256,7 @@ desolate notify            # macOS notifications: a push waiting, an offer, a wo
 desolate events            # the same, as JSON lines, for your own scripts
 ```
 
-The [README](../README.md) ("Your own scripts") has a script that opens a pull request for
+The [reference](reference.md#approving-pushing-and-the-pages-desolate-serves) ("Your own scripts") has a script that opens a pull request for
 every branch desolate pushes.
 
 ## Day to day
@@ -288,7 +288,9 @@ The git VM is made again (your clones in it are on your Mac), and a domain's tem
 next `up`.
 
 - **Running workspaces keep going** on the code and tools they started with. `desolate stop`
-  then `desolate start` gives one the new code. One made before an image change keeps its
+  then `desolate start` gives one the new code. (A devcontainer made before 2026-11-16 can
+  read `desolate` and `/desolate/status` half-replaced after an upgrade, until that stop and
+  start makes it again.) One made before an image change keeps its
   older tools until it is made again: `desolate rm <d>/<w>`, then `desolate up <d> --name <w>
   --branch <its branch>` (its checkouts, committed or not, are on your Mac and are kept).
 - **One checkout per stack.** The VMs run desolate from the folder they were made from. Run

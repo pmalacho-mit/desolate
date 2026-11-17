@@ -5,7 +5,7 @@
   "workspaces": [
     "release"
   ],
-  "description": "Dev-only manifest: tests, type-checking and their tools (suede.nests, the in-source tests' DSL, is a development dependency at suede.nests and never ships). release/ is the shipped tree, a workspace of this one with a package.json of its own and no dependencies. It pins ESM resolution for the .ts files node runs during tests, pins the TypeScript that type-checks them, and gives the suite memorable entry points. Vitest is pinned at 5.0.3: 5.1 hands plugins root-relative ids, which suede.nests's collector does not resolve (its generated test modules are 'not found').",
+  "description": "Dev-only manifest: tests, type-checking and their tools (suede.nests, the in-source tests' DSL, is a development dependency at ./suede.nests and never ships). release/ is the shipped tree, a workspace of this one with a package.json of its own and no dependencies. It pins ESM resolution for the .ts files node runs during tests, pins the TypeScript that type-checks them, and gives the suite memorable entry points. Vitest is pinned at 5.0.3: 5.1 hands plugins root-relative ids, which suede.nests's collector does not resolve (its generated test modules are 'not found').",
   "engines": {
     "node": ">=22.18"
   },

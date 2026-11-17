@@ -1,7 +1,7 @@
 # In-source tests (suede.nests)
 
 Beside most functions in `release/` is a `declare namespace` of the same name: tests written
-as types, which [suede.nests](../../suede.nests/README.md) prints as Vitest tests. They are
+as types, which [suede.nests](https://github.com/pmalacho-mit/suede.nests) prints as Vitest tests. They are
 there to be read. A reviewer who meets a function should find, right under it, what it is
 given, what it answers, and what it refuses: how it is meant to be used.
 
@@ -30,8 +30,8 @@ node_modules/.bin/vitest run release/shared/size.ts   # one file's
 The tests and this folder ship with the code; suede.nests does not. It is a development
 dependency at the root of the development checkout (`suede.nests/`, installed with suede's
 installer and `--dev`), which the `release` branch, being `release/` alone, never has. Two
-things make that work, and T1's [`release-alone.test.ts`](../../tests/v3/t1/release-alone.test.ts) checks both on a copy of `release/`
-taken out of the checkout, each beside a control:
+things make that work, and T1's [`release-alone.test.ts`](https://github.com/pmalacho-mit/desolate/blob/main/tests/v3/t1/release-alone.test.ts)
+checks both on a copy of `release/` taken out of the checkout, each beside a control:
 
 - **At runtime nothing loads.** Every import of the DSL or of a harness is `import type`, and
   a `declare namespace` is a type: node strips them all before it runs a file. So the code

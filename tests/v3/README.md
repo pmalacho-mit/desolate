@@ -4,6 +4,7 @@
 tests/v3/run.sh t1     # static and unit: seconds, anywhere                    (make test)
 tests/v3/run.sh t2     # end to end on the fake backend: minutes; needs Docker (make e2e-fast)
 tests/v3/run.sh t3     # end to end on real VMs: tens of minutes under emulation (make e2e-slow)
+tests/v3/run.sh t4     # t3's tests on a Mac's own VMs (vz): about 3 minutes on an M1
 ```
 
 A tier whose needs are not met fails and says what to install. It never skips.
@@ -68,8 +69,8 @@ install with `npm install --legacy-peer-deps` (npm's peer resolution crashes on 
 
 ## What a machine needs
 
-- **T1:** node >= 22.18, `npm install` (for TypeScript). `shellcheck` if you have it.
-- **T2:** also Docker, an ordinary user who can use it (not root), `git-lfs`, `python3`,
+- **T1:** node >= 22.18, `npm install` (for TypeScript and Vitest). `shellcheck` if you have it.
+- **T2:** also Docker, an ordinary user who can use it (not root), `git-lfs`, `python3`, `jq`,
   Chrome or Chromium (`DESOLATE_CHROME=<path>` if it is not in a usual place), and
   the base image `desolate/base:latest`:
   - on Linux: `sudo release/image/build.sh --out <dir>` (from the Ubuntu archive; imports it);
@@ -102,9 +103,10 @@ mkdir -p ~/t && TMPDIR=~/t tests/v3/run.sh t4
 The fake backend's network link is a unix socket on the host, bind-mounted into a
 `--network none` container. Colima's containers run in a Linux VM, which cannot connect to
 a socket made on the Mac, so every test that sends traffic from a workspace (egress,
-secrets, the devcontainer's pulls, dev servers) fails with "this workspace's proxy is not
+secrets, the devcontainer's pulls) fails with "this workspace's proxy is not
 answering". Git, offers, the root's checks and most of the dashboard do run. Use T2 on
-Linux for the rest; on the Mac, the boundary tier is T4.
+Linux for the rest; on the Mac, the boundary tier is T4. On an M1 on 2026-11-16, 122 of 142
+passed, and what failed was in `05-egress`, `06-editor`, `07-secrets` and `08-devcontainer`.
 
 ## Debugging a failure
 
