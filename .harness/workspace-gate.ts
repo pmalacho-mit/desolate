@@ -14,7 +14,9 @@ export type Sent = { method?: string; path: string; headers: Record<string, stri
 export type Answer = { status: number; reached: boolean; csp: string | null };
 
 const listening = (server: http.Server) =>
-  new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
+  new Promise<number>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)),
+  );
 const closed = (server: http.Server) =>
   new Promise<void>((resolve) => {
     server.closeAllConnections();
@@ -23,7 +25,12 @@ const closed = (server: http.Server) =>
 
 /** `token`: what the editor's token file holds, or null for no file. A WebSocket upgrade is a
  *  request whose headers carry `upgrade`. */
-export const throughGate = async (open: Gate, editorHost: string, token: string | null, sent: Sent): Promise<Answer> => {
+export const throughGate = async (
+  open: Gate,
+  editorHost: string,
+  token: string | null,
+  sent: Sent,
+): Promise<Answer> => {
   let reached = false;
   const editor = http.createServer((_, res) => {
     reached = true;
@@ -32,7 +39,9 @@ export const throughGate = async (open: Gate, editorHost: string, token: string 
   });
   editor.on("upgrade", (_, socket) => {
     reached = true;
-    socket.end("HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n");
+    socket.end(
+      "HTTP/1.1 101 Switching Protocols\r\nupgrade: websocket\r\nconnection: Upgrade\r\n\r\n",
+    );
   });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-gate-"));
   const tokenFile = path.join(dir, "token");
@@ -42,10 +51,24 @@ export const throughGate = async (open: Gate, editorHost: string, token: string 
   try {
     return await new Promise<Answer>((resolve, reject) => {
       // setHost false: the headers are exactly the test's, Host included.
-      const req = http.request({ host: "127.0.0.1", port, method: sent.method ?? "GET", path: sent.path, headers: sent.headers, setHost: false, agent: false });
+      const req = http.request({
+        host: "127.0.0.1",
+        port,
+        method: sent.method ?? "GET",
+        path: sent.path,
+        headers: sent.headers,
+        setHost: false,
+        agent: false,
+      });
       req.on("response", (res) => {
         res.resume();
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, reached, csp: (res.headers["content-security-policy"] as string | undefined) ?? null }));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            reached,
+            csp: (res.headers["content-security-policy"] as string | undefined) ?? null,
+          }),
+        );
       });
       req.on("upgrade", (res, socket) => {
         socket.destroy();

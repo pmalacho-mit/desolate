@@ -27,7 +27,10 @@ export const keptBefore = (text: string) => {
 /** Runs a step with `args` after its output, and says what it returned (or threw), the lines
  *  it said, and what the kept archive holds after it (null: none). The home's path is written
  *  `$DESOLATE_HOME`, since each test file's home is another. */
-export const carried = async (command: (out: (line: string) => void, ...args: any[]) => Promise<unknown>, args: unknown[]) => {
+export const carried = async (
+  command: (out: (line: string) => void, ...args: any[]) => Promise<unknown>,
+  args: unknown[],
+) => {
   const lines: string[] = [];
   const homeless = (text: string) => text.replaceAll(home(), "$DESOLATE_HOME");
   let outcome: { returned: unknown } | { threw: string };

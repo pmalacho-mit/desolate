@@ -30,20 +30,35 @@ type Registry = { repos: Record<string, RepoRecord> };
 export const registry = (): Registry => readJson<Registry>(REGISTRY, { repos: {} });
 const save = (value: Registry) => writeJson(REGISTRY, value);
 export const recordOf = (repo: Repo): RepoRecord =>
-  registry().repos[repoId(repo)] ?? refuse(`${repoId(repo)} is not cloned into the root`, `desolate clone ${repoId(repo)}`);
+  registry().repos[repoId(repo)] ??
+  refuse(`${repoId(repo)} is not cloned into the root`, `desolate clone ${repoId(repo)}`);
 
 declare namespace recordOf {
   type Fresh = Invoke<typeof emptyRoot>;
   /** what the root knows of a repository it cloned: whether it holds a write key, and the
    *  remote's default branch as last fetched */
   export type Known = Given<
-    [Fresh, Invoke<typeof aRegistry, [repos: { "acme/app": { pushable: false; defaultBranch: "trunk" } }]>],
-    Expect<Invoke<typeof recordOf, [repo: { owner: "acme"; name: "app" }]>, "=", { pushable: false; anonymous: false; defaultBranch: "trunk"; fetchedAt: null }>
+    [
+      Fresh,
+      Invoke<
+        typeof aRegistry,
+        [repos: { "acme/app": { pushable: false; defaultBranch: "trunk" } }]
+      >,
+    ],
+    Expect<
+      Invoke<typeof recordOf, [repo: { owner: "acme"; name: "app" }]>,
+      "=",
+      { pushable: false; anonymous: false; defaultBranch: "trunk"; fetchedAt: null }
+    >
   >;
   /** one it never cloned is a refusal that says how */
   export type Unknown = Given<
     Fresh,
-    Expect<Invoke<typeof refusalOf, [f: typeof recordOf, args: [repo: { owner: "acme"; name: "app" }]]>, "=", { message: "acme/app is not cloned into the root"; fix: "desolate clone acme/app"; code: 1 }>
+    Expect<
+      Invoke<typeof refusalOf, [f: typeof recordOf, args: [repo: { owner: "acme"; name: "app" }]]>,
+      "=",
+      { message: "acme/app is not cloned into the root"; fix: "desolate clone acme/app"; code: 1 }
+    >
   >;
 }
 
@@ -51,8 +66,22 @@ declare namespace list {
   type Fresh = Invoke<typeof emptyRoot>;
   /** every repository the root holds, by name */
   export type Sorted = Given<
-    [Fresh, Invoke<typeof aRegistry, [repos: { "zeta/app": {}; "acme/web": { pushable: false }; "acme/api": {} }]>],
-    Expect<Invoke<typeof list>, "matches", [{ repo: "acme/api"; pushable: true }, { repo: "acme/web"; pushable: false }, { repo: "zeta/app" }]>
+    [
+      Fresh,
+      Invoke<
+        typeof aRegistry,
+        [repos: { "zeta/app": {}; "acme/web": { pushable: false }; "acme/api": {} }]
+      >,
+    ],
+    Expect<
+      Invoke<typeof list>,
+      "matches",
+      [
+        { repo: "acme/api"; pushable: true },
+        { repo: "acme/web"; pushable: false },
+        { repo: "zeta/app" },
+      ]
+    >
   >;
   /** none yet: an empty registry, not an error */
   export type None = Given<Fresh, Expect<Invoke<typeof list>, "=", []>>;
@@ -71,16 +100,31 @@ const keyring = async (request: Record<string, unknown>) => {
 export const prepare = async (repo: Repo, options: { push: boolean; anonymous: boolean }) => {
   const all = registry();
   const existing = all.repos[repoId(repo)];
-  const record: RepoRecord = existing ?? { pushable: false, anonymous: options.anonymous, defaultBranch: null, fetchedAt: null };
+  const record: RepoRecord = existing ?? {
+    pushable: false,
+    anonymous: options.anonymous,
+    defaultBranch: null,
+    fetchedAt: null,
+  };
   const keys: { role: "read" | "write"; pubkey: string }[] = [];
   if (!options.anonymous) {
     record.anonymous = false;
-    keys.push({ role: "read", pubkey: String((await keyring({ op: "create", repo: repoId(repo), role: "read" })).pubkey) });
+    keys.push({
+      role: "read",
+      pubkey: String((await keyring({ op: "create", repo: repoId(repo), role: "read" })).pubkey),
+    });
   }
   if (options.push) {
-    if (options.anonymous) refuse("a repository fetched anonymously cannot be pushable: a push needs a write key", "drop --anonymous, or add --no-push");
+    if (options.anonymous)
+      refuse(
+        "a repository fetched anonymously cannot be pushable: a push needs a write key",
+        "drop --anonymous, or add --no-push",
+      );
     record.pushable = true;
-    keys.push({ role: "write", pubkey: String((await keyring({ op: "create", repo: repoId(repo), role: "write" })).pubkey) });
+    keys.push({
+      role: "write",
+      pubkey: String((await keyring({ op: "create", repo: repoId(repo), role: "write" })).pubkey),
+    });
   }
   all.repos[repoId(repo)] = record;
   save(all);
@@ -90,22 +134,87 @@ export const prepare = async (repo: Repo, options: { push: boolean; anonymous: b
 const fetchUrl = (repo: Repo, record: RepoRecord) => {
   const f = forge();
   if (!record.anonymous) return remoteUrl(repo, f);
-  if (f.kind !== "github") refuse("anonymous fetches are for public GitHub repositories", "clone it with a read key instead (drop --anonymous)");
+  if (f.kind !== "github")
+    refuse(
+      "anonymous fetches are for public GitHub repositories",
+      "clone it with a read key instead (drop --anonymous)",
+    );
   return `https://github.com/${repo.owner}/${repo.name}.git`;
 };
 
 declare namespace fetchUrl {
   type Fresh = Invoke<typeof emptyRoot>;
-  type GitHub = Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "" }]>;
+  type GitHub = Invoke<
+    typeof writeJsonIn,
+    [
+      where: "state",
+      name: "forge.json",
+      value: { kind: "github"; ssh: { user: "git"; host: "github.com"; port: 22 }; knownHosts: "" },
+    ]
+  >;
   /** with a read key, over ssh; without one (someone else's public repository), GitHub's https */
-  export type Ways = Given<[Fresh, GitHub], [
-    Expect<Invoke<typeof fetchUrl, [repo: { owner: "acme"; name: "app" }, record: { pushable: true; anonymous: false; defaultBranch: null; fetchedAt: null }]>, "=", "ssh://git@github.com:22/acme/app.git">,
-    Expect<Invoke<typeof fetchUrl, [repo: { owner: "acme"; name: "app" }, record: { pushable: false; anonymous: true; defaultBranch: null; fetchedAt: null }]>, "=", "https://github.com/acme/app.git">,
-  ]>;
+  export type Ways = Given<
+    [Fresh, GitHub],
+    [
+      Expect<
+        Invoke<
+          typeof fetchUrl,
+          [
+            repo: { owner: "acme"; name: "app" },
+            record: { pushable: true; anonymous: false; defaultBranch: null; fetchedAt: null },
+          ]
+        >,
+        "=",
+        "ssh://git@github.com:22/acme/app.git"
+      >,
+      Expect<
+        Invoke<
+          typeof fetchUrl,
+          [
+            repo: { owner: "acme"; name: "app" },
+            record: { pushable: false; anonymous: true; defaultBranch: null; fetchedAt: null },
+          ]
+        >,
+        "=",
+        "https://github.com/acme/app.git"
+      >,
+    ]
+  >;
   /** anonymous fetches are GitHub's alone: a stand-in forge is reached with a key */
   export type NotGitHub = Given<
-    [Fresh, Invoke<typeof writeJsonIn, [where: "state", name: "forge.json", value: { kind: "stand-in"; ssh: { user: "git"; host: "forge"; port: 2222 }; knownHosts: "" }]>],
-    Expect<Invoke<typeof refusalOf, [f: typeof fetchUrl, args: [repo: { owner: "acme"; name: "app" }, record: { pushable: false; anonymous: true; defaultBranch: null; fetchedAt: null }]]>, "=", { message: "anonymous fetches are for public GitHub repositories"; fix: "clone it with a read key instead (drop --anonymous)"; code: 1 }>
+    [
+      Fresh,
+      Invoke<
+        typeof writeJsonIn,
+        [
+          where: "state",
+          name: "forge.json",
+          value: {
+            kind: "stand-in";
+            ssh: { user: "git"; host: "forge"; port: 2222 };
+            knownHosts: "";
+          },
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<
+        typeof refusalOf,
+        [
+          f: typeof fetchUrl,
+          args: [
+            repo: { owner: "acme"; name: "app" },
+            record: { pushable: false; anonymous: true; defaultBranch: null; fetchedAt: null },
+          ],
+        ]
+      >,
+      "=",
+      {
+        message: "anonymous fetches are for public GitHub repositories";
+        fix: "clone it with a read key instead (drop --anonymous)";
+        code: 1;
+      }
+    >
   >;
 }
 
@@ -117,7 +226,12 @@ const config = async (dir: string, pairs: Record<string, string>) => {
 /** What the remote's branch is, as the mirror last saw it (null: the remote has no such
  *  branch). A push names it as the commit the branch moves from (shared/approval.ts). */
 export const remoteTip = async (repo: Repo, branch: string): Promise<string | null> => {
-  const found = await git(mirrorPath(repo), ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`]);
+  const found = await git(mirrorPath(repo), [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/heads/${branch}^{commit}`,
+  ]);
   const id = found.stdout.trim();
   return found.code === 0 && /^[0-9a-f]{40}$/.test(id) ? id : null;
 };
@@ -125,7 +239,11 @@ export const remoteTip = async (repo: Repo, branch: string): Promise<string | nu
 /** suede's rule for a `downstream/...` branch (shared/suede.ts): asked of the root clone,
  *  against every branch the remote has, as the mirror last saw them. Why not, or null. */
 export const downstreamCheck = async (repo: Repo, commit: string): Promise<string | null> => {
-  const tips = (await git(mirrorPath(repo), ["for-each-ref", "--format=%(objectname)", "refs/heads"])).stdout.split("\n").filter((id) => /^[0-9a-f]{40}$/.test(id));
+  const tips = (
+    await git(mirrorPath(repo), ["for-each-ref", "--format=%(objectname)", "refs/heads"])
+  ).stdout
+    .split("\n")
+    .filter((id) => /^[0-9a-f]{40}$/.test(id));
   return downstreamRefusal((args) => git(clonePath(repo), args), commit, tips);
 };
 
@@ -161,26 +279,44 @@ const fetchNow = async (repo: Repo, log: (line: string) => void) => {
   await gitOk(mirror, ["config", "--add", "remote.origin.fetch", "+refs/heads/*:refs/heads/*"]);
   await gitOk(mirror, ["config", "--add", "remote.origin.fetch", "+refs/tags/*:refs/tags/*"]);
 
-  log(`fetching ${repoId(repo)} ${record.anonymous ? "anonymously, over https" : "with the read key"}`);
-  const fetched = await git(mirror, ["fetch", "--prune", "--no-auto-gc", "--quiet", "origin"], { timeoutMs: 600_000 });
+  log(
+    `fetching ${repoId(repo)} ${record.anonymous ? "anonymously, over https" : "with the read key"}`,
+  );
+  const fetched = await git(mirror, ["fetch", "--prune", "--no-auto-gc", "--quiet", "origin"], {
+    timeoutMs: 600_000,
+  });
   if (fetched.code !== 0)
-    refuse(`cannot fetch ${repoId(repo)}: ${fetched.stderr.trim().split("\n").slice(-3).join(" | ")}`,
-      record.anonymous ? "check the repository is public" : `check its read deploy key is registered: desolate keys ${repoId(repo)}`);
+    refuse(
+      `cannot fetch ${repoId(repo)}: ${fetched.stderr.trim().split("\n").slice(-3).join(" | ")}`,
+      record.anonymous
+        ? "check the repository is public"
+        : `check its read deploy key is registered: desolate keys ${repoId(repo)}`,
+    );
 
   // The remote's default branch becomes the mirror's HEAD, so clones check it out.
-  const head = await git(mirror, ["ls-remote", "--symref", "origin", "HEAD"], { timeoutMs: 60_000 });
+  const head = await git(mirror, ["ls-remote", "--symref", "origin", "HEAD"], {
+    timeoutMs: 60_000,
+  });
   const symref = /^ref: refs\/heads\/(\S+)\s+HEAD/m.exec(head.stdout);
   if (symref) await gitOk(mirror, ["symbolic-ref", "HEAD", `refs/heads/${symref[1]}`]);
   const defaultBranch = symref ? symref[1]! : null;
 
   // LFS: what the branch tips need (question 8's proposal). Older objects on request.
-  const heads = (await gitOk(mirror, ["for-each-ref", "--format=%(refname)", "refs/heads"])).split("\n").filter(Boolean);
+  const heads = (await gitOk(mirror, ["for-each-ref", "--format=%(refname)", "refs/heads"]))
+    .split("\n")
+    .filter(Boolean);
   let lfsObjects = 0;
   if (heads.length > 0) {
     const lfs = await git(mirror, ["lfs", "fetch", "origin", ...heads], { timeoutMs: 600_000 });
-    if (lfs.code !== 0) refuse(`fetched ${repoId(repo)}, but its LFS objects did not come: ${lfs.stderr.trim().split("\n").slice(-2).join(" | ")}`, `desolate fetch ${repoId(repo)}`);
+    if (lfs.code !== 0)
+      refuse(
+        `fetched ${repoId(repo)}, but its LFS objects did not come: ${lfs.stderr.trim().split("\n").slice(-2).join(" | ")}`,
+        `desolate fetch ${repoId(repo)}`,
+      );
     try {
-      lfsObjects = fs.readdirSync(path.join(mirror, "lfs", "objects"), { recursive: true }).filter((name) => /[0-9a-f]{64}$/.test(String(name))).length;
+      lfsObjects = fs
+        .readdirSync(path.join(mirror, "lfs", "objects"), { recursive: true })
+        .filter((name) => /[0-9a-f]{64}$/.test(String(name))).length;
     } catch {
       /* no LFS objects */
     }
@@ -195,11 +331,26 @@ const fetchNow = async (repo: Repo, log: (line: string) => void) => {
   // when the clone last fetched, and the reviewer was sent none of the remote's newer
   // commits, so it could not describe a push after the remote moved (found by T2 04, once a
   // pull request was merged on the forge).
-  const followed = await git(clonePath(repo), ["fetch", "--quiet", "--prune", "--no-auto-gc", "origin"], { timeoutMs: 600_000 });
-  if (followed.code !== 0) log(`the root clone of ${repoId(repo)} did not follow the mirror: ${followed.stderr.trim().split("\n").pop() ?? ""}`);
+  const followed = await git(
+    clonePath(repo),
+    ["fetch", "--quiet", "--prune", "--no-auto-gc", "origin"],
+    { timeoutMs: 600_000 },
+  );
+  if (followed.code !== 0)
+    log(
+      `the root clone of ${repoId(repo)} did not follow the mirror: ${followed.stderr.trim().split("\n").pop() ?? ""}`,
+    );
   // A pull request merged since a push: the mirror now shows it (pushed.ts).
-  await settle(repoId(repo), (args) => git(mirror, args)).catch((error: Error) => log(`could not check what landed in ${repoId(repo)}: ${error.message.slice(0, 200)}`));
-  return { repo: repoId(repo), branches: heads.length, defaultBranch, lfsObjects, rootClone: created ? "created" : "present" };
+  await settle(repoId(repo), (args) => git(mirror, args)).catch((error: Error) =>
+    log(`could not check what landed in ${repoId(repo)}: ${error.message.slice(0, 200)}`),
+  );
+  return {
+    repo: repoId(repo),
+    branches: heads.length,
+    defaultBranch,
+    lfsObjects,
+    rootClone: created ? "created" : "present",
+  };
 };
 
 /** The root clone: the person's own, borrowing the mirror's objects. Its config is written
@@ -212,7 +363,15 @@ export const ensureClone = async (repo: Repo, defaultBranch: string | null): Pro
     fs.mkdirSync(path.dirname(clone), { recursive: true });
     // The mirror named as safe, for this command only (git.ts, safeIn: on vz a share reports
     // as owned by whoever last asked).
-    const made = await gitBare([...safeIn(fs.realpathSync(mirror)), "clone", "--shared", "--no-checkout", "--quiet", mirror, clone]);
+    const made = await gitBare([
+      ...safeIn(fs.realpathSync(mirror)),
+      "clone",
+      "--shared",
+      "--no-checkout",
+      "--quiet",
+      mirror,
+      clone,
+    ]);
     if (made.code !== 0) throw new Error(`cannot create the root clone: ${made.stderr.trim()}`);
   }
   const record = recordOf(repo);
@@ -248,13 +407,18 @@ export const ensureClone = async (repo: Repo, defaultBranch: string | null): Pro
   }
   if (fresh && defaultBranch) {
     const out = await git(clone, ["checkout", "--quiet", defaultBranch], { timeoutMs: 600_000 });
-    if (out.code !== 0) throw new Error(`cannot check out ${defaultBranch} in the root clone: ${out.stderr.trim().slice(-500)}`);
+    if (out.code !== 0)
+      throw new Error(
+        `cannot check out ${defaultBranch} in the root clone: ${out.stderr.trim().slice(-500)}`,
+      );
   }
   return fresh;
 };
 
 export const list = () =>
-  Object.entries(registry().repos).map(([name, record]) => ({ repo: name, ...record })).sort((a, b) => a.repo.localeCompare(b.repo));
+  Object.entries(registry().repos)
+    .map(([name, record]) => ({ repo: name, ...record }))
+    .sort((a, b) => a.repo.localeCompare(b.repo));
 
 // One fetch of a repository at a time. Two at once (two clicks on the dashboard's Fetch, a
 // push's own fetch beside a person's) raced on the mirror's config and one failed. In this
@@ -271,7 +435,8 @@ const lockedFetch = async (repo: Repo, log: (line: string) => void) => {
       fs.mkdirSync(lock);
       break;
     } catch {
-      const age = Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
+      const age =
+        Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
       if (age > FETCH_LOCK_STALE_MS) fs.rmSync(lock, { recursive: true, force: true });
       else if (!said) {
         said = true;
@@ -285,12 +450,19 @@ const lockedFetch = async (repo: Repo, log: (line: string) => void) => {
     fs.rmSync(lock, { recursive: true, force: true });
   }
 };
-export const fetch = (repo: Repo, log: (line: string) => void = () => {}): ReturnType<typeof fetchNow> => {
+export const fetch = (
+  repo: Repo,
+  log: (line: string) => void = () => {},
+): ReturnType<typeof fetchNow> => {
   const key = repoId(repo);
-  const next = (fetching.get(key) ?? Promise.resolve()).catch(() => {}).then(() => lockedFetch(repo, log));
+  const next = (fetching.get(key) ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => lockedFetch(repo, log));
   fetching.set(key, next);
-  void next.catch(() => {}).finally(() => {
-    if (fetching.get(key) === next) fetching.delete(key);
-  });
+  void next
+    .catch(() => {})
+    .finally(() => {
+      if (fetching.get(key) === next) fetching.delete(key);
+    });
   return next;
 };

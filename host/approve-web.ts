@@ -62,34 +62,61 @@ export const approveToken = (): string => {
   fs.writeFileSync(TOKEN_FILE, `${made}\n`, { mode: 0o600 });
   return made;
 };
-export const approveAddress = () => `http://${APPROVE_HOSTNAME}:${editorHostPort()}/?tkn=${approveToken()}`;
+export const approveAddress = () =>
+  `http://${APPROVE_HOSTNAME}:${editorHostPort()}/?tkn=${approveToken()}`;
 /** The key the embedded page sends (x-desolate-embed): derived, so it opens /embed's API and
  *  is not the address's token. */
-const embedKey = (token: string) => createHmac("sha256", Buffer.from(token, "hex")).update("embed beside the git terminal").digest("hex");
+const embedKey = (token: string) =>
+  createHmac("sha256", Buffer.from(token, "hex"))
+    .update("embed beside the git terminal")
+    .digest("hex");
 /** The embedded page's address, for the git terminal's page only (git-web.ts). */
-export const embedAddress = () => `http://${APPROVE_HOSTNAME}:${editorHostPort()}/embed#k=${embedKey(approveToken())}`;
+export const embedAddress = () =>
+  `http://${APPROVE_HOSTNAME}:${editorHostPort()}/embed#k=${embedKey(approveToken())}`;
 /** The one origin that may frame /embed. */
 const embedder = () => `http://${GIT_HOSTNAME}:${editorHostPort()}`;
 
-const cookieName = (token: string) => `desolate_approve_${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
+const cookieName = (token: string) =>
+  `desolate_approve_${createHash("sha256").update(token).digest("hex").slice(0, 12)}`;
 /** A push's own token: tied to the credential and to the very text the page showed. The
  *  list of waiting pushes is the root's user's: if it lists another text under the same
  *  nonce by the time of the click, the token no longer matches and nothing is signed. */
-export const pushToken = (token: string, message: string) => createHmac("sha256", Buffer.from(token, "hex")).update(`approve\n${message}`).digest("hex");
+export const pushToken = (token: string, message: string) =>
+  createHmac("sha256", Buffer.from(token, "hex")).update(`approve\n${message}`).digest("hex");
 const digestOf = (message: string) => createHash("sha256").update(message).digest("hex");
 /** An issue's own token: over its id and every word the page showed (shared/issues.ts). An
  *  issue the root lists with other words by the time of the click no longer matches. */
-export const issueToken = (token: string, issue: Issue) => createHmac("sha256", Buffer.from(token, "hex")).update(`publish issue\n${issue.id}\n${issueDigest(issue)}`).digest("hex");
+export const issueToken = (token: string, issue: Issue) =>
+  createHmac("sha256", Buffer.from(token, "hex"))
+    .update(`publish issue\n${issue.id}\n${issueDigest(issue)}`)
+    .digest("hex");
 /** The root's account of an issue, only if every field is one desolate carries. */
 const checkedIssue = (value: unknown): Issue | null => {
   const v = value as Partial<Issue> | null;
   const draft = draftOf(v);
-  if (!v || "error" in draft || typeof v.id !== "string" || !/^[0-9a-z]{6,12}-[0-9a-f]{8}$/.test(v.id) || !isSlug(v.domain) || v.state !== "approving") return null;
-  return { ...draft, id: v.id, domain: v.domain, workspace: isSlug(v.workspace) ? v.workspace : "unknown", at: String(v.at ?? ""), state: "approving", edited: v.edited === true };
+  if (
+    !v ||
+    "error" in draft ||
+    typeof v.id !== "string" ||
+    !/^[0-9a-z]{6,12}-[0-9a-f]{8}$/.test(v.id) ||
+    !isSlug(v.domain) ||
+    v.state !== "approving"
+  )
+    return null;
+  return {
+    ...draft,
+    id: v.id,
+    domain: v.domain,
+    workspace: isSlug(v.workspace) ? v.workspace : "unknown",
+    at: String(v.at ?? ""),
+    state: "approving",
+    edited: v.edited === true,
+  };
 };
 
 export const SECURITY: Record<string, string> = {
-  "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "content-security-policy":
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "x-frame-options": "DENY",
   "cross-origin-opener-policy": "same-origin",
   "cross-origin-resource-policy": "same-origin",
@@ -98,12 +125,25 @@ export const SECURITY: Record<string, string> = {
   "cache-control": "no-store",
   "permissions-policy": "camera=(), microphone=(), geolocation=()",
 };
-const send = (res: ServerResponse, status: number, type: string, content: string | Buffer, extra: Record<string, string> = {}) => {
-  res.writeHead(status, { "content-type": type, "content-length": Buffer.byteLength(content), ...SECURITY, ...extra });
+const send = (
+  res: ServerResponse,
+  status: number,
+  type: string,
+  content: string | Buffer,
+  extra: Record<string, string> = {},
+) => {
+  res.writeHead(status, {
+    "content-type": type,
+    "content-length": Buffer.byteLength(content),
+    ...SECURITY,
+    ...extra,
+  });
   res.end(content);
 };
-const text = (res: ServerResponse, status: number, message: string) => send(res, status, "text/plain; charset=utf-8", `desolate: ${message}\n`);
-const json = (res: ServerResponse, status: number, value: unknown) => send(res, status, "application/json; charset=utf-8", JSON.stringify(value));
+const text = (res: ServerResponse, status: number, message: string) =>
+  send(res, status, "text/plain; charset=utf-8", `desolate: ${message}\n`);
+const json = (res: ServerResponse, status: number, value: unknown) =>
+  send(res, status, "application/json; charset=utf-8", JSON.stringify(value));
 const STATIC: Record<string, [string, string]> = {
   "/": ["approve.html", "text/html; charset=utf-8"],
   "/approve.js": ["approve.js", "text/javascript; charset=utf-8"],
@@ -115,11 +155,20 @@ const STATIC: Record<string, [string, string]> = {
 
 /** What a push would send, as the reviewer in the root computed it: shown as data. */
 export type Summary = {
-  ok: boolean; error?: string; waiting?: boolean; warnings?: string[];
-  commits?: { commit: string; subject: string; author: string }[]; more?: number;
-  files?: { path: string; added: number; removed: number; binary?: boolean; sensitive?: boolean }[]; moreFiles?: number;
-  base?: string | null; remote?: string | null; fastForward?: boolean | null; lfs?: number;
-  diff?: string; diffCut?: boolean;
+  ok: boolean;
+  error?: string;
+  waiting?: boolean;
+  warnings?: string[];
+  commits?: { commit: string; subject: string; author: string }[];
+  more?: number;
+  files?: { path: string; added: number; removed: number; binary?: boolean; sensitive?: boolean }[];
+  moreFiles?: number;
+  base?: string | null;
+  remote?: string | null;
+  fastForward?: boolean | null;
+  lfs?: number;
+  diff?: string;
+  diffCut?: boolean;
 };
 export type Waiting = { message: string; at: string };
 const SUMMARY = { deadlineMs: 90_000, keepMs: 120_000 } as const;
@@ -163,12 +212,19 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   const summaries = new Map<string, { at: number; value: Summary | null }>();
   const summaryOf = (push: PushApproval, message: string): Summary => {
     const key = digestOf(message);
-    for (const [k, entry] of summaries) if (Date.now() - entry.at > SUMMARY.keepMs && entry.value) summaries.delete(k);
+    for (const [k, entry] of summaries)
+      if (Date.now() - entry.at > SUMMARY.keepMs && entry.value) summaries.delete(k);
     const known = summaries.get(key);
-    if (known) return known.value ?? { ok: false, waiting: true, error: "the reviewer is working it out" };
+    if (known)
+      return known.value ?? { ok: false, waiting: true, error: "the reviewer is working it out" };
     const entry: { at: number; value: Summary | null } = { at: Date.now(), value: null };
     summaries.set(key, entry);
-    const deadline = new Promise<Summary>((resolve) => setTimeout(() => resolve({ ok: false, error: "the reviewer did not answer in time" }), SUMMARY.deadlineMs).unref());
+    const deadline = new Promise<Summary>((resolve) =>
+      setTimeout(
+        () => resolve({ ok: false, error: "the reviewer did not answer in time" }),
+        SUMMARY.deadlineMs,
+      ).unref(),
+    );
     void Promise.race([backend.summary(push), deadline])
       .catch((error: Error): Summary => ({ ok: false, error: error.message }))
       .then((value) => {
@@ -178,139 +234,217 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     return { ok: false, waiting: true, error: "the reviewer is working it out" };
   };
   return async (req: IncomingMessage, res: ServerResponse) => {
-  // This name only, this origin only: a page on any other name is refused before anything.
-  // (Save /embed's own page, which another site loads, as a frame: it is static and holds
-  // nothing, and frame-ancestors says who may show it. Everything it then asks for is a
-  // same-origin request, checked as any other.)
-  const url = new URL(req.url ?? "/", `http://${APPROVE_HOSTNAME}`);
-  // Only as a frame (Sec-Fetch-Dest: iframe): a window another site opens on /embed would be
-  // the live page, under a pointer that site chose (found by the audit of #93).
-  const asFrame = req.method === "GET" && url.pathname === "/embed" && url.search === "" && req.headers["sec-fetch-dest"] === "iframe";
-  const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame);
-  // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
-  if (refused) return text(res, refused.status, `refused ${refused.why.replace(/this is the editor of/, "this is the approval page at").replace("`desolate editor`", "`desolate approve --web`")}`);
-  if (req.method === "GET" && url.pathname === "/embed" && !asFrame) return text(res, 403, "refused: /embed is the approval page beside the git terminal, and loads only as its frame");
-  const token = approveToken();
-  const name = cookieName(token);
-  const given = url.searchParams.get("tkn");
-  if (req.method === "GET" && url.pathname === "/" && given !== null) {
-    if (!sameSecret(given, token)) return text(res, 403, "refused: that is not this stack's approval address; `desolate approve --web` prints it");
-    res.writeHead(303, { location: "/", "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`, "content-length": 0, ...SECURITY });
-    return res.end();
-  }
-  const cookie = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]{48})(?:;|$)`).exec(String(req.headers.cookie ?? ""))?.[1];
-  const embedded = String(req.headers["x-desolate-embed"] ?? "");
-  const signedIn = (cookie !== undefined && sameSecret(cookie, token)) || (/^[0-9a-f]{64}$/.test(embedded) && sameSecret(embedded, embedKey(token)));
-  if (req.method === "GET" && url.pathname === "/embed") {
-    // The same page, framed beside the git terminal: by that origin alone.
-    const { "x-frame-options": _deny, ...rest } = SECURITY;
-    const content = fs.readFileSync(path.join(UI, "approve.html"));
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": content.length, ...rest, "content-security-policy": SECURITY["content-security-policy"]!.replace("frame-ancestors 'none'", `frame-ancestors ${embedder()}`) });
-    return res.end(content);
-  }
-  if (req.method === "GET" && STATIC[url.pathname]) {
-    const [file, type] = STATIC[url.pathname]!;
-    return send(res, 200, type, fs.readFileSync(path.join(UI, file)));
-  }
-  if (!signedIn) return json(res, 401, { error: "open the approval page at the address `desolate approve --web` prints, on this Mac's terminal: it carries this stack's token" });
-  // Below, every request is this page's own script's: the same origin, said by the browser.
-  if (String(req.headers["sec-fetch-site"] ?? "") !== "same-origin") return json(res, 403, { error: "a request this page did not make" });
+    // This name only, this origin only: a page on any other name is refused before anything.
+    // (Save /embed's own page, which another site loads, as a frame: it is static and holds
+    // nothing, and frame-ancestors says who may show it. Everything it then asks for is a
+    // same-origin request, checked as any other.)
+    const url = new URL(req.url ?? "/", `http://${APPROVE_HOSTNAME}`);
+    // Only as a frame (Sec-Fetch-Dest: iframe): a window another site opens on /embed would be
+    // the live page, under a pointer that site chose (found by the audit of #93).
+    const asFrame =
+      req.method === "GET" &&
+      url.pathname === "/embed" &&
+      url.search === "" &&
+      req.headers["sec-fetch-dest"] === "iframe";
+    const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame);
+    // (gate.ts words its refusal for an editor: here, this page's own name and its own command.)
+    if (refused)
+      return text(
+        res,
+        refused.status,
+        `refused ${refused.why.replace(/this is the editor of/, "this is the approval page at").replace("`desolate editor`", "`desolate approve --web`")}`,
+      );
+    if (req.method === "GET" && url.pathname === "/embed" && !asFrame)
+      return text(
+        res,
+        403,
+        "refused: /embed is the approval page beside the git terminal, and loads only as its frame",
+      );
+    const token = approveToken();
+    const name = cookieName(token);
+    const given = url.searchParams.get("tkn");
+    if (req.method === "GET" && url.pathname === "/" && given !== null) {
+      if (!sameSecret(given, token))
+        return text(
+          res,
+          403,
+          "refused: that is not this stack's approval address; `desolate approve --web` prints it",
+        );
+      res.writeHead(303, {
+        location: "/",
+        "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`,
+        "content-length": 0,
+        ...SECURITY,
+      });
+      return res.end();
+    }
+    const cookie = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]{48})(?:;|$)`).exec(
+      String(req.headers.cookie ?? ""),
+    )?.[1];
+    const embedded = String(req.headers["x-desolate-embed"] ?? "");
+    const signedIn =
+      (cookie !== undefined && sameSecret(cookie, token)) ||
+      (/^[0-9a-f]{64}$/.test(embedded) && sameSecret(embedded, embedKey(token)));
+    if (req.method === "GET" && url.pathname === "/embed") {
+      // The same page, framed beside the git terminal: by that origin alone.
+      const { "x-frame-options": _deny, ...rest } = SECURITY;
+      const content = fs.readFileSync(path.join(UI, "approve.html"));
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "content-length": content.length,
+        ...rest,
+        "content-security-policy": SECURITY["content-security-policy"]!.replace(
+          "frame-ancestors 'none'",
+          `frame-ancestors ${embedder()}`,
+        ),
+      });
+      return res.end(content);
+    }
+    if (req.method === "GET" && STATIC[url.pathname]) {
+      const [file, type] = STATIC[url.pathname]!;
+      return send(res, 200, type, fs.readFileSync(path.join(UI, file)));
+    }
+    if (!signedIn)
+      return json(res, 401, {
+        error:
+          "open the approval page at the address `desolate approve --web` prints, on this Mac's terminal: it carries this stack's token",
+      });
+    // Below, every request is this page's own script's: the same origin, said by the browser.
+    if (String(req.headers["sec-fetch-site"] ?? "") !== "same-origin")
+      return json(res, 403, { error: "a request this page did not make" });
 
-  if (req.method === "GET" && url.pathname === "/pending") {
-    const out = [];
-    for (const waiting of await backend.pending().catch(() => [] as Waiting[])) {
-      const push = parseApproval(waiting.message);
-      if (!push) continue;
-      // Everything shown is the parsed text and the reviewer's account; the root's user's own
-      // words about a push are not shown at all.
-      // The diff stays here until asked for (/diff): not in a list polled every second.
-      const { diff, ...summary } = summaryOf(push, waiting.message);
-      out.push({
-        nonce: push.nonce, repo: push.repo, branch: push.branch, commit: push.commit, onto: push.onto,
-        token: pushToken(token, waiting.message), summary: { ...summary, hasDiff: diff !== undefined },
+    if (req.method === "GET" && url.pathname === "/pending") {
+      const out = [];
+      for (const waiting of await backend.pending().catch(() => [] as Waiting[])) {
+        const push = parseApproval(waiting.message);
+        if (!push) continue;
+        // Everything shown is the parsed text and the reviewer's account; the root's user's own
+        // words about a push are not shown at all.
+        // The diff stays here until asked for (/diff): not in a list polled every second.
+        const { diff, ...summary } = summaryOf(push, waiting.message);
+        out.push({
+          nonce: push.nonce,
+          repo: push.repo,
+          branch: push.branch,
+          commit: push.commit,
+          onto: push.onto,
+          token: pushToken(token, waiting.message),
+          summary: { ...summary, hasDiff: diff !== undefined },
+        });
+      }
+      return json(res, 200, { pending: out });
+    }
+    if (req.method === "GET" && url.pathname === "/issues") {
+      const listed = (await backend.issues().catch(() => [] as unknown[]))
+        .map(checkedIssue)
+        .filter((i): i is Issue => i !== null);
+      return json(res, 200, {
+        issues: listed.map((issue) => ({ ...issue, token: issueToken(token, issue) })),
       });
     }
-    return json(res, 200, { pending: out });
-  }
-  if (req.method === "GET" && url.pathname === "/issues") {
-    const listed = (await backend.issues().catch(() => [] as unknown[])).map(checkedIssue).filter((i): i is Issue => i !== null);
-    return json(res, 200, { issues: listed.map((issue) => ({ ...issue, token: issueToken(token, issue) })) });
-  }
-  if (req.method === "POST" && url.pathname === "/issue") {
-    if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? ""))) return json(res, 415, { error: "JSON only" });
-    if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`) return json(res, 403, { error: "a request from another origin" });
-    let asked: { id?: unknown; token?: unknown; do?: unknown };
-    try {
-      asked = JSON.parse((await readBody(req)) ?? "") as typeof asked;
-    } catch {
-      return json(res, 400, { error: "not JSON" });
-    }
-    const given = String(asked.token ?? "");
-    if (!/^[0-9a-f]{64}$/.test(given)) return json(res, 403, { error: "not an issue this page showed" });
-    // The issue as the root lists it now; published only if it is the very text the page
-    // showed (the token is over it).
-    const issue = (await backend.issues()).map(checkedIssue).find((i) => i !== null && i.id === asked.id) ?? null;
-    if (!issue) return json(res, 410, { error: "that issue is no longer waiting" });
-    if (!sameSecret(given, issueToken(token, issue))) return json(res, 409, { error: "that issue is not the one this page showed: it changed, so nothing was published; look at it again" });
-    try {
-      if (asked.do === "publish") {
-        const where = await backend.publishIssue(issue);
-        log(`approve page: published an issue on ${issue.repo}: ${where}`);
-        return json(res, 200, { ok: true, url: where });
+    if (req.method === "POST" && url.pathname === "/issue") {
+      if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? "")))
+        return json(res, 415, { error: "JSON only" });
+      if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
+        return json(res, 403, { error: "a request from another origin" });
+      let asked: { id?: unknown; token?: unknown; do?: unknown };
+      try {
+        asked = JSON.parse((await readBody(req)) ?? "") as typeof asked;
+      } catch {
+        return json(res, 400, { error: "not JSON" });
       }
-      await backend.refuseIssue(issue);
-      log(`approve page: did not publish the issue ${issue.id} on ${issue.repo}`);
-      return json(res, 200, { ok: true });
-    } catch (error) {
-      return json(res, 502, { error: (error as Error).message });
-    }
-  }
-  // The diff of a push this page showed: named by its nonce and the token the page was given
-  // for its very text, as an approval is.
-  if (req.method === "GET" && url.pathname === "/diff") {
-    const nonce = url.searchParams.get("nonce") ?? "";
-    const given = url.searchParams.get("token") ?? "";
-    if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given)) return json(res, 403, { error: "not a push this page showed" });
-    const waiting = (await backend.pending().catch(() => [] as Waiting[])).find((w) => parseApproval(w.message)?.nonce === nonce);
-    if (!waiting || !sameSecret(given, pushToken(token, waiting.message))) return json(res, 410, { error: "that push is no longer waiting, or is not the one this page showed" });
-    const shown = summaries.get(digestOf(waiting.message))?.value;
-    if (!shown?.ok) return json(res, 404, { error: "the reviewer has not worked it out yet" });
-    return json(res, 200, { diff: shown.diff ?? null, cut: shown.diffCut === true });
-  }
-  if (req.method === "POST" && (url.pathname === "/approve" || url.pathname === "/refuse")) {
-    if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? ""))) return json(res, 415, { error: "JSON only" });
-    if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`) return json(res, 403, { error: "a request from another origin" });
-    const body = await readBody(req);
-    let asked: { nonce?: unknown; token?: unknown; commit?: unknown };
-    try {
-      asked = JSON.parse(body ?? "") as typeof asked;
-    } catch {
-      return json(res, 400, { error: "not JSON" });
-    }
-    const nonce = String(asked.nonce ?? "");
-    const given = String(asked.token ?? "");
-    if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given)) return json(res, 403, { error: "not a push this page showed" });
-    // The push, as the root lists it now. Signed only if it is the very text the page showed:
-    // the token is over that text, so another text under the same nonce does not match.
-    const waiting = (await backend.pending()).find((w) => parseApproval(w.message)?.nonce === nonce);
-    const push = waiting ? parseApproval(waiting.message) : null;
-    if (!waiting || !push) return json(res, 410, { error: "that push is no longer waiting (each waits two minutes)" });
-    if (!sameSecret(given, pushToken(token, waiting.message))) return json(res, 409, { error: "that push is not the one this page showed: it changed, so nothing was signed; look at it again" });
-    if (asked.commit !== push.commit) return json(res, 409, { error: "that is not the commit this push names" });
-    try {
-      if (url.pathname === "/approve") {
-        await backend.approve(waiting.message);
-        log(`approve page: approved ${push.repo} ${push.branch} ${push.commit}${push.onto ? ` (from ${push.onto})` : " (a new branch)"}`);
-      } else {
-        await backend.refuse(waiting.message);
-        log(`approve page: refused ${push.repo} ${push.branch} ${push.commit}`);
+      const given = String(asked.token ?? "");
+      if (!/^[0-9a-f]{64}$/.test(given))
+        return json(res, 403, { error: "not an issue this page showed" });
+      // The issue as the root lists it now; published only if it is the very text the page
+      // showed (the token is over it).
+      const issue =
+        (await backend.issues()).map(checkedIssue).find((i) => i !== null && i.id === asked.id) ??
+        null;
+      if (!issue) return json(res, 410, { error: "that issue is no longer waiting" });
+      if (!sameSecret(given, issueToken(token, issue)))
+        return json(res, 409, {
+          error:
+            "that issue is not the one this page showed: it changed, so nothing was published; look at it again",
+        });
+      try {
+        if (asked.do === "publish") {
+          const where = await backend.publishIssue(issue);
+          log(`approve page: published an issue on ${issue.repo}: ${where}`);
+          return json(res, 200, { ok: true, url: where });
+        }
+        await backend.refuseIssue(issue);
+        log(`approve page: did not publish the issue ${issue.id} on ${issue.repo}`);
+        return json(res, 200, { ok: true });
+      } catch (error) {
+        return json(res, 502, { error: (error as Error).message });
       }
-      return json(res, 200, { ok: true });
-    } catch (error) {
-      return json(res, 502, { error: (error as Error).message });
     }
-  }
-  return json(res, 404, { error: "no such thing" });
+    // The diff of a push this page showed: named by its nonce and the token the page was given
+    // for its very text, as an approval is.
+    if (req.method === "GET" && url.pathname === "/diff") {
+      const nonce = url.searchParams.get("nonce") ?? "";
+      const given = url.searchParams.get("token") ?? "";
+      if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given))
+        return json(res, 403, { error: "not a push this page showed" });
+      const waiting = (await backend.pending().catch(() => [] as Waiting[])).find(
+        (w) => parseApproval(w.message)?.nonce === nonce,
+      );
+      if (!waiting || !sameSecret(given, pushToken(token, waiting.message)))
+        return json(res, 410, {
+          error: "that push is no longer waiting, or is not the one this page showed",
+        });
+      const shown = summaries.get(digestOf(waiting.message))?.value;
+      if (!shown?.ok) return json(res, 404, { error: "the reviewer has not worked it out yet" });
+      return json(res, 200, { diff: shown.diff ?? null, cut: shown.diffCut === true });
+    }
+    if (req.method === "POST" && (url.pathname === "/approve" || url.pathname === "/refuse")) {
+      if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? "")))
+        return json(res, 415, { error: "JSON only" });
+      if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
+        return json(res, 403, { error: "a request from another origin" });
+      const body = await readBody(req);
+      let asked: { nonce?: unknown; token?: unknown; commit?: unknown };
+      try {
+        asked = JSON.parse(body ?? "") as typeof asked;
+      } catch {
+        return json(res, 400, { error: "not JSON" });
+      }
+      const nonce = String(asked.nonce ?? "");
+      const given = String(asked.token ?? "");
+      if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given))
+        return json(res, 403, { error: "not a push this page showed" });
+      // The push, as the root lists it now. Signed only if it is the very text the page showed:
+      // the token is over that text, so another text under the same nonce does not match.
+      const waiting = (await backend.pending()).find(
+        (w) => parseApproval(w.message)?.nonce === nonce,
+      );
+      const push = waiting ? parseApproval(waiting.message) : null;
+      if (!waiting || !push)
+        return json(res, 410, { error: "that push is no longer waiting (each waits two minutes)" });
+      if (!sameSecret(given, pushToken(token, waiting.message)))
+        return json(res, 409, {
+          error:
+            "that push is not the one this page showed: it changed, so nothing was signed; look at it again",
+        });
+      if (asked.commit !== push.commit)
+        return json(res, 409, { error: "that is not the commit this push names" });
+      try {
+        if (url.pathname === "/approve") {
+          await backend.approve(waiting.message);
+          log(
+            `approve page: approved ${push.repo} ${push.branch} ${push.commit}${push.onto ? ` (from ${push.onto})` : " (a new branch)"}`,
+          );
+        } else {
+          await backend.refuse(waiting.message);
+          log(`approve page: refused ${push.repo} ${push.branch} ${push.commit}`);
+        }
+        return json(res, 200, { ok: true });
+      } catch (error) {
+        return json(res, 502, { error: (error as Error).message });
+      }
+    }
+    return json(res, 404, { error: "no such thing" });
   };
 };
 
@@ -321,43 +455,167 @@ declare namespace handler {
   /** The cookie that address gave the person's browser: a name of this stack's own. */
   type Cookie = "desolate_approve_5e00ea51cf17=abababababababababababababababababababababababab";
   /** A push waiting, as the keyring wrote it, and another text under the same nonce. */
-  type Push = "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n";
-  type Swapped = "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 1111111111111111111111111111111111111111\nonto: none\nnonce: 00000000000000000000000000000001\n";
-  type Page = Invoke<typeof handler, [backend: Invoke<typeof waiting, [messages: [Push]]>, log: typeof quiet]>;
+  type Push =
+    "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n";
+  type Swapped =
+    "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 1111111111111111111111111111111111111111\nonto: none\nnonce: 00000000000000000000000000000001\n";
+  type Page = Invoke<
+    typeof handler,
+    [backend: Invoke<typeof waiting, [messages: [Push]]>, log: typeof quiet]
+  >;
   /** What the page's own script sends: this name and origin, the browser's word that it is
    *  same-origin, the cookie, and JSON. */
-  type Script = { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "same-origin"; origin: "http://desolate-approve.localhost:31581"; cookie: Cookie; "content-type": "application/json" };
+  type Script = {
+    host: "desolate-approve.localhost:31581";
+    "sec-fetch-site": "same-origin";
+    origin: "http://desolate-approve.localhost:31581";
+    cookie: Cookie;
+    "content-type": "application/json";
+  };
 
   /** the address's token is traded for a cookie a script cannot read and another site never sends */
   export type SignsIn = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/?tkn=abababababababababababababababababababababababab"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "none" } }]>, "matches", { status: 303; headers: { location: "/"; "set-cookie": "desolate_approve_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/" } }>
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Page,
+          request: {
+            method: "GET";
+            url: "/?tkn=abababababababababababababababababababababababab";
+            headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "none" };
+          },
+        ]
+      >,
+      "matches",
+      {
+        status: 303;
+        headers: {
+          location: "/";
+          "set-cookie": "desolate_approve_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/";
+        };
+      }
+    >
   >;
   /** an address with any other token gets nothing */
   export type WrongAddress = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/?tkn=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"; headers: { host: "desolate-approve.localhost:31581" } }]>, "matches", { status: 403; text: "desolate: refused: that is not this stack's approval address; `desolate approve --web` prints it\n" }>
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Page,
+          request: {
+            method: "GET";
+            url: "/?tkn=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd";
+            headers: { host: "desolate-approve.localhost:31581" };
+          },
+        ]
+      >,
+      "matches",
+      {
+        status: 403;
+        text: "desolate: refused: that is not this stack's approval address; `desolate approve --web` prints it\n";
+      }
+    >
   >;
   /** another name for this port (a workspace's, where an agent's page is) is refused first */
   export type OnlyByItsName = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 421; text: "desolate: refused this is the approval page at desolate-approve.localhost; open it by that name (`desolate approve --web` prints the address)\n" }>
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Page,
+          request: {
+            method: "GET";
+            url: "/pending";
+            headers: { host: "acme-web-0a1b2c.localhost:31581"; cookie: Cookie };
+          },
+        ]
+      >,
+      "matches",
+      {
+        status: 421;
+        text: "desolate: refused this is the approval page at desolate-approve.localhost; open it by that name (`desolate approve --web` prints the address)\n";
+      }
+    >
   >;
 
   /** what is waiting: the parsed text and a token over it, and only to the page's own script */
   export type ListsWhatWaits = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Invoke<typeof handler, [backend: Invoke<typeof waiting, [messages: [Push, "not an approval at all"]]>, log: typeof quiet]>, request: { method: "GET"; url: "/pending"; headers: Script }]>, "matches", {
-      status: 200;
-      json: { pending: [{ nonce: "00000000000000000000000000000001"; repo: "acme/web"; branch: "fix/login"; commit: "0123456789abcdef0123456789abcdef01234567"; onto: null; token: Invoke<typeof pushToken, [token: Token, message: Push]>; summary: { ok: false; waiting: true; hasDiff: false } }] };
-    }>
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Invoke<
+            typeof handler,
+            [
+              backend: Invoke<typeof waiting, [messages: [Push, "not an approval at all"]]>,
+              log: typeof quiet,
+            ]
+          >,
+          request: { method: "GET"; url: "/pending"; headers: Script },
+        ]
+      >,
+      "matches",
+      {
+        status: 200;
+        json: {
+          pending: [
+            {
+              nonce: "00000000000000000000000000000001";
+              repo: "acme/web";
+              branch: "fix/login";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+              onto: null;
+              token: Invoke<typeof pushToken, [token: Token, message: Push]>;
+              summary: { ok: false; waiting: true; hasDiff: false };
+            },
+          ];
+        };
+      }
+    >
   >;
   /** no cookie: nothing; the cookie without the browser's same-origin word (a script, curl): nothing */
   export type NotSignedIn = Given<
     HasToken,
     [
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "same-origin" } }]>, "matches", { status: 401 }>,
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "desolate-approve.localhost:31581"; cookie: Cookie } }]>, "matches", { status: 403; json: { error: "a request this page did not make" } }>,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/pending";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 401 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/pending";
+              headers: { host: "desolate-approve.localhost:31581"; cookie: Cookie };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403; json: { error: "a request this page did not make" } }
+      >,
     ]
   >;
 
@@ -365,7 +623,26 @@ declare namespace handler {
   export type Approves = Given<
     HasToken,
     [
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/approve"; headers: Script; body: { nonce: "00000000000000000000000000000001"; token: Invoke<typeof pushToken, [token: Token, message: Push]>; commit: "0123456789abcdef0123456789abcdef01234567" } }]>, "matches", { status: 200; json: { ok: true } }>,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "POST";
+              url: "/approve";
+              headers: Script;
+              body: {
+                nonce: "00000000000000000000000000000001";
+                token: Invoke<typeof pushToken, [token: Token, message: Push]>;
+                commit: "0123456789abcdef0123456789abcdef01234567";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 200; json: { ok: true } }
+      >,
       Expect<Invoke<typeof approved>, "=", [Push]>,
     ]
   >;
@@ -373,21 +650,112 @@ declare namespace handler {
   export type NotWhatWasShown = Given<
     HasToken,
     [
-      Expect<Invoke<typeof ask, [handler: Invoke<typeof handler, [backend: Invoke<typeof waiting, [messages: [Swapped]]>, log: typeof quiet]>, request: { method: "POST"; url: "/approve"; headers: Script; body: { nonce: "00000000000000000000000000000001"; token: Invoke<typeof pushToken, [token: Token, message: Push]>; commit: "0123456789abcdef0123456789abcdef01234567" } }]>, "matches", { status: 409; json: { error: "that push is not the one this page showed: it changed, so nothing was signed; look at it again" } }>,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Invoke<
+              typeof handler,
+              [backend: Invoke<typeof waiting, [messages: [Swapped]]>, log: typeof quiet]
+            >,
+            request: {
+              method: "POST";
+              url: "/approve";
+              headers: Script;
+              body: {
+                nonce: "00000000000000000000000000000001";
+                token: Invoke<typeof pushToken, [token: Token, message: Push]>;
+                commit: "0123456789abcdef0123456789abcdef01234567";
+              };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 409;
+          json: {
+            error: "that push is not the one this page showed: it changed, so nothing was signed; look at it again";
+          };
+        }
+      >,
       Expect<Invoke<typeof approved>, "=", []>,
     ]
   >;
   /** the click names the commit too: a token for the right text with another commit signs nothing */
   export type NotItsCommit = Given<
     HasToken,
-    Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/approve"; headers: Script; body: { nonce: "00000000000000000000000000000001"; token: Invoke<typeof pushToken, [token: Token, message: Push]>; commit: "1111111111111111111111111111111111111111" } }]>, "matches", { status: 409; json: { error: "that is not the commit this push names" } }>
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Page,
+          request: {
+            method: "POST";
+            url: "/approve";
+            headers: Script;
+            body: {
+              nonce: "00000000000000000000000000000001";
+              token: Invoke<typeof pushToken, [token: Token, message: Push]>;
+              commit: "1111111111111111111111111111111111111111";
+            };
+          },
+        ]
+      >,
+      "matches",
+      { status: 409; json: { error: "that is not the commit this push names" } }
+    >
   >;
   /** what another site's form could send: not JSON, or from its own origin */
   export type NotFromAForm = Given<
     HasToken,
     [
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/approve"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "same-origin"; origin: "http://desolate-approve.localhost:31581"; cookie: Cookie; "content-type": "application/x-www-form-urlencoded" }; body: "nonce=00000000000000000000000000000001" }]>, "matches", { status: 415 }>,
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "POST"; url: "/approve"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "cross-site"; origin: "http://acme-web-0a1b2c.localhost:31581"; cookie: Cookie; "content-type": "application/json" }; body: "{}" }]>, "matches", { status: 403; text: "desolate: refused a request another site started (Sec-Fetch-Site: cross-site)\n" }>,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "POST";
+              url: "/approve";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+                origin: "http://desolate-approve.localhost:31581";
+                cookie: Cookie;
+                "content-type": "application/x-www-form-urlencoded";
+              };
+              body: "nonce=00000000000000000000000000000001";
+            },
+          ]
+        >,
+        "matches",
+        { status: 415 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "POST";
+              url: "/approve";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                origin: "http://acme-web-0a1b2c.localhost:31581";
+                cookie: Cookie;
+                "content-type": "application/json";
+              };
+              body: "{}";
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 403;
+          text: "desolate: refused a request another site started (Sec-Fetch-Site: cross-site)\n";
+        }
+      >,
       Expect<Invoke<typeof approved>, "=", []>,
     ]
   >;
@@ -396,9 +764,70 @@ declare namespace handler {
   export type EmbedsOnlyAsAFrame = Given<
     HasToken,
     [
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/embed"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "cross-site"; "sec-fetch-dest": "iframe" } }]>, "matches", { status: 200; headers: { "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://desolate-git.localhost:31581" } }>,
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/embed"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "cross-site"; "sec-fetch-dest": "document" } }]>, "matches", { status: 403; text: "desolate: refused a request another site started (Sec-Fetch-Site: cross-site)\n" }>,
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/embed"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-dest": "document" } }]>, "matches", { status: 403; text: "desolate: refused: /embed is the approval page beside the git terminal, and loads only as its frame\n" }>,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/embed";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-dest": "iframe";
+              };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 200;
+          headers: {
+            "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://desolate-git.localhost:31581";
+          };
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/embed";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 403;
+          text: "desolate: refused a request another site started (Sec-Fetch-Site: cross-site)\n";
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/embed";
+              headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-dest": "document" };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 403;
+          text: "desolate: refused: /embed is the approval page beside the git terminal, and loads only as its frame\n";
+        }
+      >,
     ]
   >;
   /** the frame signs in with a key derived from the token (given in its address's fragment);
@@ -406,8 +835,44 @@ declare namespace handler {
   export type EmbedKey = Given<
     HasToken,
     [
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "same-origin"; "x-desolate-embed": "cba2baa14dd006b2aa6983bca3c648b5ab3438eb0b303069f92240a36171f833" } }]>, "matches", { status: 200 }>,
-      Expect<Invoke<typeof ask, [handler: Page, request: { method: "GET"; url: "/pending"; headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "same-origin"; "x-desolate-embed": Token } }]>, "matches", { status: 401 }>,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/pending";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+                "x-desolate-embed": "cba2baa14dd006b2aa6983bca3c648b5ab3438eb0b303069f92240a36171f833";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 200 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/pending";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+                "x-desolate-embed": Token;
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 401 }
+      >,
     ]
   >;
 }

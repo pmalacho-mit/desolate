@@ -5,7 +5,8 @@
 import { PassThrough } from "node:stream";
 import type { Writable } from "node:stream";
 
-const pkt = (text: string) => `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, "0")}${text}`;
+const pkt = (text: string) =>
+  `${(Buffer.byteLength(text) + 4).toString(16).padStart(4, "0")}${text}`;
 
 /** A forge whose receive-pack lists `refs` (the first line carries its capabilities after a
  *  NUL, as git's does), and then, if it is asked for an update, reports `report`. Each line is
@@ -16,7 +17,9 @@ export const forgeSaying = (refs: string[], report: string[] = [], raw?: string)
   const stdout = new PassThrough();
   let asked = "";
   stdin.on("data", (chunk: Buffer) => (asked += chunk.toString("latin1")));
-  stdout.end(raw ?? [...refs.map(pkt), "0000", ...report.map(pkt), report.length ? "0000" : ""].join(""));
+  stdout.end(
+    raw ?? [...refs.map(pkt), "0000", ...report.map(pkt), report.length ? "0000" : ""].join(""),
+  );
   return { stdin, stdout, asked: () => asked };
 };
 

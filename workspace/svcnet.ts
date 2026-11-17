@@ -27,7 +27,10 @@ type Listener = { port: number; address: string };
 /** /proc/net/tcp{,6}: state 0A is LISTEN; addresses are hex, in the kernel's byte order. */
 export const listening = (): Listener[] => {
   const out = new Map<number, Listener>();
-  for (const [file, v6] of [["/proc/net/tcp", false], ["/proc/net/tcp6", true]] as const) {
+  for (const [file, v6] of [
+    ["/proc/net/tcp", false],
+    ["/proc/net/tcp6", true],
+  ] as const) {
     let text = "";
     try {
       text = fs.readFileSync(file, "utf8");
@@ -47,10 +50,16 @@ export const listening = (): Listener[] => {
   }
   return [...out.values()].sort((a, b) => a.port - b.port);
 };
-const addressV4 = (hex: string) => (hex.match(/../g) ?? []).reverse().map((byte) => parseInt(byte, 16)).join(".");
+const addressV4 = (hex: string) =>
+  (hex.match(/../g) ?? [])
+    .reverse()
+    .map((byte) => parseInt(byte, 16))
+    .join(".");
 const addressV6 = (hex: string) => {
   // Four 32-bit words, each in host (little-endian) order.
-  const words = (hex.match(/.{8}/g) ?? []).map((word) => (word.match(/../g) ?? []).reverse().join(""));
+  const words = (hex.match(/.{8}/g) ?? []).map((word) =>
+    (word.match(/../g) ?? []).reverse().join(""),
+  );
   const groups = words.join("").match(/.{4}/g) ?? [];
   const text = groups.map((g) => g.replace(/^0+(?=.)/, "")).join(":");
   if (/^0:0:0:0:0:0:0:0$/.test(text)) return "::";
@@ -70,29 +79,38 @@ const addressV6 = (hex: string) => {
 declare namespace addressV4 {
   /** the addresses a listener binds: loopback, every address, docker's resolver (which
    *  `L` leaves out) and one on a network */
-  export type Kernel = Table<typeof addressV4, [
-    [args: [hex: "0100007F"], expected: "127.0.0.1"],
-    [args: [hex: "00000000"], expected: "0.0.0.0"],
-    [args: [hex: "0B00007F"], expected: "127.0.0.11"],
-    [args: [hex: "0200A8C0"], expected: "192.168.0.2"],
-  ]>;
+  export type Kernel = Table<
+    typeof addressV4,
+    [
+      [args: [hex: "0100007F"], expected: "127.0.0.1"],
+      [args: [hex: "00000000"], expected: "0.0.0.0"],
+      [args: [hex: "0B00007F"], expected: "127.0.0.11"],
+      [args: [hex: "0200A8C0"], expected: "192.168.0.2"],
+    ]
+  >;
 }
 declare namespace addressV6 {
   /** every address and loopback in their short forms; any other written out in full, which
    *  connect takes as it is */
-  export type Kernel = Table<typeof addressV6, [
-    [args: [hex: "00000000000000000000000000000000"], expected: "::"],
-    [args: [hex: "00000000000000000000000001000000"], expected: "::1"],
-    [args: [hex: "B80D0120000000000000000001000000"], expected: "2001:DB8:0:0:0:0:0:1"],
-  ]>;
+  export type Kernel = Table<
+    typeof addressV6,
+    [
+      [args: [hex: "00000000000000000000000000000000"], expected: "::"],
+      [args: [hex: "00000000000000000000000001000000"], expected: "::1"],
+      [args: [hex: "B80D0120000000000000000001000000"], expected: "2001:DB8:0:0:0:0:0:1"],
+    ]
+  >;
   /** an IPv4 address on an IPv6 socket (::ffff:a.b.c.d), as the kernel writes it, is that IPv4
    *  address; FFFF anywhere else is an IPv6 address like any other */
-  export type Mapped = Table<typeof addressV6, [
-    [args: [hex: "0000000000000000FFFF00000100007F"], expected: "127.0.0.1"],
-    [args: [hex: "0000000000000000FFFF00000200A8C0"], expected: "192.168.0.2"],
-    [args: [hex: "0000000000000000FEFF00000100007F"], expected: "0:0:0:0:0:FFFE:7F00:1"],
-    [args: [hex: "FFFF0000000000000000000001000000"], expected: "0:FFFF:0:0:0:0:0:1"],
-  ]>;
+  export type Mapped = Table<
+    typeof addressV6,
+    [
+      [args: [hex: "0000000000000000FFFF00000100007F"], expected: "127.0.0.1"],
+      [args: [hex: "0000000000000000FFFF00000200A8C0"], expected: "192.168.0.2"],
+      [args: [hex: "0000000000000000FEFF00000100007F"], expected: "0:0:0:0:0:FFFE:7F00:1"],
+      [args: [hex: "FFFF0000000000000000000001000000"], expected: "0:FFFF:0:0:0:0:0:1"],
+    ]
+  >;
 }
 
 /** Where to reach the listener on a port: a wildcard is reached at loopback. */
@@ -119,10 +137,18 @@ const serve = (client: Socket) => {
     const line = head.subarray(0, end).toString().trim();
     const rest = head.subarray(end + 1);
     // Not docker's own resolver, which every container on a compose network has at 127.0.0.11.
-    if (line === "L") return void client.end(JSON.stringify(listening().filter((l) => l.address !== DOCKER_DNS).map((l) => l.port)) + "\n");
+    if (line === "L")
+      return void client.end(
+        JSON.stringify(
+          listening()
+            .filter((l) => l.address !== DOCKER_DNS)
+            .map((l) => l.port),
+        ) + "\n",
+      );
     const ask = /^C (\S+) (\d{1,5})$/.exec(line);
     const port = Number(ask?.[2]);
-    if (!ask || port < 1 || port > 65535 || (ask[1] !== "-" && !HOST.test(ask[1]!))) return void client.destroy();
+    if (!ask || port < 1 || port > 65535 || (ask[1] !== "-" && !HOST.test(ask[1]!)))
+      return void client.destroy();
     client.pause();
     const upstream = connect({ host: ask[1] === "-" ? targetOf(port) : ask[1], port });
     upstream.on("error", () => client.destroy());

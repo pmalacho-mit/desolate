@@ -17,7 +17,12 @@ let made = 0;
 /** Runs `guestEnd` on the connecting side and `hostEnd` on the listening side, each with its
  *  token. A guest that is let in then sends "hello" and ends. `host` is what the host end
  *  answered: with link.ts's accept, what came after the guest's proof (null: refused). */
-export const handshake = async (guestEnd: GuestEnd, hostEnd: HostEnd, guestToken: string, hostToken: string): Promise<{ guest: boolean; host: string | null }> => {
+export const handshake = async (
+  guestEnd: GuestEnd,
+  hostEnd: HostEnd,
+  guestToken: string,
+  hostToken: string,
+): Promise<{ guest: boolean; host: string | null }> => {
   const file = path.join(process.env.DESOLATE_HOME!, `link-${process.pid}-${made++}.sock`);
   const server = net.createServer();
   onTestFinished(() => {
@@ -45,8 +50,12 @@ export const handshake = async (guestEnd: GuestEnd, hostEnd: HostEnd, guestToken
 };
 
 /** What the host end answered, as text ("" for nothing): for a host end that says what it heard. */
-export const heard = async (guestEnd: GuestEnd, hostEnd: HostEnd, guestToken: string, hostToken: string): Promise<string> =>
-  (await handshake(guestEnd, hostEnd, guestToken, hostToken)).host ?? "";
+export const heard = async (
+  guestEnd: GuestEnd,
+  hostEnd: HostEnd,
+  guestToken: string,
+  hostToken: string,
+): Promise<string> => (await handshake(guestEnd, hostEnd, guestToken, hostToken)).host ?? "";
 
 /** Whatever holds the port when the host daemon does not: it answers the guest's first line
  *  with a proof it made up, and says what the guest sent it. */

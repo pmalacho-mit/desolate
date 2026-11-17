@@ -20,14 +20,29 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { refuse } from "../shared/exit.ts";
-import { gitVmName, isBranch, isCommit, isLfsOid, isSlug, parseRepo, repoId } from "../shared/names.ts";
+import {
+  gitVmName,
+  isBranch,
+  isCommit,
+  isLfsOid,
+  isSlug,
+  parseRepo,
+  repoId,
+} from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome, readState, writeState } from "../.harness/home.ts";
-import type { answerTo, inHome, leave, leaveLink, linkInHome, outbox } from "../.harness/host-git-out.ts";
+import type {
+  answerTo,
+  inHome,
+  leave,
+  leaveLink,
+  linkInHome,
+  outbox,
+} from "../.harness/host-git-out.ts";
 import type { collect } from "../.harness/host-stack.ts";
 
 export const GIT_VM = gitVmName(INSTANCE);
@@ -55,23 +70,30 @@ export const gitSpec = (): VmSpec => ({
 declare namespace gitSpec {
   /** no network; the mirrors, the root's clones and the host's answers read-only; only the
    *  person's clones and the out-box writable */
-  export type Shares = Expect<Invoke<typeof gitSpec>, "matches", {
-    role: "git"; egress: "none"; sockets: [];
-    shares: [
-      { guest: "/desolate/release"; writable: false },
-      { guest: "/desolate/mirrors"; writable: false },
-      { guest: "/desolate/root"; writable: false },
-      { guest: "/git"; writable: true },
-      { guest: "/desolate/out"; writable: true },
-      { guest: "/desolate/answers"; writable: false },
-    ];
-  }>;
+  export type Shares = Expect<
+    Invoke<typeof gitSpec>,
+    "matches",
+    {
+      role: "git";
+      egress: "none";
+      sockets: [];
+      shares: [
+        { guest: "/desolate/release"; writable: false },
+        { guest: "/desolate/mirrors"; writable: false },
+        { guest: "/desolate/root"; writable: false },
+        { guest: "/git"; writable: true },
+        { guest: "/desolate/out"; writable: true },
+        { guest: "/desolate/answers"; writable: false },
+      ];
+    }
+  >;
 }
 
 /** Make the git VM if there is none, start it, and give it its settings. Idempotent. */
 export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
   const b = backend();
-  for (const dir of [paths.git, paths.gitOut, paths.gitAnswers]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const dir of [paths.git, paths.gitOut, paths.gitAnswers])
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   let info = await b.info(GIT_VM);
   if (info.status !== "missing" && b.kind !== "fake") {
     // Older than this desolate's image: made again. It has no network to be provisioned
@@ -79,9 +101,13 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
     // hands the host are on the host (paths.git, gitOut), and its git identity is set below.
     if (info.status !== "running") await b.start(GIT_VM);
     const { imageFingerprint, stampOf } = await import("./image.ts");
-    const stamp = stampOf((await b.exec(GIT_VM, ["cat", "/opt/desolate/image-info"], { timeoutMs: 30_000 })).stdout);
+    const stamp = stampOf(
+      (await b.exec(GIT_VM, ["cat", "/opt/desolate/image-info"], { timeoutMs: 30_000 })).stdout,
+    );
     if (stamp !== imageFingerprint()) {
-      log(`git VM: made from ${stamp ? `image ${stamp}` : "an unstamped image"}, older than this desolate's (${imageFingerprint()}); making it again (your clones are on the Mac, and kept)`);
+      log(
+        `git VM: made from ${stamp ? `image ${stamp}` : "an unstamped image"}, older than this desolate's (${imageFingerprint()}); making it again (your clones are on the Mac, and kept)`,
+      );
       await b.destroy(GIT_VM);
       info = await b.info(GIT_VM);
     }
@@ -92,14 +118,36 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
     await b.create(gitSpec());
   }
   if ((await b.info(GIT_VM)).status !== "running") await b.start(GIT_VM);
-  const provisioned = await b.exec(GIT_VM, ["bash", `${guest.release}/git/provision.sh`], { root: true, timeoutMs: 120_000 });
-  if (provisioned.code !== 0) refuse(`the git VM could not be set up: ${(provisioned.stderr || provisioned.stdout).trim().slice(-300)}`, "desolate doctor");
+  const provisioned = await b.exec(GIT_VM, ["bash", `${guest.release}/git/provision.sh`], {
+    root: true,
+    timeoutMs: 120_000,
+  });
+  if (provisioned.code !== 0)
+    refuse(
+      `the git VM could not be set up: ${(provisioned.stderr || provisioned.stdout).trim().slice(-300)}`,
+      "desolate doctor",
+    );
   // Who you are, for your commits: the Mac's own git identity, unless the git VM has one
   // already (yours to change there: git config --global user.name ...).
-  const mine = (key: string) => spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout.trim().replace(/[\x00-\x1f\x7f]/g, "").slice(0, 200);
+  const mine = (key: string) =>
+    spawnSync("git", ["config", "--global", key], { encoding: "utf8" })
+      .stdout.trim()
+      .replace(/[\x00-\x1f\x7f]/g, "")
+      .slice(0, 200);
   const [name, email] = [mine("user.name"), mine("user.email")];
   if (name || email)
-    await b.exec(GIT_VM, ["bash", "-c", 'for kv in "user.name=$1" "user.email=$2"; do k=${kv%%=*}; v=${kv#*=}; [ -n "$v" ] && ! git config --global "$k" >/dev/null && git config --global "$k" "$v"; done; true', "_", name, email], { timeoutMs: 60_000 });
+    await b.exec(
+      GIT_VM,
+      [
+        "bash",
+        "-c",
+        'for kv in "user.name=$1" "user.email=$2"; do k=${kv%%=*}; v=${kv#*=}; [ -n "$v" ] && ! git config --global "$k" >/dev/null && git config --global "$k" "$v"; done; true',
+        "_",
+        name,
+        email,
+      ],
+      { timeoutMs: 60_000 },
+    );
 };
 
 /** The person's clone of a repository in the git VM: from the mirror, with `root` as a
@@ -112,8 +160,15 @@ export const ensureGitClone = async (repo: Repo) => {
   // workspaces wrote (<domain>/<branch>), and `git push <domain> <branch>` delivers a branch
   // to it (its workspaces see root/<branch>). (A domain named like a remote already here is
   // reached through `root` alone.)
-  const domainList = (await rootctl<{ slug: string; repos: string[] }[]>("domain.list", {}, { quiet: true }).catch(() => []))
-    .filter((d) => d.repos.includes(id) && isSlug(d.slug) && d.slug !== "origin" && d.slug !== "root").map((d) => d.slug);
+  const domainList = (
+    await rootctl<{ slug: string; repos: string[] }[]>("domain.list", {}, { quiet: true }).catch(
+      () => [],
+    )
+  )
+    .filter(
+      (d) => d.repos.includes(id) && isSlug(d.slug) && d.slug !== "origin" && d.slug !== "root",
+    )
+    .map((d) => d.slug);
   const perDomain = domainList.flatMap((d) => [
     `git remote get-url ${d} >/dev/null 2>&1 || git remote add ${d} "$4"`,
     `git config remote.${d}.url "$4"`,
@@ -150,8 +205,16 @@ export const ensureGitClone = async (repo: Repo) => {
     ...perDomain,
     "git lfs pull >/dev/null 2>&1 || true",
   ].join("\n");
-  const made = await backend().exec(GIT_VM, ["bash", "-c", script, "_", mirror, dir, id, `${guest.rootClones}/${repo.owner}/${repo.name}`], { timeoutMs: 1_800_000 });
-  if (made.code !== 0) refuse(`the git VM could not clone ${id}: ${(made.stderr || made.stdout).trim().slice(-300)}`, `desolate clone ${id} first, if the root has not`);
+  const made = await backend().exec(
+    GIT_VM,
+    ["bash", "-c", script, "_", mirror, dir, id, `${guest.rootClones}/${repo.owner}/${repo.name}`],
+    { timeoutMs: 1_800_000 },
+  );
+  if (made.code !== 0)
+    refuse(
+      `the git VM could not clone ${id}: ${(made.stderr || made.stdout).trim().slice(-300)}`,
+      `desolate clone ${id} first, if the root has not`,
+    );
   return dir;
 };
 
@@ -162,7 +225,12 @@ export const ensureGitClone = async (repo: Repo) => {
 // following links, checks it is a plain file of a bounded size, and COPIES what it reads into
 // a file of its own; answers go to a directory only the host writes (read-only to the git VM).
 const GIT_IN = path.join(paths.rootClones, ".git-in");
-const LIMIT = { request: 64 * 1024, bundle: 2 * 1024 ** 3, lfs: 5 * 1024 ** 3, objects: 2000 } as const;
+const LIMIT = {
+  request: 64 * 1024,
+  bundle: 2 * 1024 ** 3,
+  lfs: 5 * 1024 ** 3,
+  objects: 2000,
+} as const;
 /** A directory the host made, in a share the root's user can write: a real directory, not
  *  a link it left there, at its name or anywhere on the way to it from the home. A link above
  *  the home is the Mac's own (macOS's /var is one) and is not refused: every push from the git
@@ -171,26 +239,46 @@ const ownDirectory = (dir: string) => {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const stat = fs.lstatSync(dir);
   const real = path.join(fs.realpathSync(paths.home), path.relative(paths.home, path.resolve(dir)));
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(dir) !== real) throw new Error(`${dir} is not the host's own directory`);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(dir) !== real)
+    throw new Error(`${dir} is not the host's own directory`);
 };
 
 declare namespace ownDirectory {
   /** the host's own directory in the root's share: made, and taken */
-  export type Made = Given<Invoke<typeof emptyHome>, Expect<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>, "=", undefined>>;
+  export type Made = Given<
+    Invoke<typeof emptyHome>,
+    Expect<
+      Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>,
+      "=",
+      undefined
+    >
+  >;
   /** a link the root's user left there, at its name or at the share above it, or a way to it
    *  through a link inside the home: refused, though each leads to a directory of the home's */
   export type Refuses = [
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof linkInHome, [name: "root/.git-in", target: "state"]>],
-      Throws<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>, "is not the host's own directory">
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof linkInHome, [name: "root/.git-in", target: "state"]>,
+      ],
+      Throws<
+        Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>,
+        "is not the host's own directory"
+      >
     >,
     Given<
       [Invoke<typeof emptyHome>, Invoke<typeof linkInHome, [name: "root", target: "state"]>],
-      Throws<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>, "is not the host's own directory">
+      Throws<
+        Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "root/.git-in"]>]>,
+        "is not the host's own directory"
+      >
     >,
     Given<
       [Invoke<typeof emptyHome>, Invoke<typeof linkInHome, [name: "again", target: "."]>],
-      Throws<Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "again/root/.git-in"]>]>, "is not the host's own directory">
+      Throws<
+        Invoke<typeof ownDirectory, [dir: Invoke<typeof inHome, [name: "again/root/.git-in"]>]>,
+        "is not the host's own directory"
+      >
     >,
   ];
 }
@@ -207,12 +295,24 @@ const answer = (id: string, value: Record<string, unknown>) => {
  *  handed to the root, and the answer left where the git VM reads it. */
 const FETCH_GAP_MS = 5000;
 const fetchedAt = new Map<string, number>();
-const take = async (id: string, log: (line: string) => void, announce: (fields: Record<string, unknown>) => void = () => {}) => {
+const take = async (
+  id: string,
+  log: (line: string) => void,
+  announce: (fields: Record<string, unknown>) => void = () => {},
+) => {
   const out = paths.gitOut;
   const opened = openPlain(path.join(out, `${id}.json`), LIMIT.request);
   fs.rmSync(path.join(out, `${id}.json`), { force: true });
   if (!opened) return;
-  let asked: { op?: unknown; repo?: unknown; branch?: unknown; commit?: unknown; forced?: unknown; lfs?: unknown; domain?: unknown };
+  let asked: {
+    op?: unknown;
+    repo?: unknown;
+    branch?: unknown;
+    commit?: unknown;
+    forced?: unknown;
+    lfs?: unknown;
+    domain?: unknown;
+  };
   try {
     const text = Buffer.alloc(opened.size);
     fs.readSync(opened.fd, text, 0, opened.size, 0);
@@ -226,9 +326,14 @@ const take = async (id: string, log: (line: string) => void, announce: (fields: 
   // `desolate fetch` in the git VM: the root refreshes the mirror (with its read key), and
   // the git VM then fetches from it. At most once every few seconds a repository.
   if (asked.op === "fetch") {
-    if (!repo) return answer(id, { fetched: false, error: "the git VM's request is not one desolate makes" });
+    if (!repo)
+      return answer(id, {
+        fetched: false,
+        error: "the git VM's request is not one desolate makes",
+      });
     const last = fetchedAt.get(repoId(repo)) ?? 0;
-    if (Date.now() - last < FETCH_GAP_MS) return answer(id, { fetched: true, said: [`${repoId(repo)}: refreshed a moment ago`] });
+    if (Date.now() - last < FETCH_GAP_MS)
+      return answer(id, { fetched: true, said: [`${repoId(repo)}: refreshed a moment ago`] });
     fetchedAt.set(repoId(repo), Date.now());
     try {
       await rootctl("repo.fetch", { repo: repoId(repo) }, { quiet: true, timeoutMs: 10 * 60_000 });
@@ -237,10 +342,22 @@ const take = async (id: string, log: (line: string) => void, announce: (fields: 
       return answer(id, { fetched: false, error: (error as Error).message });
     }
   }
-  const domain = asked.domain === undefined ? null : isSlug(asked.domain) ? String(asked.domain) : false;
-  if (domain === false) return answer(id, { pushed: false, error: "the git VM's request names no domain desolate would make" });
+  const domain =
+    asked.domain === undefined ? null : isSlug(asked.domain) ? String(asked.domain) : false;
+  if (domain === false)
+    return answer(id, {
+      pushed: false,
+      error: "the git VM's request names no domain desolate would make",
+    });
   const lfs = Array.isArray(asked.lfs) ? asked.lfs : [];
-  if (!repo || !isBranch(asked.branch) || !isCommit(asked.commit) || lfs.length > LIMIT.objects || !lfs.every(isLfsOid) || new Set(lfs).size !== lfs.length)
+  if (
+    !repo ||
+    !isBranch(asked.branch) ||
+    !isCommit(asked.commit) ||
+    lfs.length > LIMIT.objects ||
+    !lfs.every(isLfsOid) ||
+    new Set(lfs).size !== lfs.length
+  )
     return answer(id, { pushed: false, error: "the git VM's request is not one desolate makes" });
   ownDirectory(GIT_IN);
   const name = randomBytes(8).toString("hex");
@@ -249,7 +366,11 @@ const take = async (id: string, log: (line: string) => void, announce: (fields: 
   try {
     // Copied, never moved: the git VM keeps no hold on the root's copy.
     const bundle = openPlain(path.join(out, `${id}.bundle`), LIMIT.bundle);
-    if (!bundle) return answer(id, { pushed: false, error: "the push's bundle is not a plain file of at most 2 GiB" });
+    if (!bundle)
+      return answer(id, {
+        pushed: false,
+        error: "the push's bundle is not a plain file of at most 2 GiB",
+      });
     try {
       copyOut(bundle, bundleTo);
     } finally {
@@ -260,24 +381,52 @@ const take = async (id: string, log: (line: string) => void, announce: (fields: 
       for (const oid of lfs as string[]) {
         // Flat names in the out-box: no directory of the git VM's is ever walked into.
         const object = openPlain(path.join(out, `${id}.${oid}.lfs`), LIMIT.lfs);
-        if (!object) return answer(id, { pushed: false, error: `the LFS object ${oid.slice(0, 12)} is not a plain file` });
+        if (!object)
+          return answer(id, {
+            pushed: false,
+            error: `the LFS object ${oid.slice(0, 12)} is not a plain file`,
+          });
         try {
-          if (copyOut(object, path.join(lfsTo, oid)) !== oid) return answer(id, { pushed: false, error: `the LFS object ${oid.slice(0, 12)} does not hash to its name` });
+          if (copyOut(object, path.join(lfsTo, oid)) !== oid)
+            return answer(id, {
+              pushed: false,
+              error: `the LFS object ${oid.slice(0, 12)} does not hash to its name`,
+            });
         } finally {
           fs.closeSync(object.fd);
         }
       }
     }
-    log(`git VM: ${domain ? `a delivery to ${domain}` : "a push"} of ${repoId(repo)} ${String(asked.branch)} at ${String(asked.commit)}, handed to the root`);
-    announce({ repo: repoId(repo), branch: asked.branch, commit: asked.commit, ...(domain ? { domain } : {}) });
-    const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>("git.push", { repo: repoId(repo), branch: asked.branch, commit: asked.commit, forced: asked.forced === true, bundle: `${name}.bundle`, lfs, ...(domain ? { domain } : {}) }, { quiet: true, timeoutMs: 20 * 60_000 });
+    log(
+      `git VM: ${domain ? `a delivery to ${domain}` : "a push"} of ${repoId(repo)} ${String(asked.branch)} at ${String(asked.commit)}, handed to the root`,
+    );
+    announce({
+      repo: repoId(repo),
+      branch: asked.branch,
+      commit: asked.commit,
+      ...(domain ? { domain } : {}),
+    });
+    const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>(
+      "git.push",
+      {
+        repo: repoId(repo),
+        branch: asked.branch,
+        commit: asked.commit,
+        forced: asked.forced === true,
+        bundle: `${name}.bundle`,
+        lfs,
+        ...(domain ? { domain } : {}),
+      },
+      { quiet: true, timeoutMs: 20 * 60_000 },
+    );
     answer(id, reply);
   } catch (error) {
     answer(id, { pushed: false, error: (error as Error).message });
   } finally {
     fs.rmSync(bundleTo, { force: true });
     fs.rmSync(lfsTo, { recursive: true, force: true });
-    for (const leftover of [`${id}.bundle`, ...lfs.map((oid) => `${id}.${String(oid)}.lfs`)]) fs.rmSync(path.join(out, leftover), { force: true });
+    for (const leftover of [`${id}.bundle`, ...lfs.map((oid) => `${id}.${String(oid)}.lfs`)])
+      fs.rmSync(path.join(out, leftover), { force: true });
   }
 };
 
@@ -286,59 +435,191 @@ declare namespace take {
 
   /** a request that is not JSON is answered so, and is gone from the out-box */
   export type NotJson = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: "{"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-    [Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the git VM's request is not JSON" }>, Expect<Invoke<typeof outbox>, "=", []>]
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof leave, [name: "0123456789abcdef.json", text: "{"]>,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the git VM's request is not JSON" }
+      >,
+      Expect<Invoke<typeof outbox>, "=", []>,
+    ]
   >;
   /** names that would become argv words or paths in the root, refused before anything is copied */
   export type NotOneDesolateMakes = [
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"--upload-pack=touch x","commit":"0123456789abcdef0123456789abcdef01234567"}']>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the git VM's request is not one desolate makes" }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<
+          typeof leave,
+          [
+            name: "0123456789abcdef.json",
+            text: '{"op":"push","repo":"acme/web","branch":"--upload-pack=touch x","commit":"0123456789abcdef0123456789abcdef01234567"}',
+          ]
+        >,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the git VM's request is not one desolate makes" }
+      >
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"HEAD"}']>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the git VM's request is not one desolate makes" }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<
+          typeof leave,
+          [
+            name: "0123456789abcdef.json",
+            text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"HEAD"}',
+          ]
+        >,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the git VM's request is not one desolate makes" }
+      >
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","lfs":["../../state/ui-token"]}']>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the git VM's request is not one desolate makes" }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<
+          typeof leave,
+          [
+            name: "0123456789abcdef.json",
+            text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","lfs":["../../state/ui-token"]}',
+          ]
+        >,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the git VM's request is not one desolate makes" }
+      >
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","domain":"../acme"}']>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the git VM's request names no domain desolate would make" }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<
+          typeof leave,
+          [
+            name: "0123456789abcdef.json",
+            text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","domain":"../acme"}',
+          ]
+        >,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the git VM's request names no domain desolate would make" }
+      >
     >,
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"fetch","repo":"acme/.."}']>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { fetched: false; error: "the git VM's request is not one desolate makes" }>
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<
+          typeof leave,
+          [name: "0123456789abcdef.json", text: '{"op":"fetch","repo":"acme/.."}']
+        >,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { fetched: false; error: "the git VM's request is not one desolate makes" }
+      >
     >,
   ];
   /** a request that is a link (to a file of the host's) is not followed, not read and not
    *  answered: the link is removed, and what it pointed at is as it was */
   export type ALinkIsNotFollowed = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>, Invoke<typeof leaveLink, [name: "0123456789abcdef.json", target: "state/ui-token"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-    [Expect<Invoke<typeof answerTo, [id: Id]>, "=", null>, Expect<Invoke<typeof outbox>, "=", []>, Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">]
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>,
+      Invoke<typeof leaveLink, [name: "0123456789abcdef.json", target: "state/ui-token"]>,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    [
+      Expect<Invoke<typeof answerTo, [id: Id]>, "=", null>,
+      Expect<Invoke<typeof outbox>, "=", []>,
+      Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">,
+    ]
   >;
   /** nor a bundle that is a link. (This and the next could not run on macOS until ownDirectory
    *  let the home be under a link: a test's home is under /var, which is one.) */
   export type TheBundleIsAPlainFile = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567"}']>, Invoke<typeof leaveLink, [name: "0123456789abcdef.bundle", target: "state/ui-token"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
     [
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the push's bundle is not a plain file of at most 2 GiB" }>,
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "ui-token", text: "the dashboard's"]>,
+      Invoke<
+        typeof leave,
+        [
+          name: "0123456789abcdef.json",
+          text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567"}',
+        ]
+      >,
+      Invoke<typeof leaveLink, [name: "0123456789abcdef.bundle", target: "state/ui-token"]>,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the push's bundle is not a plain file of at most 2 GiB" }
+      >,
       Expect<Invoke<typeof outbox>, "=", []>,
       Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">,
     ]
   >;
   /** an LFS object is taken only if it is what its name says it is */
   export type LfsByItsHash = Given<
-    [Invoke<typeof emptyHome>, Invoke<typeof leave, [name: "0123456789abcdef.json", text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","lfs":["0000000000000000000000000000000000000000000000000000000000000000"]}']>, Invoke<typeof leave, [name: "0123456789abcdef.bundle", text: "a bundle"]>, Invoke<typeof leave, [name: "0123456789abcdef.0000000000000000000000000000000000000000000000000000000000000000.lfs", text: "not that object"]>, Invoke<typeof take, [id: Id, log: typeof collect]>],
-    [Expect<Invoke<typeof answerTo, [id: Id]>, "=", { pushed: false; error: "the LFS object 000000000000 does not hash to its name" }>, Expect<Invoke<typeof outbox>, "=", []>]
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<
+        typeof leave,
+        [
+          name: "0123456789abcdef.json",
+          text: '{"op":"push","repo":"acme/web","branch":"fix/login","commit":"0123456789abcdef0123456789abcdef01234567","lfs":["0000000000000000000000000000000000000000000000000000000000000000"]}',
+        ]
+      >,
+      Invoke<typeof leave, [name: "0123456789abcdef.bundle", text: "a bundle"]>,
+      Invoke<
+        typeof leave,
+        [
+          name: "0123456789abcdef.0000000000000000000000000000000000000000000000000000000000000000.lfs",
+          text: "not that object",
+        ]
+      >,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; error: "the LFS object 000000000000 does not hash to its name" }
+      >,
+      Expect<Invoke<typeof outbox>, "=", []>,
+    ]
   >;
 }
 
 /** Watch what the git VM leaves: one request at a time (a git VM cannot crowd the root, or
  *  the approval page). (The host daemon runs this.) */
-export const watchGitOut = (log: (line: string) => void, announce: (fields: Record<string, unknown>) => void = () => {}) => {
-  for (const dir of [paths.gitOut, paths.gitAnswers]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+export const watchGitOut = (
+  log: (line: string) => void,
+  announce: (fields: Record<string, unknown>) => void = () => {},
+) => {
+  for (const dir of [paths.gitOut, paths.gitAnswers])
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   let busy = false;
   const scan = () => {
     if (busy) return;
