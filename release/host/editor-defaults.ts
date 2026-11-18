@@ -32,7 +32,11 @@ export const checkDefaults = (value: unknown): Record<string, unknown> => {
     refuse("editor defaults of at most 64 KiB", "fewer settings", EXIT.usage);
   for (const key of Object.keys(value))
     if (!KEY.test(key))
-      refuse(`'${key.slice(0, 80)}' is not a setting's name`, '"files.autoSave", or "[python]"', EXIT.usage);
+      refuse(
+        `'${key.slice(0, 80)}' is not a setting's name`,
+        '"files.autoSave", or "[python]"',
+        EXIT.usage,
+      );
   return value as Record<string, unknown>;
 };
 
@@ -73,7 +77,13 @@ declare namespace editorDefaults {
   >;
   /** set: the person's, all of them, and nothing else */
   export type Theirs = Given<
-    [Fresh, Invoke<typeof writeState, [name: "editor-defaults.json", text: '{"workbench.colorTheme": "Dark+"}']>],
+    [
+      Fresh,
+      Invoke<
+        typeof writeState,
+        [name: "editor-defaults.json", text: '{"workbench.colorTheme": "Dark+"}']
+      >,
+    ],
     [Expect<Invoke<typeof editorDefaults>, "=", { "workbench.colorTheme": "Dark+" }>]
   >;
 }
@@ -90,7 +100,13 @@ export const saveDefaults = (settings: Record<string, unknown>) => {
 declare namespace saveDefaults {
   type Fresh = Invoke<typeof emptyHome>;
   export type Saved = Given<
-    [Fresh, Invoke<typeof saveDefaults, [settings: { "workbench.colorTheme": "Dark+"; "files.autoSave": "off" }]>],
+    [
+      Fresh,
+      Invoke<
+        typeof saveDefaults,
+        [settings: { "workbench.colorTheme": "Dark+"; "files.autoSave": "off" }]
+      >,
+    ],
     [
       Expect<
         Invoke<typeof readState, [name: "editor-defaults.json"]>,
@@ -105,11 +121,17 @@ declare namespace saveDefaults {
  *  defaults is still an editor. What happened, in a word. */
 export const applyTo = async (vm: string): Promise<string> => {
   try {
-    const done = await backend().exec(vm, ["bash", `${guest.release}/workspace/editor-defaults.sh`], {
-      input: JSON.stringify(editorDefaults()),
-      timeoutMs: 120_000,
-    });
-    return done.code === 0 ? "applied" : `not applied: ${(done.stderr || done.stdout).trim().slice(-200)}`;
+    const done = await backend().exec(
+      vm,
+      ["bash", `${guest.release}/workspace/editor-defaults.sh`],
+      {
+        input: JSON.stringify(editorDefaults()),
+        timeoutMs: 120_000,
+      },
+    );
+    return done.code === 0
+      ? "applied"
+      : `not applied: ${(done.stderr || done.stdout).trim().slice(-200)}`;
   } catch (error) {
     return `not applied: ${(error as Error).message.slice(0, 200)}`;
   }
@@ -118,15 +140,15 @@ export const applyTo = async (vm: string): Promise<string> => {
 /** Every running workspace's editor, now (after the defaults change). How many took them. */
 export const applyAll = async (): Promise<{ running: number; applied: number }> => {
   const b = backend();
-  const running = new Set((await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name));
+  const running = new Set(
+    (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
+  );
   const { isOwnVm } = await import("./workspaces.ts");
   let count = 0;
   let applied = 0;
-  for (const d of await rootctl<{ slug: string; workspaces: { vm: string; workspace: string; domain?: string }[] }[]>(
-    "domain.list",
-    {},
-    { quiet: true },
-  ))
+  for (const d of await rootctl<
+    { slug: string; workspaces: { vm: string; workspace: string; domain?: string }[] }[]
+  >("domain.list", {}, { quiet: true }))
     for (const w of d.workspaces)
       if (running.has(w.vm) && isOwnVm(d.slug, w)) {
         count++;
