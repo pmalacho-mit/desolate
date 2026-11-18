@@ -46,6 +46,8 @@ dev: any public host is reachable (open). Its workspaces still reach nothing int
   internal addresses it may reach: <forge>
 [exit 0]
 
+## addresses of the VM's own
+
 ## per-domain network rules
 
 $ desolate domain dev net allow api.example.test
