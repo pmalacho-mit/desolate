@@ -445,6 +445,50 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
     assert.match(refused.stdout, /editor-gate: refused a request another site started/);
   });
 
+  it("every editor's defaults are its lowest layer: set on the Mac, the open editor has them when reloaded", async () => {
+    stack.step("editor defaults");
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const e = editors.one!;
+    const themed = /vscode-theme-defaults-themes-[a-z0-9_-]+-json/;
+    const theme = async () => {
+      let page = await loadPage(
+        chrome,
+        fs.mkdtempSync(path.join(stack.work, "chrome-theme-")),
+        e.url,
+        { until: themed, ms: 60_000 },
+      );
+      for (let i = 0; i < 3 && !themed.test(page.stdout); i++)
+        page = await loadPage(
+          chrome,
+          fs.mkdtempSync(path.join(stack.work, "chrome-theme-")),
+          e.url,
+          { until: themed, ms: 60_000 },
+        );
+      return themed.exec(page.stdout)?.[0] ?? `no theme: ${page.stdout.slice(0, 200)}`;
+    };
+    // CONTROL: before, the editor's own default theme, a light one.
+    assert.equal(await theme(), "vscode-theme-defaults-themes-2026-light-json");
+    const shown = stack.desolate("editor", "defaults");
+    assert.match(
+      shown.stdout,
+      /^ {2}files\.autoSave: "off"$/m,
+      "desolate's own default: no autosave",
+    );
+    const set = stack.desolate("editor", "defaults", "set", "workbench.colorTheme", "Dark+");
+    assert.equal(set.code, 0, set.stderr);
+    assert.match(
+      set.stdout,
+      /editor defaults saved: 2 setting\(s\); (\d+) of \1 running editor\(s\) have them now/,
+    );
+    assert.equal(
+      await theme(),
+      "vscode-theme-defaults-themes-dark_plus-json",
+      "the default reached a running editor",
+    );
+    assert.equal(stack.quiet("editor", "defaults", "reset").code, 0);
+  });
+
   it("the editor comes back with the workspace, and a stopped workspace's name answers nothing", async () => {
     stack.step("stop and start");
     assert.equal(stack.quiet("stop", "web/one").code, 0);

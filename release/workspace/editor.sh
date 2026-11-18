@@ -54,7 +54,7 @@ WHERE=vm
 if [ "$(jq -r '.state == "up" and .glibc and (.hostNetwork or (.compose and .bridge != null))' "$STATE" 2>/dev/null)" = true ]; then
   WHERE=$(jq -r .containerId "$STATE")
 fi
-node --disable-warning=ExperimentalWarning "$HERE/editor-settings.ts" "$DATA/data/Machine/settings.json" "$([ "$WHERE" = vm ] && echo enter || echo plain)"
+node --disable-warning=ExperimentalWarning "$HERE/editor-settings.ts" "$DATA/data/Machine/settings.json" "$([ "$WHERE" = vm ] && echo enter || echo plain)" "$STATE"
 HAVE=$(cat "$DATA/server.where" 2>/dev/null || true)
 if listening "$SERVER_PORT" && { [ "$HAVE" != "$WHERE" ] || [ "$RENEW" = 1 ]; }; then
   # It is running in the other place (the devcontainer appeared, changed or went), or with a

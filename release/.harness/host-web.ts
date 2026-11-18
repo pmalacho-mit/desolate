@@ -99,8 +99,10 @@ export const gitVmDown = async (_repo: string | null) => {
 /** The approval page's backend with a domain's secrets: `acme` holds NPM-TOKEN; a set keeps
  *  what it was given in `secretsSet` (the value included, to show it reached the host). */
 let given: Record<string, unknown>[] = [];
+let defaults: Record<string, unknown> = { "files.autoSave": "off" };
 export const withSecrets = (): Backend => {
   given = [];
+  defaults = { "files.autoSave": "off" };
   const held = [{ name: "NPM-TOKEN", hosts: ["registry.npmjs.org"], headers: null, on: true }];
   return {
     ...waiting([]),
@@ -113,6 +115,16 @@ export const withSecrets = (): Backend => {
       },
       switch: async () => held,
       remove: async () => [],
+    },
+    // Every editor's defaults, held here for the test.
+    editorDefaults: {
+      get: async () => defaults,
+      set: async (settings) => {
+        if (typeof settings !== "object" || settings === null || Array.isArray(settings))
+          throw new Error("editor defaults are a settings object");
+        defaults = settings;
+        return { settings, running: 0, applied: 0 };
+      },
     },
     // The real planner (shared/envfile.ts), and an import that keeps nothing.
     envImport: {

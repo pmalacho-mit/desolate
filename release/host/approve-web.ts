@@ -160,6 +160,8 @@ const STATIC: Record<string, [string, string]> = {
   "/approve.css": ["approve.css", "text/css; charset=utf-8"],
   "/secrets": ["secrets.html", "text/html; charset=utf-8"],
   "/secrets.js": ["secrets.js", "text/javascript; charset=utf-8"],
+  "/editor-defaults": ["editor-defaults.html", "text/html; charset=utf-8"],
+  "/editor-defaults.js": ["editor-defaults.js", "text/javascript; charset=utf-8"],
   // Syntax colour for the diff (shared/ui/highlight.js says how it is kept to colour).
   "/highlight.js": ["../../shared/ui/highlight.js", "text/javascript; charset=utf-8"],
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],
@@ -205,6 +207,13 @@ export type Backend = {
   secrets?: SecretOps;
   /** A .env into a domain's secrets (env-import.ts), for /secrets's Import: the plan (no
    *  value in it), and the import, which answers the .env with names in place of values. */
+  /** Every editor's default settings (editor-defaults.ts), for /editor-defaults. */
+  editorDefaults?: {
+    get: () => Promise<Record<string, unknown>>;
+    set: (
+      settings: Record<string, unknown>,
+    ) => Promise<{ settings: Record<string, unknown>; running: number; applied: number }>;
+  };
   envImport?: {
     plan: (domain: string, text: string) => Promise<PlanRow[]>;
     apply: (
@@ -270,11 +279,12 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       url.pathname === "/embed" &&
       url.search === "" &&
       req.headers["sec-fetch-dest"] === "iframe";
-    // The secrets page itself, opened from the dashboard (another site): static, and all it
-    // does is a request of its own origin with this page's cookie (as the git page).
+    // The secrets page and the editor-defaults page, opened from the dashboard (another
+    // site): static, and all they do is a request of their own origin with this page's cookie
+    // (as the git page).
     const toSecrets =
       req.method === "GET" &&
-      url.pathname === "/secrets" &&
+      (url.pathname === "/secrets" || url.pathname === "/editor-defaults") &&
       req.headers["sec-fetch-mode"] === "navigate" &&
       req.headers["sec-fetch-dest"] === "document";
     const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame || toSecrets);
@@ -344,6 +354,34 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     if (String(req.headers["sec-fetch-site"] ?? "") !== "same-origin")
       return json(res, 403, { error: "a request this page did not make" });
 
+    // Every editor's default settings: by this page's cookie only, as the secrets are. Not a
+    // secret, but they reach every domain's editor, so not the dashboard's (which the root's
+    // ordinary user serves) to change.
+    if (url.pathname.startsWith("/editor-defaults/")) {
+      const ops = backend.editorDefaults;
+      if (!ops) return json(res, 404, { error: "no editor defaults here" });
+      if (cookie === undefined || !sameSecret(cookie, token))
+        return json(res, 401, {
+          error:
+            "open the approval page at the address `desolate approve --web` prints once: its cookie opens this page too",
+        });
+      if (req.method === "GET" && url.pathname === "/editor-defaults/get")
+        return json(res, 200, { settings: await ops.get() });
+      if (req.method !== "POST" || url.pathname !== "/editor-defaults/set")
+        return json(res, 404, { error: "no such thing" });
+      if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? "")))
+        return json(res, 415, { error: "JSON only" });
+      if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
+        return json(res, 403, { error: "a request from another origin" });
+      try {
+        const asked = JSON.parse((await readBody(req, 70_000)) ?? "") as { settings?: unknown };
+        const done = await ops.set(asked.settings as Record<string, unknown>);
+        log(`editor defaults page: ${Object.keys(done.settings).length} setting(s) saved`);
+        return json(res, 200, done);
+      } catch (error) {
+        return json(res, 400, { error: (error as Error).message });
+      }
+    }
     // A domain's secrets: by this page's cookie only (not the key of the frame beside the git
     // terminal). The value of one comes in here and goes to the root's store, and is never
     // sent back: a list names each secret and where it goes.
@@ -760,6 +798,119 @@ declare namespace handler {
     >
   >;
 
+  /** the editor-defaults page opens from the dashboard (another site); reading or changing the
+   *  defaults needs this page's cookie and origin, as the secrets do */
+  export type EditorDefaults_ = Given<
+    HasToken,
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/editor-defaults";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 200 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/editor-defaults/get";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 401 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: { method: "GET"; url: "/editor-defaults/get"; headers: Script },
+          ]
+        >,
+        "matches",
+        { status: 200; json: { settings: { "files.autoSave": "off" } } }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "POST";
+              url: "/editor-defaults/set";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "same-origin";
+                origin: "http://acme-web-0a1b2c.localhost:31581";
+                cookie: Cookie;
+                "content-type": "application/json";
+              };
+              body: { settings: { "workbench.colorTheme": "Dark+" } };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "POST";
+              url: "/editor-defaults/set";
+              headers: Script;
+              body: { settings: { "workbench.colorTheme": "Dark+"; "files.autoSave": "off" } };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 200;
+          json: { settings: { "workbench.colorTheme": "Dark+"; "files.autoSave": "off" } };
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "POST";
+              url: "/editor-defaults/set";
+              headers: Script;
+              body: { settings: ["Dark+"] };
+            },
+          ]
+        >,
+        "matches",
+        { status: 400; json: { error: "editor defaults are a settings object" } }
+      >,
+    ]
+  >;
   type ImportAsk = Invoke<
     typeof ask,
     [

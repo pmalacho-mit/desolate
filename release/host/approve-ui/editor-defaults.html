@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>desolate: editor defaults</title>
+<link rel="stylesheet" href="/approve.css">
+<script src="/editor-defaults.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>Editor defaults</h1>
+  <p class="lede">Every workspace's editor starts from these settings. Anything else overrides them: what you set in an editor, the project's devcontainer (<code>customizations.vscode.settings</code>), and the repository's <code>.vscode/settings.json</code>. A change reaches running editors at once; an open editor takes it when its tab is reloaded. This page is the Mac's own, like the approval page. From a terminal: <code>desolate editor defaults</code>.</p>
+</header>
+<main>
+  <section class="card" id="main" hidden>
+    <label class="field">Color theme <span class="hint">this editor's own default is a light theme (Light 2026)</span>
+      <select id="theme" aria-label="the color theme">
+        <option value="">(the editor's own)</option>
+        <option>Dark+</option><option>Dark Modern</option><option>Dark 2026</option>
+        <option>Light+</option><option>Light Modern</option><option>Light 2026</option>
+        <option>Visual Studio Dark</option><option>Visual Studio Light</option>
+        <option>Default High Contrast</option><option>Default High Contrast Light</option>
+      </select></label>
+    <label class="field">Auto save <span class="hint">a web editor's own default saves as you type</span>
+      <select id="autosave" aria-label="auto save">
+        <option value="">(the editor's own: after a delay)</option>
+        <option value="off">off: save with Cmd-S</option>
+        <option value="afterDelay">after a delay</option>
+        <option value="onFocusChange">when the editor loses focus</option>
+        <option value="onWindowChange">when the window loses focus</option>
+      </select></label>
+    <label class="field">All of them, as settings JSON <span class="hint">any setting, as in settings.json; the two above are in here too</span>
+      <textarea id="json" rows="10" class="mono env" spellcheck="false" aria-label="the default settings, as JSON"></textarea></label>
+    <div class="actions plain"><button type="button" class="approve" id="save">Save</button><button type="button" id="reset">desolate's own (auto save off)</button><span id="said" class="hint"></span></div>
+  </section>
+</main>
+<p id="status" class="status"></p>
+</body>
+</html>

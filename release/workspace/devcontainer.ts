@@ -68,6 +68,8 @@ export type State =
       glibc: boolean;
       compose: boolean;
       extensions: string[];
+      /** customizations.vscode.settings (settingsOf), for the editor's Machine settings */
+      settings?: Record<string, unknown>;
       image: string;
       note?: string;
       /** compose: svcnet.ts's socket in the primary service, when it answers (bridge.ts) */
@@ -117,6 +119,35 @@ declare namespace locate {
         >,
       ]
     >,
+    "=",
+    undefined
+  >;
+}
+
+/** customizations.vscode.settings: the project's own editor settings, which the editor's
+ *  Machine settings take (editor-settings.ts), as VS Code's Dev Containers does. An object of
+ *  at most 64 KiB as JSON, or nothing. */
+export const settingsOf = (spec: Record<string, unknown>): Record<string, unknown> | undefined => {
+  const vscode = (spec.customizations as { vscode?: { settings?: unknown } } | undefined)?.vscode;
+  const settings = vscode?.settings;
+  if (typeof settings !== "object" || settings === null || Array.isArray(settings))
+    return undefined;
+  return JSON.stringify(settings).length <= 65_536
+    ? (settings as Record<string, unknown>)
+    : undefined;
+};
+
+declare namespace settingsOf {
+  export type Given = Expect<
+    Invoke<
+      typeof settingsOf,
+      [spec: { customizations: { vscode: { settings: { "files.autoSave": "afterDelay" } } } }]
+    >,
+    "=",
+    { "files.autoSave": "afterDelay" }
+  >;
+  export type None = Expect<
+    Invoke<typeof settingsOf, [spec: { customizations: { vscode: { settings: ["no"] } } }]>,
     "=",
     undefined
   >;
@@ -891,6 +922,7 @@ const main = async () => {
     glibc,
     compose,
     extensions: extensionsOf(spec),
+    ...(settingsOf(spec) ? { settings: settingsOf(spec) } : {}),
     image: (compose
       ? `service ${String(spec.service)}`
       : String(spec.image ?? image ?? "built")

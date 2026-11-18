@@ -19,6 +19,8 @@ Every day: a workspace, your work in it, and its push:
               [--checkout <owner/repo>=main|worktree:<branch>]   a workspace: one VM, its checkouts
   desolate list [<domain>] [--json]
   desolate editor <domain>/<workspace> [--open] [--json]         the address of its editor, for your browser
+  desolate editor defaults [--json] | set <setting> <value> | unset <setting> | replace | reset
+                                                                 every editor's default settings (its own, the devcontainer's override them)
   desolate exec <domain>/<workspace> [--checkout <repo>] [--vm] -- <cmd>
                                                                  a command in its devcontainer (bash: a shell there)
                                                                  (or in the VM itself: when it has none, or --vm)
@@ -462,6 +464,72 @@ const main = async (argv: string[]): Promise<number> => {
     const { RELEASE_DIR } = await import("./paths.ts");
     process.stdout.write(fs.readFileSync(`${RELEASE_DIR}/completion.bash`, "utf8"));
     return EXIT.ok;
+  }
+  if (verb === "editor" && rest[0] === "defaults") {
+    // desolate editor defaults [--json] | set <key> <value> | unset <key> | replace (stdin) | reset
+    const { values, positionals } = flags(rest.slice(1), {});
+    const d = await import("./editor-defaults.ts");
+    const [action, key, ...value] = positionals;
+    const how =
+      "desolate editor defaults [--json] | set <setting> <value> | unset <setting> | replace (a JSON object on stdin) | reset";
+    const said = async (settings: Record<string, unknown>) => {
+      const done = await d.setDefaults(settings);
+      out(
+        `editor defaults saved: ${Object.keys(done.settings).length} setting(s); ${done.applied} of ${done.running} running editor(s) have them now (an open editor takes them when its tab is reloaded).`,
+      );
+    };
+    if (action === undefined) {
+      const now = d.editorDefaults();
+      if (values.json === true) out(JSON.stringify(now));
+      else {
+        out(
+          "Every workspace's editor starts from these. Its own settings, the project's devcontainer and the repository's .vscode/settings.json override them.",
+        );
+        for (const [k, v] of Object.entries(now)) out(`  ${k}: ${JSON.stringify(v)}`);
+        if (!Object.keys(now).length) out("  (none)");
+        out(`change: ${how}`);
+      }
+      return EXIT.ok;
+    }
+    if (action === "set") {
+      if (!key || value.length === 0)
+        refuse(
+          "set which setting, to what?",
+          "desolate editor defaults set workbench.colorTheme Dark+",
+          EXIT.usage,
+        );
+      await said({ ...d.editorDefaults(), [key]: d.valueOf(value.join(" ")) });
+      return EXIT.ok;
+    }
+    if (action === "unset") {
+      if (!key)
+        refuse("unset which setting?", "desolate editor defaults unset files.autoSave", EXIT.usage);
+      const now = d.editorDefaults();
+      delete now[key];
+      await said(now);
+      return EXIT.ok;
+    }
+    if (action === "replace") {
+      let text = "";
+      for await (const chunk of process.stdin) text += chunk;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        refuse(
+          "that is not JSON",
+          'desolate editor defaults replace <<< \'{"files.autoSave": "off"}\'',
+          EXIT.usage,
+        );
+      }
+      await said(d.checkDefaults(parsed));
+      return EXIT.ok;
+    }
+    if (action === "reset") {
+      await said({ ...d.BUILT_IN });
+      return EXIT.ok;
+    }
+    refuse(`'editor defaults ${action}' is not understood`, how, EXIT.usage);
   }
   if (verb === "editor") {
     const { values, positionals } = flags(rest, { open: { type: "boolean" } });
