@@ -1,5 +1,6 @@
 // `desolate domain ...`: create, add, show.
 import { EXIT, refuse } from "../shared/exit.ts";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { guest, paths } from "./paths.ts";
 import { backend, changeSecrets, ensureProxyUser, revealSecret, rootctl } from "./stack.ts";
@@ -328,7 +329,7 @@ export const domainCommand = async (
       on: boolean;
       secondsLeft?: number;
     };
-    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME> | show <NAME>`;
+    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME> | show <NAME> | import <.env> [--dry-run] [--print-env | --in-place]`;
     const left = (seconds: number) =>
       seconds >= 7200
         ? `${Math.round(seconds / 3600)} h`
@@ -344,6 +345,90 @@ export const domainCommand = async (
             .map((part) => part.trim())
             .filter(Boolean)
         : [];
+    if (action === "import") {
+      // desolate domain <d> secret import <file> [--dry-run] [--print-env | --in-place]
+      //   [--choose KEY=secret:host[,host][@header[,header]] | KEY=value | KEY=local]...
+      const how = `desolate domain ${first} secret import <path/to/.env> [--dry-run] [--print-env | --in-place] [--choose KEY=secret:<host>[@<header>] | KEY=value]`;
+      if (!name) refuse("import which .env?", how, EXIT.usage);
+      if (values["print-env"] === true && values["in-place"] === true)
+        refuse("--print-env or --in-place, not both", how, EXIT.usage);
+      const { decide, describePlan, ENV_MAX, importEnv, parseChoose } =
+        await import("./env-import.ts");
+      const file = path.resolve(name);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (!stat?.isFile()) refuse(`${name} is not a file`, how, EXIT.usage);
+      if (stat.size > ENV_MAX) refuse(`${name} is over 64 KiB: not a .env`, how, EXIT.usage);
+      const text = fs.readFileSync(file, "utf8");
+      // With --print-env, stdout is the new .env alone: everything else goes to stderr.
+      const say =
+        values["print-env"] === true ? (line: string) => process.stderr.write(`${line}\n`) : out;
+      const given = Array.isArray(values.choose)
+        ? values.choose
+        : values.choose === undefined
+          ? []
+          : [values.choose];
+      const choices = given.map((c) => parseChoose(String(c)));
+      // What nothing could tell, asked on a terminal (and remembered for the domain).
+      if (values["dry-run"] !== true && process.stdin.isTTY && process.stderr.isTTY) {
+        const unknown = decide(first, text, choices).rows.filter((r) => r.kind === "ask");
+        if (unknown.length) {
+          const { createInterface } = await import("node:readline/promises");
+          const asker = createInterface({ input: process.stdin, output: process.stderr });
+          try {
+            for (const r of unknown) {
+              const hosts = csv(
+                await asker.question(
+                  `${r.key} looks like a secret, but where it goes is not known.\n  The hosts it may be sent to (comma-separated), or Enter to keep it a value: `,
+                ),
+              );
+              if (!hosts.length) {
+                choices.push({ key: r.key, kind: "value" });
+                continue;
+              }
+              const headers = csv(
+                await asker.question(
+                  "  Only in these headers (comma-separated), or Enter for anywhere in the request: ",
+                ),
+              );
+              choices.push({ key: r.key, kind: "secret", hosts, headers });
+            }
+          } finally {
+            asker.close();
+          }
+        }
+      }
+      if (values["dry-run"] === true) {
+        say(
+          `${name}: what importing it into the domain ${first} would do (--dry-run: nothing is set)`,
+        );
+        const others = (await secretOps.list(first)).map((s) => s.name);
+        for (const line of describePlan(decide(first, text, choices, others).rows)) say(line);
+        return;
+      }
+      const done = await importEnv(secretOps, first, text, choices);
+      const made = done.rows.filter((r) => r.kind === "secret").length;
+      say(
+        `${name} into the domain ${first}: ${made} secret${made === 1 ? "" : "s"} held in the root`,
+      );
+      for (const line of describePlan(done.rows)) say(line);
+      // A .env in a workspace's checkout has been readable there, by anything in the domain.
+      const under = path.relative(paths.domains, file);
+      if (made && !under.startsWith("..") && !path.isAbsolute(under))
+        say(
+          `! ${name} is in the domain ${under.split(path.sep)[0]}'s files: its values have been readable in that domain's workspaces. Rotate the keys that are secrets now, and set the new values with secret set.`,
+        );
+      if (values["print-env"] === true) process.stdout.write(done.env);
+      else if (values["in-place"] === true) {
+        const temporary = `${file}.desolate-${process.pid}`;
+        fs.writeFileSync(temporary, done.env, { mode: stat.mode & 0o777 });
+        fs.renameSync(temporary, file);
+        say(`${name} now holds each secret's name in place of its value.`);
+      } else
+        say(
+          `the workspace's .env, with each secret's name: add --print-env (to stdout) or --in-place (into ${name})`,
+        );
+      return;
+    }
     if (action === "on" || action === "off") {
       if (!name) refuse("which secret?", usage, EXIT.usage);
       let ttlSeconds: number | undefined;

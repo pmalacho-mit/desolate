@@ -321,6 +321,36 @@ can ask for it.
 
 ![The secrets page: a domain's secrets by name and host, and the form to add one](assets/secrets.png)
 
+**A project's `.env`, imported.** `desolate domain <d> secret import <.env>` (or **Import a
+.env** on the secrets page: paste it or choose the file) makes its API keys the domain's
+secrets, and gives back the same `.env` with each secret's name in place of its value, for
+the workspace: `--print-env` writes it to stdout (everything else goes to stderr, so it can
+be piped), `--in-place` rewrites the file. (Not `--print-env > .env` on the same file: the
+shell empties it before desolate reads it.) `--dry-run` shows the plan and sets nothing. Each
+entry is judged on the Mac, and no value is printed or sent to a page:
+- **What becomes a secret:** what is sent to a host, so the proxy can put the value in place
+  of the name: an API key (`sk-ant-`, `xoxb-`, `llx-` and other values say whose they are;
+  a table knows keys by name), or an OAuth client secret, which goes to the host of the
+  `*_TOKEN_URL` beside it in the file, or to a known provider's token endpoint.
+- **What stays a value:** what the app uses itself, so it needs the real value: a key it
+  signs with (`JWT_SECRET_KEY`, Zoom's SDK secret), AWS's secret access key (each request
+  is signed with it, and it is never sent), a database password. These stay readable in
+  the workspace, and the plan says so: a dev-only value is the way to keep a real one out.
+  And what a browser on your Mac uses (`NEXT_PUBLIC_*`, a publishable key), which never
+  passes the proxy.
+- **What it cannot tell** is asked about on a terminal, or marked on the page, and left a
+  value until you name its hosts: `--choose KEY=secret:<host>[,<host>][@<header>]`, or
+  `--choose KEY=value`. What you choose is remembered for the domain, on the Mac (keys and
+  hosts, never a value), so the next import asks nothing.
+- **An OAuth client secret** is put in place only where the app posts it in the request body
+  (`client_secret_post`): in HTTP Basic auth it is base64-encoded, and the proxy cannot find
+  its name. A value the proxy puts in a body or a URL goes in as it is, unencoded: the plan
+  warns about one with `+ / = &` or a space.
+
+If the `.env` was in a workspace's checkout (`~/.desolate/domains/...`), its values have
+been readable in that domain's workspaces: the import says so. Rotate the keys that became
+secrets.
+
 ## On a Mac: if macOS asks about `limactl` and incoming connections
 
 With the macOS firewall on, you may see this dialog (the wording on macOS 14.5, from the

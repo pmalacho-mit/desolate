@@ -71,3 +71,17 @@ input, select { font: inherit; padding: 7px 9px; border-radius: 6px; border: 1px
 button.danger { color: var(--danger); }
 .error { color: var(--danger); }
 #list { margin-top: 12px; }
+
+/* the secrets page's Import a .env */
+textarea.env { width: 100%; box-sizing: border-box; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); resize: vertical; }
+label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; }
+.hide { display: none; }
+.planrows { display: grid; grid-template-columns: minmax(0, 2fr) 10.5em minmax(0, 2fr) minmax(0, 1.2fr); gap: 6px 8px; align-items: center; margin: 12px 0; font-size: 13px; }
+.planrows .head { color: var(--muted); font-weight: 600; }
+.planrows .key { font-weight: 600; overflow-wrap: anywhere; padding-top: 10px; align-self: stretch; }
+.planrows .key.ask::after { content: " ?"; color: var(--danger); }
+.planrows select, .planrows input { width: 100%; box-sizing: border-box; font-size: 13px; padding: 4px 6px; margin-top: 10px; }
+.planrows input.unused { visibility: hidden; }
+.planrows .why { grid-column: 1 / -1; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.planrows .why .mono { color: var(--fg); }
+.planrows .warn { color: var(--danger); }

@@ -43,6 +43,8 @@ import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, isSlug } from "../share
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
 import type { SecretOps } from "./domains.ts";
+import type { Choice } from "./env-import.ts";
+import type { PlanRow } from "../shared/envfile.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
 import type {
@@ -201,6 +203,16 @@ export type Backend = {
   refuseIssue: (issue: Issue) => Promise<void>;
   /** A domain's secrets, for /secrets (domains.ts secretOps): absent, the page has none. */
   secrets?: SecretOps;
+  /** A .env into a domain's secrets (env-import.ts), for /secrets's Import: the plan (no
+   *  value in it), and the import, which answers the .env with names in place of values. */
+  envImport?: {
+    plan: (domain: string, text: string) => Promise<PlanRow[]>;
+    apply: (
+      domain: string,
+      text: string,
+      choices: Choice[],
+    ) => Promise<{ rows: PlanRow[]; env: string; secrets: unknown[] }>;
+  };
 };
 
 const readBody = (req: IncomingMessage, limit = 4096): Promise<string | null> =>
@@ -360,7 +372,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 403, { error: "a request from another origin" });
       let asked: Record<string, unknown>;
       try {
-        asked = JSON.parse((await readBody(req, 70_000)) ?? "") as Record<string, unknown>;
+        // (An import carries a whole .env, of at most 64 KiB, as JSON: room for its escapes.)
+        asked = JSON.parse(
+          (await readBody(req, url.pathname.startsWith("/secrets/import/") ? 200_000 : 70_000)) ??
+            "",
+        ) as Record<string, unknown>;
       } catch {
         return json(res, 400, { error: "not JSON" });
       }
@@ -382,6 +398,28 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           });
           log(`secrets page: set ${name} for the domain ${asked.domain}`);
           return json(res, 200, { secrets: listed });
+        }
+        // Import a .env: the plan first (keys, where each would go and why: never a value),
+        // then the import, with what the person changed on the page.
+        if (url.pathname === "/secrets/import/plan" || url.pathname === "/secrets/import/apply") {
+          const importer = backend.envImport;
+          if (!importer) return json(res, 404, { error: "no import here" });
+          const text = typeof asked.text === "string" ? asked.text : "";
+          if (!text.trim()) return json(res, 400, { error: "paste a .env, or choose one" });
+          if (url.pathname === "/secrets/import/plan")
+            return json(res, 200, { rows: await importer.plan(asked.domain, text) });
+          const choices = (Array.isArray(asked.choices) ? asked.choices : []).filter(
+            (c): c is Choice =>
+              typeof c === "object" &&
+              c !== null &&
+              typeof (c as Choice).key === "string" &&
+              ["secret", "value", "local"].includes((c as Choice).kind),
+          );
+          const done = await importer.apply(asked.domain, text, choices);
+          log(
+            `secrets page: imported a .env into the domain ${asked.domain}: ${done.rows.filter((r) => r.kind === "secret").length} secret(s)`,
+          );
+          return json(res, 200, done);
         }
         if (url.pathname === "/secrets/switch") {
           const listed = await ops.switch(asked.domain, name, asked.on === true);
@@ -719,6 +757,88 @@ declare namespace handler {
       Invoke<typeof secretsSet>,
       "=",
       [{ domain: "acme"; name: "API"; value: "s3cret"; hosts: ["api.example.com"]; headers: [] }]
+    >
+  >;
+
+  type ImportAsk = Invoke<
+    typeof ask,
+    [
+      handler: Secrets,
+      request: {
+        method: "POST";
+        url: "/secrets/import/plan";
+        headers: Script;
+        body: {
+          domain: "acme";
+          text: "OPENAI_API_KEY=sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\nPORT=3000\n";
+        };
+      },
+    ]
+  >;
+  /** Import a .env: the plan names each key, what it becomes and where it goes */
+  export type ImportPlans = Given<
+    HasToken,
+    Expect<
+      ImportAsk,
+      "matches",
+      {
+        status: 200;
+        json: {
+          rows: [
+            {
+              key: "OPENAI_API_KEY";
+              kind: "secret";
+              name: "OPENAI-API-KEY";
+              hosts: ["api.openai.com"];
+            },
+            { key: "PORT"; kind: "value" },
+          ];
+        };
+      }
+    >
+  >;
+  /** and the import answers the .env with the secret's name in place of its value */
+  export type ImportAnswersEnv = Given<
+    HasToken,
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Secrets,
+          request: {
+            method: "POST";
+            url: "/secrets/import/apply";
+            headers: Script;
+            body: {
+              domain: "acme";
+              text: "OPENAI_API_KEY=sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaa\nPORT=3000\n";
+              choices: [];
+            };
+          },
+        ]
+      >,
+      "matches",
+      { status: 200; json: { env: "OPENAI_API_KEY=OPENAI-API-KEY\nPORT=3000\n" } }
+    >
+  >;
+  /** nothing pasted: said */
+  export type ImportEmpty = Given<
+    HasToken,
+    Expect<
+      Invoke<
+        typeof ask,
+        [
+          handler: Secrets,
+          request: {
+            method: "POST";
+            url: "/secrets/import/plan";
+            headers: Script;
+            body: { domain: "acme"; text: "  " };
+          },
+        ]
+      >,
+      "matches",
+      { status: 400; json: { error: "paste a .env, or choose one" } }
     >
   >;
 
