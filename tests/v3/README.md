@@ -13,8 +13,8 @@ A tier whose needs are not met fails and says what to install. It never skips.
 |---|---|---|---|
 | **T1** `t1/` | none | names, the name sniffer, the root's reading of an outbox and of status files (links, swapped directories, fifos); types; shell syntax | |
 | **T2** `t2/` | `fake`: each "VM" is a container | everything but the hypervisor boundary: bootstrap, the keyring and the push gate, mirrors and LFS, domains and checkouts, the port router, offers and pushes, the proxy and its rules, the editor, secrets, devcontainers, the dashboard, and what a hostile domain can send the root (`10-hostile-content`) | **any boundary a VM gives.** A T2 test is never taken as proof of one |
-| **T3** `t3/` | `qemu`: real VMs through Lima (KVM, or software emulation) | read-only shares against root in the VM, forced egress against root in the VM, no path between domains; an offer, a dangerous tree and a linked outbox over a real share | anything about a Mac |
-| **T4** | `vz` on a Mac: the same `t3/` file, `tests/v3/run.sh t4` | as T3, on the product backend; ICMP too | the qemu-only assertions (QEMU's command line) |
+| **T3** `t3/` | `qemu`: real VMs through Lima (KVM, or software emulation) | read-only shares against root in the VM, forced egress against root in the VM, no path between domains; an offer, a dangerous tree and a linked outbox over a real share; and (`02-dev-stack`) a project's dev stack on the VM's Docker: a published port 80 from the VM and the Mac, a service calling another, Postgres in a named volume, a container calling a secret's host | anything about a Mac |
+| **T4** | `vz` on a Mac: the same `t3/` files, `tests/v3/run.sh t4` | as T3, on the product backend; ICMP too | the qemu-only assertions (QEMU's command line) |
 
 How the tests are built (move-to-vms.md section 13):
 
