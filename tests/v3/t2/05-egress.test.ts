@@ -115,9 +115,12 @@ describe("T2 section 4.3: egress through the workspace's own proxy", () => {
       /internal address \(127\.0\.0\.1\)/,
     );
     assert.match(
-      curl("dev/w1", `http://${forge}/`).stdout,
+      curl("dev/w1", "http://198.18.0.1/").stdout,
       /a destination is a hostname: an address alone is not carried/,
     );
+    // The forge's own address is a private one: kept in the VM (the next test), so it reaches
+    // nothing, allowed or not. The proxy carries by name only.
+    assert.notEqual(curl("dev/w1", `http://${forge}/`).code, 0, "a private address, unnamed");
     assert.notEqual(
       curl("dev/w1", `https://${forge}/`, "-k").code,
       0,
@@ -127,6 +130,40 @@ describe("T2 section 4.3: egress through the workspace's own proxy", () => {
       curl("dev/w1", "http://api.example.test:8080/").code,
       0,
       "a port other than 80 and 443",
+    );
+  });
+
+  it("port 80 to an address of the VM's own (a container's, a published port) stays in the VM", () => {
+    stack.step("addresses of the VM's own");
+    // A server on port 80 here, as a container is to docker-proxy, and as a compose service is
+    // to another. A private address is the VM's own (docker's networks are made from those
+    // ranges): reached directly. The placeholder every name resolves to is not: still the
+    // relay's, which refuses an address alone. That is the control: it shows the redirect is
+    // there, so the first answer is the rule's doing. (Found 2026-11-18: a published port's
+    // docker-proxy was sent to the relay and refused.)
+    const served = inWs(
+      "dev/w1",
+      `ip addr add 10.77.0.1/32 dev lo 2>/dev/null; ip addr add 198.18.7.7/32 dev lo 2>/dev/null
+cat >/tmp/served.py <<'PY'
+import http.server as h
+class H(h.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b"served in the VM")
+    def log_message(self, *a): pass
+h.HTTPServer(("0.0.0.0", 80), H).serve_forever()
+PY
+python3 /tmp/served.py & pid=$!
+for i in $(seq 50); do curl -s -m 1 -o /dev/null http://127.0.0.1/ && break; sleep 0.1; done
+echo "private: $(curl -s -m 5 http://10.77.0.1/)"
+echo "placeholder: $(curl -s -m 5 http://198.18.7.7/)"
+kill $pid; ip addr del 10.77.0.1/32 dev lo 2>/dev/null; ip addr del 198.18.7.7/32 dev lo 2>/dev/null; true`,
+      true,
+    );
+    assert.match(served.stdout, /^private: served in the VM$/m, served.stdout + served.stderr);
+    assert.match(
+      served.stdout,
+      /^placeholder: desolate: a destination is a hostname: an address alone is not carried$/m,
+      "control: port 80 to an address that is not the VM's still goes to the relay",
     );
   });
 

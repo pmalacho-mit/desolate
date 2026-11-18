@@ -426,6 +426,30 @@ token, which is a same-origin request. Nothing more is let in than before.
 (`release/workspace/editor-gate.ts`, `openingPage`; T2 `06-editor`, "the dashboard's Open
 editor, a link from another site", with a wrong token as its control)
 
+## Found by an agent setting up a project's dev stack (2026-11-18)
+
+**A container's published port answered "an address alone is not carried".** The project's
+Vite, in its devcontainer, proxied `/backend` to a FastAPI container published on 8000.
+Every address of it was refused: `localhost:8000`, `127.0.0.1:8000`, the container's own
+address. Postgres, published the same way, answered. The redirect that brings a program's
+ports 80 and 443 to the egress relay (`workspace/net/up.sh`) spared loopback only. Docker
+reaches a published port's container with `docker-proxy`, which connects to the container's
+address on its own port: 80 here. So that connection was sent to the relay, which read
+`Host: 127.0.0.1:8000` and refused it, as it should an address. Postgres's port is 5432,
+which nothing redirects. The rule now spares the private ranges too, which Docker's networks
+take their addresses from. No name resolves to one of those, and the proxy carries by name
+only, so the relay lost nothing it could have carried. A compose service calling another on
+port 80 had the same fault. (T2 `05-egress`, "port 80 to an address of the VM's own", with
+the placeholder address as its control)
+
+**The same project's Postgres would not start with its data on `/workspaces`, at random.**
+Not a fault desolate can mend: the share is a macOS folder, and Apple's virtiofs does not
+keep an owner the VM sets. A `chown` holds in the VM's cache until something reads the
+folder again, and then the Mac's owner is back. A loop running `ls -lR` over the checkout,
+as a watcher or an editor does, made `initdb` fail 4 times of 4. Without it, it started 6 of
+6. A named volume, on the VM's disk, started 4 of 4 under the same loop. The reference
+now says to keep a database's data there.
+
 ## The rules these left
 
 - **A negative check needs a positive control.** A probe that failed to run is
