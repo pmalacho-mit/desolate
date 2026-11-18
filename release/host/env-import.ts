@@ -258,13 +258,25 @@ export const importEnv = async (
   const values = new Map<string, string>();
   for (const line of lines) if (line.kind === "entry") values.set(line.key, line.value);
   let secrets: SecretListed[] | null = null;
-  for (const row of rows.filter((r) => r.kind === "secret"))
-    secrets = await ops.set(domain, {
-      name: row.name!,
-      value: values.get(row.key)!,
-      hosts: row.hosts!,
-      headers: row.headers ?? [],
-    });
+  // One by one, as `secret set` does. One the root refuses stops the import there, and says
+  // which were set before it (each is a whole secret: set again, or removed, by name).
+  const done: string[] = [];
+  for (const row of rows.filter((r) => r.kind === "secret")) {
+    try {
+      secrets = await ops.set(domain, {
+        name: row.name!,
+        value: values.get(row.key)!,
+        hosts: row.hosts!,
+        headers: row.headers ?? [],
+      });
+    } catch (error) {
+      refuse(
+        `${row.key} (${row.name}) was not set: ${(error as Error).message}${done.length ? `. Set before it: ${done.join(", ")}` : ". Nothing was set"}`,
+        `change ${row.key} in the plan (--choose ${row.key}=value keeps it a value), and import again`,
+      );
+    }
+    done.push(row.name!);
+  }
   remember(domain, decided);
   const env = rewriteEnv(
     lines,
