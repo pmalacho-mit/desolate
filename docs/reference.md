@@ -198,6 +198,40 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
   domain wakes no watcher, so a dev server keeps serving the old file. Edit in the
   workspace (its editor, its terminal, an agent there), `touch` the file there, or have the
   watcher poll (Vite: `server.watch.usePolling: true`).
+
+**Containers a dev stack starts** (compose, `docker run`, from a devcontainer with the
+`docker-outside-of-docker` feature: the VM's own Docker). Tried on the M1, 2026-11-18, with
+a backend container behind Vite and Postgres:
+- **From the devcontainer, reach a container at `localhost:<its published port>`.** A
+  single-container devcontainer runs on the VM's network (`--network=host`), so Docker
+  cannot join it to a compose network (`container sharing network namespace ... cannot be
+  connected`), and a container's name does not resolve there: give a dev server's proxy
+  `http://localhost:8000`, not `http://backend:80`. `host.docker.internal` does not resolve
+  either: use `localhost`. Containers reach each other by name on their own network, as
+  anywhere. A published port is also forwarded to your Mac, like any server's.
+- **Keep a database's data on the VM's disk, in a named volume, not on `/workspaces`.** The
+  share is the Mac's own folder, and macOS's virtiofs does not keep the owner a VM sets: a
+  `chown` holds only until something reads the folder again (an editor, a file watcher, `git
+  status`), and the owner reverts. Postgres's `initdb` then fails, at random, on
+  "could not change permissions" or "Permission denied". A named volume (`volumes: [db:/var/lib/postgresql/data]`
+  and `volumes: {db: {}}` in compose) is on the VM's disk: it survives a `stop` and `start`,
+  and goes with the workspace's VM (`desolate rm`, Delete). The VM's own `/desolate/scratch`
+  works for a bind mount too.
+- **A container calling a host one of the domain's secrets is for must trust the domain's
+  CA.** The workspace's VM and its devcontainer do (`SSL_CERT_FILE` and the rest are set for
+  you), but a container has its own store: Python's `httpx` and `requests` use certifi's,
+  which fails with `CERTIFICATE_VERIFY_FAILED`. Give the container the VM's store, which has
+  the CA once the domain has a secret, and point it there. In compose:
+  ```yaml
+  volumes: ["/etc/ssl/certs:/desolate-certs:ro"]
+  environment:
+    SSL_CERT_FILE: /desolate-certs/ca-certificates.crt        # httpx, and so the Anthropic and OpenAI SDKs
+    REQUESTS_CA_BUNDLE: /desolate-certs/ca-certificates.crt   # requests
+    NODE_EXTRA_CA_CERTS: /desolate-certs/ca-certificates.crt  # Node
+  ```
+  (The folder, not the file: a bind of one file keeps the file as it was, and the store is
+  written again when the domain's first secret is set.) Hosts without a secret are never
+  intercepted, so a container reaches them with its own store as it is.
 - **The editor's own origin never serves a dev server**: no port is forwarded under its name
   (T2 `06` asks it at the paths web editors forward ports at). Open dev servers by their own
   address, not through the editor's Ports view.
