@@ -12,6 +12,7 @@ import type { ChildProcess } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import type { Backend, Summary } from "../host/approve-web.ts";
+import { parseEnv, planEnv, rewriteEnv } from "../shared/envfile.ts";
 
 /** `body`: text as it is sent, or an object sent as its JSON. */
 type Request = {
@@ -112,6 +113,20 @@ export const withSecrets = (): Backend => {
       },
       switch: async () => held,
       remove: async () => [],
+    },
+    // The real planner (shared/envfile.ts), and an import that keeps nothing.
+    envImport: {
+      plan: async (_domain, text) => planEnv(parseEnv(text)),
+      apply: async (_domain, text) => {
+        const lines = parseEnv(text);
+        const rows = planEnv(lines);
+        const secrets = rows.filter((r) => r.kind === "secret");
+        return {
+          rows,
+          env: rewriteEnv(lines, Object.fromEntries(secrets.map((r) => [r.key, r.name!]))),
+          secrets: held,
+        };
+      },
     },
   };
 };

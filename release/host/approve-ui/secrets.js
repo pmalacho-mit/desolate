@@ -5,6 +5,7 @@
 const $ = (id) => document.getElementById(id);
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (cls) node.className = cls; return node; };
 const form = $("form");
+const importCard = $("import");
 const select = $("domain");
 const asked = new URLSearchParams(location.search);
 let domain = asked.get("domain") || "";
@@ -60,6 +61,7 @@ const load = async () => {
     select.replaceChildren(el("option", "choose a domain"), ...body.domains.map((d) => { const o = el("option", d); o.value = d; o.selected = d === domain; return o; }));
     select.firstChild.value = "";
     form.hidden = !domain;
+    importCard.hidden = !domain;
     show(body.secrets);
     say("");
   } catch (error) { say(`not read: ${error.message}`); }
@@ -80,3 +82,77 @@ form.addEventListener("submit", (event) => {
 });
 $("clear").addEventListener("click", () => { form.reset(); $("form-title").textContent = "Add a secret"; });
 load();
+
+// ---- Import a .env: plan it (the Mac judges each entry and sends back keys, hosts and why,
+// never a value), change what is wrong, import, and take the .env with names.
+let planned = null; // { text, rows }
+const KINDS = [["secret", "secret"], ["value", "value"], ["local", "stays (the app's)"]];
+const showPlan = (rows) => {
+  const out = $("plan-out");
+  // One row per key, in a grid: the key, what it becomes, and (for a secret) its hosts and
+  // headers; the reason under it. Every entry, so a misjudged one can be changed.
+  const grid = el("div", undefined, "planrows");
+  for (const title of ["Key", "Becomes", "Hosts it may go to", "Only in headers"]) grid.append(el("div", title, "head"));
+  const reads = [];
+  for (const row of rows) {
+    const key = el("div", row.key, `key mono${row.kind === "ask" ? " ask" : ""}`);
+    const kind = el("select");
+    for (const [value, label] of KINDS) { const o = el("option", label); o.value = value; o.selected = value === (row.kind === "ask" ? "value" : row.kind); kind.append(o); }
+    kind.setAttribute("aria-label", `what ${row.key} becomes`);
+    const hosts = el("input"); hosts.value = (row.hosts || []).join(", "); hosts.className = "mono"; hosts.placeholder = "api.example.com"; hosts.setAttribute("aria-label", `where ${row.key} may go`);
+    const headers = el("input"); headers.value = (row.headers || []).join(", "); headers.className = "mono"; headers.placeholder = "anywhere"; headers.setAttribute("aria-label", `the headers ${row.key} may go in`);
+    const sync = () => { const secret = kind.value === "secret"; hosts.classList.toggle("unused", !secret); headers.classList.toggle("unused", !secret); hosts.disabled = headers.disabled = !secret; };
+    kind.addEventListener("change", sync); sync();
+    const why = el("div", undefined, "why");
+    why.append(el("span", row.kind === "ask" ? `${row.why}: left a value unless you make it a secret and name its hosts` : row.why));
+    if (row.name) why.append(el("span", `  ${row.key}=${row.name} in the workspace`, "mono"));
+    for (const w of row.warnings) why.append(el("div", w, "warn"));
+    grid.append(key, kind, hosts, headers, why);
+    reads.push(() => ({ key: row.key, kind: kind.value, hosts: csv(hosts.value), headers: csv(headers.value) }));
+  }
+  const go = el("button", "Import", "approve");
+  go.type = "button";
+  go.id = "import-go";
+  go.onclick = async () => {
+    const choices = reads.map((read) => read());
+    try {
+      go.disabled = true;
+      const done = await post("/secrets/import/apply", { text: planned.text, choices });
+      show(done.secrets);
+      $("env-new").value = done.env;
+      $("env-out").hidden = false;
+      const made = done.rows.filter((r) => r.kind === "secret").length;
+      say(`${made} secret${made === 1 ? "" : "s"} held in the root for ${domain}. The workspace's .env is below.`);
+      $("env-out").scrollIntoView({ block: "nearest" });
+    } catch (error) { say(`not imported: ${error.message}`); } finally { go.disabled = false; }
+  };
+  const counts = (kind) => rows.filter((r) => r.kind === kind).length;
+  out.replaceChildren(el("p", `${counts("secret")} would become secrets, ${counts("local")} stay values the app uses itself, ${counts("ask")} could not be told${counts("ask") ? " (marked ?)" : ""}, ${counts("value")} are not secrets.`, "hint"), grid, go);
+};
+$("plan").addEventListener("click", async () => {
+  const text = $("env").value;
+  try {
+    const answer = await post("/secrets/import/plan", { text });
+    planned = { text, rows: answer.rows };
+    $("env-out").hidden = true;
+    showPlan(answer.rows);
+    $("plan-said").textContent = "";
+  } catch (error) { $("plan-said").textContent = `not planned: ${error.message}`; }
+});
+$("env-file").addEventListener("change", async () => {
+  const file = $("env-file").files[0];
+  if (!file) return;
+  if (file.size > 65536) { $("plan-said").textContent = "that file is over 64 KiB: not a .env"; return; }
+  $("env").value = await file.text();
+  $("plan").click();
+});
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("env-new").value); say("Copied."); } catch { $("env-new").select(); say("Select-all, then copy."); }
+});
+$("download").addEventListener("click", () => {
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([$("env-new").value], { type: "text/plain" }));
+  link.download = ".env";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});

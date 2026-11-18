@@ -518,6 +518,74 @@ describe("T2 phase 4: a domain's secrets", () => {
     );
   });
 
+  it("a .env imported: its API keys become secrets, what the app uses itself stays, its .env holds names, and no value is ever printed", () => {
+    stack.step("import a .env");
+    const file = path.join(stack.work, "project.env");
+    const upstreamValue = "imported-value-7c1e5a";
+    const openai = `sk-proj-${"q".repeat(32)}`;
+    // OPENAI_API_KEY2 beside OPENAI_API_KEY: names where one contains the other, which the
+    // root refuses (the owner's .env had them): the import keeps them apart.
+    const env = (a: string, b: string, c: string) =>
+      `# the project's keys\nUPSTREAM_TOKEN=${a}\nOPENAI_API_KEY="${b}"\nOPENAI_API_KEY2=${c}\nJWT_SECRET_KEY=dev-only-jwt\nPORT=3000\n`;
+    const openai2 = `sk-proj-${"r".repeat(32)}`;
+    fs.writeFileSync(file, env(upstreamValue, openai, openai2));
+    // The plan, first: nothing set.
+    const dry = stack.desolate("domain", "dev", "secret", "import", file, "--dry-run");
+    assert.equal(dry.code, 0, dry.stderr);
+    assert.match(
+      dry.stdout,
+      /^ {2}secret {2}OPENAI_API_KEY -> OPENAI-API-KEY-1 {2}to api\.openai\.com \(in authorization only\): an OpenAI key/m,
+    );
+    assert.match(dry.stdout, /^ {2}stays {3}JWT_SECRET_KEY: this app signs with it/m);
+    assert.match(
+      dry.stdout,
+      /^ {2}value\? {2}UPSTREAM_TOKEN: looks like a secret, but where it goes is not known/m,
+    );
+    assert.ok(
+      !stack.quiet("domain", "dev", "secret", "list").stdout.includes("UPSTREAM-TOKEN"),
+      "a dry run sets nothing",
+    );
+    // The import, with where the unknown one goes; the new .env alone on stdout.
+    const imported = stack.quiet(
+      "domain",
+      "dev",
+      "secret",
+      "import",
+      file,
+      "--print-env",
+      "--choose",
+      "UPSTREAM_TOKEN=secret:api.example.test@authorization",
+    );
+    assert.equal(imported.code, 0, imported.stderr);
+    assert.equal(imported.stdout, env("UPSTREAM-TOKEN", "OPENAI-API-KEY-1", "OPENAI-API-KEY2"));
+    assert.match(imported.stderr, /: 3 secrets held in the root/);
+    for (const value of [upstreamValue, openai, openai2])
+      assert.ok(!(imported.stdout + imported.stderr).includes(value), "no value is printed");
+    // It is a secret like any other: the name goes out, the value arrives.
+    const sent = curl(
+      "dev/w1",
+      "--cacert /workspaces/upstream.crt https://api.example.test/imported -H 'Authorization: Bearer UPSTREAM-TOKEN'",
+    );
+    assert.equal(sent.stdout.trim(), "upstream https host=api.example.test path=/imported");
+    assert.equal(last().authorization, `Bearer ${upstreamValue}`);
+    // What the person chose is remembered for the domain: the next import asks nothing.
+    const again = stack.desolate("domain", "dev", "secret", "import", file, "--dry-run");
+    assert.match(
+      again.stdout,
+      /^ {2}secret {2}UPSTREAM_TOKEN -> UPSTREAM-TOKEN {2}to api\.example\.test \(in authorization only\): as you chose before$/m,
+    );
+    // --in-place: the file itself, names in place of values.
+    const copy = path.join(stack.work, "project-copy.env");
+    fs.writeFileSync(copy, env(upstreamValue, openai, openai2));
+    assert.equal(stack.quiet("domain", "dev", "secret", "import", copy, "--in-place").code, 0);
+    assert.equal(
+      fs.readFileSync(copy, "utf8"),
+      env("UPSTREAM-TOKEN", "OPENAI-API-KEY-1", "OPENAI-API-KEY2"),
+    );
+    for (const name of ["UPSTREAM-TOKEN", "OPENAI-API-KEY-1", "OPENAI-API-KEY2"])
+      assert.equal(stack.quiet("domain", "dev", "secret", "rm", name).code, 0);
+  });
+
   it("fail closed: with the secrets proxy down its hosts are refused, not passed around it; a removed secret is a name again", async () => {
     stack.step("the secrets proxy stops; a secret is removed");
     const count = upstream().length;
