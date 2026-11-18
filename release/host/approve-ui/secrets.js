@@ -86,37 +86,35 @@ load();
 // ---- Import a .env: plan it (the Mac judges each entry and sends back keys, hosts and why,
 // never a value), change what is wrong, import, and take the .env with names.
 let planned = null; // { text, rows }
-const KINDS = [["secret", "secret"], ["value", "value"], ["local", "stays (the app uses it itself)"]];
+const KINDS = [["secret", "secret"], ["value", "value"], ["local", "stays (the app's)"]];
 const showPlan = (rows) => {
   const out = $("plan-out");
-  const table = el("table", undefined, "plan");
-  const head = el("tr");
-  for (const title of ["Key", "Becomes", "Hosts it may go to", "Only in headers", "Why"]) head.append(el("th", title));
-  table.append(head);
+  // One row per key, in a grid: the key, what it becomes, and (for a secret) its hosts and
+  // headers; the reason under it. Every entry, so a misjudged one can be changed.
+  const grid = el("div", undefined, "planrows");
+  for (const title of ["Key", "Becomes", "Hosts it may go to", "Only in headers"]) grid.append(el("div", title, "head"));
+  const reads = [];
   for (const row of rows) {
-    const tr = el("tr", undefined, row.kind === "ask" ? "ask" : "");
-    tr.dataset.key = row.key;
+    const key = el("div", row.key, `key mono${row.kind === "ask" ? " ask" : ""}`);
     const kind = el("select");
     for (const [value, label] of KINDS) { const o = el("option", label); o.value = value; o.selected = value === (row.kind === "ask" ? "value" : row.kind); kind.append(o); }
     kind.setAttribute("aria-label", `what ${row.key} becomes`);
     const hosts = el("input"); hosts.value = (row.hosts || []).join(", "); hosts.className = "mono"; hosts.placeholder = "api.example.com"; hosts.setAttribute("aria-label", `where ${row.key} may go`);
     const headers = el("input"); headers.value = (row.headers || []).join(", "); headers.className = "mono"; headers.placeholder = "anywhere"; headers.setAttribute("aria-label", `the headers ${row.key} may go in`);
-    const sync = () => { hosts.disabled = headers.disabled = kind.value !== "secret"; };
+    const sync = () => { const secret = kind.value === "secret"; hosts.classList.toggle("unused", !secret); headers.classList.toggle("unused", !secret); hosts.disabled = headers.disabled = !secret; };
     kind.addEventListener("change", sync); sync();
-    const why = el("td");
-    why.append(el("div", row.kind === "ask" ? `${row.why}: left a value unless you name its hosts` : row.why, "why"));
-    if (row.name) why.append(el("div", `in the workspace: ${row.key}=${row.name}`, "mono why"));
+    const why = el("div", undefined, "why");
+    why.append(el("span", row.kind === "ask" ? `${row.why}: left a value unless you make it a secret and name its hosts` : row.why));
+    if (row.name) why.append(el("span", `  ${row.key}=${row.name} in the workspace`, "mono"));
     for (const w of row.warnings) why.append(el("div", w, "warn"));
-    const cell = (node, cls) => { const td = el("td", undefined, cls); td.append(node); return td; };
-    tr.append(el("td", row.key, "key mono"), cell(kind), cell(hosts), cell(headers), why);
-    tr.read = () => ({ key: row.key, kind: kind.value, hosts: csv(hosts.value), headers: csv(headers.value) });
-    table.append(tr);
+    grid.append(key, kind, hosts, headers, why);
+    reads.push(() => ({ key: row.key, kind: kind.value, hosts: csv(hosts.value), headers: csv(headers.value) }));
   }
   const go = el("button", "Import", "approve");
   go.type = "button";
   go.id = "import-go";
   go.onclick = async () => {
-    const choices = [...table.querySelectorAll("tr[data-key]")].map((tr) => tr.read());
+    const choices = reads.map((read) => read());
     try {
       go.disabled = true;
       const done = await post("/secrets/import/apply", { text: planned.text, choices });
@@ -129,7 +127,7 @@ const showPlan = (rows) => {
     } catch (error) { say(`not imported: ${error.message}`); } finally { go.disabled = false; }
   };
   const counts = (kind) => rows.filter((r) => r.kind === kind).length;
-  out.replaceChildren(el("p", `${counts("secret")} would become secrets, ${counts("local")} stay values the app uses itself, ${counts("ask")} could not be told${counts("ask") ? " (marked ?)" : ""}, ${counts("value")} are not secrets.`, "hint"), table, go);
+  out.replaceChildren(el("p", `${counts("secret")} would become secrets, ${counts("local")} stay values the app uses itself, ${counts("ask")} could not be told${counts("ask") ? " (marked ?)" : ""}, ${counts("value")} are not secrets.`, "hint"), grid, go);
 };
 $("plan").addEventListener("click", async () => {
   const text = $("env").value;
