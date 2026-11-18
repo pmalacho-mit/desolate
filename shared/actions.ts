@@ -19,6 +19,25 @@ export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
     isSlug(a.domain) && isSlug(a.workspace)
       ? ["rm", `${a.domain}/${a.workspace}`, "--if-clean", "--if-pushed"]
       : null,
+  // The dashboard's Resize: a stopped workspace's size, whole (the host refuses a running one,
+  // and a smaller disk). Memory in MiB and disk in GiB, as the page sends them.
+  "workspace.resize": (a) =>
+    isSlug(a.domain) &&
+    isSlug(a.workspace) &&
+    /^[1-9]\d?$/.test(a.cpus ?? "") &&
+    /^[1-9]\d{3,5}m$/.test(a.memory ?? "") &&
+    /^[1-9]\d{1,3}g$/.test(a.disk ?? "")
+      ? [
+          "resize",
+          `${a.domain}/${a.workspace}`,
+          "--cpus",
+          a.cpus!,
+          "--memory",
+          a.memory!,
+          "--disk",
+          a.disk!,
+        ]
+      : null,
   "workspace.up": (a) =>
     isSlug(a.domain) && (a.workspace === undefined || a.workspace === "" || isSlug(a.workspace))
       ? ["up", a.domain, ...(a.workspace ? ["--name", a.workspace] : [])]
@@ -152,6 +171,13 @@ declare namespace hostArgv {
         args: [kind: "workspace.remove", args: { domain: "dev"; workspace: "w1" }],
         expected: ["rm", "dev/w1", "--if-clean", "--if-pushed"],
       ],
+      [
+        args: [
+          kind: "workspace.resize",
+          args: { domain: "dev"; workspace: "w1"; cpus: "4"; memory: "16384m"; disk: "60g" },
+        ],
+        expected: ["resize", "dev/w1", "--cpus", "4", "--memory", "16384m", "--disk", "60g"],
+      ],
     ]
   >;
   /** nothing else: a kind not on the list (an object's own keys included), a name that is not
@@ -180,6 +206,24 @@ declare namespace hostArgv {
       [args: [kind: "workspace.start", args: { domain: ["dev"]; workspace: "w1" }], expected: null],
       [args: [kind: "workspace.start", args: null], expected: null],
       [args: [kind: 7, args: {}], expected: null],
+      [
+        args: [
+          kind: "workspace.resize",
+          args: { domain: "dev"; workspace: "w1"; cpus: "4"; memory: "16g"; disk: "60g" },
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          kind: "workspace.resize",
+          args: { domain: "dev"; workspace: "w1"; cpus: "--help"; memory: "16384m"; disk: "60g" },
+        ],
+        expected: null,
+      ],
+      [
+        args: [kind: "workspace.resize", args: { domain: "dev"; workspace: "w1"; cpus: "4" }],
+        expected: null,
+      ],
     ]
   >;
   /** a title is a label: one that looks like an option or holds a control is left out, and

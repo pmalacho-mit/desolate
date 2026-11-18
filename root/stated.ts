@@ -244,6 +244,7 @@ const DOING: Record<string, string> = {
   "workspace.start": "starting",
   "workspace.stop": "stopping",
   "workspace.remove": "deleting",
+  "workspace.resize": "resizing",
 };
 /** The dashboard's action still at this workspace, if any: a start, stop or delete names it;
  *  an up names it, or (without a name) made it, so it is the domain's workspace planned since. */
@@ -467,6 +468,10 @@ declare namespace makingOf {
 // counted in the background, since it runs git, and again when a HEAD moves or every two
 // minutes (the remote moves too).
 const pushedOf = new Map<string, { heads: string; at: number; result: Unpushed[] }>();
+// What each workspace's project asks for (its devcontainer.json in the mirror: domains.ts
+// projectSizeOf), for the dashboard's Resize. Read in the same loop: one rev-parse when the
+// spec has not changed.
+const asksOf = new Map<string, domains.ProjectAsk | null>();
 let checkingPushed = false;
 const checkPushed = async () => {
   if (checkingPushed) return;
@@ -478,6 +483,13 @@ const checkPushed = async () => {
         if (w.workspace === TEMPLATE_BUILD) continue;
         const key = `${d.slug}/${w.workspace}`;
         seen.add(key);
+        try {
+          asksOf.set(key, await domains.projectSizeOf(d.slug, w.env));
+        } catch (error) {
+          console.error(
+            `stated: what ${key}'s project asks for could not be read: ${String(error)}`,
+          );
+        }
         const reposDir = path.join(domainPath(d.slug), "repos");
         const heads = w.checkouts.map((c) => readHead(reposDir, c)?.commit ?? "").join(",");
         const known = pushedOf.get(key);
@@ -489,6 +501,7 @@ const checkPushed = async () => {
         }
       }
     for (const key of pushedOf.keys()) if (!seen.has(key)) pushedOf.delete(key);
+    for (const key of asksOf.keys()) if (!seen.has(key)) asksOf.delete(key);
   } finally {
     checkingPushed = false;
   }
@@ -536,6 +549,8 @@ const snapshot = () => {
           making: makingOf(w, d.slug, actions),
           // Its commits against the remote, as last counted (checkPushed): for Delete.
           pushed: pushedOf.get(`${d.slug}/${w.workspace}`)?.result ?? null,
+          // What its project asks for, as data for the Resize form (shown as text).
+          asks: asksOf.get(`${d.slug}/${w.workspace}`) ?? null,
           size: w.size ?? null,
           // Who asked for it (null: the person), and whether that one is gone before it.
           startedBy: w.startedBy?.workspace ?? null,

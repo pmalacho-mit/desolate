@@ -523,6 +523,71 @@ const statusOf = (w, host, running) => {
   return [host.status || w.state, host.status ? "red" : "gray", "what its VM says it is"];
 };
 
+// ---- a workspace's size: what it has, what its project asks for, and Resize (stopped only)
+/** "16 GiB memory, 4 CPUs": the parts a size sets. */
+const sizeParts = (s) => [
+  s.cpus !== undefined ? `${s.cpus} CPU${s.cpus === 1 ? "" : "s"}` : null,
+  s.memoryMiB !== undefined ? `${s.memoryMiB % 1024 === 0 ? s.memoryMiB / 1024 : (s.memoryMiB / 1024).toFixed(1)} GiB memory` : null,
+  s.diskGiB !== undefined ? `${s.diskGiB} GiB disk` : null,
+].filter(Boolean).join(", ");
+/** The parts the project asks for that this workspace does not have. */
+const askedMore = (w) => {
+  const ask = (w.asks && w.asks.size) || {};
+  const now = w.size || {};
+  const more = {};
+  for (const key of ["cpus", "memoryMiB", "diskGiB"]) if (ask[key] !== undefined && ask[key] !== now[key]) more[key] = ask[key];
+  return more;
+};
+// The open Resize forms, by "<domain>/<workspace>": kept across renders, as typed.
+const resizing = new Map();
+const openResize = (d, w) => {
+  const key = `${d.slug}/${w.workspace}`;
+  const now = w.size || { cpus: 2, memoryMiB: 4096, diskGiB: 30 };
+  const ask = (w.asks && w.asks.size) || {};
+  const number = (name, value, min, max, label) => el("label", { class: "field" }, label,
+    el("input", { type: "number", name, value: String(value), min: String(min), max: String(max), step: "1", required: true, "aria-label": label }));
+  const cpus = number("cpus", now.cpus, 1, 64, "CPUs");
+  const memory = number("memory", Math.round(now.memoryMiB / 1024), 1, 256, "Memory (GiB)");
+  const disk = number("disk", now.diskGiB, now.diskGiB, 2048, `Disk (GiB, ${now.diskGiB} or more: a disk only grows)`);
+  const input = (label) => label.querySelector("input");
+  const useAsked = Object.keys(askedMore(w)).length
+    ? el("button", { class: "quiet small", type: "button", "data-resize-asked": "", onclick: () => {
+        if (ask.cpus !== undefined) input(cpus).value = String(ask.cpus);
+        if (ask.memoryMiB !== undefined) input(memory).value = String(Math.ceil(ask.memoryMiB / 1024));
+        if (ask.diskGiB !== undefined) input(disk).value = String(Math.max(ask.diskGiB, now.diskGiB));
+      } }, `Use what the project asks (${sizeParts(ask)})`)
+    : null;
+  const element = el("form", { class: "resize", "data-resize-form": key, onsubmit: (event) => {
+    event.preventDefault();
+    act(`ws:${key}`, "workspace.resize", { domain: d.slug, workspace: w.workspace, cpus: String(Number(input(cpus).value)), memory: `${Number(input(memory).value) * 1024}m`, disk: `${Number(input(disk).value)}g` });
+    resizing.delete(key);
+    render();
+  } },
+    cpus, memory, disk,
+    el("div", { class: "buttons" }, useAsked,
+      el("button", { type: "submit" }, "Resize"),
+      el("button", { class: "quiet", type: "button", onclick: () => { resizing.delete(key); render(); } }, "Cancel")),
+    el("div", { class: "sub" }, "It takes effect when the workspace starts again. Its files, containers and volumes stay."));
+  resizing.set(key, element);
+  render();
+};
+/** The size line: what it has, what its project asks for (if that differs), and Resize. */
+const sizeLine = (d, w, running, making) => {
+  const key = `${d.slug}/${w.workspace}`;
+  if (running && resizing.has(key)) resizing.delete(key);
+  const more = askedMore(w);
+  const asks = w.asks;
+  const askTitle = asks ? `${asks.repo}'s ${asks.path} asks for ${sizeParts(asks.size) || "nothing"}${asks.problems.length ? `; not used: ${asks.problems.join("; ")}` : ""}` : "";
+  return [
+    el("div", { class: "line", "data-size": key },
+      w.size ? sizeParts(w.size) : "size: the defaults of its day",
+      Object.keys(more).length ? [" ", pill(`project asks ${sizeParts(more)}`, "orange", askTitle, { "data-size-asked": sizeParts(more) })] : asks && asks.problems.length ? [" ", pill("project's size not read", "orange", askTitle)] : null,
+      making ? null : [" ", el("span", { class: "tip", title: running ? `Stop ${key} first: a VM's size changes only while it is stopped.` : `Change ${key}'s CPUs, memory or disk. It takes effect when it starts again.` },
+        el("button", { class: "quiet small", type: "button", disabled: running || busy.has(`ws:${key}`) || resizing.has(key), "data-resize": key, onclick: () => openResize(d, w) }, "Resize..."))]),
+    resizing.get(key) || null,
+  ];
+};
+
 const workspaceRow = (d, w) => {
   const host = w.host || {};
   const running = host.status === "running";
@@ -555,7 +620,7 @@ const workspaceRow = (d, w) => {
       says ? el("div", { class: "line", "data-says": "" }, pill(says.color, says.color === "gray" ? "" : says.color, "what the workspace said about itself (desolate status set)"), " ", says.message) : null,
       allLanded(d, w) ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. ", running ? "Stop frees its memory; " : "", "Delete removes it.") : null,
       host.devcontainer ? el("div", { class: "line" }, pill(/^FAILED/.test(host.devcontainer) ? "devcontainer failed" : "devcontainer", /^FAILED/.test(host.devcontainer) ? "red" : "", "the project's devcontainer, in its VM"), " ", host.devcontainer.replace(/^up \(/, "(")) : null,
-      w.size ? el("div", { class: "line" }, `${w.size.cpus} CPUs, ${Math.round(w.size.memoryMiB / 1024)} GiB memory, ${w.size.diskGiB} GiB disk`) : null,
+      sizeLine(d, w, running, making),
       (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? " " : "", el("a", { href: p.url, target: "_blank", rel: "noopener", class: "pill accent", title: `its server on port ${p.port}, at its own name` }, `:${p.port}`)])) : null,
       // A port this Mac holds (another user's program, often, on a shared Mac): the
       // workspace's server on it is not forwarded, and its address reaches that program.
