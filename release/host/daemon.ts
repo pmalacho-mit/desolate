@@ -391,6 +391,16 @@ declare namespace reviewerSummary {
 const approvalBackend = (): ApprovalBackend => {
   return {
     secrets: secretOps,
+    envImport: {
+      plan: async (domain, text) => {
+        const { decide } = await import("./env-import.ts");
+        return decide(domain, text).rows;
+      },
+      apply: async (domain, text, choices) => {
+        const { importEnv } = await import("./env-import.ts");
+        return importEnv(secretOps, domain, text, choices);
+      },
+    },
     pending: async () =>
       (
         await rootctl<{ message: string; at: string }[]>(

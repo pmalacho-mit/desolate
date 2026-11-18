@@ -227,6 +227,11 @@ desolate domain you--app secret set CLAUDE-OAUTH --hosts api.anthropic.com --hea
 Mac's, like the approval page. The value goes from it to the root and is never shown on a page
 again; `desolate domain you--app secret show CLAUDE-OAUTH` shows it in your terminal.)
 
+A project with a `.env` full of keys: `desolate domain you--app secret import path/to/.env
+--print-env > workspace.env` makes its API keys secrets and writes the `.env` the workspace
+uses, with their names (or **Import a .env** on the secrets page). The reference says what
+can be a secret and what cannot.
+
 then, for each task:
 
 ```bash

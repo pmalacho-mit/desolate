@@ -71,3 +71,16 @@ input, select { font: inherit; padding: 7px 9px; border-radius: 6px; border: 1px
 button.danger { color: var(--danger); }
 .error { color: var(--danger); }
 #list { margin-top: 12px; }
+
+/* the secrets page's Import a .env */
+textarea.env { width: 100%; box-sizing: border-box; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); resize: vertical; }
+label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line); cursor: pointer; }
+.hide { display: none; }
+table.plan { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+table.plan th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 6px; }
+table.plan td { border-top: 1px solid var(--line); padding: 6px; vertical-align: top; }
+table.plan td.key { font-weight: 600; overflow-wrap: anywhere; }
+table.plan input, table.plan select { width: 100%; box-sizing: border-box; font-size: 13px; padding: 4px 6px; }
+table.plan tr.ask td.key::after { content: " ?"; color: var(--danger); }
+table.plan .why { color: var(--muted); }
+table.plan .warn { color: var(--danger); }

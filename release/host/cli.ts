@@ -67,6 +67,8 @@ Your repositories and domains:
   desolate domain <domain> net recommend                         what it reached that is not on its list
   desolate domain <domain> secret set <NAME> --hosts <h>[,...] [--headers <h>[,...]] | copy <NAME> --from <d> | list | off | on [--ttl 30m] | rm | show
                                                                  a secret: the value on stdin, the name in workspaces
+  desolate domain <domain> secret import <.env> [--dry-run] [--print-env | --in-place] [--choose KEY=secret:<host>[@<header>] | KEY=value]
+                                                                 a project's .env: its API keys become secrets, and the .env their names
   desolate rm <domain>                                           the domain and its clones; not the root's
 
 Programs kept running in a workspace (a dev server, a watcher, a coding agent):
@@ -276,6 +278,10 @@ const main = async (argv: string[]): Promise<number> => {
       ttl: { type: "string" },
       secret: { type: "string" },
       from: { type: "string" },
+      "dry-run": { type: "boolean" },
+      "print-env": { type: "boolean" },
+      "in-place": { type: "boolean" },
+      choose: { type: "string", multiple: true },
     });
     const { domainCommand } = await import("./domains.ts");
     await domainCommand(positionals, values, out);
