@@ -32,22 +32,33 @@ fi
 [ -L /etc/resolv.conf ] && rm -f /etc/resolv.conf
 printf 'nameserver 127.0.0.1\n' >/etc/resolv.conf
 
+# Ports 80 and 443 go to the relay unless they are for this VM itself: its loopback, and the
+# private ranges its docker networks take their addresses from. A container's published port
+# is docker-proxy connecting to the container's address, port 80 often; a compose service
+# reaches another by its address. Sent to the relay, those were refused as "an address alone"
+# (2026-11-18, docs/incidents.md). Nothing the relay could carry is lost: every name resolves
+# to the placeholder, which is not private, and the proxy carries by name only.
 nft -f - <<N
 table ip desolate
 delete table ip desolate
 table ip desolate {
+  set here {
+    type ipv4_addr; flags interval;
+    elements = { 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 }
+  }
   chain output {
     type nat hook output priority -100;
-    ip daddr 127.0.0.0/8 return
+    ip daddr @here return
     tcp dport 443 redirect to :15443
     tcp dport 80 redirect to :15080
   }
   chain prerouting {
     type nat hook prerouting priority -100;
-    tcp dport 443 redirect to :15443
-    tcp dport 80 redirect to :15080
     udp dport 53 redirect to :53
     tcp dport 53 redirect to :53
+    ip daddr @here return
+    tcp dport 443 redirect to :15443
+    tcp dport 80 redirect to :15080
   }
 }
 N
