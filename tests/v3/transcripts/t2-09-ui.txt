@@ -49,6 +49,8 @@ doctor: all checks passed.
 
 ## stop and start
 
+## resize from the dashboard
+
 ## review and push
 
 $ desolate approve    # at a terminal; the person types: fix

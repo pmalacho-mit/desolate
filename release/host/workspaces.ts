@@ -18,15 +18,17 @@ import { outlived } from "../shared/plan.ts";
 import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
 import {
+  capToMac,
   checkSize,
   defaultsFor,
   describe as describeSize,
+  describeParts,
   LIMITS,
   merge,
   parseDisk,
   parseMemory,
 } from "../shared/size.ts";
-import type { Size } from "../shared/size.ts";
+import type { ProjectSize, Size } from "../shared/size.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";
@@ -540,20 +542,35 @@ export const up = async (
   // The domain's template (section 4.7, C3), before this workspace takes its checkouts:
   // made once per environment, then cloned. Not on the fake backend, whose clone carries no
   // docker images. DESOLATE_TEMPLATES=0 makes every workspace from the base.
+  // What the project asks for (its devcontainer.json, as the remote published it): after the
+  // person's own choices, before the stack's defaults, and kept within this Mac.
+  const asked = await rootctl<ProjectAsk | null>(
+    "domain.projectSize",
+    { slug: domain, preferred: envRepo },
+    { quiet: true },
+  ).catch(() => null);
+  const project = asked
+    ? capToMac(asked.size, os.cpus().length, Math.floor(os.totalmem() / 1024 / 1024))
+    : null;
+  const domainSize = (view as DomainView & { size?: Partial<Size> }).size;
   let template: string | null = null;
   if (b.kind !== "fake" && process.env.DESOLATE_TEMPLATES !== "0") {
     const { ensure } = await import("./templates.ts");
     const say = (line: string) =>
       json ? process.stderr.write(`${forTerminal(line)}\n`) : out(line);
-    template = await ensure(domain, view.repos, { specOf, startServices }, say, envRepo);
+    template = await ensure(
+      domain,
+      view.repos,
+      { specOf, startServices },
+      say,
+      envRepo,
+      merge(domainSize, project?.size, stackDefaults()),
+    );
     if (template) phase("template");
   }
-  // Its size: the flags, then the domain's, then the stack's defaults (each part on its own).
-  const size = merge(
-    options.size,
-    (view as DomainView & { size?: Partial<Size> }).size,
-    stackDefaults(),
-  );
+  // Its size: the flags, then the domain's, then the project's, then the stack's defaults
+  // (each part on its own).
+  const size = merge(options.size, domainSize, project?.size, stackDefaults());
   // Who commits in it: your own git identity, as on this Mac (as the git VM takes it).
   const mine = (key: string) =>
     spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
@@ -656,6 +673,7 @@ export const up = async (
       `  ${c.repo}  ${c.kind === "main" ? `main checkout (${c.branch})` : `worktree ${c.branch} from ${c.base}`}  ${c.path}`,
     );
   out(`  size         ${describeSize(plan.size ?? size)}`);
+  for (const line of sizeNotes(asked, project?.capped ?? [], options.size, domainSize)) out(line);
   if (!author.name || !author.email)
     out(
       `  commits as   ${author.name || `${domain}/${plan.workspace}`} <${author.email || `${plan.workspace}@${domain}.desolate.invalid`}>: this Mac's git has no ${!author.name && !author.email ? "user.name or user.email" : !author.name ? "user.name" : "user.email"} (git config --global user.name "Your Name"; git config --global user.email you@example.com, then the next up uses them)`,
@@ -891,6 +909,144 @@ declare namespace vouched {
     >,
   ];
 }
+/** What a domain's environment asks for (the root's projectSizeOf). */
+type ProjectAsk = ProjectSize & { repo: string; path: string };
+
+/** What `up` says of the project's own size, under the size line: what it asks for and where;
+ *  each part a choice of the person's decided instead (a flag, the domain's size); what this
+ *  Mac lowered; and what could not be read. Nothing, for a project that asks for nothing. */
+export const sizeNotes = (
+  asked: ProjectAsk | null,
+  capped: string[],
+  flags: Partial<Size> | undefined,
+  domain: Partial<Size> | undefined,
+): string[] => {
+  if (!asked) return [];
+  const lines: string[] = [];
+  const parts = describeParts(asked.size);
+  if (parts) lines.push(`  project asks ${parts} (${asked.repo}, ${asked.path})`);
+  for (const key of ["cpus", "memoryMiB", "diskGiB"] as const) {
+    if (asked.size[key] === undefined) continue;
+    const by =
+      flags?.[key] !== undefined
+        ? "up's flag"
+        : domain?.[key] !== undefined
+          ? "the domain's size"
+          : null;
+    const chosen = flags?.[key] ?? domain?.[key];
+    if (by && chosen !== asked.size[key])
+      lines.push(`    ${describeParts({ [key]: chosen })} instead: ${by} decides`);
+  }
+  for (const why of capped) lines.push(`    lowered: ${why}`);
+  for (const why of asked.problems) lines.push(`    not used: ${why}`);
+  return lines;
+};
+
+declare namespace sizeNotes {
+  /** a project that asks for 16 GiB, given it: one line */
+  export type Asked = Expect<
+    Invoke<
+      typeof sizeNotes,
+      [
+        asked: {
+          repo: "acme/app";
+          path: ".devcontainer/devcontainer.json";
+          size: { memoryMiB: 16384 };
+          problems: [];
+        },
+        capped: [],
+        flags: undefined,
+        domain: undefined,
+      ]
+    >,
+    "=",
+    ["  project asks 16 GiB memory (acme/app, .devcontainer/devcontainer.json)"]
+  >;
+  /** the person's choices decide, and say so; and what the Mac lowered and what was not read */
+  export type Overridden = Expect<
+    Invoke<
+      typeof sizeNotes,
+      [
+        asked: {
+          repo: "acme/app";
+          path: ".devcontainer.json";
+          size: { cpus: 8; memoryMiB: 16384 };
+          problems: ['customizations.desolate.disk: "lots" is not an amount (write it as "16g")'];
+        },
+        capped: ["8 CPUs: this Mac has 4"],
+        flags: { cpus: 2 },
+        domain: { memoryMiB: 8192 },
+      ]
+    >,
+    "=",
+    [
+      "  project asks 8 CPUs, 16 GiB memory (acme/app, .devcontainer.json)",
+      "    2 CPUs instead: up's flag decides",
+      "    8 GiB memory instead: the domain's size decides",
+      "    lowered: 8 CPUs: this Mac has 4",
+      '    not used: customizations.desolate.disk: "lots" is not an amount (write it as "16g")',
+    ]
+  >;
+  /** no spec: nothing */
+  export type NoSpec = Expect<
+    Invoke<typeof sizeNotes, [asked: null, capped: [], flags: undefined, domain: undefined]>,
+    "=",
+    []
+  >;
+}
+
+/** `desolate resize <d>/<w> [--cpus] [--memory] [--disk]`: a stopped workspace's size, changed
+ *  in its VM and in the root's record (so a VM made again for it is made this size). What is
+ *  not given is kept. A disk only grows. With no flags: its size, and what its project asks. */
+export const resize = async (target: string | undefined, given: Partial<Size>, out: Out) => {
+  const w = await find(target);
+  const name = `${w.domain}/${w.workspace}`;
+  // (A workspace made before sizes were recorded got the defaults of its day: these.)
+  const now: Size = w.size ?? stackDefaults();
+  if (Object.keys(given).length === 0) {
+    out(`${name}  ${describeSize(now)}`);
+    const asked = await rootctl<ProjectAsk | null>(
+      "domain.projectSize",
+      { slug: w.domain, preferred: w.env },
+      { quiet: true },
+    ).catch(() => null);
+    for (const line of sizeNotes(asked, [], undefined, undefined)) out(line);
+    out(
+      `change it (stopped): desolate resize ${name} [--cpus <n>] [--memory <16g>] [--disk <60g>]`,
+    );
+    return;
+  }
+  const next = merge(given, now);
+  if (next.diskGiB < now.diskGiB)
+    refuse(
+      `a workspace's disk can grow, never shrink: ${name} has ${now.diskGiB} GiB`,
+      `desolate resize ${name} --disk ${now.diskGiB}g`,
+      EXIT.usage,
+    );
+  if (next.cpus === now.cpus && next.memoryMiB === now.memoryMiB && next.diskGiB === now.diskGiB) {
+    out(`${name} is already ${describeSize(now)}`);
+    return;
+  }
+  const b = backend();
+  const status = (await b.info(w.vm)).status;
+  if (status === "running" || status === "suspended")
+    refuse(
+      `${name} is ${status}: a VM's size changes only while it is stopped`,
+      `desolate stop ${name}`,
+      EXIT.busy,
+    );
+  if (status !== "missing") await b.resize(w.vm, next);
+  await rootctl(
+    "workspace.resize",
+    { domain: w.domain, name: w.workspace, size: next },
+    { quiet: true },
+  );
+  out(
+    `resized ${name}: ${describeSize(next)}${status === "missing" ? " (its VM is made at this size when it starts)" : ""}`,
+  );
+  out(`next: desolate start ${name}`);
+};
+
 const find = async (target: string | undefined) => {
   const { domain, workspace } = splitTarget(target);
   return vouched(

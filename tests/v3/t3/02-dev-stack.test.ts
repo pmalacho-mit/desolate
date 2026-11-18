@@ -208,6 +208,44 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
       );
     });
 
+    it("T3 resize: a stopped workspace's VM gets its new CPUs, memory and disk, and keeps what is on its disk", () => {
+      stack.step("resize, in a real VM");
+      const running = stack.desolate("resize", "dev/w1", "--cpus", "2");
+      assert.notEqual(running.code, 0, "control: refused while it runs");
+      assert.match(running.stderr, /a VM's size changes only while it is stopped/);
+      assert.equal(stack.quiet("stop", "dev/w1").code, 0);
+      const resized = stack.desolate(
+        "resize",
+        "dev/w1",
+        "--cpus",
+        "2",
+        "--memory",
+        "3g",
+        "--disk",
+        "36g",
+      );
+      assert.equal(resized.code, 0, resized.stderr);
+      assert.equal(stack.quiet("start", "dev/w1").code, 0);
+      const seen = asRoot(`echo "cpus=$(nproc)"
+echo "mem_kib=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+echo "disk_gib=$(df -BG --output=size / | tail -1 | tr -dc 0-9)"
+echo "volume=$(docker volume ls -q --filter name=^devdb$)"`);
+      const got = Object.fromEntries(
+        seen.stdout
+          .split("\n")
+          .filter((line) => line.includes("="))
+          .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
+      );
+      assert.equal(got.cpus, "2", seen.stdout);
+      // MemTotal is what the kernel has after its own reservations: a little under 3 GiB.
+      assert.ok(
+        Number(got.mem_kib) > 2.6 * 1048576 && Number(got.mem_kib) <= 3 * 1048576,
+        `MemTotal ${got.mem_kib} KiB, for 3 GiB`,
+      );
+      assert.ok(Number(got.disk_gib) >= 34, `the root filesystem grew: ${got.disk_gib}G`);
+      assert.equal(got.volume, "devdb", "the named volume, on its disk, is still there");
+    });
+
     it("T3 destroy leaves nothing of this stack", () => {
       stack.step("destroy");
       const result = stack.desolate("destroy", "--all");

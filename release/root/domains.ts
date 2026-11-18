@@ -6,8 +6,9 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isSlug, parseRepo, repoId, workspaceVmName } from "../shared/names.ts";
 import { checkoutPath } from "../shared/plan.ts";
-import { checkSize } from "../shared/size.ts";
-import type { Size } from "../shared/size.ts";
+import { checkSize, projectSize } from "../shared/size.ts";
+import type { ProjectSize, Size } from "../shared/size.ts";
+import { parse as parseJsonc } from "../shared/jsonc.ts";
 import type { Checkout, WorkspacePlan } from "../shared/plan.ts";
 import { git, gitOk } from "./git.ts";
 import { clonePath, domainPath, mirrorPath, ROOT } from "./layout.ts";
@@ -1141,6 +1142,37 @@ declare namespace plan {
   >;
 }
 
+/** A workspace's size, changed (`desolate resize`, once the host has resized its stopped VM):
+ *  in its record, so a VM made again for it (`start` after its VM is gone) is made this size,
+ *  and in the copy its VM reads. */
+export const setWorkspaceSize = (slug: string, name: string, sizeArg: unknown) => {
+  const w = workspace(slug, name);
+  const given = (typeof sizeArg === "object" && sizeArg !== null ? sizeArg : {}) as Record<
+    string,
+    unknown
+  >;
+  const size: Size = {
+    cpus: Number(given.cpus),
+    memoryMiB: Number(given.memoryMiB),
+    diskGiB: Number(given.diskGiB),
+  };
+  const why =
+    (Object.values(size).some((v) => Number.isNaN(v))
+      ? "a size has CPUs, memory and disk"
+      : null) ?? checkSize(size);
+  if (why)
+    refuse(
+      why,
+      `desolate resize ${slug}/${name} --cpus <n> --memory <16g> --disk <60g>`,
+      EXIT.usage,
+    );
+  writeJson(workspaceFile(slug, name), { ...w, size });
+  const copy = path.join(domainPath(slug), "inbox", "workspaces", `${name}.json`);
+  const read = readJson<Record<string, unknown> | null>(copy, null);
+  if (read) writeJson(copy, { ...read, size });
+  return { ...w, size };
+};
+
 export const setState = (slug: string, name: string, state: Workspace["state"]) => {
   const w = workspace(slug, name);
   writeJson(workspaceFile(slug, name), { ...w, state });
@@ -1173,6 +1205,49 @@ export const remove = async (slugArg: unknown) => {
     domain: d.slug,
     kept: "the root clones keep this domain's branches for as long as they are wanted",
   };
+};
+
+/** What the domain's environment asks for (shared/size.ts projectSize): its devcontainer.json
+ *  as the remote published it, read in the MIRROR (P4), as data. Remembered by the blob's id,
+ *  so asking again costs one rev-parse. null: no repository of the domain has a spec, or its
+ *  spec is a folder with no devcontainer.json at its top. */
+export type ProjectAsk = ProjectSize & { repo: string; path: string };
+const asked = new Map<string, ProjectSize>();
+const SPEC_MAX = 256 * 1024;
+export const projectSizeOf = async (
+  slugArg: unknown,
+  preferred?: unknown,
+): Promise<ProjectAsk | null> => {
+  const env = await envKey(slugArg, preferred);
+  if (!env) return null;
+  const repo = parseRepo(env.repo)!;
+  const branch = registry().repos[env.repo]?.defaultBranch;
+  if (!branch || !isBranch(branch)) return null;
+  const file =
+    env.spec === ".devcontainer" ? ".devcontainer/devcontainer.json" : ".devcontainer.json";
+  const found = await git(mirrorPath(repo), [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `refs/heads/${branch}:${file}`,
+  ]);
+  const blob = found.stdout.trim();
+  if (found.code !== 0 || !/^[0-9a-f]{40}$/.test(blob)) return null;
+  let known = asked.get(blob);
+  if (!known) {
+    const bytes = Number((await git(mirrorPath(repo), ["cat-file", "-s", blob])).stdout.trim());
+    if (!(bytes <= SPEC_MAX)) known = { size: {}, problems: [`${file} is over 256 KiB: not read`] };
+    else {
+      const text = await git(mirrorPath(repo), ["cat-file", "blob", blob]);
+      try {
+        known = projectSize(parseJsonc(text.stdout));
+      } catch {
+        known = { size: {}, problems: [`${file} is not JSON (with comments) that desolate reads`] };
+      }
+    }
+    asked.set(blob, known);
+  }
+  return { repo: env.repo, path: file, ...known };
 };
 
 /** The domain's environment as the remote published it, for its template (section 4.7, C3):

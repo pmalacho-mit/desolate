@@ -67,6 +67,9 @@ export interface Backend {
   clone(from: string, spec: VmSpec): Promise<void>;
   start(name: string): Promise<void>;
   stop(name: string): Promise<void>;
+  /** A stopped VM's size, changed (`desolate resize`): its CPUs and memory, and its disk,
+   *  which only grows. */
+  resize(name: string, size: { cpus: number; memoryMiB: number; diskGiB: number }): Promise<void>;
   suspend(name: string): Promise<void>;
   resume(name: string): Promise<void>;
   destroy(name: string): Promise<void>;

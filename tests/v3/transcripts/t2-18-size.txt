@@ -1,0 +1,95 @@
+$ desolate bootstrap --forge stand-in:ssh://git@<forge>:22 --forge-known-hosts <work>/forge-state/known_hosts
+desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; tests only), instance <instance>
+  + home <home>
+    base image desolate/base:latest present (<id>)
+  = base image
+  + config: backend fake, forge stand-in (<forge>:22)
+    approver: a software key in <home>/approver; every push will ask on your terminal
+  + approver (terminal): the key that approves pushes, held on this host
+  + root VM dsl-<instance>-root created
+  + root VM running
+  + root services: keyring
+  + root: the approver's public key and the host daemon's token
+  dashboard    http://desolate.localhost:31591/?tkn=<token>   (and: desolate ui)
+  workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
+bootstrap: 7 step(s) done.
+  ok   home: <home>
+  ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
+  ok   docker daemon: docker <version>
+  ok   base image: desolate/base:latest <id>
+  ok   root VM running: dsl-<instance>-root
+  ok   approver: terminal; pushes are approved on this host
+  ok   root: keyring answers: 0 key(s) held
+  ok   root: the write agent's askpass socket is closed to the root's own user: only the keyring's user can answer for a signature
+  ok   root: private keys are unreadable to the root's own user: /var/lib/desolate-root/keyring is the keyring user's alone
+  ok   root: the root's own user cannot become root: sudo refuses it
+  ok   root: the programs root runs are root's: node (/usr/local/bin/node) and root's PATH
+  ok   root: each domain's proxies run as that domain's own user: none shares a group with the root's user, reaches the shares, or reaches another domain's secrets
+  ok   root: secret values are unreadable to the root's own user: /var/lib/desolate-proxies/secrets: root's, and each domain's proxies'
+  ok   root: git's settings are root's: /var/lib/desolate-root/gitconfig
+  ok   root: approver key installed: sha256 <oid>
+  ok   root: forge configured: yes
+  ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
+  ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
+  ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   root: runs this desolate's code: its share of the release is <repo>/release
+  ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
+doctor: all checks passed.
+[exit 0]
+
+## the project's size
+
+$ desolate up sized --name w1
+workspace sized/w1 is up  [NOT ISOLATED: fake backend]
+  acme/sized  main checkout (main)  /workspaces/acme/sized
+  size         <size>
+  project asks <size> (acme/sized, .devcontainer.json)
+  devcontainer FAILED: An error occurred setting up the container. (Error: Command failed: docker pull desolate.invalid/none:1) (the whole log: /home/desolate/.desolate-devcontainer/up.log in the workspace)
+  editor       http://sized-w1-editor-<hex>.localhost:31591/?tkn=<token>&folder=%2Fworkspaces%2Facme%2Fsized
+  dev servers  http://sized-w1-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor sized/w1 --open      its editor, in your browser
+      desolate exec sized/w1 -- <command>     a command in its devcontainer (bash, for a shell)
+[exit 0]
+
+## the person decides
+
+$ desolate up sized --name w2 --cpus 2
+workspace sized/w2 is up  [NOT ISOLATED: fake backend]
+  acme/sized  worktree w2 from main  /workspaces/acme/sized/.worktrees/w2
+  size         <size>
+  project asks <size> (acme/sized, .devcontainer.json)
+    2 CPUs instead: up's flag decides
+    4 GiB memory instead: the domain's size decides
+  devcontainer FAILED: An error occurred setting up the container. (Error: Command failed: docker pull desolate.invalid/none:1) (the whole log: /home/desolate/.desolate-devcontainer/up.log in the workspace)
+  editor       http://sized-w2-editor-<hex>.localhost:31591/?tkn=<token>&folder=%2Fworkspaces%2Facme%2Fsized%2F.worktrees%2Fw2
+  dev servers  http://sized-w2-<hex>.localhost:<port>   (the port it listens on inside, nothing to declare)
+the start took <duration>: asked the root <duration>, VM booted <duration>, services, checkouts, devcontainer and editor <duration>
+next: desolate editor sized/w2 --open      its editor, in your browser
+      desolate exec sized/w2 -- <command>     a command in its devcontainer (bash, for a shell)
+[exit 0]
+
+## a project that asks too much
+
+## resize
+
+$ desolate resize sized/w1
+sized/w1  <size>
+  project asks <size> (acme/sized, .devcontainer.json)
+change it (stopped): desolate resize sized/w1 [--cpus <n>] [--memory <16g>] [--disk <60g>]
+[exit 0]
+
+$ desolate resize sized/w1 --memory 6g
+desolate: sized/w1 is running: a VM's size changes only while it is stopped
+  fix: desolate stop sized/w1
+[exit 75]
+
+$ desolate resize sized/w1 --disk 30g
+desolate: a workspace's disk can grow, never shrink: sized/w1 has 40 GiB
+  fix: desolate resize sized/w1 --disk 40g
+[exit 64]
+
+$ desolate resize sized/w1 --memory 6g --disk 50g
+resized sized/w1: <size>
+next: desolate start sized/w1
+[exit 0]

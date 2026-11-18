@@ -252,6 +252,20 @@ export const fakeBackend = (): Backend => {
     async stop(name) {
       await must("docker", ["stop", "-t", "3", name]);
     },
+    async resize(name, size) {
+      // A container's limits, changed while it is stopped. (Its "disk" is the host's: nothing
+      // to grow. The size is kept in the workspace's record, as on a real VM.)
+      await must("docker", [
+        "update",
+        "--cpus",
+        String(size.cpus),
+        "--memory",
+        `${size.memoryMiB}m`,
+        "--memory-swap",
+        `${size.memoryMiB * 2}m`,
+        name,
+      ]);
+    },
     async suspend(name) {
       await must("docker", ["pause", name]);
     },

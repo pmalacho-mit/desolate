@@ -24,6 +24,8 @@ Every day: a workspace, your work in it, and its push:
                                                                  (or in the VM itself: when it has none, or --vm)
   desolate ports [<domain>/<workspace>] [--json]                 what is forwarded, at which URL; what is reserved
   desolate stop | start | rm <domain>/<workspace>
+  desolate resize <domain>/<workspace> [--cpus <n>] [--memory <16g>] [--disk <60g>]
+                                                                 a stopped workspace's size (no flags: what it has, and its project asks)
   desolate rm <domain>/<workspace> --if-clean [--if-pushed]      only if nothing in it would be lost (and its commits are on the remote)
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open] [--json]                                  the dashboard's address, for your browser
@@ -347,6 +349,20 @@ const main = async (argv: string[]): Promise<number> => {
     const { values, positionals } = flags(rest, {});
     const { list } = await import("./workspaces.ts");
     await list(out, values.json === true, positionals[0]);
+    return EXIT.ok;
+  }
+  if (verb === "resize") {
+    const { values, positionals } = flags(rest, {
+      cpus: { type: "string" },
+      memory: { type: "string" },
+      disk: { type: "string" },
+    });
+    const { resize, sizeFlags } = await import("./workspaces.ts");
+    await resize(
+      positionals[0],
+      sizeFlags(values as { cpus?: string; memory?: string; disk?: string }),
+      out,
+    );
     return EXIT.ok;
   }
   if (verb === "stop" || verb === "start" || verb === "rm") {

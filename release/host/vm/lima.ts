@@ -715,6 +715,35 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     async stop(name) {
       await limaOk(["stop", name], { timeoutMs: 600_000 });
     },
+    async resize(name, size) {
+      const m = meta(name);
+      if (!m) throw new Error(`${name} is not a VM desolate made`);
+      // Lima's own edit of a stopped VM (measured on the M1, 2026-11-18: the guest has the new
+      // memory at its next boot, and its root filesystem grows to a larger disk). A disk
+      // never shrinks: Lima refuses, and the caller refuses first.
+      const disk = Math.max(m.spec.diskGiB ?? BASE_DISK_GIB, BASE_DISK_GIB);
+      await limaOk(
+        [
+          "edit",
+          "--cpus",
+          String(size.cpus),
+          "--memory",
+          String(size.memoryMiB / 1024),
+          ...(size.diskGiB > disk ? ["--disk", String(size.diskGiB)] : []),
+          name,
+        ],
+        { timeoutMs: 120_000 },
+      );
+      writeJson(metaFile(name), {
+        ...m,
+        spec: {
+          ...m.spec,
+          cpus: size.cpus,
+          memoryMiB: size.memoryMiB,
+          diskGiB: Math.max(size.diskGiB, disk),
+        },
+      });
+    },
     async suspend() {
       throw new Error(
         `the ${kind} backend cannot suspend a VM (Lima has no suspend to disk for it); stop it instead`,
