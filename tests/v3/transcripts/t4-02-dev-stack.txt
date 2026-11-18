@@ -83,6 +83,18 @@ next: desolate editor dev/w1 --open      its editor, in your browser
 
 ## a secret, from a container
 
+## resize, in a real VM
+
+$ desolate resize dev/w1 --cpus 2
+desolate: dev/w1 is running: a VM's size changes only while it is stopped
+  fix: desolate stop dev/w1
+[exit 75]
+
+$ desolate resize dev/w1 --cpus 2 --memory 3g --disk 36g
+resized dev/w1: <size>
+next: desolate start dev/w1
+[exit 0]
+
 ## destroy
 
 $ desolate destroy --all
