@@ -394,7 +394,8 @@ const approvalBackend = (): ApprovalBackend => {
     envImport: {
       plan: async (domain, text) => {
         const { decide } = await import("./env-import.ts");
-        return decide(domain, text).rows;
+        const others = (await secretOps.list(domain)).map((s) => s.name);
+        return decide(domain, text, [], others).rows;
       },
       apply: async (domain, text, choices) => {
         const { importEnv } = await import("./env-import.ts");

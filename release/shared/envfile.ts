@@ -737,3 +737,70 @@ declare namespace rewriteEnv {
     '# keys\nexport OPENAI_API_KEY="OPENAI-API-KEY"\nPORT=3000\n'
   >;
 }
+
+/** Each secret's name kept apart from every other, and from the domain's other secrets
+ *  (`others`): the root refuses two names where one contains the other, since a request that
+ *  carries the longer carries the shorter too (OPENAI-API-KEY in OPENAI-API-KEY2: found
+ *  importing the owner's .env, 2026-11-18). The one contained gets -1, -2, ... until it is
+ *  apart. A name equal to one of `others` is that secret, replaced: an import again finds the
+ *  names the last one made. */
+export const keepApart = (rows: PlanRow[], others: string[] = []): PlanRow[] => {
+  const out = rows.map((r) => ({ ...r }));
+  const secretRows = out.filter((r) => r.kind === "secret");
+  const overlap = (a: string, b: string) => a !== b && (a.includes(b) || b.includes(a));
+  for (const row of secretRows) {
+    const base = row.name!;
+    const rest = () => [...others, ...secretRows.filter((r) => r !== row).map((r) => r.name!)];
+    // Only the contained one moves: a name that contains another keeps its own.
+    const contained = (name: string) => rest().some((o) => o !== name && o.includes(name));
+    const clashes = (name: string) => rest().some((o) => overlap(o, name));
+    if (!contained(base)) continue;
+    let n = 1;
+    while (clashes(`${base}-${n}`)) n++;
+    row.name = `${base}-${n}`;
+  }
+  return out;
+};
+
+declare namespace keepApart {
+  type Row<K extends string, N extends string> = {
+    key: K;
+    kind: "secret";
+    name: N;
+    hosts: ["api.openai.com"];
+    headers: null;
+    by: "value";
+    why: "";
+    warnings: [];
+  };
+  /** OPENAI_API_KEY2 keeps its name; OPENAI_API_KEY, inside it, becomes OPENAI-API-KEY-1 */
+  export type Inside = Expect<
+    Invoke<
+      typeof keepApart,
+      [rows: [Row<"OPENAI_API_KEY2", "OPENAI-API-KEY2">, Row<"OPENAI_API_KEY", "OPENAI-API-KEY">]]
+    >,
+    "matches",
+    [{ name: "OPENAI-API-KEY2" }, { name: "OPENAI-API-KEY-1" }]
+  >;
+  /** imported again: the same names, which replace the secrets the first import made */
+  export type Again = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [Row<"OPENAI_API_KEY2", "OPENAI-API-KEY2">, Row<"OPENAI_API_KEY", "OPENAI-API-KEY">],
+        others: ["OPENAI-API-KEY2", "OPENAI-API-KEY-1"],
+      ]
+    >,
+    "matches",
+    [{ name: "OPENAI-API-KEY2" }, { name: "OPENAI-API-KEY-1" }]
+  >;
+  /** apart from a secret the domain already has */
+  export type FromOthers = Expect<
+    Invoke<
+      typeof keepApart,
+      [rows: [Row<"API_KEY", "API-KEY-SECRET">], others: ["MYAPP-API-KEY-SECRET"]]
+    >,
+    "matches",
+    [{ name: "API-KEY-SECRET-1" }]
+  >;
+}

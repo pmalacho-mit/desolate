@@ -523,15 +523,18 @@ describe("T2 phase 4: a domain's secrets", () => {
     const file = path.join(stack.work, "project.env");
     const upstreamValue = "imported-value-7c1e5a";
     const openai = `sk-proj-${"q".repeat(32)}`;
-    const env = (a: string, b: string) =>
-      `# the project's keys\nUPSTREAM_TOKEN=${a}\nOPENAI_API_KEY="${b}"\nJWT_SECRET_KEY=dev-only-jwt\nPORT=3000\n`;
-    fs.writeFileSync(file, env(upstreamValue, openai));
+    // OPENAI_API_KEY2 beside OPENAI_API_KEY: names where one contains the other, which the
+    // root refuses (the owner's .env had them): the import keeps them apart.
+    const env = (a: string, b: string, c: string) =>
+      `# the project's keys\nUPSTREAM_TOKEN=${a}\nOPENAI_API_KEY="${b}"\nOPENAI_API_KEY2=${c}\nJWT_SECRET_KEY=dev-only-jwt\nPORT=3000\n`;
+    const openai2 = `sk-proj-${"r".repeat(32)}`;
+    fs.writeFileSync(file, env(upstreamValue, openai, openai2));
     // The plan, first: nothing set.
     const dry = stack.desolate("domain", "dev", "secret", "import", file, "--dry-run");
     assert.equal(dry.code, 0, dry.stderr);
     assert.match(
       dry.stdout,
-      /^ {2}secret {2}OPENAI_API_KEY -> OPENAI-API-KEY {2}to api\.openai\.com \(in authorization only\): an OpenAI key/m,
+      /^ {2}secret {2}OPENAI_API_KEY -> OPENAI-API-KEY-1 {2}to api\.openai\.com \(in authorization only\): an OpenAI key/m,
     );
     assert.match(dry.stdout, /^ {2}stays {3}JWT_SECRET_KEY: this app signs with it/m);
     assert.match(
@@ -554,9 +557,9 @@ describe("T2 phase 4: a domain's secrets", () => {
       "UPSTREAM_TOKEN=secret:api.example.test@authorization",
     );
     assert.equal(imported.code, 0, imported.stderr);
-    assert.equal(imported.stdout, env("UPSTREAM-TOKEN", "OPENAI-API-KEY"));
-    assert.match(imported.stderr, /: 2 secrets held in the root/);
-    for (const value of [upstreamValue, openai])
+    assert.equal(imported.stdout, env("UPSTREAM-TOKEN", "OPENAI-API-KEY-1", "OPENAI-API-KEY2"));
+    assert.match(imported.stderr, /: 3 secrets held in the root/);
+    for (const value of [upstreamValue, openai, openai2])
       assert.ok(!(imported.stdout + imported.stderr).includes(value), "no value is printed");
     // It is a secret like any other: the name goes out, the value arrives.
     const sent = curl(
@@ -573,10 +576,13 @@ describe("T2 phase 4: a domain's secrets", () => {
     );
     // --in-place: the file itself, names in place of values.
     const copy = path.join(stack.work, "project-copy.env");
-    fs.writeFileSync(copy, env(upstreamValue, openai));
+    fs.writeFileSync(copy, env(upstreamValue, openai, openai2));
     assert.equal(stack.quiet("domain", "dev", "secret", "import", copy, "--in-place").code, 0);
-    assert.equal(fs.readFileSync(copy, "utf8"), env("UPSTREAM-TOKEN", "OPENAI-API-KEY"));
-    for (const name of ["UPSTREAM-TOKEN", "OPENAI-API-KEY"])
+    assert.equal(
+      fs.readFileSync(copy, "utf8"),
+      env("UPSTREAM-TOKEN", "OPENAI-API-KEY-1", "OPENAI-API-KEY2"),
+    );
+    for (const name of ["UPSTREAM-TOKEN", "OPENAI-API-KEY-1", "OPENAI-API-KEY2"])
       assert.equal(stack.quiet("domain", "dev", "secret", "rm", name).code, 0);
   });
 

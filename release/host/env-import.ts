@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { readJson } from "../shared/json.ts";
-import { parseEnv, planEnv, rewriteEnv, secretName } from "../shared/envfile.ts";
+import { keepApart, parseEnv, planEnv, rewriteEnv, secretName } from "../shared/envfile.ts";
 import type { Decision, PlanRow } from "../shared/envfile.ts";
 import { paths } from "./paths.ts";
 import type { SecretListed, SecretOps } from "./domains.ts";
@@ -148,6 +148,7 @@ export const decide = (
   domain: string,
   text: string,
   choices: Choice[] = [],
+  others: string[] = [],
 ): { rows: PlanRow[]; decided: Record<string, Decision> } => {
   if (text.length > ENV_MAX)
     refuse(`a .env of at most 64 KiB, not ${text.length} bytes`, "split it", EXIT.usage);
@@ -186,11 +187,13 @@ export const decide = (
             warnings: row.warnings.filter((w) => !/^(only if|its value)/.test(w)),
           };
   }
-  const names = rows.filter((r) => r.kind === "secret").map((r) => r.name!);
+  // Names apart from each other and from the domain's other secrets (shared/envfile.ts).
+  const apart = keepApart(rows, others);
+  const names = apart.filter((r) => r.kind === "secret").map((r) => r.name!);
   const twice = names.find((n, i) => names.indexOf(n) !== i);
   if (twice)
     refuse(`two keys would be the secret ${twice}`, "rename one of them in the .env", EXIT.usage);
-  return { rows, decided };
+  return { rows: apart, decided };
 };
 
 declare namespace decide {
@@ -250,7 +253,8 @@ export const importEnv = async (
   choices: Choice[] = [],
 ): Promise<{ rows: PlanRow[]; env: string; secrets: SecretListed[] }> => {
   const lines = parseEnv(text);
-  const { rows, decided } = decide(domain, text, choices);
+  const others = (await ops.list(domain)).map((s) => s.name);
+  const { rows, decided } = decide(domain, text, choices, others);
   const values = new Map<string, string>();
   for (const line of lines) if (line.kind === "entry") values.set(line.key, line.value);
   let secrets: SecretListed[] | null = null;

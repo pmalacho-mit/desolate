@@ -401,7 +401,8 @@ export const domainCommand = async (
         say(
           `${name}: what importing it into the domain ${first} would do (--dry-run: nothing is set)`,
         );
-        for (const line of describePlan(decide(first, text, choices).rows)) say(line);
+        const others = (await secretOps.list(first)).map((s) => s.name);
+        for (const line of describePlan(decide(first, text, choices, others).rows)) say(line);
         return;
       }
       const done = await importEnv(secretOps, first, text, choices);
