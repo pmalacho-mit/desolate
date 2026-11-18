@@ -279,6 +279,32 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.
 
+**The editor's settings, layer by layer** (lowest first; each overrides the ones before it):
+- **VSCodium's own defaults.** In the browser its default theme is a light one, and it saves
+  as you type.
+- **Your defaults, for every workspace** (`desolate editor defaults ...`, or the
+  editor-defaults page, linked from the dashboard's header). They're kept on the Mac
+  (`~/.desolate/state/editor-defaults.json`; until you set any, `files.autoSave: off`) and
+  installed in each editor as a small extension that contributes them as defaults
+  (`configurationDefaults`). Its start installs them, and so does every change, in every
+  running workspace. The page is the Mac's own, like the secrets page, not the dashboard's:
+  a default reaches every domain's editor, and the dashboard is served by the root's
+  ordinary user, which reads what domains send.
+- **What you set in the editor** (its Settings, User). This editor keeps those in the
+  browser.
+- **The project's devcontainer**, `customizations.vscode.settings`: the editor's Machine
+  settings, as VS Code's Dev Containers does. A key the spec drops is taken out again,
+  unless you changed it since.
+- **desolate's own few**, in the same Machine settings, over the project's: no
+  workspace-trust prompts, no self-updates, no telemetry, and the terminal into the
+  devcontainer.
+- **The repository's `.vscode/settings.json`**, as in any VS Code, for the settings a
+  workspace may set. (desolate's own few are not among those.)
+
+(Measured on the M1, 2026-11-18. User settings written to the server are not read, so a
+file there cannot be the defaults' layer, and Machine settings override what you set in the
+editor, so they cannot be either.)
+
 **A workspace's size, from its project.** desolate reads one thing in a `devcontainer.json`
 itself: the size its VM is made with. `customizations.desolate` (`cpus`, `memory`, `disk`:
 `"16g"`, or a bare number of GiB) for each part it sets, then the spec's `hostRequirements`
