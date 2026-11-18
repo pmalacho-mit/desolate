@@ -118,6 +118,8 @@ cannot take is approving a push, so a script's work ends at an offer.
 - [docs/reference.md](docs/reference.md): how approval works, the git terminal, `desolate events`,
   what the root takes from a workspace, devcontainers, secrets, the macOS firewall dialog, what
   is and is not done, and where the code is.
+- [docs/home.md](docs/home.md): what is in `~/.desolate`, folder by folder, and which VM sees
+  each one where.
 - [docs/agents.md](docs/agents.md): programs kept running in a workspace and attached to (no
   tmux), coding agents among them, and Claude Code start to finish.
 - [recipes/](recipes/README.md): scripts of ordinary desolate commands for tasks you do often:

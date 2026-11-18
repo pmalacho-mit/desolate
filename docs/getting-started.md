@@ -330,6 +330,8 @@ desolate destroy                  # every VM; your clones, keys and secrets stay
 desolate destroy --all            # and ~/.desolate: mirrors, clones, the root's keys
 ```
 
+What each of these removes from `~/.desolate` is in [home.md](home.md#what-removes-what).
+
 Then, on GitHub, delete the deploy keys titled `desolate read (host ...)` and
 `desolate write (host ...)` from each repository you cloned.
 
