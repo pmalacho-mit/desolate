@@ -168,6 +168,16 @@ export const ops: Record<string, Op> = {
     );
     return {};
   },
+  async "workspace.resize"(args) {
+    return domains.setWorkspaceSize(
+      domains.slugOf(args.domain, "domain"),
+      domains.slugOf(args.name, "workspace"),
+      args.size,
+    );
+  },
+  async "domain.projectSize"(args) {
+    return domains.projectSizeOf(args.slug, args.preferred);
+  },
   async "workspace.get"(args) {
     return domains.workspace(
       domains.slugOf(args.domain, "domain"),

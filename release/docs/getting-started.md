@@ -120,17 +120,41 @@ chooses the environment: its `devcontainer.json`, if it has one.
 
 **Its size.** By default a workspace gets half your Mac's cores (2 to 4), a quarter of its
 memory (3 to 8 GiB) and 30 GiB of disk; `desolate bootstrap` says what that comes to on your
-Mac. Change it for a domain, or for one workspace:
+Mac. A project can say what it needs in its `devcontainer.json`, and its workspaces get it:
+
+```jsonc
+"customizations": { "desolate": { "cpus": 4, "memory": "16g", "disk": "60g" } }
+```
+
+The spec's own `hostRequirements` (`"cpus"`, `"memory": "16gb"`, `"storage": "64gb"`, what
+Codespaces reads) works too; `customizations.desolate` wins where both say. Your own choices
+come first: for a domain, or for one workspace, they override the project's, and `up` says
+which decided:
 
 ```bash
 desolate domain you--app size --cpus 4 --memory 12g --disk 60g    # its new workspaces
 desolate up you--app --name big --memory 16g                       # this one
 ```
 
+A project's size is its repository's word, so it is kept within your Mac: no more CPUs than
+it has cores, and no more than three quarters of its memory. `up` says what it lowered, and
+what it could not read.
+
+**Resizing one.** Stop it, then:
+
+```bash
+desolate resize you--app/greet --memory 16g    # or --cpus 6, or --disk 80g (a disk only grows)
+desolate start you--app/greet
+```
+
+Or use **Resize...** on its row on the dashboard. It is off while the workspace runs, and the
+row shows when the project asks for more than the workspace has. Its files, containers and
+volumes stay. `desolate resize you--app/greet` with no flags says what it has, and what its
+project asks for.
+
 What it costs: CPUs are shares of your Mac's time (an idle VM uses almost none); memory is a
 ceiling the VM fills as it uses it (and macOS is slow to take back); disk grows as it is
-written. `desolate list` shows each workspace's size. A workspace keeps the size it was made
-with. If the
+written. `desolate list` shows each workspace's size. If the
 first repository (or the first you name with `--checkout`) has a `devcontainer.json`, it
 runs inside the VM, as written. The first
 workspace of a domain builds the domain's environment once (the "template" above); the

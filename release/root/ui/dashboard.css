@@ -134,6 +134,10 @@ hr.split { border: 0; border-top: 1px solid var(--line); margin: 12px 0 0; }
 .what .name { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .checkout { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--soft); margin-top: 2px; }
 .new-domain { display: grid; gap: 10px; }
+.resize { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: end; margin: 6px 0 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.resize .field { margin: 0; }
+.resize input[type="number"] { width: 7em; }
+.resize .sub { flex-basis: 100%; }
 .new-domain .choices { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .new-domain label.choice { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; }
 

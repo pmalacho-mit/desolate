@@ -46,7 +46,7 @@ _desolate() {
     local i
     for ((i = 1; i < COMP_CWORD; i++)); do [ "${COMP_WORDS[i]}" = "--" ] && return 0; done
     if [ "$COMP_CWORD" -eq 1 ]; then
-        words="bootstrap doctor destroy down clone fetch repos keys domain up list status board start stop rm exec editor ui ports offers branches review push approve root net git events notify agent suede upstream completion help"
+        words="bootstrap doctor destroy down clone fetch repos keys domain up list status board start stop resize rm exec editor ui ports offers branches review push approve root net git events notify agent suede upstream completion help"
     else
         case "$verb" in
             domain)
@@ -57,7 +57,7 @@ _desolate() {
                 elif [ "${COMP_WORDS[3]:-}" = add ]; then words="--repo $(_desolate_repos)"
                 fi ;;
             up) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_domains)"; else words="--name --checkout --base --fetch"; fi ;;
-            start|stop|editor|ports) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_workspaces)"; fi ;;
+            start|stop|resize|editor|ports) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_workspaces)"; fi ;;
             status|board|list|offers|branches) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_workspaces) $(_desolate_domains) --json"; fi ;;
             rm) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_workspaces) $(_desolate_domains)"; fi ;;
             exec) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_workspaces)"; else words="--checkout --vm --"; fi ;;

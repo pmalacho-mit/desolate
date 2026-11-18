@@ -29,6 +29,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkspacePlan } from "../shared/plan.ts";
+import type { Size } from "../shared/size.ts";
 import { imageFingerprint } from "./image.ts";
 import { INSTANCE, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
@@ -128,11 +129,12 @@ export const ensure = async (
   build: Builder,
   say: (line: string) => void,
   envRepo?: string,
+  size?: Size,
 ): Promise<string | null> => {
   // A template only makes a start faster: nothing about one may stop a workspace being made
   // (two `up`s at once in a domain: the second finds the first's build under way).
   try {
-    return await ensureOrThrow(domain, repos, build, say, envRepo);
+    return await ensureOrThrow(domain, repos, build, say, envRepo, size);
   } catch (error) {
     say(
       `  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`,
@@ -190,6 +192,7 @@ const ensureOrThrow = async (
   build: Builder,
   say: (line: string) => void,
   envRepo?: string,
+  size?: Size,
 ): Promise<string | null> => {
   const b = backend();
   const env = await rootctl<EnvKey | null>(
@@ -230,6 +233,9 @@ const ensureOrThrow = async (
       base: null,
       fetch: false,
       env: env.repo,
+      // Built at the size its workspaces get (but for `up`'s flags): a project that needs
+      // 16 GiB to install needs it while its environment is built, too.
+      ...(size ? { size } : {}),
     },
     { quiet: true },
   );

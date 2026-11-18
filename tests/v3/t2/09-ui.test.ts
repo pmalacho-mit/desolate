@@ -504,6 +504,11 @@ describe("T2 section 4.8: the root UI", () => {
       "a token is in a link's address and never in what is shown",
     );
     assert.match(dom, /NOT ISOLATED: fake backend/);
+    assert.match(
+      dom,
+      /<span class="tip" title="Stop web\/one first: a VM's size changes only while it is stopped\."><button [^>]*disabled=""[^>]*data-resize="web\/one"[^>]*>Resize\.\.\.<\/button>/,
+      "Resize is there, off while it runs, and says why",
+    );
   });
 
   it("stop and start from the dashboard", async () => {
@@ -525,6 +530,58 @@ describe("T2 section 4.8: the root UI", () => {
       ),
     );
     assert.equal((await state()).actions.at(-1)!.command, "desolate start web/one");
+  });
+
+  it("Resize from the dashboard: refused while it runs, done once it is stopped", async () => {
+    stack.step("resize from the dashboard");
+    const last = async () => {
+      assert.ok(
+        await until(
+          async () => ["done", "failed"].includes((await state()).actions.at(-1)?.state ?? ""),
+          120_000,
+        ),
+      );
+      return (await state()).actions.at(-1)!;
+    };
+    const to = { domain: "web", workspace: "one", cpus: "3", memory: "5120m", disk: "40g" };
+    // CONTROL: running, the host refuses it, and says how.
+    assert.equal((await action("workspace.resize", to)).status, 202);
+    const refused = await last();
+    assert.equal(refused.command, "desolate resize web/one --cpus 3 --memory 5120m --disk 40g");
+    assert.equal(refused.state, "failed");
+    assert.match(refused.lines.join("\n"), /a VM's size changes only while it is stopped/);
+    // A size the page would never send is refused before anything runs.
+    assert.equal(
+      (await action("workspace.resize", { ...to, memory: "5g" })).status,
+      400,
+      "memory goes as MiB",
+    );
+    assert.equal((await action("workspace.stop", { domain: "web", workspace: "one" })).status, 202);
+    assert.ok(
+      await until(async () => ws(await state(), "web/one")?.host?.status === "stopped", 60_000),
+    );
+    assert.equal((await action("workspace.resize", to)).status, 202);
+    const done = await last();
+    assert.equal(done.state, "done", done.lines.join("\n"));
+    assert.ok(
+      await until(async () => {
+        const size = (ws(await state(), "web/one") as { size?: unknown } | undefined)?.size;
+        return JSON.stringify(size) === JSON.stringify({ cpus: 3, memoryMiB: 5120, diskGiB: 40 });
+      }, 30_000),
+      "the dashboard shows the new size",
+    );
+    assert.equal(
+      (await action("workspace.start", { domain: "web", workspace: "one" })).status,
+      202,
+    );
+    assert.ok(
+      await until(
+        async () =>
+          ws(await state(), "web/one")?.host?.status === "running" &&
+          (await state()).actions.at(-1)?.state === "done",
+        120_000,
+      ),
+    );
   });
 
   it("an offer appears, is reviewed, and a push from the dashboard still waits for the person on the host", async () => {

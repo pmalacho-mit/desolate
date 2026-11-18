@@ -166,3 +166,217 @@ declare namespace merge {
     Expect<Invoke<typeof merge, [a: null, b: undefined, c: { cpus: 2 }]>["memoryMiB"], "undefined">,
   ];
 }
+
+// ------------------------------------------------------------------ a project's own size
+// What a project's devcontainer.json asks for, read by the root from the mirror (what the
+// remote published, root/domains.ts projectSizeOf), for each part: desolate's own
+// `customizations.desolate` ({ cpus, memory, disk }) first, then the devcontainer spec's
+// `hostRequirements` ({ cpus, memory, storage }: what Codespaces reads). It comes after the
+// person's own choices (`up`'s flags, the domain's size) and before the stack's defaults.
+// It is a repository's content, so it is data: checked as a size, and kept within this Mac
+// (capToMac).
+
+/** An amount as a devcontainer.json writes it: "16gb", "16g", "16GiB", "512mb", "1tb"; a
+ *  bare number is GiB. In MiB, or null. */
+export const parseSpecAmount = (value: unknown): number | null => {
+  if (typeof value === "number")
+    return Number.isFinite(value) && value > 0 ? Math.round(value * 1024) : null;
+  if (typeof value !== "string") return null;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(t|tb|tib|g|gb|gib|m|mb|mib|k|kb|kib)?\s*$/i.exec(value);
+  if (!match) return null;
+  const unit = (match[2] ?? "g")[0]!.toLowerCase();
+  const factor = unit === "t" ? 1024 * 1024 : unit === "g" ? 1024 : unit === "m" ? 1 : 1 / 1024;
+  const mib = Math.round(Number(match[1]) * factor);
+  return Number.isFinite(mib) && mib > 0 ? mib : null;
+};
+
+declare namespace parseSpecAmount {
+  /** the spec's own units (tb, gb, mb, kb, as hostRequirements writes them), desolate's
+   *  spellings ("16g", "16GiB"), and a bare number as GiB; anything else is not an amount */
+  export type Spellings = Table<
+    typeof parseSpecAmount,
+    [
+      [args: [value: "16gb"], expected: 16384],
+      [args: [value: "16g"], expected: 16384],
+      [args: [value: "16GiB"], expected: 16384],
+      [args: [value: "512mb"], expected: 512],
+      [args: [value: "1tb"], expected: 1048576],
+      [args: [value: 16], expected: 16384],
+      [args: [value: "16"], expected: 16384],
+      [args: [value: "1.5g"], expected: 1536],
+      [args: [value: "lots"], expected: null],
+      [args: [value: -4], expected: null],
+      [args: [value: { gb: 16 }], expected: null],
+    ]
+  >;
+}
+
+export type ProjectSize = { size: Partial<Size>; problems: string[] };
+
+/** What a parsed devcontainer.json asks for, each part from `customizations.desolate` if it
+ *  sets it, else from `hostRequirements`; a part that is not a size desolate makes is left
+ *  out, and said. */
+export const projectSize = (spec: unknown): ProjectSize => {
+  const object = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : {};
+  const top = object(spec);
+  const ours = object(object(top.customizations).desolate);
+  const host = object(top.hostRequirements);
+  const shown = (value: unknown) =>
+    JSON.stringify(value)
+      ?.slice(0, 40)
+      .replace(/[^\x20-\x7e]/g, "?") ?? String(value);
+  const size: Partial<Size> = {};
+  const problems: string[] = [];
+  const parts = [
+    ["cpus", "cpus", "cpus", (v: unknown) => (typeof v === "number" ? v : null)],
+    ["memoryMiB", "memory", "memory", parseSpecAmount],
+    [
+      "diskGiB",
+      "disk",
+      "storage",
+      (v: unknown) => {
+        const mib = parseSpecAmount(v);
+        return mib === null ? null : Math.ceil(mib / 1024);
+      },
+    ],
+  ] as const;
+  for (const [key, mine, theirs, parse] of parts) {
+    const where =
+      ours[mine] !== undefined
+        ? `customizations.desolate.${mine}`
+        : host[theirs] !== undefined
+          ? `hostRequirements.${theirs}`
+          : null;
+    if (!where) continue;
+    const value = ours[mine] !== undefined ? ours[mine] : host[theirs];
+    const parsed = parse(value);
+    if (parsed === null) {
+      problems.push(
+        `${where}: ${shown(value)} is not ${key === "cpus" ? "a number of CPUs" : 'an amount (write it as "16g")'}`,
+      );
+      continue;
+    }
+    const why = checkSize({ [key]: parsed });
+    if (why) problems.push(`${where}: ${why}`);
+    else size[key] = parsed;
+  }
+  return { size, problems };
+};
+
+declare namespace projectSize {
+  /** desolate's own customizations first, part by part, then the spec's hostRequirements */
+  export type Both = Expect<
+    Invoke<
+      typeof projectSize,
+      [
+        spec: {
+          customizations: { desolate: { memory: "16g" } };
+          hostRequirements: { cpus: 4; memory: "8gb"; storage: "64gb" };
+        },
+      ]
+    >,
+    "=",
+    { size: { cpus: 4; memoryMiB: 16384; diskGiB: 64 }; problems: [] }
+  >;
+  /** a project that says nothing asks for nothing */
+  export type Silent = Expect<
+    Invoke<typeof projectSize, [spec: { image: "node:22" }]>,
+    "=",
+    { size: {}; problems: [] }
+  >;
+  /** what is not a size desolate makes is left out, in the spec's own words */
+  export type Wrong = Expect<
+    Invoke<
+      typeof projectSize,
+      [spec: { customizations: { desolate: { cpus: "four"; memory: "512m"; disk: "lots" } } }]
+    >,
+    "=",
+    {
+      size: {};
+      problems: [
+        'customizations.desolate.cpus: "four" is not a number of CPUs',
+        "customizations.desolate.memory: memory must be from 1 GiB to 256 GiB",
+        'customizations.desolate.disk: "lots" is not an amount (write it as "16g")',
+      ];
+    }
+  >;
+  /** not an object at all: nothing */
+  export type NotAnObject = Expect<
+    Invoke<typeof projectSize, [spec: null]>,
+    "=",
+    { size: {}; problems: [] }
+  >;
+}
+
+/** A project's size, kept within this Mac: no more CPUs than it has cores, and no more than
+ *  three quarters of its memory (memory is a ceiling a VM fills, and macOS is slow to take it
+ *  back: one that could take all of it could stall the Mac). Disk is not capped: it grows as
+ *  it is written. What was lowered, said. */
+export const capToMac = (
+  size: Partial<Size>,
+  cores: number,
+  memoryMiB: number,
+): { size: Partial<Size>; capped: string[] } => {
+  const out = { ...size };
+  const capped: string[] = [];
+  if (out.cpus !== undefined && out.cpus > cores) {
+    capped.push(`${out.cpus} CPUs: this Mac has ${cores}`);
+    out.cpus = cores;
+  }
+  const most = Math.max(LIMITS.memoryMiB[0], Math.floor((memoryMiB * 3) / 4 / 1024) * 1024);
+  if (out.memoryMiB !== undefined && out.memoryMiB > most) {
+    capped.push(
+      `${out.memoryMiB % 1024 === 0 ? `${out.memoryMiB / 1024} GiB` : `${out.memoryMiB} MiB`} memory: a workspace gets at most ${most / 1024} GiB here, three quarters of this Mac's ${Math.round(memoryMiB / 1024)} GiB`,
+    );
+    out.memoryMiB = most;
+  }
+  return { size: out, capped };
+};
+
+declare namespace capToMac {
+  /** within the Mac: as asked */
+  export type Within = Expect<
+    Invoke<typeof capToMac, [size: { cpus: 4; memoryMiB: 16384 }, cores: 10, memoryMiB: 32768]>,
+    "=",
+    { size: { cpus: 4; memoryMiB: 16384 }; capped: [] }
+  >;
+  /** more than the Mac: lowered, and said */
+  export type Over = Expect<
+    Invoke<
+      typeof capToMac,
+      [size: { cpus: 64; memoryMiB: 262144; diskGiB: 500 }, cores: 10, memoryMiB: 32768]
+    >,
+    "=",
+    {
+      size: { cpus: 10; memoryMiB: 24576; diskGiB: 500 };
+      capped: [
+        "64 CPUs: this Mac has 10",
+        "256 GiB memory: a workspace gets at most 24 GiB here, three quarters of this Mac's 32 GiB",
+      ];
+    }
+  >;
+}
+
+/** The parts a partial size sets, for a person: "16 GiB memory, 4 CPUs". */
+export const describeParts = (size: Partial<Size>): string =>
+  [
+    size.cpus !== undefined ? `${size.cpus} CPU${size.cpus === 1 ? "" : "s"}` : null,
+    size.memoryMiB !== undefined
+      ? `${size.memoryMiB % 1024 === 0 ? `${size.memoryMiB / 1024} GiB` : `${size.memoryMiB} MiB`} memory`
+      : null,
+    size.diskGiB !== undefined ? `${size.diskGiB} GiB disk` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
+declare namespace describeParts {
+  export type Some = Expect<
+    Invoke<typeof describeParts, [size: { memoryMiB: 16384; diskGiB: 60 }]>,
+    "=",
+    "16 GiB memory, 60 GiB disk"
+  >;
+  export type None = Expect<Invoke<typeof describeParts, [size: {}]>, "=", "">;
+}

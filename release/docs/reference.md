@@ -279,6 +279,17 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.
 
+**A workspace's size, from its project.** desolate reads one thing in a `devcontainer.json`
+itself: the size its VM is made with. `customizations.desolate` (`cpus`, `memory`, `disk`:
+`"16g"`, or a bare number of GiB) for each part it sets, then the spec's `hostRequirements`
+(`cpus`, `memory`, `storage`). The root reads it in the mirror, from the environment
+repository's default branch as the remote published it, never from a domain's clone (P4).
+It comes after `up`'s flags and the domain's size, and before the Mac's defaults. A
+repository's word, it is checked as a size, and kept to this Mac's cores and to three
+quarters of its memory; `up` says what it lowered or did not use. It sizes the domain's
+environment build too. A workspace made before its project asked is not changed: `desolate
+resize` (stopped), or Resize... on the dashboard, which shows what the project asks for.
+
 **Devcontainers.** A workspace runs its project's own `devcontainer.json`, unchanged, with
 the devcontainer CLI and a docker daemon inside the workspace's VM. Nothing in a spec is
 refused: the VM is the boundary. A spec that does not come up leaves the workspace as the
