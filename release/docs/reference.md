@@ -457,3 +457,5 @@ docs/              getting started, the reference, agents, suede, developing des
 ```
 
 The code runs straight from this tree: every VM mounts it read-only at `/desolate/release`.
+What desolate keeps on the Mac, in `~/.desolate`, and which VM sees each folder of it, is in
+[home.md](home.md).
