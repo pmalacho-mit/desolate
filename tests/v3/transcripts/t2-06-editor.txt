@@ -61,4 +61,16 @@ next: desolate editor web/one --open      its editor, in your browser
 
 ## open the editor from another site
 
+## editor defaults
+
+$ desolate editor defaults
+Every workspace's editor starts from these. Its own settings, the project's devcontainer and the repository's .vscode/settings.json override them.
+  files.autoSave: "off"
+change: desolate editor defaults [--json] | set <setting> <value> | unset <setting> | replace (a JSON object on stdin) | reset
+[exit 0]
+
+$ desolate editor defaults set workbench.colorTheme Dark+
+editor defaults saved: 2 setting(s); 2 of 2 running editor(s) have them now (an open editor takes them when its tab is reloaded).
+[exit 0]
+
 ## stop and start

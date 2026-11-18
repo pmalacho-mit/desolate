@@ -87,6 +87,8 @@ describe("T2 section 4.2: the project's devcontainer, inside the workspace's VM"
   "postCreateCommand": "echo created-by-the-spec > /tmp/created",
   /* a spec may ask for anything: the VM is the boundary */
   "privileged": true,
+  // the project's own editor settings: over the person's defaults, under desolate's own
+  "customizations": { "vscode": { "settings": { "files.autoSave": "afterDelay", "editor.tabSize": 3, "update.mode": "default" } } },
 }
 `,
       );
@@ -313,6 +315,18 @@ describe("T2 section 4.2: the project's devcontainer, inside the workspace's VM"
       "127.0.0.1:31580\n127.0.0.1:31581",
       "still on the VM's loopback only, behind the gate, which stays in the VM",
     );
+    // The project's own settings are the editor's Machine settings (as VS Code's Dev
+    // Containers puts them), under desolate's held ones; the person's defaults are installed
+    // below everything, as an extension, by the server in the container.
+    const settings = inVm(
+      "app/w1",
+      `jq -c '{save: .["files.autoSave"], tab: .["editor.tabSize"], update: .["update.mode"]}' ~/.desolate-editor/data/Machine/settings.json; ls ~/.desolate-editor/extensions | grep -c '^desolate.defaults-'; jq -c '.[] | .identifier.id' ~/.desolate-editor/extensions/extensions.json | grep -c desolate.defaults`,
+    );
+    assert.deepEqual(settings.stdout.trim().split("\n"), [
+      '{"save":"afterDelay","tab":3,"update":"none"}',
+      "1",
+      "1",
+    ]);
   });
 
   it("a spec with a Dockerfile is built in the VM, from the project's own context", () => {

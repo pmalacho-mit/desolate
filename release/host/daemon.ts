@@ -391,6 +391,13 @@ declare namespace reviewerSummary {
 const approvalBackend = (): ApprovalBackend => {
   return {
     secrets: secretOps,
+    editorDefaults: {
+      get: async () => (await import("./editor-defaults.ts")).editorDefaults(),
+      set: async (settings) =>
+        (await import("./editor-defaults.ts")).setDefaults(
+          (await import("./editor-defaults.ts")).checkDefaults(settings),
+        ),
+    },
     envImport: {
       plan: async (domain, text) => {
         const { decide } = await import("./env-import.ts");

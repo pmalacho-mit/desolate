@@ -366,6 +366,9 @@ export const startServices = async (plan: WorkspacePlan) => {
     ],
     { timeoutMs: 300_000 },
   );
+  // The person's default editor settings: its lowest layer (editor-defaults.ts). Never fails
+  // the start.
+  if (editor.code === 0) await (await import("./editor-defaults.ts")).applyTo(plan.vm);
   step("the editor");
   return {
     editorDown:
@@ -806,6 +809,8 @@ export const reconnectRunning = async (): Promise<number> => {
           ],
           { timeoutMs: 300_000 },
         );
+      // And the person's default editor settings (editor-defaults.ts), as they are now.
+      await (await import("./editor-defaults.ts")).applyTo(w.vm);
       count += 1;
     }
   return count;

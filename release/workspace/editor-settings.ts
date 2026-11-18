@@ -35,9 +35,17 @@ const TERMINAL = {
   "terminal.integrated.defaultProfile.linux": "desolate",
 };
 
+/** The Machine settings file again: what was in it, the project's own settings over that
+ *  (`project`: its devcontainer's customizations.vscode.settings, as VS Code's Dev Containers
+ *  puts them here), the terminal, and desolate's held settings over everything. A key the
+ *  project set last time (`before`) and no longer sets is taken away, unless it was changed
+ *  since: then it is the person's. (The person's defaults for every editor are a layer below
+ *  all of this: editor-defaults.sh.) */
 export const hold = (
   text: string | undefined,
   terminal: "enter" | "plain" | undefined = undefined,
+  project: Record<string, unknown> = {},
+  before: Record<string, unknown> = {},
 ): string => {
   let settings: Record<string, unknown> = {};
   try {
@@ -47,6 +55,10 @@ export const hold = (
   } catch {
     // Unreadable (hand-edited into something that is not JSON): start again from what is held.
   }
+  for (const [key, value] of Object.entries(before))
+    if (!(key in project) && JSON.stringify(settings[key]) === JSON.stringify(value))
+      delete settings[key];
+  Object.assign(settings, project);
   if (terminal === "enter") Object.assign(settings, TERMINAL);
   // Only what desolate put there is taken away: a profile of the person's own stays.
   if (terminal === "plain" && settings["terminal.integrated.defaultProfile.linux"] === "desolate")
@@ -121,6 +133,52 @@ declare namespace hold {
       }
     >,
   ];
+  /** the project's own settings (its devcontainer's) over the person's; desolate's held ones
+   *  over the project's */
+  export type Project = Expect<
+    Invoke<
+      typeof JSON.parse,
+      [
+        text: Invoke<
+          typeof hold,
+          [
+            text: '{"files.autoSave": "off", "editor.fontSize": 15}',
+            terminal: undefined,
+            project: { "files.autoSave": "afterDelay"; "update.mode": "default" },
+          ]
+        >,
+      ]
+    >,
+    "matches",
+    { "files.autoSave": "afterDelay"; "editor.fontSize": 15; "update.mode": "none" }
+  >;
+  /** a key the project no longer sets goes; one the person changed since stays theirs */
+  export type ProjectDropped = Expect<
+    Invoke<
+      typeof JSON.parse,
+      [
+        text: Invoke<
+          typeof hold,
+          [
+            text: '{"files.autoSave": "afterDelay", "editor.tabSize": 8}',
+            terminal: undefined,
+            project: {},
+            before: { "files.autoSave": "afterDelay"; "editor.tabSize": 2 },
+          ]
+        >,
+      ]
+    >,
+    "=",
+    {
+      "editor.tabSize": 8;
+      "security.workspace.trust.enabled": false;
+      "extensions.autoCheckUpdates": false;
+      "extensions.autoUpdate": false;
+      "update.mode": "none";
+      "telemetry.telemetryLevel": "off";
+      "terminal.integrated.macOptionClickForcesSelection": true;
+    }
+  >;
   /** "enter": the editor's server is in the VM, so its terminals enter the devcontainer */
   export type Enter = Expect<
     Invoke<typeof JSON.parse, [text: Invoke<typeof hold, [text: "{}", terminal: "enter"]>]>,
@@ -200,6 +258,27 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const terminal =
     process.argv[3] === "enter" || process.argv[3] === "plain" ? process.argv[3] : undefined;
-  fs.writeFileSync(`${file}.desolate-tmp`, hold(text, terminal), { mode: 0o600 });
+  // The project's settings: from the devcontainer's state (devcontainer.ts settingsOf), when
+  // it is up; and what it set last time, kept beside the settings file.
+  const read = (where: string | undefined): Record<string, unknown> => {
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(where ?? "", "utf8"));
+      return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  };
+  const state = read(process.argv[4]);
+  const project =
+    state.state === "up" && typeof state.settings === "object" && state.settings !== null
+      ? (state.settings as Record<string, unknown>)
+      : {};
+  const kept = path.join(path.dirname(file), "project-settings.json");
+  fs.writeFileSync(`${file}.desolate-tmp`, hold(text, terminal, project, read(kept)), {
+    mode: 0o600,
+  });
   fs.renameSync(`${file}.desolate-tmp`, file);
+  fs.writeFileSync(kept, `${JSON.stringify(project)}\n`, { mode: 0o600 });
 }

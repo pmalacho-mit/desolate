@@ -177,6 +177,13 @@ terminal, extensions. What is different is what it cannot reach: no key, no toke
 files only as its own checkouts, and the network only through its own proxy, on ports 80
 and 443 ([what that means for registries and builds](reference.md)).
 
+- **Your editor settings, everywhere.** Every workspace's editor starts from your defaults:
+  `desolate editor defaults set workbench.colorTheme Dark+`, or **Editor defaults...** at
+  the top of the dashboard (a page of your Mac's, with a theme and an auto-save choice and
+  any setting as JSON). desolate's own default turns the web editor's auto-save off. They
+  are the editor's lowest layer: what you set in an editor, the project's devcontainer
+  (`customizations.vscode.settings`) and the repository's `.vscode/settings.json` all
+  override them. A change reaches running editors at once; reload an open tab to see it.
 - **Run it.** Start a dev server in the editor's terminal (`npm run dev`, or anything that
   listens) and open the address `desolate ports` prints:
   `http://you--app-greet-<id>.localhost:<the same port>`. Nothing to declare: a port is

@@ -762,6 +762,10 @@ const render = () => {
   const stack = document.getElementById("stack");
   stack.textContent = state.stack ? (state.stack.isolated ? `${state.stack.backend} VMs` : "NOT ISOLATED: fake backend") : "stack: unknown";
   stack.className = `chip ${state.stack && !state.stack.isolated ? "bad" : ""}`;
+  // Every editor's defaults: a page of the Mac's own (as the secrets are), not this one's.
+  const defaults = document.getElementById("editor-defaults");
+  defaults.hidden = !(state.stack && state.stack.approveHostname);
+  if (!defaults.hidden) defaults.href = `http://${state.stack.approveHostname}:${state.stack.editorPort}/editor-defaults`;
   const host = document.getElementById("host");
   host.textContent = notice || (state.hostConnected ? "host connected" : "host not connected: VM states are as last known; run `desolate bootstrap` on the host");
   host.className = `chip ${notice || !state.hostConnected ? "bad" : ""}`;
