@@ -38,6 +38,11 @@ const agent = (script: string) => {
     `${script} && git rev-parse HEAD && (git push origin HEAD 2>&1 || true)`,
   );
   assert.equal(done.code, 0, `${done.stdout}\n${done.stderr}`);
+  assert.match(
+    done.stdout,
+    /offered to the root, not pushed/,
+    `the push did not offer: ${done.stdout}\n${done.stderr}`,
+  );
   return done.stdout
     .trim()
     .split("\n")
