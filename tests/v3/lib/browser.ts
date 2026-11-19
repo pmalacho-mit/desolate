@@ -323,7 +323,29 @@ export const openBrowser = async (
     browser.kill();
     await exited;
   };
-  return { load, tab, close };
+  /** The pages open now (tabs a page opened among them), and the text one of them shows. */
+  const pages = async () =>
+    (
+      (await send("Target.getTargets")) as {
+        targetInfos?: { targetId: string; type: string; url: string }[];
+      }
+    ).targetInfos?.filter((t) => t.type === "page") ?? [];
+  const textOf = async (targetId: string) => {
+    const { sessionId } = (await send("Target.attachToTarget", { targetId, flatten: true })) as {
+      sessionId: string;
+    };
+    try {
+      const r = (await send(
+        "Runtime.evaluate",
+        { expression: "document.body ? document.body.innerText : ''", returnByValue: true },
+        sessionId,
+      )) as { result?: { value?: string } };
+      return r.result?.value ?? "";
+    } finally {
+      await send("Target.detachFromTarget", { sessionId });
+    }
+  };
+  return { load, tab, pages, textOf, close };
 };
 
 /** One page in a Chrome of its own, with the profile `profile`, closed after. */

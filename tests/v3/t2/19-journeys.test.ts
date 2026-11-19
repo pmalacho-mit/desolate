@@ -74,6 +74,11 @@ describe("T2 journeys through the dashboard", () => {
     const chrome = findChrome();
     assert.ok(chrome, "these journeys need Chrome or Chromium");
     browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-journeys-")));
+    // The browser signed in to the approval page once, as `desolate approve --web --open` does:
+    // the tab Push opens then shows the push.
+    const approvals = /approvals {4}(http:\S+)/.exec(stack.quiet("approve", "--web").stdout)![1]!;
+    const signIn = await browser.tab(approvals);
+    await signIn.close();
     const address = (JSON.parse(stack.quiet("ui", "--json").stdout) as { dashboard: string })
       .dashboard;
     page = await browser.tab(address);
@@ -168,6 +173,25 @@ describe("T2 journeys through the dashboard", () => {
       "the push waiting for approval",
       60_000,
     );
+    // Push opened the approval page in a tab of its own, and it shows this push.
+    const approvalTab = await (async () => {
+      for (let i = 0; i < 60; i++) {
+        for (const p of await browser.pages())
+          if (
+            p.url.startsWith(`http://desolate-approve.localhost:${stack.env.DESOLATE_EDITOR_PORT}/`)
+          ) {
+            const text = await browser.textOf(p.targetId);
+            if (/feature\/greet/.test(text)) return text;
+          }
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      return null;
+    })();
+    assert.ok(
+      approvalTab,
+      `the approval page opened, showing the push: ${JSON.stringify(await browser.pages())}`,
+    );
+    assert.match(approvalTab!, /acme\/app/);
     const approved = stack.person("Type the branch name", "feature/greet", "approve");
     assert.equal(approved.code, 0, approved.stdout);
     await page.until(
