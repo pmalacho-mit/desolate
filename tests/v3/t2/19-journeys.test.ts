@@ -60,6 +60,27 @@ const forgeRefs = () =>
       .map((line) => [line.split(" ")[0], line.split(" ")[1]]),
   ) as Record<string, string>;
 
+let port = "";
+let link = "";
+let before_: { approve: number; git: number } = { approve: 0, git: 0 };
+/** What the approval page and the git terminal answer this browser, each from a tab of its
+ *  own: what its own script asks first (200 signed in, 401 not). */
+const signedIn = async () => {
+  const answer = async (url: string, api: string) => {
+    const tab = await browser.tab(url);
+    try {
+      await tab.until(`document.readyState === "complete"`, "the page");
+      return await tab.evaluate<number>(`fetch(${JSON.stringify(api)}).then((r) => r.status)`);
+    } finally {
+      await tab.close();
+    }
+  };
+  return {
+    approve: await answer(`http://desolate-approve.localhost:${port}/`, "/pending"),
+    git: await answer(`http://desolate-git.localhost:${port}/`, "/approvals-frame"),
+  };
+};
+
 describe("T2 journeys through the dashboard", () => {
   before(async () => {
     stack = newStack("journeys");
@@ -74,14 +95,18 @@ describe("T2 journeys through the dashboard", () => {
     const chrome = findChrome();
     assert.ok(chrome, "these journeys need Chrome or Chromium");
     browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-journeys-")));
-    // The browser signed in to the approval page once, as `desolate approve --web --open` does:
-    // the tab Push opens then shows the push.
-    const approvals = /approvals {4}(http:\S+)/.exec(stack.quiet("approve", "--web").stdout)![1]!;
-    const signIn = await browser.tab(approvals);
-    await signIn.close();
-    const address = (JSON.parse(stack.quiet("ui", "--json").stdout) as { dashboard: string })
-      .dashboard;
-    page = await browser.tab(address);
+    // The browser signed in once, to all three pages, as `desolate ui --open` does. Before it
+    // (the control), neither the approval page nor the git terminal would answer this browser.
+    port = new URL(
+      (JSON.parse(stack.quiet("ui", "--json").stdout) as { dashboard: string }).dashboard,
+    ).port;
+    before_ = await signedIn();
+    link = stack.quiet("ui", "--link").stdout.trim();
+    page = await browser.tab(link);
+    await page.until(
+      `location.href === "http://desolate.localhost:${port}/" && document.readyState === "complete" && document.querySelector("#review")`,
+      "the dashboard, after the sign-in link",
+    );
     // What the root answers each action the page asks for, for a failure to say.
     await page.evaluate(
       `window.__clicks = []; for (const kind of ["mousedown", "mouseup", "click"]) document.addEventListener(kind, (e) => window.__clicks.push(kind + " " + (e.target.outerHTML || "").slice(0, 80) + (e.target.isConnected ? "" : " (gone)")), true); window.__answers = []; const f = window.fetch; window.fetch = async (...a) => { const r = await f(...a); if (String(a[0]).includes("/action")) window.__answers.push(r.status + " " + (await r.clone().text()).slice(0, 300)); return r; }; true`,
@@ -91,6 +116,22 @@ describe("T2 journeys through the dashboard", () => {
     await page?.close().catch(() => {});
     await browser?.close();
     stack.destroy();
+  });
+
+  it("one link signs the browser in to all three pages, once", async () => {
+    stack.step("one sign-in for all three pages");
+    assert.deepEqual(before_, { approve: 401, git: 401 }, "the control: not signed in before");
+    assert.deepEqual(await signedIn(), { approve: 200, git: 200 }, "signed in to both after");
+    assert.match(link, /^http:\/\/desolate-approve\.localhost:\d+\/\?signin=[0-9a-f]{48}$/);
+    const again = await browser.tab(link);
+    try {
+      await again.until(
+        `/spent or too old/.test(document.body.innerText)`,
+        "the same link refused, a second time",
+      );
+    } finally {
+      await again.close();
+    }
   });
 
   it("a first workspace from the dashboard: the home domain's Workspace on main, running", async () => {

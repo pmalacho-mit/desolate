@@ -103,8 +103,8 @@ workspace, the network rules, upgrading with `git pull` and `desolate bootstrap`
 
 1. **Run `desolate doctor`.** It checks everything it can and says what to run for each
    failure. Every refusal desolate prints ends with a `fix:` line: try that first.
-2. **A page will not open:** Chrome or Firefox, and the address `desolate ui` prints (it carries
-   its token).
+2. **A page will not open:** Chrome or Firefox, and `desolate ui --open` again (it signs the
+   browser in to every page).
 3. **Something in a workspace cannot reach a host:** that is usually the point.
    `desolate net log <domain>` says what was refused and why;
    `desolate domain <domain> net allow <host>` lets one through.

@@ -296,6 +296,72 @@ describe("T2 section 4.8: the root UI", () => {
     assert.equal((await http("GET", "/state")).status, 200);
   });
 
+  it("one sign-in link: the approval page, the git terminal, then the dashboard, each a code spent once", async () => {
+    stack.step("one sign-in link for all three pages");
+    const link = new URL(stack.quiet("ui", "--link").stdout.trim());
+    assert.equal(link.hostname, "desolate-approve.localhost", "it starts on the host's own page");
+    const navigate = (site: string) => [
+      `Sec-Fetch-Site: ${site}`,
+      "Sec-Fetch-Mode: navigate",
+      "Sec-Fetch-Dest: document",
+    ];
+    const hop = async (url: URL, site: string) => {
+      const answer = await http("GET", `${url.pathname}${url.search}`, {
+        host: url.hostname,
+        cookie: null,
+        headers: navigate(site),
+      });
+      const location = /\r\nlocation: (\S+)\r\n/i.exec(answer.headers)?.[1];
+      return { answer, next: location ? new URL(location) : undefined };
+    };
+    // Another site cannot start the chain (the command opens it, as no site's).
+    assert.equal((await hop(link, "cross-site")).answer.status, 403, "the first link, from a site");
+    const approve = await hop(link, "none");
+    assert.equal(approve.answer.status, 303);
+    assert.match(
+      approve.answer.headers,
+      /\r\nset-cookie: desolate_approve_[0-9a-f]{12}=[0-9a-f]{48}; HttpOnly; SameSite=Strict; Path=\/\r\n/i,
+    );
+    assert.equal(approve.next?.hostname, "desolate-git.localhost");
+    const git = await hop(approve.next!, "cross-site");
+    assert.equal(git.answer.status, 303);
+    assert.match(
+      git.answer.headers,
+      /\r\nset-cookie: desolate_git_[0-9a-f]{12}=[0-9a-f]{48}; HttpOnly; SameSite=Strict; Path=\/\r\n/i,
+    );
+    assert.equal(git.next?.hostname, HOST);
+    // The dashboard's: the cookie, and a page that goes on to the dashboard by itself.
+    const dashboard = await hop(git.next!, "cross-site");
+    assert.equal(dashboard.answer.status, 200);
+    assert.match(
+      dashboard.answer.headers,
+      new RegExp(`\\r\\nset-cookie: ${cookie}; HttpOnly; SameSite=Strict; Path=/\\r\\n`, "i"),
+    );
+    assert.match(dashboard.answer.body, /<meta http-equiv="refresh" content="0; url=\/">/);
+    // Each link once: the same three again get nothing.
+    for (const [url, site] of [
+      [link, "none"],
+      [approve.next!, "cross-site"],
+      [git.next!, "cross-site"],
+    ] as const) {
+      const again = await hop(url, site);
+      assert.equal(again.answer.status, 403, `${url.hostname} a second time`);
+      assert.match(again.answer.body, /spent or too old/);
+    }
+    // The dashboard takes only its own link from another site, and nothing else with it.
+    const code = git.next!.searchParams.get("signin");
+    assert.equal(
+      (
+        await http("GET", `/?signin=${code}&tkn=${token}`, {
+          cookie: null,
+          headers: navigate("cross-site"),
+        })
+      ).status,
+      403,
+      "a token beside a code, from another site",
+    );
+  });
+
   it("only the dashboard's own page may talk to it, and only the host's daemon to the host's side", async () => {
     stack.step("who may talk to the state service");
     assert.equal((await http("GET", "/state", { host: "127.0.0.1" })).status, 421);

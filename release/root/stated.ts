@@ -1146,6 +1146,23 @@ const STATIC: Record<string, [string, string]> = {
   "/markdown.js": ["../../shared/ui/markdown.js", "text/javascript; charset=utf-8"],
 };
 
+// The dashboard's sign-in codes, the last page of `desolate ui --open`'s chain
+// (host/signin.ts): each code's digest, as the host told it, until it is spent or a minute
+// is up. The host sends only a digest: the code itself first reaches the root in the
+// browser's request, after the host's own pages spent theirs.
+const signinCodes = new Map<string, number>();
+const SIGNIN = { ttlMs: 60_000, most: 32 };
+const takeSignin = (given: string, now = Date.now()) => {
+  for (const [key, until] of signinCodes) if (until <= now) signinCodes.delete(key);
+  if (!/^[0-9a-f]{48}$/.test(given)) return false;
+  return signinCodes.delete(createHash("sha256").update(given).digest("hex"));
+};
+/** After the code, the page the browser lands on: it goes on to the dashboard by itself. A
+ *  303 would not do: the browser came by way of the other two pages' names, so it counts the
+ *  dashboard's address as another site's request, and sends it no cookie (SameSite=Strict).
+ *  A refresh from this page of its own is the dashboard's own request. */
+const SIGNED_IN = `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/"><title>desolate</title><p>Signed in. Opening the dashboard…</p>`;
+
 const fromHost = (req: IncomingMessage) => {
   const token = hostToken();
   const given = /^Bearer ([0-9a-f]{48})$/.exec(String(req.headers.authorization ?? ""))?.[1];
@@ -1160,6 +1177,14 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     if (req.method === "PUT" && url.pathname === "/host/facts") {
       facts = (await body(req)) as HostFacts;
       changed();
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === "POST" && url.pathname === "/host/signin") {
+      const digest = ((await body(req)) as { digest?: unknown }).digest;
+      if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))
+        return json(res, 400, { error: "a sign-in code's digest is 64 hex digits" });
+      signinCodes.set(digest, Date.now() + SIGNIN.ttlMs);
+      while (signinCodes.size > SIGNIN.most) signinCodes.delete(signinCodes.keys().next().value!);
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/host/nudge") {
@@ -1247,11 +1272,22 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
   // The dashboard's name, as the host says it is (a stack inside a workspace has its own:
   // shared/names.ts, HOSTNAME_SUFFIX); checked, and desolate.localhost until it says.
   const named = facts.stack?.rootHostname;
+  // The chain's last link (above), which the git terminal's page sends the browser to: another
+  // site's navigation, so let through to its code alone. Nothing else comes in that way.
+  const signin = url.searchParams.get("signin");
+  const toSignin =
+    req.method === "GET" &&
+    url.pathname === "/" &&
+    signin !== null &&
+    [...url.searchParams.keys()].length === 1 &&
+    req.headers["sec-fetch-mode"] === "navigate" &&
+    req.headers["sec-fetch-dest"] === "document";
   const refused = refusal(
     typeof named === "string" && named.startsWith("desolate.") && isLocalhostSuffix(named.slice(9))
       ? named
       : ROOT_HOSTNAME,
     req.headers,
+    toSignin,
   );
   if (refused)
     return send(
@@ -1269,6 +1305,22 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       "desolate: the dashboard has no credential installed yet; run `desolate bootstrap` on the host\n",
     );
   const name = cookieName(ui);
+  if (req.method === "GET" && url.pathname === "/" && signin !== null) {
+    if (!toSignin || !takeSignin(signin))
+      return send(
+        res,
+        403,
+        "text/plain; charset=utf-8",
+        "desolate: refused: that sign-in link is spent or too old; `desolate ui --open` makes another\n",
+      );
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": Buffer.byteLength(SIGNED_IN),
+      "set-cookie": `${name}=${ui}; HttpOnly; SameSite=Strict; Path=/`,
+      ...SECURITY,
+    });
+    return res.end(SIGNED_IN);
+  }
   const given = url.searchParams.get("tkn");
   if (req.method === "GET" && url.pathname === "/" && given !== null) {
     if (!sameSecret(given, ui))
