@@ -38,7 +38,7 @@ Every day: a workspace, your work in it, and its push:
   desolate issue publish | refuse <id>                           create one on GitHub, as you, once you have read it (or not)
   desolate review <domain> <owner/repo> <branch> [--diff] [--against origin|domain] [--json]
                                                                  what a push would send; --diff: the diff itself
-  desolate push <domain> <owner/repo> <branch> --expect <commit> [--allow-default]
+  desolate push <domain> <owner/repo> <branch> --expect <commit>
                                                                  to the remote; you approve it here, on the
                                                                  host, on your terminal
   desolate approve [--web [--open] | --selftest]                 approve a push waiting for you (the dashboard's, the

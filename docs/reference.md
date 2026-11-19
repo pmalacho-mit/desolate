@@ -70,8 +70,13 @@ direnv, no clone's hooks; `less` shows colour and nothing else raw, and vim read
 modelines. The root's clones and the mirrors are read-only to it. What it pushes, the root
 takes in like a domain's work: every object checked first. The terminal's address carries
 this stack's token, like the approval page's: treat it like a password. Once you have opened
-it, the dashboard's "Open in git" on an offer opens a shell at that repository's clone
-(made on the way if it is not there yet). (`desolate root
+it, **Open in git** in the dashboard's review opens a shell at that repository's clone (made
+on the way if it is not there yet), on the branch reviewed, as its domain has it: it fetches
+the domain, makes your branch of that name at the domain's commit or fast-forwards it (never
+past work of your own, and never switching away from uncommitted changes), sets its upstream
+to the remote's branch of that name, and shows `git status`. So it says what the workspace
+said: "ahead of 'origin/main' by 2 commits", and `git push` sends exactly that, for your
+approval. (`desolate root
 shell` is still there, a shell in the root VM itself, for what only the root can do.)
 
 **Your own scripts: `desolate events`.** A JSON object per line, as things happen, until you

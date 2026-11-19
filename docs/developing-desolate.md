@@ -80,8 +80,10 @@ desolate ui --open      # Review the offer, then Push, and approve the exact com
 ```
 
 or `desolate push desolate pmalacho-mit/desolate mac/push-label --expect <commit>`
-in a terminal. desolate refuses a push to the default branch (`main` here). It does not know
-your rule about `release`, so the approval, which names the branch, is where that is kept.
+in a terminal. A push to the default branch (`main` here) works the same way, and the review
+says loudly that it is the default branch: keep to pushing `mac/<topic>` branches yourself.
+desolate does not know your rule about `release` either, so the approval, which names the
+branch, is where that is kept.
 Then the pull request. Once the push lands, desolate gives GitHub's page for opening it, filled
 in with the branch and its base: "Open pull request" on the dashboard, or the line `open a pull
 request into main, in your browser, as yourself: https://github.com/...` after `desolate push`.

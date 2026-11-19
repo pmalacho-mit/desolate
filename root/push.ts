@@ -1,9 +1,9 @@
 // The push (section 6.4): root clone -> remote, approved by a person ON THE HOST, pinned to
 // the commit they reviewed. The host's `desolate push` runs this twice:
 //
-//   node push.ts prepare <domain> <owner/repo> <branch> --expect <commit> [--allow-default]
+//   node push.ts prepare <domain> <owner/repo> <branch> --expect <commit>
 //       every refusal that needs no person (not pushable, no --expect, the commit moved,
-//       the default branch, nothing to send), then the keyring's challenge for exactly
+//       nothing to send), then the keyring's challenge for exactly
 //       this push. Prints one JSON object.
 //   node push.ts run <same arguments> --message <base64> --signature <base64>
 //       the challenge, signed by the host's approver. The keyring files the approval if
@@ -149,13 +149,13 @@ declare namespace argsOf {
 
 /** Every refusal that needs no person, of the branch as the review found it: a repository the
  *  root holds no write key for, a push that does not name the commit reviewed (or names one
- *  the branch has moved from), the default branch without --allow-default, nothing to send. */
+ *  the branch has moved from), nothing to send. The default branch is pushed like any other
+ *  (the dashboard says so, loudly): --allow-default is still taken, and changes nothing. */
 export const refusePush = (
   r: Pick<Review, "repo" | "commit" | "pushable" | "isDefault" | "commits">,
   domain: string,
   branch: string,
   expect: string | undefined,
-  allowDefault: boolean,
 ) => {
   const again = `desolate review ${domain} ${r.repo} ${branch}`;
   if (!r.pushable)
@@ -174,12 +174,6 @@ export const refusePush = (
       `${branch} is at ${r.commit.slice(0, 12)}, not the ${expect!.slice(0, 12)} that was reviewed: it moved since`,
       `review it again (${again}), then push with --expect ${r.commit}`,
       EXIT.expectMismatch,
-    );
-  if (r.isDefault && !allowDefault)
-    refuse(
-      `${branch} is ${r.repo}'s default branch`,
-      "push a branch and open a pull request; or, to push the default branch itself, add --allow-default",
-      EXIT.defaultBranch,
     );
   if (r.commits.length === 0) refuse(`${branch} has nothing the remote lacks`, again);
 };
@@ -204,7 +198,6 @@ declare namespace refusePush {
           domain: "acme",
           branch: "fix",
           expect: "0123456789abcdef0123456789abcdef01234567",
-          allowDefault: false,
         ],
       ]
     >,
@@ -229,7 +222,6 @@ declare namespace refusePush {
             domain: "acme",
             branch: "fix",
             expect: "0123456789abcdef0123456789abcdef01234567",
-            allowDefault: false,
           ],
         ]
       >,
@@ -245,13 +237,7 @@ declare namespace refusePush {
         typeof refusalOf,
         [
           f: typeof refusePush,
-          args: [
-            r: Reviewed,
-            domain: "acme",
-            branch: "fix",
-            expect: undefined,
-            allowDefault: false,
-          ],
+          args: [r: Reviewed, domain: "acme", branch: "fix", expect: undefined],
         ]
       >,
       "=",
@@ -271,7 +257,6 @@ declare namespace refusePush {
             domain: "acme",
             branch: "fix",
             expect: "89abcdef0123456789abcdef0123456789abcdef",
-            allowDefault: false,
           ],
         ]
       >,
@@ -292,40 +277,12 @@ declare namespace refusePush {
               repo: "acme/app";
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
-              isDefault: true;
-              commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
-            },
-            domain: "acme",
-            branch: "main",
-            expect: "0123456789abcdef0123456789abcdef01234567",
-            allowDefault: false,
-          ],
-        ]
-      >,
-      "=",
-      {
-        message: "main is acme/app's default branch";
-        fix: "push a branch and open a pull request; or, to push the default branch itself, add --allow-default";
-        code: 77;
-      }
-    >,
-    Expect<
-      Invoke<
-        typeof refusalOf,
-        [
-          f: typeof refusePush,
-          args: [
-            r: {
-              repo: "acme/app";
-              commit: "0123456789abcdef0123456789abcdef01234567";
-              pushable: true;
               isDefault: false;
               commits: [];
             },
             domain: "acme",
             branch: "fix",
             expect: "0123456789abcdef0123456789abcdef01234567",
-            allowDefault: false,
           ],
         ]
       >,
@@ -337,8 +294,9 @@ declare namespace refusePush {
       }
     >,
   ];
-  /** the default branch itself, when the person said so */
-  export type AllowDefault = Expect<
+  /** the default branch is pushed like any other (2026-11-18: one way to push, learned once;
+   *  the dashboard says loudly that it is the default branch) */
+  export type DefaultBranch = Expect<
     Invoke<
       typeof refusalOf,
       [
@@ -354,7 +312,6 @@ declare namespace refusePush {
           domain: "acme",
           branch: "main",
           expect: "0123456789abcdef0123456789abcdef01234567",
-          allowDefault: true,
         ],
       ]
     >,
@@ -452,12 +409,12 @@ declare namespace refuseOtherApproval {
 }
 
 const main = async () => {
-  const { mode, domain, repoArg, branch, expect, allowDefault, message, signature } = argsOf(
+  const { mode, domain, repoArg, branch, expect, message, signature } = argsOf(
     process.argv.slice(2),
   );
   const r = await review(domain, repoArg, branch);
   const repo = parseRepo(r.repo)!;
-  refusePush(r, domain, branch, expect, allowDefault);
+  refusePush(r, domain, branch, expect);
   // A suede proposal: its own workflows run on the remote when it lands (shared/suede.ts).
   if (isDownstream(branch)) {
     const why = await repos.downstreamCheck(repo, r.commit);
