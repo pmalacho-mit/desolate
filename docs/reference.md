@@ -22,7 +22,9 @@ the server.
 
 **Or approve with one click.** `desolate approve --web` (and `desolate ui`) prints the
 approval page's address, `http://desolate-approve.localhost:<port>/?tkn=...`: open it once in
-your browser, keep the tab, and every push waiting for you shows there, with what it would
+your browser (`--open`). The dashboard's **Push** opens the page in a new tab, at its bare
+address, the one way into it from another site: a token's address from another site is
+refused, and so is the page in a frame. Every push waiting for you shows there, with what it would
 send, as desolate's reviewer in the root worked it out (its commits and files, and whether
 it builds on the remote's branch or replaces it). The page is the host's, not a VM's, and it
 signs only for a request from its own tab: a cookie only that address gives, its own origin
