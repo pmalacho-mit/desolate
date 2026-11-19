@@ -28,8 +28,10 @@ import {
 import { embedAddress } from "./approve-web.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
+import { signins } from "./signin.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
+import type { mint } from "./signin.ts";
 import type { ask, gitVmDown, noShell, quiet } from "../.harness/host-web.ts";
 
 export const TOKEN_FILE = path.join(paths.state, "git-token");
@@ -212,6 +214,26 @@ export const handler = (
       );
     const token = gitToken();
     const name = cookieName(token);
+    // The second page of `desolate ui --open`'s chain (signin.ts), sent here by the approval
+    // page: a code of its own, spent once, for this page's cookie, and on to the dashboard's.
+    const code = url.searchParams.get("signin");
+    if (req.method === "GET" && url.pathname === "/" && code !== null) {
+      const next = signins.take("git", code);
+      if (next === undefined)
+        return send(
+          res,
+          403,
+          "text/plain; charset=utf-8",
+          "desolate: refused: that sign-in link is spent or too old; `desolate ui --open` makes another\n",
+        );
+      res.writeHead(303, {
+        location: next,
+        "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`,
+        "content-length": 0,
+        ...SECURITY,
+      });
+      return res.end();
+    }
     const given = url.searchParams.get("tkn");
     if (req.method === "GET" && url.pathname === "/" && given !== null) {
       if (!sameSecret(given, token))
@@ -351,6 +373,87 @@ declare namespace handler {
     "content-type": "application/json";
   };
 
+  /** the chain's second link, from the approval page (another site): its code, spent once, for
+   *  the cookie, and on to the dashboard's; a code of the approval page's is not one of its own */
+  export type SignsInByCode = Given<
+    [
+      HasToken,
+      Invoke<
+        typeof mint,
+        [
+          page: "git",
+          next: "http://desolate.localhost:31581/?signin=787878787878787878787878787878787878787878787878",
+          code: "565656565656565656565656565656565656565656565656",
+        ]
+      >,
+      Invoke<
+        typeof mint,
+        [
+          page: "approve",
+          next: "http://desolate-git.localhost:31581/",
+          code: "787878787878787878787878787878787878787878787878",
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=565656565656565656565656565656565656565656565656";
+              headers: {
+                host: "desolate-git.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 303;
+          headers: {
+            location: "http://desolate.localhost:31581/?signin=787878787878787878787878787878787878787878787878";
+            "set-cookie": "desolate_git_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/";
+          };
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=565656565656565656565656565656565656565656565656";
+              headers: { host: "desolate-git.localhost:31581"; "sec-fetch-site": "none" };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=787878787878787878787878787878787878787878787878";
+              headers: { host: "desolate-git.localhost:31581"; "sec-fetch-site": "none" };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+    ]
+  >;
   /** the address's token becomes a cookie; the repository it names is kept only if it is one */
   export type SignsIn = Given<
     HasToken,

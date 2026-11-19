@@ -30,7 +30,7 @@ Every day: a workspace, your work in it, and its push:
                                                                  a stopped workspace's size (no flags: what it has, and its project asks)
   desolate rm <domain>/<workspace> --if-clean [--if-pushed]      only if nothing in it would be lost (and its commits are on the remote)
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
-  desolate ui [--open] [--json]                                  the dashboard's address, for your browser
+  desolate ui [--open | --link] [--json]                         the dashboard's address; --open signs your browser in to all three pages
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
   desolate offers dismiss <domain> <owner/repo> <branch>         not this one: off "Needs you" (the branch stays)
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
@@ -440,12 +440,18 @@ const main = async (argv: string[]): Promise<number> => {
     return push(rest);
   }
   if (verb === "ui") {
-    const { values } = flags(rest, { open: { type: "boolean" } });
-    const { ui } = await import("./daemon.ts");
+    const { values } = flags(rest, { open: { type: "boolean" }, link: { type: "boolean" } });
+    const { ui, signinAddress } = await import("./daemon.ts");
+    // One link for all three pages (signin.ts), each signed in until the browser quits: opened
+    // (--open), or printed for a browser of your choosing (--link). Good once, for a minute.
+    if (values.link === true) {
+      out(await signinAddress());
+      return EXIT.ok;
+    }
     const shown = await ui();
     if (values.json === true) out(JSON.stringify(shown));
     else out(`dashboard    ${shown.dashboard}\napprovals    ${shown.approvals}`);
-    if (values.open === true) openInBrowser(shown.dashboard);
+    if (values.open === true) openInBrowser(await signinAddress());
     return EXIT.ok;
   }
   if (verb === "down") {

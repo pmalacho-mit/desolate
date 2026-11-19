@@ -15,7 +15,7 @@
 // nowhere else: which link a connection arrived on is what attributes it.
 import { printable } from "../shared/text.ts";
 import { execFile, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as os from "node:os";
 import type { Size } from "../shared/size.ts";
 import * as fs from "node:fs";
@@ -44,6 +44,7 @@ import {
 import { handler as approvePage } from "./approve-web.ts";
 import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
+import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
@@ -3448,6 +3449,25 @@ const serve = async () => {
           connection.on("close", stop);
           connection.on("error", stop);
           return;
+        } else if (request.op === "signin") {
+          // `desolate ui --open`: the chain of sign-in codes (signin.ts), the host's pages first.
+          // The dashboard's is told to the root first, as a digest: a chain whose last link
+          // would be refused is not handed out.
+          const port = editorHostPort();
+          const dashboard = randomBytes(24).toString("hex");
+          const told = await rootHttp("POST", "/host/signin", {
+            digest: createHash("sha256").update(dashboard).digest("hex"),
+          }).catch((error: Error) => ({ status: 0, body: error.message }));
+          if (told.status !== 200)
+            reply = {
+              ok: false,
+              error: `the dashboard did not take its sign-in code (${told.status || told.body})`,
+            };
+          else {
+            const git = mint("git", `http://${ROOT_HOSTNAME}:${port}/?signin=${dashboard}`);
+            const approve = mint("approve", `http://${GIT_HOSTNAME}:${port}/?signin=${git}`);
+            reply = { ok: true, address: `http://${APPROVE_HOSTNAME}:${port}/?signin=${approve}` };
+          }
         } else if (request.op === "code") {
           reply = { ok: true, code: CODE };
         } else if (request.op === "stop") {
@@ -3738,6 +3758,20 @@ export const ui = async (): Promise<{ dashboard: string; approvals: string }> =>
     dashboard: `http://${ROOT_HOSTNAME}:${editorHostPort()}/?tkn=${token}`,
     approvals: approveAddress(),
   };
+};
+
+/** `desolate ui --open`: one address that signs a browser in to the approval page, the git
+ *  terminal and the dashboard, then shows the dashboard (signin.ts). Good once, for a minute. */
+export const signinAddress = async (): Promise<string> => {
+  await ensureDaemon();
+  await tokenAddressesSafe();
+  const reply = await ask({ op: "signin" }, 30_000);
+  if (reply.ok !== true || typeof reply.address !== "string")
+    refuse(
+      `no sign-in link: ${String(reply.error ?? "the host daemon did not make one")}`,
+      "desolate doctor",
+    );
+  return reply.address as string;
 };
 
 /** `desolate events`: the daemon's events, as they come, to `onLine`, for as long as this

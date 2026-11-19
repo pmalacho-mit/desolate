@@ -42,6 +42,18 @@ export const FEATURES: Feature[] = [
     shots: ["dashboard"],
   },
   {
+    id: "signin",
+    what: "one sign-in for the browser (desolate ui --open): the approval page, the git terminal and the dashboard, a code each",
+    code: ["release/host/signin.ts"],
+    tests: ["t2/09-ui", "t2/19-journeys"],
+    docs: [
+      "release/docs/getting-started.md: 2. Bootstrap the stack",
+      "release/docs/reference.md: Approving, pushing, and the pages desolate serves",
+    ],
+    shots: [],
+    boundary: true,
+  },
+  {
     id: "review-and-push",
     what: "reviewing what a push sends (commits, files changed, the diff), pushing it, and approving it on the Mac",
     code: [

@@ -20,9 +20,13 @@ terminal, the editors): they are at names under `localhost`, which those browser
 themselves. Safari asks macOS, which resolves `localhost` alone, and says it cannot find
 the server.
 
-**Or approve with one click.** `desolate approve --web` (and `desolate ui`) prints the
-approval page's address, `http://desolate-approve.localhost:<port>/?tkn=...`: open it once in
-your browser (`--open`). The dashboard's **Push** opens the page in a new tab, at its bare
+**Or approve with one click.** `desolate ui --open` signs your browser in to the approval
+page, the git terminal and the dashboard, with one link: each page in turn trades a code that
+works once, for a minute, for its own session cookie, and sends the browser on to the next,
+the host's two pages first (the root, which serves the dashboard, sees only the dashboard's
+code, after the others are spent). Quitting the browser signs it out of all three. Or sign in
+to the approval page alone: `desolate approve --web` (and `desolate ui`) prints its address,
+`http://desolate-approve.localhost:<port>/?tkn=...`, to open once in your browser (`--open`). The dashboard's **Push** opens the page in a new tab, at its bare
 address, the one way into it from another site: a token's address from another site is
 refused, and so is the page in a frame. Every push waiting for you shows there, with what it would
 send, as desolate's reviewer in the root worked it out (its commits and files, and whether

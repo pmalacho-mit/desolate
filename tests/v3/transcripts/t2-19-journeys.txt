@@ -37,6 +37,8 @@ bootstrap: 7 step(s) done.
 doctor: all checks passed.
 [exit 0]
 
+## one sign-in for all three pages
+
 ## a first workspace
 
 ## review and push a branch
