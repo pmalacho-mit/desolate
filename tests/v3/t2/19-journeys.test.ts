@@ -17,6 +17,16 @@ let browser: Awaited<ReturnType<typeof openBrowser>>;
 let page: Awaited<ReturnType<Awaited<ReturnType<typeof openBrowser>>["tab"]>>;
 const DOMAIN = "acme--app";
 const row = `[data-workspace="${DOMAIN}/main"]`;
+/** A button clicked once it is there and on, as a person waits for it (the dashboard turns a
+ *  workspace's buttons off for a moment after each action). */
+const press = async (selector: string, text: string, ms = 120_000) => {
+  await page.until(
+    `[...document.querySelectorAll(${JSON.stringify(selector)})].some((b) => b.innerText.includes(${JSON.stringify(text)}) && !b.disabled)`,
+    `${text}, on`,
+    ms,
+  );
+  await page.click(selector, text);
+};
 /** An agent's work in the workspace, then its `git push`: an offer. */
 const agent = (script: string) => {
   const done = stack.quiet(
@@ -27,7 +37,7 @@ const agent = (script: string) => {
     "-lc",
     `${script} && git rev-parse HEAD && (git push origin HEAD 2>&1 || true)`,
   );
-  assert.equal(done.code, 0, done.stderr);
+  assert.equal(done.code, 0, `${done.stdout}\n${done.stderr}`);
   return done.stdout
     .trim()
     .split("\n")
@@ -75,7 +85,7 @@ describe("T2 journeys through the dashboard", () => {
       `document.querySelector('[data-first-workspace="${DOMAIN}"] button')`,
       "Workspace on main",
     );
-    await page.click(`[data-first-workspace="${DOMAIN}"] button`, "Workspace on main");
+    await press(`[data-first-workspace="${DOMAIN}"] button`, "Workspace on main");
     await page.until(
       `document.querySelector('${row}') && /running/.test(document.querySelector('${row}').innerText) && document.querySelector('${row} [data-editor]')`,
       "the workspace running, with its editor",
@@ -138,7 +148,7 @@ describe("T2 journeys through the dashboard", () => {
     );
     await page.click("#review [data-change] button", "greet.txt");
     // Push, then the person approves on the host.
-    await page.click("#review button[data-action='offer.push']", "Push exactly");
+    await press("#review button[data-action='offer.push']", "Push exactly");
     await page.until(
       `[...document.querySelectorAll("#activity-list li")].some((li) => /desolate push acme--app acme\\/app feature\\/greet/.test(li.innerText))`,
       "the push in what the dashboard ran",
@@ -176,7 +186,7 @@ describe("T2 journeys through the dashboard", () => {
       "the Push button",
     );
     assert.equal(push, `Push exactly ${head.slice(0, 12)} to main`);
-    await page.click("#review button[data-action='offer.push']", "Push exactly");
+    await press("#review button[data-action='offer.push']", "Push exactly");
     await page.until(
       `[...document.querySelectorAll("#activity-list li")].some((li) => /desolate push acme--app acme\\/app main/.test(li.innerText))`,
       "the push of main",
@@ -189,13 +199,13 @@ describe("T2 journeys through the dashboard", () => {
 
   it("a stopped workspace resized from the dashboard, started again, and deleted once nothing in it would be lost", async () => {
     stack.step("resize and delete");
-    await page.click(`${row} button`, "Stop");
+    await press(`${row} button`, "Stop");
     await page.until(
       `/stopped/.test(document.querySelector('${row}').innerText) && document.querySelector('${row} [data-resize]') && !document.querySelector('${row} [data-resize]').disabled`,
       "stopped, with Resize on",
       120_000,
     );
-    await page.click(`${row} [data-resize]`, "Resize");
+    await press(`${row} [data-resize]`, "Resize");
     await page.until(
       `document.querySelector('${row} [data-resize-form] input[name=memory]')`,
       "the Resize form",
@@ -209,13 +219,13 @@ describe("T2 journeys through the dashboard", () => {
       "5 GiB memory",
       60_000,
     );
-    await page.click(`${row} button`, "Start");
+    await press(`${row} button`, "Start");
     await page.until(
       `/running/.test(document.querySelector('${row}').innerText) && document.querySelector('${row} [data-delete]') && !document.querySelector('${row} [data-delete]').disabled`,
       "running, everything pushed, and Delete on",
       180_000,
     );
-    await page.click(`${row} [data-delete]`, "Delete");
+    await press(`${row} [data-delete]`, "Delete");
     await page.until(`!document.querySelector('${row}')`, "the workspace gone", 120_000);
     assert.deepEqual(page.said, [], "nothing on the page threw");
   });
