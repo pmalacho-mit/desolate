@@ -158,6 +158,12 @@ describe("T2 journeys through the dashboard", () => {
       `[...document.querySelectorAll("#activity-list li")].some((li) => /desolate push acme--app acme\\/app feature\\/greet/.test(li.innerText))`,
       "the push in what the dashboard ran",
     );
+    // The person approves once the push asks: it says so in Needs you.
+    await page.until(
+      `/A push is waiting for your approval: acme\\/app feature\\/greet/.test(document.body.innerText)`,
+      "the push waiting for approval",
+      60_000,
+    );
     const approved = stack.person("Type the branch name", "feature/greet", "approve");
     assert.equal(approved.code, 0, approved.stdout);
     await page.until(
@@ -195,6 +201,12 @@ describe("T2 journeys through the dashboard", () => {
     await page.until(
       `[...document.querySelectorAll("#activity-list li")].some((li) => /desolate push acme--app acme\\/app main/.test(li.innerText))`,
       "the push of main",
+    );
+    // The person approves once the push asks: it says so in Needs you.
+    await page.until(
+      `/A push is waiting for your approval: acme\\/app main/.test(document.body.innerText)`,
+      "the push waiting for approval",
+      60_000,
     );
     const approved = stack.person("Type the branch name", "main", "approve");
     assert.equal(approved.code, 0, approved.stdout);
