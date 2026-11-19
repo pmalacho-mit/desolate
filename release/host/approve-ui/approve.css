@@ -1,38 +1,71 @@
-:root { --bg: #f7f7f5; --fg: #1d1d1b; --muted: #6b6b66; --card: #ffffff; --line: #deded8; --accent: #1f5f3f; --danger: #9a2a1a; color-scheme: light dark; }
-@media (prefers-color-scheme: dark) { :root { --bg: #161615; --fg: #ececea; --muted: #a2a29c; --card: #20201e; --line: #3a3a36; --accent: #6fc196; --danger: #f08a72; } }
+/* The approval page, the secrets page and the editor defaults ("Slate", as the dashboard:
+   root/ui/dashboard.css says how it is built). Nothing that holds Approve is ever moved,
+   filtered or see-through: beside the git terminal, the browser counts any of those as Approve
+   being covered (approve.js), and it would never arm. */
+:root {
+  --icon-repo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3.25A1.5 1.5 0 0 1 4.5 1.75h8.25v10H4.5A1.5 1.5 0 0 0 3 13.25ZM3 13.25a1.5 1.5 0 0 0 1.5 1.5h8.25v-3'/%3E%3C/svg%3E");
+  --icon-branch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4.75' cy='3.5' r='1.6'/%3E%3Ccircle cx='4.75' cy='12.5' r='1.6'/%3E%3Ccircle cx='11.25' cy='5' r='1.6'/%3E%3Cpath d='M4.75 5.1v5.8M11.25 6.6c0 3-6.5 2.2-6.5 4.3'/%3E%3C/svg%3E");
+  --icon-commit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='2.6'/%3E%3Cpath d='M1 8h4.4M10.6 8H15'/%3E%3C/svg%3E");
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --icon: 14px;
+  --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --bg: #f3f3f5; --fg: #17171a; --muted: #686872; --card: #ffffff; --line: #e3e3e8; --accent: #17171a; --danger: #dc2626; --raise: #f0f0f3; --ok: #16a34a;
+  --k-repo: #56667f; --k-branch: #cf6a0a; --k-commit: #767c87;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0c0c0f; --fg: #f2f2f5; --muted: #a0a0ab; --card: #15151a; --line: #26262d; --accent: #f2f2f5; --danger: #f87171; --raise: #1f1f25; --ok: #4ade80;
+    --k-repo: #9eabc2; --k-branch: #f3a04c; --k-commit: #969ca7; }
+}
 * { box-sizing: border-box; }
-body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+[hidden] { display: none !important; }
+body { margin: 0; padding: 40px 16px 48px; background: var(--bg); color: var(--fg); font: 14px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
 header, main, .status, .empty { max-width: 760px; margin: 0 auto; }
-.card.empty { margin: 16px auto; }
+header { display: grid; gap: var(--s2); }
+header > * { margin: 0; }
+.card.empty { margin: var(--s5) auto; }
 body.nothing .lede { display: none; }
-.empty .big { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
+.empty .big { font-size: 17px; font-weight: 650; margin: 0; }
 .empty .more, .empty li { color: var(--muted); }
-.empty ul { margin: 4px 0 8px; padding-left: 20px; }
+.empty ul { margin: 0; padding-left: 20px; }
 html.embed .empty .more { display: none; }
-h1 { font-size: 22px; margin: 0 0 4px; }
+h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
 .lede, .from, .hint, .status { color: var(--muted); }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 16px; margin: 16px 0; }
-.names { display: grid; grid-template-columns: max-content 1fr; gap: 2px 16px; margin: 0; }
-.names dt { color: var(--muted); }
-.names dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
-.mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.card { display: grid; gap: var(--s4); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: var(--s5) var(--s6); margin: var(--s5) 0; box-shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04); }
+.card > * { margin-top: 0; margin-bottom: 0; }
+.names { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s4); align-items: center; margin: 0; }
+.names dt { color: var(--muted); font-size: 13px; line-height: 22px; }
+.names dd { margin: 0; font-weight: 550; overflow-wrap: anywhere; }
+/* What a name is: a capsule with its kind's icon, as on the dashboard. */
+.names dd.repo, .names dd.branch, .names dd.commit { justify-self: start; display: inline-flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 var(--s2) 0 6px; border-radius: 6px; background: var(--raise); font: 550 12.5px var(--mono); }
+.names dd.repo::before, .names dd.branch::before, .names dd.commit::before { content: ""; flex: none; width: var(--icon); height: var(--icon); background: var(--kind-color);
+  -webkit-mask: var(--kind-icon) center / var(--icon) no-repeat; mask: var(--kind-icon) center / var(--icon) no-repeat; }
+.names dd.repo { --kind-icon: var(--icon-repo); --kind-color: var(--k-repo); }
+.names dd.branch { --kind-icon: var(--icon-branch); --kind-color: var(--k-branch); }
+.names dd.commit { --kind-icon: var(--icon-commit); --kind-color: var(--k-commit); }
+.mono, code { font-family: var(--mono); font-size: 12.5px; }
+code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 .forced { color: var(--danger); font-weight: 600; }
-.summary ul { margin: 4px 0 8px; padding-left: 20px; }
+.summary { display: grid; gap: var(--s3); }
+.summary > * { margin: 0; }
+.summary > button { justify-self: start; }
+.summary ul { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s1); }
+.summary li { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s2); align-items: baseline; }
 .summary li { overflow-wrap: anywhere; }
 .summary .error { color: var(--danger); }
 /* The decision stays in view: while a card is taller than the window, its buttons stay at the
    bottom of the window (inside the card, in front of nothing but the card's own text). */
-.actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 12px; position: sticky; bottom: 0; z-index: 1; background: var(--card); padding: 10px 0; border-top: 1px solid var(--line); }
+.actions { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; margin: 0; position: sticky; bottom: 0; z-index: 1; background: var(--card); padding: var(--s3) 0 var(--s1); border-top: 1px solid var(--line); }
 /* A long list scrolls in its own box. */
-.summary ul.long { max-height: 11em; overflow: auto; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px 6px 28px; }
-button { font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
-button.approve { background: var(--accent); border-color: var(--accent); color: var(--card); font-weight: 600; }
+.summary ul.long { max-height: 11em; overflow: auto; background: var(--raise); border-radius: 10px; padding: var(--s2) var(--s3); }
+button { font: 550 13.5px var(--font); min-height: 36px; padding: 0 var(--s4); display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03); }
+button.approve { background: var(--fg); border-color: var(--fg); color: var(--card); font-weight: 600; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 .arm { display: inline-block; }
 .onto { color: var(--muted); }
 button.approve:disabled { pointer-events: none; }
 .gone { opacity: 0.5; }
-.sensitive code { color: var(--danger); font-weight: 600; }
+.sensitive code { color: var(--danger); font-weight: 600; background: color-mix(in srgb, var(--danger) 12%, var(--card)); }
 /* Beside the git terminal (/embed): the same page, narrower. */
 html.embed body { padding: 10px 12px 24px; font-size: 14px; }
 html.embed .lede { display: none; }
@@ -43,11 +76,11 @@ html.embed pre.diff { max-height: 40vh; }
 /* The diff, on asking: git's text, coloured by each line's first character. */
 pre.diff { margin: 8px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; max-height: 50vh; overflow: auto; white-space: pre; font: 12.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
 pre.diff span { display: block; min-width: max-content; }
-pre.diff .add { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+pre.diff .add { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 pre.diff .del { background: color-mix(in srgb, var(--danger) 18%, transparent); }
-pre.diff .hunk { color: var(--accent); }
+pre.diff .hunk { color: var(--muted); }
 pre.diff .file { font-weight: 700; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
-button.quiet { padding: 4px 10px; font-size: 13px; }
+button.quiet { min-height: 28px; padding: 0 var(--s3); font-size: 12.5px; border-radius: 8px; }
 /* Syntax colour (shared/ui/highlight.js): each token's colours, for light and dark. */
 pre.diff .hl { display: inline; min-width: 0; color: var(--hl-light, inherit); }
 @media (prefers-color-scheme: dark) { pre.diff .hl { color: var(--hl-dark, inherit); } }
@@ -59,14 +92,16 @@ main > .card h2 { font-size: 16px; margin: 0 0 10px; }
 label.row { display: flex; gap: 10px; align-items: center; font-weight: 600; }
 label.field { display: grid; gap: 4px; margin: 0 0 12px; font-weight: 600; }
 label.field .hint { font-weight: 400; font-size: 13px; }
-input, select { font: inherit; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+input, select { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+input:focus, select:focus, textarea:focus { outline: 0; border-color: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 18%, transparent); }
 .actions.plain { position: static; border-top: 0; padding: 0; }
 .secret { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
 .secret:first-child { border-top: 0; }
 .secret .name { font-weight: 600; }
 .secret .buttons { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.pill { font-size: 12px; padding: 1px 9px; border-radius: 999px; border: 1px solid currentColor; }
-.pill.on { color: var(--accent); }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 22px; font-size: 11.5px; font-weight: 500; padding: 0 var(--s2); border-radius: 6px; background: var(--raise); }
+.pill.on::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.pill.on { color: var(--fg); }
 .pill.off { color: var(--muted); }
 button.danger { color: var(--danger); }
 .error { color: var(--danger); }

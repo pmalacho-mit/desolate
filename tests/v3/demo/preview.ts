@@ -74,7 +74,7 @@ const page = (res: ServerResponse, url: URL, theme: string, html: string) => {
   res.setHeader("set-cookie", `theme=${theme}; Path=/; SameSite=Lax`);
   let text = fs.readFileSync(html, "utf8");
   // ?review: the dashboard opens its first offer's review, as a click on Review would.
-  if (url.searchParams.has("review"))
+  if (url.searchParams.has("review") || url.searchParams.has("pick"))
     text = text.replace("</body>", `<script src="/preview-review.js"></script></body>`);
   send(res, 200, TYPES[".html"]!, text);
 };
@@ -100,7 +100,7 @@ const dashboard = (req: IncomingMessage, res: ServerResponse, url: URL) => {
         res,
         200,
         TYPES[".js"]!,
-        `setTimeout(() => document.querySelector("[data-offer] button")?.click(), 400);`,
+        `setTimeout(() => document.querySelector("[data-offer] button")?.click(), 400); if (/[?&]pick/.test(location.search)) setTimeout(() => document.querySelectorAll("[data-pick]")[1]?.click(), 1400);`,
       );
     case "/state":
       return json(res, read("state.json"));
@@ -110,8 +110,21 @@ const dashboard = (req: IncomingMessage, res: ServerResponse, url: URL) => {
       return; // kept open, as the real one is
     case "/review":
       return json(res, review);
-    case "/diff":
-      return json(res, diff);
+    case "/diff": {
+      // A pick of commits (?from&to): here, the first file's part of the diff stands for it.
+      if (!url.searchParams.get("from")) return json(res, diff);
+      const first = diff.text.split(/(?=^diff --git )/m)[0];
+      const change = review.changes[0];
+      return json(res, {
+        ...diff,
+        text: first,
+        pick: {
+          from: url.searchParams.get("from"),
+          to: url.searchParams.get("to"),
+          changes: [change],
+        },
+      });
+    }
     default:
       return json(res, { ok: true });
   }

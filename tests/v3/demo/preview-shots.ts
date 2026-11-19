@@ -81,6 +81,7 @@ await send("Emulation.setDeviceMetricsOverride", {
 const PAGES = [
   ["dashboard", (t: string) => `http://desolate.localhost:${PORT}/?theme=${t}`],
   ["review", (t: string) => `http://desolate.localhost:${PORT}/?theme=${t}&review`],
+  ["pick", (t: string) => `http://desolate.localhost:${PORT}/?theme=${t}&review&pick`],
   ["approve", (t: string) => `http://desolate-approve.localhost:${PORT}/?theme=${t}`],
 ] as const;
 for (const theme of themes)
@@ -90,7 +91,7 @@ for (const theme of themes)
         features: [{ name: "prefers-color-scheme", value: scheme }],
       });
       await send("Page.navigate", { url: address(theme) });
-      await sleep(name === "review" ? 2200 : 1400);
+      await sleep(name === "pick" ? 3200 : name === "review" ? 2200 : 1400);
       const shot = await send("Page.captureScreenshot", { format: "png" });
       fs.writeFileSync(
         path.join(OUT, `${theme}-${name}-${scheme}.png`),
