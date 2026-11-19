@@ -42,11 +42,13 @@ import type { Issue } from "../shared/issues.ts";
 import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, isSlug } from "../shared/names.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
+import { signins } from "./signin.ts";
 import type { SecretOps } from "./domains.ts";
 import type { Choice } from "./env-import.ts";
 import type { PlanRow } from "../shared/envfile.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
+import type { mint } from "./signin.ts";
 import type {
   approved,
   ask,
@@ -310,6 +312,26 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       );
     const token = approveToken();
     const name = cookieName(token);
+    // The first page of `desolate ui --open`'s chain (signin.ts): a code of its own, spent once,
+    // for this page's cookie, and the browser sent on to the git terminal's. Opened by the
+    // command, never by another site: the gate above refused that (only the bare address is).
+    const code = url.searchParams.get("signin");
+    if (req.method === "GET" && url.pathname === "/" && code !== null) {
+      const next = signins.take("approve", code);
+      if (next === undefined)
+        return text(
+          res,
+          403,
+          "refused: that sign-in link is spent or too old; `desolate ui --open` makes another",
+        );
+      res.writeHead(303, {
+        location: next,
+        "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`,
+        "content-length": 0,
+        ...SECURITY,
+      });
+      return res.end();
+    }
     const given = url.searchParams.get("tkn");
     if (req.method === "GET" && url.pathname === "/" && given !== null) {
       if (!sameSecret(given, token))
@@ -1091,6 +1113,117 @@ declare namespace handler {
         };
       }
     >
+  >;
+  /** `desolate ui --open`'s link: its code, spent once, for the cookie, and on to the git
+   *  terminal's link; the same link again, or another site's, gets nothing */
+  export type SignsInByCode = Given<
+    [
+      HasToken,
+      Invoke<
+        typeof mint,
+        [
+          page: "approve",
+          next: "http://desolate-git.localhost:31581/?signin=121212121212121212121212121212121212121212121212",
+          code: "efefefefefefefefefefefefefefefefefefefefefefefef",
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=efefefefefefefefefefefefefefefefefefefefefefefef";
+              headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "none" };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 303;
+          headers: {
+            location: "http://desolate-git.localhost:31581/?signin=121212121212121212121212121212121212121212121212";
+            "set-cookie": "desolate_approve_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/";
+          };
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=efefefefefefefefefefefefefefefefefefefefefefefef";
+              headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "none" };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 403;
+          text: "desolate: refused: that sign-in link is spent or too old; `desolate ui --open` makes another\n";
+        }
+      >,
+    ]
+  >;
+  /** a link another site sends the browser to is refused before its code is looked at (a
+   *  control: the same code, opened by the command, still works after) */
+  export type SignInNotFromAnotherSite = Given<
+    [
+      HasToken,
+      Invoke<
+        typeof mint,
+        [
+          page: "approve",
+          next: "http://desolate-git.localhost:31581/",
+          code: "343434343434343434343434343434343434343434343434",
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=343434343434343434343434343434343434343434343434";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        {
+          status: 403;
+          text: "desolate: refused a request another site started (Sec-Fetch-Site: cross-site)\n";
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Page,
+            request: {
+              method: "GET";
+              url: "/?signin=343434343434343434343434343434343434343434343434";
+              headers: { host: "desolate-approve.localhost:31581"; "sec-fetch-site": "none" };
+            },
+          ]
+        >,
+        "matches",
+        { status: 303; headers: { location: "http://desolate-git.localhost:31581/" } }
+      >,
+    ]
   >;
   /** an address with any other token gets nothing */
   export type WrongAddress = Given<

@@ -64,29 +64,40 @@ If macOS asks whether `limactl` may accept incoming network connections, **click
 desolate listens only on your Mac's loopback ([why](reference.md#on-a-mac-if-macos-asks-about-limactl-and-incoming-connections)).
 
 **Your browser.** Most of desolate is pages in your browser, all served on your Mac at
-`*.localhost` names (Chrome; Safari cannot open `*.localhost`):
+`*.localhost` names (Chrome; Safari cannot open `*.localhost`). One command signs your browser
+in to all of them:
 
-| Page | What it is for | Signing in |
-|---|---|---|
-| **Dashboard** | domains, workspaces, review, push | `desolate ui --open` |
-| **Approval page** | approving each push; **Push** on the dashboard opens it | `desolate approve --web --open` |
-| **Secrets**, **Editor defaults** | a domain's secrets, and every editor's defaults; linked from the dashboard | the approval page's sign-in opens them too |
-| **Git terminal** | Open in git, from a review | `desolate git --open` |
-| **Editors** | each workspace's VSCodium | nothing: **Open editor** carries its own token |
-| **Dev servers** | your app, at its workspace's name | nothing |
+```bash
+desolate ui --open
+```
 
-Run each of the three commands once in a terminal, the first time and again after you quit
-the browser. Each opens its page at an address that carries a token, which the page trades for
-a cookie only that page's own name gets. They are separate on purpose: each page is its own
-site, so no page can act as another.
+Run it the first time, and again after you quit the browser: quitting signs the browser out of
+every page, a clean slate. (`desolate ui --link` prints the link instead, for a browser of your
+choosing.)
+
+| Page | What it is for |
+|---|---|
+| **Dashboard** | domains, workspaces, review, push |
+| **Approval page** | approving each push; **Push** on the dashboard opens it |
+| **Secrets**, **Editor defaults** | a domain's secrets, and every editor's defaults; linked from the dashboard |
+| **Git terminal** | Open in git, from a review |
+| **Editors** | each workspace's VSCodium; **Open editor** carries its own token |
+| **Dev servers** | your app, at its workspace's name; no sign-in |
+
+The link goes through the approval page, then the git terminal, then the dashboard, where it
+stops. Each page trades a code that works once, for a minute, for a cookie only that page's own
+name gets. The pages are separate on purpose: each is its own site, so no page can act as
+another.
 - **The dashboard can never approve a push, see a secret's value, or type in your git
   terminal.** It is served by the root VM's ordinary user, which reads everything domains
-  send.
+  send. So the link starts on your Mac's own pages, and the root sees only the dashboard's
+  code, after the other two are spent.
 - **The approval page, the secrets page and the editor defaults are your Mac's.** They hold
   what decides what leaves desolate.
-- **A page without its cookie says which command to run.**
+- **A page without its cookie says which command to run.** Each page still has its own command,
+  `desolate approve --web --open` and `desolate git --open`, which signs in to that page alone.
 
-Treat the addresses the commands print like passwords: whoever opens one is signed in.
+Treat the addresses these commands print like passwords: whoever opens one is signed in.
 
 ## 3. Clone a repository: it is a domain
 
@@ -310,7 +321,7 @@ with what they are: a **domain**, a **workspace**, a **repo**, a **branch**.
 Two ways, and both end with you approving the exact commit:
 
 - From the dashboard: **Push exactly <commit>**. It opens the approval page in a new tab,
-  where you approve exactly that commit. (Your browser needs the approval page's sign-in:
+  where you approve exactly that commit. (Your browser is signed in to it by `desolate ui --open`:
   step 2. Or approve with `desolate approve` in a terminal.)
   The default branch is pushed the same way: the review says so in red at its top, since a
   push there changes it on the remote with no pull request first.
