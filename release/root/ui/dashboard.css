@@ -91,6 +91,7 @@ button.fold::before { content: "\25BE"; }
 .card > * { margin-top: 0; margin-bottom: 0; }
 .card[data-folded] { gap: var(--s2); }
 .card > .top, .repos, .meta, .toolbar, .stat { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); min-height: var(--row); }
+.toolbar:empty { display: none; }
 .domain-title { color: var(--soft); font-size: 13.5px; }
 hr.split { border: 0; border-top: 1px solid var(--line); margin: 0; }
 #needs ul.rows { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0 var(--s5); box-shadow: var(--shadow); }
