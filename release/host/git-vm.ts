@@ -218,6 +218,47 @@ export const ensureGitClone = async (repo: Repo) => {
   return dir;
 };
 
+/** Your clone, on the branch a domain offered, as the dashboard's review of it opens the
+ *  terminal: what a workspace had in its editor (dogfooding, 2026-11-18: "up to date with
+ *  origin/main" here, two commits ahead there). Fetches the remote's mirror and the domain,
+ *  then puts your <branch> at the domain's: made if you have none, fast-forwarded if it is
+ *  behind, and otherwise left as it is (never moved back, never past work of your own), and
+ *  never switched to over uncommitted changes. Its upstream is the remote's branch of that
+ *  name, which a push updates: `git status` then says how far ahead it is. What happened,
+ *  and `git status`, as text for the terminal. */
+export const checkoutOffered = async (repo: Repo, domain: string, branch: string) => {
+  if (!isSlug(domain) || !isBranch(branch)) return "";
+  const dir = `${guest.git}/${repo.owner}/${repo.name}`;
+  const script = [
+    "set -u",
+    'cd "$1" || exit 0',
+    'D=$2; B=$3; THEIRS="refs/remotes/$D/$B"',
+    "git fetch --quiet origin 2>&1 | tail -2",
+    'if ! git remote get-url "$D" >/dev/null 2>&1; then echo "desolate: no remote for the domain $D in this clone yet"; git status; exit 0; fi',
+    'git fetch --quiet "$D" 2>&1 | tail -2',
+    'if ! git rev-parse -q --verify "$THEIRS^{commit}" >/dev/null; then echo "desolate: $D has no branch $B (yet): staying where you are"; git status; exit 0; fi',
+    "NOW=$(git symbolic-ref -q --short HEAD || true)",
+    'if [ "$NOW" != "$B" ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "desolate: staying on ${NOW:-a detached HEAD}: it has changes not committed. Commit or stash them, then: git switch $B"; git status; exit 0; fi',
+    'if ! git show-ref -q --verify "refs/heads/$B"; then',
+    '  git switch -q -c "$B" "$THEIRS" && echo "desolate: made $B at $D/$B"',
+    'elif git merge-base --is-ancestor "refs/heads/$B" "$THEIRS"; then',
+    '  if [ "$NOW" = "$B" ]; then git merge -q --ff-only "$THEIRS"; else git branch -q -f "$B" "$THEIRS" && git switch -q "$B"; fi',
+    '  echo "desolate: $B is at $D/$B"',
+    "else",
+    '  [ "$NOW" = "$B" ] || git switch -q "$B"',
+    '  if git merge-base --is-ancestor "$THEIRS" "refs/heads/$B"; then echo "desolate: your $B already has $D/$B, and more"; else echo "desolate: your $B and $D/$B have both moved: yours is left as it is (git log --oneline --graph $B $D/$B shows both)"; fi',
+    "fi",
+    // What a push updates: the remote's branch of the same name. A branch the remote does
+    // not have yet is made there by the first push (push.default current).
+    'if git show-ref -q --verify "refs/remotes/origin/$B"; then git branch -q --set-upstream-to "origin/$B" "$B"; else git branch -q --unset-upstream "$B" 2>/dev/null; git config push.default current; fi',
+    "git status",
+  ].join("\n");
+  const done = await backend().exec(GIT_VM, ["bash", "-c", script, "_", dir, domain, branch], {
+    timeoutMs: 300_000,
+  });
+  return `${done.stdout}${done.stderr}`.slice(-20_000);
+};
+
 // ---------------------------------------------------------------- pushes from the git VM
 // The out-box is the git VM's to write: any name in it may be a link, a FIFO, a directory, or
 // a file the git VM still holds open and will change. So the host never follows a name

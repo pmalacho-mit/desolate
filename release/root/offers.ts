@@ -500,12 +500,73 @@ export type Review = {
   isDefault: boolean;
   commits: { commit: string; subject: string }[];
   files: string[];
+  /** Each file changed, for the review's list: how, and how many lines (null: binary). */
+  changes: Change[];
   stat: string;
   lfsObjects: number;
   warnings: string[];
   /** How many commits a push would send: against origin, whatever the view compares with. */
   pushCommits: number;
 };
+
+export type Change = {
+  path: string;
+  status: "added" | "modified" | "deleted" | "changed";
+  added: number | null;
+  removed: number | null;
+};
+const CHANGES_MAX = 1000;
+
+/** The files a diff changes, from git's own `--name-status -z` and `--numstat -z` (no renames:
+ *  a moved file is one deleted and one added). Paths are data, shown as text. */
+export const changesOf = (nameStatus: string, numstat: string): Change[] => {
+  const counts = new Map<string, { added: number | null; removed: number | null }>();
+  for (const part of numstat.split("\0").filter(Boolean)) {
+    const [added, removed, ...rest] = part.split("\t");
+    counts.set(rest.join("\t"), {
+      added: added === "-" ? null : Number(added),
+      removed: removed === "-" ? null : Number(removed),
+    });
+  }
+  const parts = nameStatus.split("\0");
+  const out: Change[] = [];
+  for (let i = 0; i + 1 < parts.length && out.length < CHANGES_MAX; i += 2) {
+    const letter = parts[i]!;
+    const path = parts[i + 1]!;
+    if (!letter) break;
+    out.push({
+      path,
+      status:
+        letter === "A"
+          ? "added"
+          : letter === "D"
+            ? "deleted"
+            : letter === "M"
+              ? "modified"
+              : "changed",
+      ...(counts.get(path) ?? { added: null, removed: null }),
+    });
+  }
+  return out;
+};
+
+declare namespace changesOf {
+  export type Three = Expect<
+    Invoke<
+      typeof changesOf,
+      [
+        nameStatus: "M\u0000src/a.ts\u0000A\u0000docs/new.md\u0000D\u0000logo.png\u0000",
+        numstat: "3\t1\tsrc/a.ts\u000010\t0\tdocs/new.md\u0000-\t-\tlogo.png\u0000",
+      ]
+    >,
+    "=",
+    [
+      { path: "src/a.ts"; status: "modified"; added: 3; removed: 1 },
+      { path: "docs/new.md"; status: "added"; added: 10; removed: 0 },
+      { path: "logo.png"; status: "deleted"; added: null; removed: null },
+    ]
+  >;
+}
 
 /** What a push would send (section 8: `desolate review`). Read from the root clone only. */
 /** What a branch is compared with: the remote's default branch as the mirror has it
@@ -665,6 +726,28 @@ export const review = async (
         subject: line.slice(line.indexOf("\t") + 1),
       })),
     files,
+    changes: changesOf(
+      await gitOk(clone, [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--name-status",
+        "-z",
+        base || "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        commit,
+      ]),
+      await gitOk(clone, [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--numstat",
+        "-z",
+        base || "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+        commit,
+      ]),
+    ),
     stat,
     lfsObjects: (await lfsOf(repo, commit)).length,
     warnings,

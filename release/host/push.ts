@@ -282,7 +282,7 @@ export const review = async (
     out(`${r.repo} is not pushable (cloned --no-push): there is no write key for it.`);
   else
     out(
-      `to push exactly this: desolate push ${domain} ${r.repo} ${plain(r.branch)} --expect ${r.commit}${r.isDefault ? " --allow-default" : ""}`,
+      `to push exactly this: desolate push ${domain} ${r.repo} ${plain(r.branch)} --expect ${r.commit}`,
     );
 };
 
@@ -336,8 +336,8 @@ declare namespace review {
       ]
     >
   >;
-  /** the default branch needs --allow-default said out loud; a repository cloned --no-push has
-   *  no write key, and says so instead */
+  /** the default branch is pushed as any branch is; a repository cloned --no-push has no
+   *  write key, and says so instead */
   export type DefaultBranch = Given<
     [
       Mock<"./stack.ts", typeof fakeStack>,
@@ -370,7 +370,7 @@ declare namespace review {
     Expect<
       Invoke<typeof said>,
       "includes",
-      "to push exactly this: desolate push acme acme/web main --expect 0123456789abcdef0123456789abcdef01234567 --allow-default"
+      "to push exactly this: desolate push acme acme/web main --expect 0123456789abcdef0123456789abcdef01234567"
     >
   >;
   export type NotPushable = Given<

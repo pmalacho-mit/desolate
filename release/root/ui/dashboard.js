@@ -13,17 +13,22 @@ const el = (tag, attrs = {}, ...children) => {
     if (key === "class") node.className = value;
     else if (key === "onclick") node.addEventListener("click", value);
     else if (key === "onsubmit") node.addEventListener("submit", value);
+    else if (key === "oninput") node.addEventListener("input", value);
     else node.setAttribute(key, value === true ? "" : String(value));
   }
   for (const child of children.flat(Infinity)) if (child !== null && child !== undefined && child !== false) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
   return node;
 };
 /** "Open in git": the git terminal (the host's page, not this one) in a new tab, at the
- *  person's clone of the repository. It carries no token: the tab is signed in only if the
- *  person opened `desolate git`'s address in this browser once. */
-const gitLink = (repo) => state && state.stack && state.stack.editorPort
-  ? el("a", { class: "button quiet", href: `http://${state.stack.gitHostname || "desolate-git.localhost"}:${state.stack.editorPort}/?repo=${encodeURIComponent(repo)}`, target: "_blank", rel: "noopener noreferrer" }, "Open in git")
+ *  person's clone of the repository, on the domain's branch as its workspace has it (the
+ *  host checks it out there: host/git-vm.ts checkoutOffered). It carries no token: the tab is
+ *  signed in only if the person opened `desolate git`'s address in this browser once. */
+const gitLink = (repo, at) => state && state.stack && state.stack.editorPort
+  ? el("a", { class: "button quiet", "data-open-git": repo, href: `http://${state.stack.gitHostname || "desolate-git.localhost"}:${state.stack.editorPort}/?repo=${encodeURIComponent(repo)}${at ? `&domain=${encodeURIComponent(at.domain)}&branch=${encodeURIComponent(at.branch)}` : ""}`, target: "_blank", rel: "noopener noreferrer", title: at ? `A terminal in your clone of ${repo}, on ${at.branch} as ${at.domain} has it: git status, git log, git push` : `A terminal in your clone of ${repo}` }, "Open in git")
   : null;
+/** What a name is, said with it: a domain, a workspace, a repository, a branch. (The same
+ *  word can be all four.) */
+const named = (kind, value, title) => el("span", { class: `named ${kind}`, title: title || `the ${kind}` }, el("span", { class: "kind" }, kind), el("span", { class: "value mono" }, value));
 // A token in an address is for the link, never for the label.
 const redact = (text) => String(text).replace(/tkn=[0-9a-f]+/g, "tkn=...");
 const short = (commit) => String(commit).slice(0, 12);
@@ -81,8 +86,9 @@ const unhidden = (line) => line.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060
 // Given `tokens` (shared/ui/highlight.js, a line's code in its syntax's colours), each line of
 // code is drawn in colour; its text is the same either way.
 const hasColour = (tokens, i) => Boolean(tokens && tokens[i] && typeof DesolateHighlight !== "undefined");
+const fileOf = (line) => line.replace(/^diff --git a\/(.*) b\/.*$/, "$1");
 const diffView = (text, tokens) => el("pre", { class: "mono diff", "data-diff": "" }, text.split("\n").map((line, i) =>
-  el("span", { class: line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "" },
+  el("span", { class: line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "", "data-file": line.startsWith("diff --git") ? fileOf(line) : null },
     hasColour(tokens, i) ? [line[0], ...DesolateHighlight.paint(tokens[i], unhidden)] : unhidden(line) || " ")));
 // Side by side: git's unified text, laid out in two columns by this script (nothing in the
 // root parses anything more). A run of removed lines beside the run of added lines that
@@ -197,7 +203,7 @@ const marked = (mine, theirs) => {
   return range ? [mine.slice(0, range[0]), el("mark", {}, mine.slice(range[0], range[1])), mine.slice(range[1])] : [mine];
 };
 const sideBySide = (text, tokens) => el("div", { class: "sbs", "data-diff": "" }, sides(text).map((row) => {
-  if (row.kind !== "change" && row.kind !== "same") return el("div", { class: `sbs-${row.kind}` }, row.text);
+  if (row.kind !== "change" && row.kind !== "same") return el("div", { class: `sbs-${row.kind}`, "data-file": row.kind === "file" ? row.text : null }, row.text);
   const code = (side, other) => {
     const pair = row.kind === "change" && row.like;
     if (hasColour(tokens, side.at)) return DesolateHighlight.paint(tokens[side.at], unhidden, pair ? differing(unhidden(side.text), other && unhidden(other.text)) : null);
@@ -380,9 +386,9 @@ const needsYou = () => {
   for (const o of state.offers) {
     const key = `push:${o.domain}:${o.repo}:${o.branch}`;
     items.push(el("li", { "data-offer": `${o.domain}/${o.repo}/${o.branch}` }, el("span", { class: "dot blue" }), el("div", { class: "what" },
-      el("div", { class: "name" }, `Offered: ${o.repo} ${o.branch}`),
-      el("div", { class: "line" }, `from ${o.domain}/${o.workspace}, at `, el("span", { class: "mono" }, short(o.commit)), o.lfs ? `, with ${o.lfs} LFS object(s)` : "")),
-      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview(o) }, "Review"), gitLink(o.repo),
+      el("div", { class: "name" }, "Offered: ", named("branch", o.branch), " ", named("repo", o.repo)),
+      el("div", { class: "line" }, "from ", named("domain", o.domain), " ", named("workspace", o.workspace), " at ", el("span", { class: "mono" }, short(o.commit)), o.lfs ? `, with ${o.lfs} LFS object(s)` : "")),
+      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview(o) }, "Review"),
         // Not this one: off "Needs you". The branch stays, and offering it again brings it back.
         el("button", { class: "quiet", title: "Take it off this list. The branch stays in the domain; offering it again brings it back.", onclick: () => dismissOffer(o) }, "Dismiss"))));
   }
@@ -412,6 +418,34 @@ const statView = (stat) => {
   ];
 };
 
+/** The files a review changes: how (added, modified, deleted), and how many lines, with a
+ *  filter; a file's name goes to its place in the diff (which is drawn whole first, if the
+ *  file is past what is shown). Paths are a branch's data: text, never markup. */
+let filesFilter = "";
+const jumpTo = (path) => {
+  const find = () => [...document.querySelectorAll("#review [data-file]")].find((n) => n.dataset.file === path);
+  let at = find();
+  if (!at && reviewing && reviewing.diff && !reviewing.diff.all) {
+    reviewing.diff.all = true;
+    render();
+    at = find();
+  }
+  if (at) at.scrollIntoView({ block: "start", behavior: "smooth" });
+};
+const filesChanged = (review) => {
+  const changes = review.changes || review.files.map((path) => ({ path, status: "changed", added: null, removed: null }));
+  if (!changes.length) return null;
+  const shown = changes.filter((c) => !filesFilter || c.path.toLowerCase().includes(filesFilter.toLowerCase()));
+  const colour = { added: "green", deleted: "red", modified: "blue", changed: "" };
+  return el("details", { class: "files-changed", open: true, "data-files-changed": "" },
+    el("summary", {}, `Files changed (${changes.length})`),
+    changes.length > 6 ? el("input", { class: "filter", placeholder: "filter files", "aria-label": "filter the files changed", value: filesFilter, oninput: (event) => { filesFilter = event.target.value; render(); const box = document.querySelector("#review .files-changed .filter"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); } } }) : null,
+    el("ul", { class: "files" }, shown.map((c) => el("li", { "data-change": c.path },
+      pill(c.status, colour[c.status] || "", `${c.status} in this branch`),
+      el("button", { class: "link mono", type: "button", title: "go to it in the diff", onclick: () => jumpTo(c.path) }, c.path),
+      c.added === null ? el("span", { class: "sub" }, "binary") : el("span", { class: "counts" }, el("span", { class: "plus" }, `+${c.added}`), " ", el("span", { class: "minus" }, `−${c.removed}`))))),
+    shown.length < changes.length ? el("div", { class: "sub" }, `${changes.length - shown.length} more do not match`) : null);
+};
 const reviewPanel = () => {
   if (!reviewing) return null;
   const { offer, review, loading } = reviewing;
@@ -434,7 +468,10 @@ const reviewPanel = () => {
     : [pill(`against the remote's ${def}`, "accent", `origin/${def}: the remote's ${def}, as the root last fetched it`), el("span", { class: "sub" }, repo.fetchedAt ? `fetched ${ago(repo.fetchedAt)}` : ""),
       el("button", { class: "quiet small", disabled: busy.has(`fetch:${review.repo}`), "data-fetch": review.repo, title: `desolate fetch ${review.repo}: the remote's branches as they are now; the review follows`, onclick: () => act(`fetch:${review.repo}`, "repo.fetch", { repo: review.repo }) }, busy.has(`fetch:${review.repo}`) ? "Fetching..." : "Fetch now")];
   return el("div", { class: "card", id: "review-card" },
-    header(el("h3", {}, review.repo), pill(review.branch, "mono", "the branch reviewed"), el("span", { class: "mono sub", title: "the commit reviewed: Push sends exactly this" }, short(review.commit))),
+    header(el("h3", {}, "Review"), named("branch", review.branch, "the branch reviewed"), named("repo", review.repo), named("domain", offer.domain, "the domain its workspaces wrote it in"), el("span", { class: "mono sub", title: "the commit reviewed: Push sends exactly this" }, short(review.commit))),
+    // The default branch: one way to push, the same as any branch, and said loudly.
+    review.isDefault ? el("div", { class: "warnbox default-branch", "data-default-branch": "" }, el("strong", {}, `This is ${review.repo}'s default branch, ${review.branch}.`), ` A push changes ${review.branch} on the remote directly, with no pull request to review it there first. Read every change below before you push.`) : null,
+    el("div", { class: "toolbar" }, gitLink(review.repo, { domain: offer.domain, branch: review.branch })),
     el("div", { class: "toolbar" }, ...against,
       // The domain's own default branch, against itself, shows nothing: offered only for
       // another branch.
@@ -447,7 +484,7 @@ const reviewPanel = () => {
       reviewing.against === "domain" ? el("span", { class: "sub" }, `(a push would send ${review.pushCommits}, counted against the remote)`) : null),
     review.warnings.length ? el("div", { class: "warnbox" }, review.warnings.map((w) => el("div", {}, pill("warning", "orange"), ` a push of this branch ${w}`))) : null,
     el("pre", { class: "mono" }, review.commits.slice(0, 40).map((c) => `${short(c.commit)}  ${c.subject}`).join("\n")),
-    el("pre", { class: "mono" }, review.files.slice(0, 80).join("\n")),
+    filesChanged(review),
     reviewing.diff && reviewing.diff.loading ? el("div", { class: "sub" }, "reading the diff...") : null,
     reviewing.diff && reviewing.diff.error ? el("div", { class: "warn" }, reviewing.diff.error) : null,
     // The diff is shown only if it is of the commit the Push button names.
@@ -461,9 +498,8 @@ const reviewPanel = () => {
     el("div", { class: "sub" }, "To see whole files, open the branch in a workspace's editor. The diff here is the one to trust: it is made in the root, by git alone."),
     el("div", { class: "buttons" }, !review.pushable ? el("span", { class: "sub" }, "Not pushable: cloned --no-push, so there is no write key for it.")
       : reviewing.against === "domain" ? el("span", { class: "sub" }, `A push would send ${review.pushCommits} commit(s), counted against origin: compare with origin to push.`)
-      : !offered ? el("span", { class: "sub" }, "Not offered at this commit, so not pushed from here. Push it yourself from ", gitLink(review.repo) || "the git terminal", ` (git fetch root, then git push origin root/${offer.domain}/${review.branch}:${review.branch}), or have the agent run `, el("code", {}, "desolate offer"), ".")
-      : review.isDefault ? el("span", { class: "sub" }, "This is the default branch. Push it from the host: ", el("code", {}, `desolate push ${offer.domain} ${review.repo} ${review.branch} --expect ${review.commit} --allow-default`))
-      : button(`Push exactly ${short(review.commit)}`, key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit })),
+      : !offered ? el("span", { class: "sub" }, "Not offered at this commit, so not pushed from here. Open it in git (above) and run git push there, or have the agent run ", el("code", {}, "desolate offer"), ".")
+      : button(`Push exactly ${short(review.commit)}${review.isDefault ? ` to ${review.branch}` : ""}`, key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit })),
     el("div", { class: "sub" }, "Pushing waits for your approval on the host: on the approval page (", el("code", {}, "desolate approve --web --open"), "), or ", el("code", {}, "desolate approve"), " in a terminal."));
 };
 
@@ -476,7 +512,7 @@ const checkoutLine = (d, w, c) => {
     ? [pill(c.branch, "mono", "the branch it started on: its HEAD has not been read yet"), el("span", { class: "sub" }, "(as started)")]
     : !head.branch
       ? [pill(head.commit ? `detached at ${short(head.commit)}` : "on a branch desolate does not carry", "orange", "not on a branch: commits here reach the root only from a branch")]
-      : [pill(head.branch, "mono", `the branch checked out now`), head.commit ? el("span", { class: "mono" }, short(head.commit)) : null];
+      : [named("branch", head.branch, "the branch checked out now"), head.commit ? el("span", { class: "mono" }, short(head.commit)) : null];
   const remote = !pushed ? null
     : pushed.count === 0 ? pill("on the remote", "green", "every commit here is on a branch of the remote (origin)")
       : pushed.count > 0 ? pill(`${pushed.count} not on the remote`, "orange", `${pushed.why}: review and push it, or offer it`)
@@ -606,7 +642,7 @@ const workspaceRow = (d, w) => {
   return el("li", { "data-workspace": `${d.slug}/${w.workspace}` },
     el("span", { class: `dot ${making ? "blue" : running ? (says ? says.color : "gray") : "hollow"}`, title: making ? w.doing || "busy" : says ? says.color : running ? "no status set" : "stopped" }),
     el("div", { class: "what" },
-      el("div", { class: "name" }, w.workspace, pill(word, colour, explain, { "data-making": making ? "" : null }),
+      el("div", { class: "name" }, named("workspace", w.workspace), pill(word, colour, explain, { "data-making": making ? "" : null }),
         // Who started it: you, or a workspace of the domain (desolate spawn in it); and a
         // warning when that one is gone and this one is still here.
         w.startedBy
@@ -643,11 +679,11 @@ const branchList = (d) => {
     el("ul", { class: "rows" }, list.map((b) => el("li", { "data-branch": `${b.repo}/${b.branch}` },
       el("span", { class: `dot ${offered(b) ? "blue" : "hollow"}`, title: offered(b) ? "offered" : "not offered" }),
       el("div", { class: "what" },
-        el("div", { class: "name" }, pill(b.branch, "mono", "the branch"), pill(b.repo, "repo mono", "the repository"),
+        el("div", { class: "name" }, named("branch", b.branch), " ", named("repo", b.repo),
           offered(b) ? pill("offered", "blue", "a workspace offered it for you to review and push") : null,
           b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null),
-        el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? ` · checked out in ${where(b).join(", ")}` : "")),
-      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"), gitLink(b.repo))))));
+        el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? [" · checked out in ", where(b).map((w) => named("workspace", w))] : "")),
+      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))));
 };
 const branchesOpen = new Set();
 
@@ -682,7 +718,7 @@ const domainCard = (d) => {
   const running = d.workspaces.filter((w) => w.host && w.host.status === "running").length;
   const head = el("div", { class: "top fold-head", title: isFolded ? "Show this domain" : "", onclick: (event) => { if (!event.target.closest("button, a, input, select, label, .pill[title]")) toggleFold(foldKey); } },
     el("button", { class: "fold", type: "button", "aria-expanded": String(!isFolded), "aria-label": isFolded ? "show this domain" : "hide this domain", onclick: () => toggleFold(foldKey) }),
-    el("h3", {}, d.title || d.slug), pill(d.slug, "mono", `the domain's name (desolate domain ${d.slug} show)`),
+    el("h3", {}, d.title || d.slug), named("domain", d.slug, `the domain's name (desolate domain ${d.slug} show)`),
     d.home ? pill("home domain", "accent", homeTip(d.home), { "data-home": d.home }) : null,
     el("span", { class: "grow" }),
     d.building ? pill("building", "blue pulse", "its environment is being built for its first workspace")

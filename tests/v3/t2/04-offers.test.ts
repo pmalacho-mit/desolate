@@ -389,12 +389,11 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const main = JSON.parse(
       stack.quiet("review", "dev", "acme/widgets", "main", "--json").stdout,
     ) as { commit: string };
+    // The default branch is pushed like any other (2026-11-18): not refused for being it. (Here
+    // it has nothing the remote lacks, which is what stops it.)
     const def = stack.desolate("push", "dev", "acme/widgets", "main", "--expect", main.commit);
-    assert.equal(def.code, 77);
-    assert.match(
-      def.stderr,
-      /fix: push a branch and open a pull request; or, to push the default branch itself, add --allow-default/,
-    );
+    assert.notEqual(def.code, 77);
+    assert.doesNotMatch(def.stderr, /default branch/);
     const wrong = stack.person(
       "Type the branch name",
       "yes",

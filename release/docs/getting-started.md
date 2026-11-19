@@ -272,9 +272,11 @@ Cards fold to a line, and the domains filter by name or repository; hover a pill
 means.
 
 **Review** (or a checkout's **Diff**) opens a panel on the right, the window's height, as wide
-as you drag it. It shows what a push would send: the commits, the files and the diff, made by
-git in the root VM, from the objects alone (nothing in the branch runs), against the remote's
-default branch as last fetched (**Fetch now** fetches it):
+as you drag it. It shows what a push would send: the commits, the files changed (each with
+its lines added and removed; filter them, and click one to go to it in the diff), and the
+diff, made by git in the root VM, from the objects alone (nothing in the branch runs), against
+the remote's default branch as last fetched (**Fetch now** fetches it). Names are labelled
+with what they are: a **domain**, a **workspace**, a **repo**, a **branch**.
 
 ![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
 
@@ -284,6 +286,10 @@ Two ways, and both end with you approving the exact commit:
 
 - From the dashboard: **Push exactly <commit>**, then approve it on the approval page
   (`desolate approve --web --open`; keep that tab) or with `desolate approve` in a terminal.
+  The default branch is pushed the same way: the review says so in red at its top, since a
+  push there changes it on the remote with no pull request first.
+- **Open in git**, in the review: the git terminal, on that branch as the workspace has it
+  (`git status` says how far ahead of the remote it is), where `git push` sends it.
 - From the **git terminal**, which is git as you use it anywhere, in a VM of its own with no
   network and no keys:
 
