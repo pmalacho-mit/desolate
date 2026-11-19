@@ -16,7 +16,13 @@ import { recordOf } from "./repos.ts";
 import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Table,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aDomain, emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
 /** `base`: the branch a pull request of this one would go into, as the workspace said
@@ -762,12 +768,95 @@ export const review = async (
  *  is the content's, so whoever shows it shows it as text. Capped: a diff too long to read
  *  is cut, and says so. */
 export const DIFF_LIMIT = 1024 * 1024;
+/** Some of a review's commits, picked on the dashboard: `from` (the oldest picked) to `to`
+ *  (the newest), each one of the commits the review lists, `from` an ancestor of `to` (or
+ *  the same). What is compared is `from`'s parent with `to`: those commits' changes, and no
+ *  others'. Anything else is refused, never guessed. */
+export const pickOf = (
+  commits: { commit: string }[],
+  from: unknown,
+  to: unknown,
+): { from: string; to: string } | null => {
+  if ((from === null || from === undefined) && (to === null || to === undefined)) return null;
+  const listed = new Set(commits.map((c) => c.commit));
+  for (const end of [from, to])
+    if (typeof end !== "string" || !/^[0-9a-f]{40}$/.test(end) || !listed.has(end))
+      refuse(
+        `'${String(end).slice(0, 40)}' is not one of this review's commits`,
+        "pick commits from the review's list",
+      );
+  return { from: from as string, to: to as string };
+};
+
+declare namespace pickOf {
+  /** none asked: the whole review; one or a range of its own commits: those; anything else
+   *  (a commit it does not list, a name, half a range): refused */
+  export type Picks = [
+    Expect<Invoke<typeof pickOf, [commits: [], from: null, to: null]>, "=", null>,
+    Expect<
+      Invoke<
+        typeof pickOf,
+        [
+          commits: [
+            { commit: "1111111111111111111111111111111111111111" },
+            { commit: "2222222222222222222222222222222222222222" },
+          ],
+          from: "2222222222222222222222222222222222222222",
+          to: "1111111111111111111111111111111111111111",
+        ]
+      >,
+      "=",
+      {
+        from: "2222222222222222222222222222222222222222";
+        to: "1111111111111111111111111111111111111111";
+      }
+    >,
+  ];
+  export type Refused = [
+    Throws<
+      Invoke<
+        typeof pickOf,
+        [
+          commits: [{ commit: "1111111111111111111111111111111111111111" }],
+          from: "3333333333333333333333333333333333333333",
+          to: "1111111111111111111111111111111111111111",
+        ]
+      >,
+      "'3333333333333333333333333333333333333333' is not one of this review's commits"
+    >,
+    Throws<
+      Invoke<
+        typeof pickOf,
+        [
+          commits: [{ commit: "1111111111111111111111111111111111111111" }],
+          from: "HEAD",
+          to: "1111111111111111111111111111111111111111",
+        ]
+      >,
+      "'HEAD' is not one of this review's commits"
+    >,
+    Throws<
+      Invoke<
+        typeof pickOf,
+        [
+          commits: [{ commit: "1111111111111111111111111111111111111111" }],
+          from: "1111111111111111111111111111111111111111",
+          to: null,
+        ]
+      >,
+      "'null' is not one of this review's commits"
+    >,
+  ];
+}
+
 export const diff = async (
   domain: string,
   repoArg: unknown,
   branch: unknown,
   against: unknown = "origin",
   whitespace: unknown = "show",
+  fromArg: unknown = null,
+  toArg: unknown = null,
 ): Promise<{
   repo: string;
   branch: string;
@@ -777,10 +866,49 @@ export const diff = async (
   whitespace: "show" | "ignore";
   text: string;
   truncated: boolean;
+  /** Some of its commits only (pickOf): their range, and the files they change. */
+  pick?: { from: string; to: string; changes: Change[] };
 }> => {
   const r = await review(domain, repoArg, branch, against);
   const clone = clonePath(parseRepo(r.repo)!);
   if (!ownedByRoot(clone)) throw new Error("not a root clone");
+  const pick = pickOf(r.commits, fromArg, toArg);
+  if (pick && (await git(clone, ["merge-base", "--is-ancestor", pick.from, pick.to])).code !== 0)
+    refuse(
+      "the commits picked are not in order: the first is not before the last",
+      "pick a run of the review's commits",
+    );
+  const EMPTY = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+  // Picked: the oldest one's parent (none for a first commit: the empty tree) to the newest.
+  const left = pick
+    ? (await git(clone, ["rev-parse", "--verify", "--quiet", `${pick.from}^`])).stdout.trim() ||
+      EMPTY
+    : r.base || EMPTY;
+  const right = pick ? pick.to : r.commit;
+  const changes = pick
+    ? changesOf(
+        await gitOk(clone, [
+          "diff",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-renames",
+          "--name-status",
+          "-z",
+          left,
+          right,
+        ]),
+        await gitOk(clone, [
+          "diff",
+          "--no-ext-diff",
+          "--no-textconv",
+          "--no-renames",
+          "--numstat",
+          "-z",
+          left,
+          right,
+        ]),
+      )
+    : null;
   const child = spawn(
     "git",
     [
@@ -798,8 +926,8 @@ export const diff = async (
       // for a change that is mostly re-indentation.
       "--diff-algorithm=histogram",
       ...(whitespace === "ignore" ? ["-w"] : []),
-      r.base || "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
-      r.commit,
+      left,
+      right,
       "--",
     ],
     {
@@ -844,5 +972,6 @@ export const diff = async (
     whitespace: whitespace === "ignore" ? "ignore" : "show",
     text: Buffer.concat(chunks).toString("utf8"),
     truncated,
+    ...(pick && changes ? { pick: { ...pick, changes } } : {}),
   };
 };

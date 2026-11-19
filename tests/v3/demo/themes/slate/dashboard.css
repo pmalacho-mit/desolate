@@ -1,0 +1,61 @@
+/* Slate: one step from Ink toward Soft. A grey canvas with white cards that lift a little;
+   each name in a neutral capsule with its kind's icon in colour; states a dot and a word.
+   Still one filled button per row, in ink. */
+:root {
+  --bg: #f3f3f5; --card: #ffffff; --ink: #17171a; --soft: #686872; --line: #e3e3e8; --accent: #17171a;
+  --gray: #a1a1aa; --blue: #2563eb; --green: #16a34a; --yellow: #ca8a04; --orange: #ea580c; --red: #dc2626;
+  --hover: #f1f1f4; --raise: #f0f0f3; --shadow: 0 1px 2px rgba(20,20,30,0.05), 0 2px 8px rgba(20,20,30,0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0c0c0f; --card: #15151a; --ink: #f2f2f5; --soft: #a0a0ab; --line: #26262d; --accent: #f2f2f5;
+    --gray: #71717a; --blue: #60a5fa; --green: #4ade80; --yellow: #facc15; --orange: #fb923c; --red: #f87171;
+    --hover: #1c1c22; --raise: #1f1f25; --shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 4px 16px rgba(0,0,0,0.3); }
+}
+body { font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+header { background: var(--card); padding-inline: var(--s6); border-bottom-color: var(--line); }
+h1 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+h2 { font-size: 12.5px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--soft); }
+h3 { font-size: 15px; font-weight: 650; letter-spacing: -0.005em; }
+.chip { border: 0; background: var(--raise); padding: 0 var(--s2); font-size: 11.5px; border-radius: 6px; }
+
+button, a.button { font-size: 12.5px; font-weight: 550; padding: 0 var(--s3); border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); box-shadow: 0 1px 1px rgba(0,0,0,0.03); }
+button:hover, a.button:hover { background: var(--hover); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { background: var(--ink); border-color: var(--ink); color: var(--card); }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: var(--bg); } }
+button.quiet, a.button.quiet { background: var(--card); color: var(--ink); }
+button.small, a.button.small { padding: 0 var(--s2); font-size: 12px; border-radius: 6px; }
+button.fold { border: 0; background: none; box-shadow: none; }
+.danger { color: var(--red) !important; }
+input, select { border-radius: 8px; font-size: 13px; padding: 0 var(--s3); border-color: var(--line); background: var(--card); }
+input:focus, select:focus { outline: 0; border-color: var(--soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--soft) 18%, transparent); }
+
+.card { border-radius: 12px; padding: var(--s5) var(--s5); border-color: var(--line); box-shadow: var(--shadow); }
+#needs ul.rows { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 0 var(--s5); box-shadow: var(--shadow); }
+#needs ul.rows > li:first-child { padding-top: var(--s4); }
+ul.rows > li { border-top-color: var(--line); }
+.what .line, .checkout { color: var(--soft); }
+
+/* names: a neutral capsule, the kind's icon in colour */
+.named, .pill.repo, .checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { background: var(--raise); border-radius: 6px; padding: 0 var(--s2) 0 6px; }
+.named { font-size: 12.5px; }
+.named .value { font-weight: 550; color: var(--ink); }
+.named.branch .value, .named.repo .value, .pill.repo, .checkout > span.mono:not(.pill) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pill.repo { border: 0; color: var(--ink); font-weight: 500; }
+.checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { color: var(--soft); }
+
+.pill { border: 0; background: var(--raise); color: var(--soft); font-size: 11.5px; font-weight: 500; padding: 0 var(--s2); border-radius: 6px; gap: 6px; }
+.pill.green, .pill.red, .pill.orange, .pill.yellow, .pill.blue { background: var(--raise); color: var(--ink); font-weight: 500; }
+.pill.green::before, .pill.red::before, .pill.orange::before, .pill.yellow::before, .pill.blue::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.pill.green::before { background: var(--green); } .pill.red::before { background: var(--red); } .pill.orange::before { background: var(--orange); }
+.pill.yellow::before { background: var(--yellow); } .pill.blue::before { background: var(--blue); }
+.pill.accent { border: 0; background: var(--raise); color: var(--ink); }
+a.pill.accent { text-decoration: none; } a.pill.accent:hover { background: var(--hover); text-decoration: underline; }
+
+#review { box-shadow: -24px 0 48px rgba(0,0,0,0.14); border-left-color: var(--line); }
+#review-body > .card { padding: 0 var(--s5); box-shadow: none; }
+.warnbox { border-radius: 10px; border-color: color-mix(in srgb, var(--orange) 35%, var(--line)); padding: var(--s3) var(--s4); }
+.warnbox.default-branch { border: 1px solid color-mix(in srgb, var(--red) 50%, transparent); background: color-mix(in srgb, var(--red) 7%, var(--card)); padding: var(--s3) var(--s4); }
+.sbs, pre.diff { border-radius: 10px; }
+.sbs-file { background: var(--raise); }
+code, .what pre { background: var(--raise); }
+.empty-ws, .resize { border-color: var(--line); border-radius: 10px; }

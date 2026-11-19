@@ -311,8 +311,13 @@ means.
 as you drag it. It shows what a push would send: the commits, the files changed (each with
 its lines added and removed; filter them, and click one to go to it in the diff), and the
 diff, made by git in the root VM, from the objects alone (nothing in the branch runs), against
-the remote's default branch as last fetched (**Fetch now** fetches it). Names are labelled
-with what they are: a **domain**, a **workspace**, a **repo**, a **branch**.
+the remote's default branch as last fetched (**Fetch now** fetches it).
+- **One commit at a time:** click a commit to see its changes alone, and shift-click another
+  for a run of them; the files and the diff follow, and the list says how many of the commits
+  you are seeing. **Show all** goes back. **Push** always sends the whole branch.
+- **Names carry an icon in their kind's colour:** a shield for a **domain**, a screen for a
+  **workspace**, a book for a **repository**, a branch, and a dot on a line for a **commit**.
+  Hover one for its kind. Click a domain or a workspace to go to its card or row.
 
 ![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
 

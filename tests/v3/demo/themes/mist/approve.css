@@ -1,0 +1,16 @@
+/* Mist: the approval page. A plain canvas; nothing holding Approve is blurred, moved, filtered
+   or see-through (beside the git terminal, it would never arm). */
+:root { --bg: #f1f1f4; --fg: #18181d; --muted: #676773; --card: #ffffff; --line: #e7e7ec; --accent: #4f46e5; --danger: #dc2626; --raise: #f2f2f5; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0e0e12; --fg: #f1f1f5; --muted: #9d9daa; --card: #17171c; --line: #26262e; --accent: #8b8cf8; --danger: #f87171; --raise: #202027; } }
+body { font: 14.5px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; padding-top: 44px; }
+h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.015em; }
+.card { border: 0; border-radius: 18px; padding: var(--s6); box-shadow: 0 1px 2px rgba(24,24,40,0.04), 0 6px 20px rgba(24,24,40,0.06); }
+.names dd { font-weight: 600; }
+.names dd.repo, .names dd.branch, .names dd.commit { justify-self: start; background: var(--raise); border-radius: 7px; padding: 0 var(--s2) 0 7px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.summary ul.long { border: 0; background: var(--raise); border-radius: 12px; }
+.summary code { background: var(--raise); padding: 1px 6px; border-radius: 6px; }
+.sensitive code { background: color-mix(in srgb, var(--danger) 12%, var(--card)); }
+button { border: 0; border-radius: 11px; background: var(--raise); font-weight: 600; padding: 0 18px; }
+button.approve { background: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { button.approve { color: #0e0e12; } }
+.actions { border-top-color: var(--line); }

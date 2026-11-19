@@ -1,0 +1,20 @@
+/* Quiet: the approval page. (No transform, filter or opacity on anything that holds Approve:
+   beside the git terminal, the browser counts those as Approve being obscured, and it never
+   arms.) */
+:root { --bg: #fafafa; --fg: #18181b; --muted: #71717a; --card: #ffffff; --line: #e4e4e7; --accent: #18181b; --danger: #dc2626; --raise: #f4f4f5; }
+@media (prefers-color-scheme: dark) { :root { --bg: #09090b; --fg: #fafafa; --muted: #a1a1aa; --card: #0f0f12; --line: #232327; --accent: #fafafa; --danger: #f87171; --raise: #18181b; } }
+body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; padding-top: 40px; }
+h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.015em; }
+.lede { font-size: 13.5px; }
+.card { border-radius: 12px; padding: 20px 22px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+.names { gap: 4px 20px; font-size: 13.5px; }
+.names dt { font-size: 12.5px; }
+.names dd { font-weight: 500; }
+.names dd.branch, .names dd.repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.onto { font-size: 13px; }
+.summary ul.long { background: var(--raise); border: 0; border-radius: 8px; }
+.summary code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
+.sensitive code { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+button { font-size: 13.5px; font-weight: 500; padding: 7px 14px; border-radius: 7px; }
+button.approve { background: var(--fg); border-color: var(--fg); color: var(--bg); }
+.actions { border-top-color: var(--line); padding: 14px 0 2px; }

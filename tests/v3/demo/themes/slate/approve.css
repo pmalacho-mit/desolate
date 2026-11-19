@@ -1,0 +1,13 @@
+/* Slate: the approval page. */
+:root { --bg: #f3f3f5; --fg: #17171a; --muted: #686872; --card: #ffffff; --line: #e3e3e8; --accent: #17171a; --danger: #dc2626; --raise: #f0f0f3; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0c0c0f; --fg: #f2f2f5; --muted: #a0a0ab; --card: #15151a; --line: #26262d; --accent: #f2f2f5; --danger: #f87171; --raise: #1f1f25; } }
+body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; padding-top: 40px; }
+h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
+.card { border-radius: 14px; padding: var(--s5) var(--s6); box-shadow: 0 1px 2px rgba(20,20,30,0.05), 0 2px 8px rgba(20,20,30,0.04); }
+.names dd { font-weight: 550; }
+.names dd.repo, .names dd.branch, .names dd.commit { justify-self: start; background: var(--raise); border-radius: 6px; padding: 0 var(--s2) 0 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.summary ul.long { background: var(--raise); border: 0; border-radius: 10px; }
+.summary code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
+.sensitive code { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+button { font-size: 13.5px; font-weight: 550; padding: 0 var(--s4); border-radius: 9px; }
+button.approve { background: var(--fg); border-color: var(--fg); color: var(--card); }

@@ -537,7 +537,7 @@ describe("T2 section 4.8: the root UI", () => {
     const dom = page.stdout;
     assert.match(
       dom,
-      /<div class="card" data-domain="web">[\s\S]*<h3>the web app<\/h3>/,
+      /<div class="card" data-domain="web">[\s\S]*<h3><span class="named domain"[^>]*><span class="kind">domain<\/span><span class="value mono">web<\/span><\/span><\/h3><span class="domain-title"[^>]*>the web app<\/span>/,
       dom.slice(0, 600),
     );
     assert.match(
@@ -779,6 +779,54 @@ describe("T2 section 4.8: the root UI", () => {
         })
       ).status,
       403,
+    );
+    // Some of a review's commits (the dashboard's commit picker): a run of the review's own
+    // commits, in order, and that run's changes alone; anything else is refused.
+    const second = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      "echo second > SECOND.md && git add SECOND.md && git -c user.name=t -c user.email=t@example.test commit -qm 'a second file' && desolate offer && git rev-parse HEAD",
+    );
+    assert.equal(second.code, 0, second.stderr);
+    const next = second.stdout.trim().split("\n").pop()!;
+    assert.ok(
+      await until(async () =>
+        (await state()).offers.some((o) => o.branch === "markup" && o.commit === next),
+      ),
+    );
+    const picked = (from: string, to: string) =>
+      http("GET", `/diff?domain=web&repo=acme%2Fapp&branch=markup&from=${from}&to=${to}`);
+    const one = JSON.parse((await picked(next, next)).body) as {
+      commit: string;
+      text: string;
+      pick: { from: string; to: string; changes: { path: string }[] };
+    };
+    assert.equal(one.commit, next, "still the branch's commit, the one Push names");
+    assert.deepEqual(
+      one.pick.changes.map((c) => c.path),
+      ["SECOND.md"],
+      "that commit's file alone",
+    );
+    assert.doesNotMatch(one.text, /README\.md/, "and its diff alone");
+    const both = JSON.parse((await picked(tip, next)).body) as {
+      pick: { changes: { path: string }[] };
+    };
+    assert.deepEqual(both.pick.changes.map((c) => c.path).sort(), ["README.md", "SECOND.md"]);
+    assert.match((await picked(next, tip)).body, /not in order/, "a run backwards is refused");
+    assert.equal((await picked(next, tip)).status, 400);
+    assert.equal(
+      (await picked("0".repeat(40), next)).status,
+      400,
+      "a commit the review does not list",
+    );
+    assert.equal((await picked("HEAD", next)).status, 400, "a name, not a commit");
+    assert.equal(
+      (await http("GET", `/diff?domain=web&repo=acme%2Fapp&branch=markup&from=${next}`)).status,
+      400,
+      "half a run",
     );
     // In the browser: the review opens at the offer, side by side (the default layout), and
     // the diff's markup is text on the page, in a span, not an element of it.

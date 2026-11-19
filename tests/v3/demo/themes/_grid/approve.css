@@ -1,0 +1,37 @@
+/* The grid, on the approval page: the same scale and the same kind icons. Nothing that holds
+   Approve is moved, filtered or see-through (beside the git terminal it would never arm). */
+:root {
+  --icon-domain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.75 13.25 3.6v4.05c0 3.05-2.15 5.55-5.25 6.6-3.1-1.05-5.25-3.55-5.25-6.6V3.6Z'/%3E%3C/svg%3E");
+  --icon-workspace: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='1.75' y='2.75' width='12.5' height='8.5' rx='1.5'/%3E%3Cpath d='M5.5 14h5M8 11.25V14'/%3E%3C/svg%3E");
+  --icon-repo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3.25A1.5 1.5 0 0 1 4.5 1.75h8.25v10H4.5A1.5 1.5 0 0 0 3 13.25ZM3 13.25a1.5 1.5 0 0 0 1.5 1.5h8.25v-3'/%3E%3C/svg%3E");
+  --icon-branch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4.75' cy='3.5' r='1.6'/%3E%3Ccircle cx='4.75' cy='12.5' r='1.6'/%3E%3Ccircle cx='11.25' cy='5' r='1.6'/%3E%3Cpath d='M4.75 5.1v5.8M11.25 6.6c0 3-6.5 2.2-6.5 4.3'/%3E%3C/svg%3E");
+  --icon-commit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='2.6'/%3E%3Cpath d='M1 8h4.4M10.6 8H15'/%3E%3C/svg%3E");
+}
+:root { --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --icon: 14px;
+  --k-repo: #56667f; --k-branch: #cf6a0a; --k-commit: #767c87; }
+@media (prefers-color-scheme: dark) { :root { --k-repo: #9eabc2; --k-branch: #f3a04c; --k-commit: #969ca7; } }
+[hidden] { display: none !important; }
+header { display: grid; gap: var(--s2); }
+header h1, header .lede { margin: 0; }
+.card { display: grid; gap: var(--s4); margin: var(--s5) 0; }
+.card > * { margin-top: 0; margin-bottom: 0; }
+.names { grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s4); align-items: center; }
+.names dt { line-height: 22px; }
+.names dd { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+.names dd.repo::before, .names dd.branch::before, .names dd.commit::before {
+  content: ""; flex: none; width: var(--icon); height: var(--icon); background: var(--kind-color);
+  -webkit-mask: var(--kind-icon) center / var(--icon) no-repeat; mask: var(--kind-icon) center / var(--icon) no-repeat;
+}
+.names dd.repo { --kind-icon: var(--icon-repo); --kind-color: var(--k-repo); }
+.names dd.branch { --kind-icon: var(--icon-branch); --kind-color: var(--k-branch); }
+.names dd.commit { --kind-icon: var(--icon-commit); --kind-color: var(--k-commit); }
+.summary { display: grid; gap: var(--s3); }
+.summary > * { margin: 0; }
+.summary ul { padding-left: 0; list-style: none; display: grid; gap: var(--s1); }
+.summary ul.long { padding: var(--s2) var(--s3); }
+.summary li { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s2); align-items: baseline; }
+.summary li code { font-variant-numeric: tabular-nums; }
+.actions { gap: var(--s3); margin-top: 0; padding: var(--s3) 0 0; }
+button { min-height: 36px; display: inline-flex; align-items: center; justify-content: center; }
+.summary > button, .summary > .diffbox, .card > button { justify-self: start; }
+.summary > .diffbox { justify-self: stretch; }

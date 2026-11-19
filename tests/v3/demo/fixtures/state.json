@@ -1,0 +1,607 @@
+{
+ "stack": {
+  "instance": "main",
+  "backend": "vz",
+  "isolated": true,
+  "editorPort": 31580,
+  "approver": "terminal",
+  "rootHostname": "desolate.localhost",
+  "gitHostname": "desolate-git.localhost",
+  "approveHostname": "desolate-approve.localhost",
+  "mac": {
+   "cpus": 10,
+   "memoryMiB": 65536
+  }
+ },
+ "hostConnected": true,
+ "repos": [
+  {
+   "repo": "acme/storefront",
+   "pushable": true,
+   "defaultBranch": "main",
+   "fetchedAt": "2026-11-19T18:00:00.000Z"
+  },
+  {
+   "repo": "acme/payments",
+   "pushable": true,
+   "defaultBranch": "main",
+   "fetchedAt": "2026-11-19T18:00:00.000Z"
+  },
+  {
+   "repo": "acme/billing-api",
+   "pushable": true,
+   "defaultBranch": "main",
+   "fetchedAt": "2026-11-19T18:00:00.000Z"
+  },
+  {
+   "repo": "acme/docs",
+   "pushable": true,
+   "defaultBranch": "main",
+   "fetchedAt": "2026-11-19T18:00:00.000Z"
+  },
+  {
+   "repo": "acme/ranker",
+   "pushable": true,
+   "defaultBranch": "main",
+   "fetchedAt": "2026-11-19T18:00:00.000Z"
+  }
+ ],
+ "domains": [
+  {
+   "slug": "shop",
+   "title": "storefront",
+   "repos": [
+    "acme/storefront",
+    "acme/payments"
+   ],
+   "home": null,
+   "branches": [
+    {
+     "repo": "acme/storefront",
+     "branch": "main",
+     "commit": "2627f48a68c2fedfaf50292ed778c8d65637fd03",
+     "landed": null
+    },
+    {
+     "repo": "acme/storefront",
+     "branch": "feature/checkout-v2",
+     "commit": "131efd9fd588bed3689b1edb0cb930b476eff881",
+     "landed": null
+    },
+    {
+     "repo": "acme/storefront",
+     "branch": "fix/cart-rounding",
+     "commit": "329567331bccf801d12e82529ae41a6d46d32764",
+     "landed": {
+      "into": "main",
+      "how": "squash"
+     }
+    },
+    {
+     "repo": "acme/payments",
+     "branch": "main",
+     "commit": "2d20c5006814d9ce3c60317a0d6aba4a276eaaaa",
+     "landed": null
+    },
+    {
+     "repo": "acme/payments",
+     "branch": "refunds",
+     "commit": "dc7577ef31b8158ab4634ae9d169cd9f97f758d0",
+     "landed": null
+    }
+   ],
+   "net": "enforce",
+   "secrets": [
+    {
+     "name": "STRIPE_KEY",
+     "on": true
+    },
+    {
+     "name": "SENTRY_DSN",
+     "on": true
+    },
+    {
+     "name": "OLD_TOKEN",
+     "on": false
+    }
+   ],
+   "building": null,
+   "workspaces": [
+    {
+     "workspace": "checkout-v2",
+     "vm": "dsl-main-22e522ec10",
+     "state": "up",
+     "doing": null,
+     "making": null,
+     "pushed": [
+      {
+       "repo": "acme/storefront",
+       "branch": "feature/checkout-v2",
+       "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d",
+       "count": 3,
+       "why": null
+      }
+     ],
+     "asks": {
+      "repo": "acme/storefront",
+      "path": ".devcontainer/devcontainer.json",
+      "size": {},
+      "problems": []
+     },
+     "size": {
+      "cpus": 4,
+      "memoryMiB": 8192,
+      "diskGiB": 30
+     },
+     "startedBy": null,
+     "outlived": false,
+     "checkouts": [
+      {
+       "repo": "acme/storefront",
+       "branch": "feature/checkout-v2",
+       "kind": "worktree",
+       "head": {
+        "branch": "feature/checkout-v2",
+        "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d"
+       }
+      }
+     ],
+     "says": {
+      "workspace": "shop/checkout-v2",
+      "checkouts": [
+       {
+        "repo": "acme/storefront",
+        "branch": "feature/checkout-v2",
+        "head": {
+         "branch": "feature/checkout-v2",
+         "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d"
+        },
+        "status": null,
+        "note": ""
+       }
+      ],
+      "status": {
+       "color": "green",
+       "message": "Checkout v2 is done: 214 tests pass. Ready for review.",
+       "updated": "2026-11-19T17:57:00.000Z"
+      }
+     },
+     "host": {
+      "status": "running",
+      "editor": "http://shop-checkout-v2-editor-1a2b3c.localhost:31580/?tkn=000000000000000000000000000000000000000000000000&folder=/workspaces/acme/storefront",
+      "devcontainer": "up (mcr.microsoft.com/devcontainers/typescript-node:22, user node)",
+      "ports": [
+       {
+        "port": 5173,
+        "url": "http://shop-checkout-v2-1a2b3c.localhost:5173/"
+       },
+       {
+        "port": 8787,
+        "url": "http://shop-checkout-v2-1a2b3c.localhost:8787/"
+       }
+      ]
+     }
+    },
+    {
+     "workspace": "refunds",
+     "vm": "dsl-main-1dcf6e7936",
+     "state": "up",
+     "doing": null,
+     "making": null,
+     "pushed": [
+      {
+       "repo": "acme/payments",
+       "branch": "refunds",
+       "commit": "1dcf6e7936eaee9e6c9b514e91f49c0ad67459db",
+       "count": 1,
+       "why": null
+      }
+     ],
+     "asks": {
+      "repo": "acme/payments",
+      "path": ".devcontainer/devcontainer.json",
+      "size": {},
+      "problems": []
+     },
+     "size": {
+      "cpus": 4,
+      "memoryMiB": 8192,
+      "diskGiB": 30
+     },
+     "startedBy": "shop/checkout-v2",
+     "outlived": false,
+     "checkouts": [
+      {
+       "repo": "acme/payments",
+       "branch": "refunds",
+       "kind": "worktree",
+       "head": {
+        "branch": "refunds",
+        "commit": "1dcf6e7936eaee9e6c9b514e91f49c0ad67459db"
+       }
+      }
+     ],
+     "says": {
+      "workspace": "shop/refunds",
+      "checkouts": [
+       {
+        "repo": "acme/payments",
+        "branch": "refunds",
+        "head": {
+         "branch": "refunds",
+         "commit": "1dcf6e7936eaee9e6c9b514e91f49c0ad67459db"
+        },
+        "status": null,
+        "note": ""
+       }
+      ],
+      "status": {
+       "color": "yellow",
+       "message": "Writing the refund migration; 2 tests still failing.",
+       "updated": "2026-11-19T17:58:00.000Z"
+      }
+     },
+     "host": {
+      "status": "running",
+      "editor": "http://shop-refunds-editor-1a2b3c.localhost:31580/?tkn=000000000000000000000000000000000000000000000000&folder=/workspaces/acme/payments",
+      "devcontainer": "up (mcr.microsoft.com/devcontainers/typescript-node:22, user node)"
+     }
+    },
+    {
+     "workspace": "w1",
+     "vm": "dsl-main-9f86e287e0",
+     "state": "up",
+     "doing": null,
+     "making": null,
+     "pushed": [
+      {
+       "repo": "acme/storefront",
+       "branch": "main",
+       "commit": "9f86e287e0e7cda0b5e6ce5b9b31f56aad56f9e8",
+       "count": 0,
+       "why": null
+      }
+     ],
+     "asks": {
+      "repo": "acme/storefront",
+      "path": ".devcontainer/devcontainer.json",
+      "size": {},
+      "problems": []
+     },
+     "size": {
+      "cpus": 4,
+      "memoryMiB": 8192,
+      "diskGiB": 30
+     },
+     "startedBy": null,
+     "outlived": false,
+     "checkouts": [
+      {
+       "repo": "acme/storefront",
+       "branch": "main",
+       "kind": "main",
+       "head": {
+        "branch": "main",
+        "commit": "9f86e287e0e7cda0b5e6ce5b9b31f56aad56f9e8"
+       }
+      }
+     ],
+     "says": {
+      "workspace": "shop/w1",
+      "checkouts": [
+       {
+        "repo": "acme/storefront",
+        "branch": "main",
+        "head": {
+         "branch": "main",
+         "commit": "9f86e287e0e7cda0b5e6ce5b9b31f56aad56f9e8"
+        },
+        "status": null,
+        "note": ""
+       }
+      ],
+      "status": null
+     },
+     "host": {
+      "status": "stopped"
+     }
+    }
+   ]
+  },
+  {
+   "slug": "billing",
+   "title": "acme/billing-api",
+   "repos": [
+    "acme/billing-api"
+   ],
+   "home": null,
+   "branches": [
+    {
+     "repo": "acme/billing-api",
+     "branch": "main",
+     "commit": "c288e78b06bf036ab1af18ebde3afa497e42a81d",
+     "landed": null
+    },
+    {
+     "repo": "acme/billing-api",
+     "branch": "rate-limits",
+     "commit": "7289cb3406dd4838f20a71c780c32abdff77f948",
+     "landed": null
+    }
+   ],
+   "net": "open",
+   "secrets": [
+    {
+     "name": "DATABASE_URL",
+     "on": true
+    }
+   ],
+   "building": null,
+   "workspaces": [
+    {
+     "workspace": "rate-limits",
+     "vm": "dsl-main-e1ccc10b24",
+     "state": "up",
+     "doing": null,
+     "making": null,
+     "pushed": [
+      {
+       "repo": "acme/billing-api",
+       "branch": "main",
+       "commit": "e1ccc10b245128d0a02c8c098925b88cd7924af8",
+       "count": 2,
+       "why": null
+      }
+     ],
+     "asks": {
+      "repo": "acme/billing-api",
+      "path": ".devcontainer/devcontainer.json",
+      "size": {},
+      "problems": []
+     },
+     "size": {
+      "cpus": 4,
+      "memoryMiB": 8192,
+      "diskGiB": 30
+     },
+     "startedBy": null,
+     "outlived": false,
+     "checkouts": [
+      {
+       "repo": "acme/billing-api",
+       "branch": "main",
+       "kind": "main",
+       "head": {
+        "branch": "main",
+        "commit": "e1ccc10b245128d0a02c8c098925b88cd7924af8"
+       }
+      }
+     ],
+     "says": {
+      "workspace": "billing/rate-limits",
+      "checkouts": [
+       {
+        "repo": "acme/billing-api",
+        "branch": "main",
+        "head": {
+         "branch": "main",
+         "commit": "e1ccc10b245128d0a02c8c098925b88cd7924af8"
+        },
+        "status": null,
+        "note": ""
+       }
+      ],
+      "status": {
+       "color": "red",
+       "message": "Blocked: which rate limit should the free tier get? 60/min or 600/hour?",
+       "updated": "2026-11-19T17:55:00.000Z"
+      }
+     },
+     "host": {
+      "status": "running",
+      "editor": "http://billing-rate-limits-editor-1a2b3c.localhost:31580/?tkn=000000000000000000000000000000000000000000000000&folder=/workspaces/acme/billing-api",
+      "devcontainer": "up (mcr.microsoft.com/devcontainers/typescript-node:22, user node)"
+     }
+    }
+   ]
+  },
+  {
+   "slug": "docs",
+   "title": "acme/docs",
+   "repos": [
+    "acme/docs"
+   ],
+   "home": null,
+   "branches": [
+    {
+     "repo": "acme/docs",
+     "branch": "main",
+     "commit": "be9cb3cfb6cc6c05e70cafe52b5d18a68ceba54f",
+     "landed": null
+    },
+    {
+     "repo": "acme/docs",
+     "branch": "fix/typos",
+     "commit": "65087bf21e0ae366560507a77e97911fa2539f37",
+     "landed": null
+    }
+   ],
+   "net": "open",
+   "secrets": [],
+   "building": null,
+   "workspaces": [
+    {
+     "workspace": "typos",
+     "vm": "dsl-main-305ac26ff3",
+     "state": "up",
+     "doing": "starting",
+     "making": "devcontainer up: pulling node:22-bookworm (412 MB of 1.1 GB)",
+     "pushed": [
+      {
+       "repo": "acme/docs",
+       "branch": "fix/typos",
+       "commit": "305ac26ff30e4dc2ea43fba33e8ec6203469ecbf",
+       "count": 0,
+       "why": null
+      }
+     ],
+     "asks": {
+      "repo": "acme/docs",
+      "path": ".devcontainer/devcontainer.json",
+      "size": {},
+      "problems": []
+     },
+     "size": {
+      "cpus": 4,
+      "memoryMiB": 8192,
+      "diskGiB": 30
+     },
+     "startedBy": null,
+     "outlived": false,
+     "checkouts": [
+      {
+       "repo": "acme/docs",
+       "branch": "fix/typos",
+       "kind": "worktree",
+       "head": {
+        "branch": "fix/typos",
+        "commit": "305ac26ff30e4dc2ea43fba33e8ec6203469ecbf"
+       }
+      }
+     ],
+     "says": {
+      "workspace": "docs/typos",
+      "checkouts": [
+       {
+        "repo": "acme/docs",
+        "branch": "fix/typos",
+        "head": {
+         "branch": "fix/typos",
+         "commit": "305ac26ff30e4dc2ea43fba33e8ec6203469ecbf"
+        },
+        "status": null,
+        "note": ""
+       }
+      ],
+      "status": null
+     },
+     "host": {
+      "status": "stopped"
+     }
+    }
+   ]
+  },
+  {
+   "slug": "ranker",
+   "title": "acme/ranker",
+   "repos": [
+    "acme/ranker"
+   ],
+   "home": null,
+   "branches": [
+    {
+     "repo": "acme/ranker",
+     "branch": "main",
+     "commit": "dda7bf7fc08fa898a316f226fb2c1a738363225e",
+     "landed": null
+    }
+   ],
+   "net": "open",
+   "secrets": [],
+   "building": null,
+   "workspaces": []
+  }
+ ],
+ "spawnMax": {
+  "shop": null,
+  "billing": null,
+  "docs": null,
+  "ranker": null
+ },
+ "offers": [
+  {
+   "domain": "shop",
+   "repo": "acme/storefront",
+   "branch": "feature/checkout-v2",
+   "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d",
+   "workspace": "checkout-v2",
+   "lfs": 0,
+   "at": "2026-11-19T17:58:00.000Z"
+  },
+  {
+   "domain": "billing",
+   "repo": "acme/billing-api",
+   "branch": "main",
+   "commit": "e1ccc10b245128d0a02c8c098925b88cd7924af8",
+   "workspace": "rate-limits",
+   "lfs": 0,
+   "at": "2026-11-19T17:40:00.000Z"
+  },
+  {
+   "domain": "docs",
+   "repo": "acme/docs",
+   "branch": "fix/typos",
+   "commit": "305ac26ff30e4dc2ea43fba33e8ec6203469ecbf",
+   "workspace": "typos",
+   "lfs": 0,
+   "at": "2026-11-19T16:12:00.000Z"
+  }
+ ],
+ "issues": [
+  {
+   "repo": "acme/storefront",
+   "title": "Cart: rounding is off by a cent for three-item orders in EUR",
+   "body": "Seen while writing checkout v2.\n\n- [ ] reproduce with `cart.test.ts`\n- [ ] round once, at the total\n\n```ts\nexpect(total([1.005, 2.335, 4.1])).toBe(7.44)\n```",
+   "labels": [
+    "bug"
+   ],
+   "id": "mx1-cart-rounding",
+   "domain": "shop",
+   "workspace": "checkout-v2",
+   "at": "2026-11-19T17:30:00.000Z",
+   "state": "offered",
+   "edited": false
+  }
+ ],
+ "refused": [],
+ "approvals": [],
+ "actions": [
+  {
+   "id": "a1",
+   "kind": "workspace.start",
+   "args": {},
+   "command": "desolate start docs/typos",
+   "state": "running",
+   "lines": [
+    "image node:22-bookworm: pulling",
+    "devcontainer up: pulling node:22-bookworm (412 MB of 1.1 GB)"
+   ],
+   "at": "2026-11-19T17:59:00.000Z"
+  },
+  {
+   "id": "a2",
+   "kind": "offer.push",
+   "args": {},
+   "command": "desolate push shop acme/storefront fix/cart-rounding",
+   "state": "done",
+   "lines": [
+    "approved on the approval page",
+    "pushed fix/cart-rounding to acme/storefront"
+   ],
+   "at": "2026-11-19T17:20:00.000Z",
+   "code": 0
+  },
+  {
+   "id": "a3",
+   "kind": "workspace.new",
+   "args": {},
+   "command": "desolate new ranker",
+   "state": "failed",
+   "lines": [
+    "devcontainer.json: \"image\" or \"build\" is needed"
+   ],
+   "at": "2026-11-19T16:00:00.000Z",
+   "code": 2
+  }
+ ]
+}

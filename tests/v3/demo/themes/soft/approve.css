@@ -1,0 +1,15 @@
+/* Soft: the approval page. Its canvas is plain (no gradient fixed behind it) and nothing holding
+   Approve is blurred, moved, filtered or see-through: beside the git terminal, the browser
+   would count it obscured, and it would never arm. */
+:root { --bg: #f3f2f8; --fg: #1e1b2e; --muted: #6e6a85; --card: #ffffff; --line: #e6e3f0; --accent: #6d4aff; --danger: #e11d48; --tint: #f6f4fd; }
+@media (prefers-color-scheme: dark) { :root { --bg: #121019; --fg: #edeaf7; --muted: #9a95b3; --card: #1b1825; --line: #2b2738; --accent: #a28bff; --danger: #fb7185; --tint: #231f31; } }
+body { font: 14.5px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased; padding-top: 40px; }
+h1 { font-size: 24px; font-weight: 700; }
+.card { border: 0; border-radius: 20px; padding: 22px 24px; box-shadow: 0 1px 2px rgba(30,27,46,0.04), 0 8px 24px rgba(30,27,46,0.06); }
+.names dd.branch { color: var(--accent); }
+.summary ul.long { border: 0; background: var(--tint); border-radius: 12px; }
+.summary code { background: var(--tint); padding: 1px 6px; border-radius: 6px; }
+button { border: 0; border-radius: 12px; background: var(--tint); font-weight: 600; padding: 9px 18px; }
+button.approve { background: var(--accent); color: #fff; }
+@media (prefers-color-scheme: dark) { button.approve { color: #120f1c; } }
+.actions { border-top: 0; }

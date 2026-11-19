@@ -1,0 +1,67 @@
+/* Soft: rounded, airy and calm. Floating cards on a tinted canvas, pastel tints for kinds
+   and states, generous space. In the spirit of Raycast and Arc. */
+:root {
+  --bg: #f3f2f8; --card: #ffffff; --ink: #1e1b2e; --soft: #6e6a85; --line: #e6e3f0; --accent: #6d4aff;
+  --gray: #a6a2b8; --blue: #3b82f6; --green: #10b981; --yellow: #eab308; --orange: #f97316; --red: #ef4444;
+  --tint: #f6f4fd; --shadow: 0 1px 2px rgba(30,27,46,0.04), 0 8px 24px rgba(30,27,46,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #121019; --card: #1b1825; --ink: #edeaf7; --soft: #9a95b3; --line: #2b2738; --accent: #a28bff;
+    --gray: #6e6a85; --blue: #7aa7ff; --green: #34d399; --yellow: #facc15; --orange: #fb923c; --red: #fb7185;
+    --tint: #231f31; --shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 32px rgba(0,0,0,0.35); }
+}
+body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+  background: radial-gradient(1200px 600px at 80% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%), var(--bg); background-attachment: fixed; }
+header { background: color-mix(in srgb, var(--card) 70%, transparent); backdrop-filter: blur(16px) saturate(1.5); border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); padding: 12px 28px; }
+h1 { font-size: 16px; font-weight: 700; background: linear-gradient(90deg, var(--accent), var(--blue)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+h2 { font-size: 13px; text-transform: none; letter-spacing: 0; font-weight: 600; color: var(--ink); }
+h3 { font-size: 16px; font-weight: 650; }
+main { gap: 34px; padding-top: 30px; }
+.chip { border: 0; background: var(--tint); font-size: 12px; padding: 2px 10px; }
+
+button, a.button { font-size: 13px; font-weight: 550; padding: 6px 14px; border-radius: 10px; border: 0; background: var(--tint); color: var(--ink); transition: transform 0.08s, background 0.15s; }
+button:hover, a.button:hover { background: color-mix(in srgb, var(--accent) 14%, var(--tint)); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent)); color: #fff; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: #120f1c; } }
+button.quiet, a.button.quiet { background: var(--tint); color: var(--ink); }
+button.small, a.button.small { padding: 2px 10px; border-radius: 8px; font-size: 12px; }
+.danger { color: var(--red) !important; background: color-mix(in srgb, var(--red) 8%, var(--tint)) !important; }
+input, select { border-radius: 10px; border-color: transparent; background: var(--tint); padding: 6px 12px; }
+input:focus, select:focus { outline: 0; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
+
+.card { border: 0; border-radius: 18px; padding: 20px 22px; box-shadow: var(--shadow); margin-bottom: 18px; }
+#needs { background: var(--card); border-radius: 18px; padding: 18px 22px 8px; box-shadow: var(--shadow); }
+ul.rows > li { padding: 14px 0; border-top: 1px solid var(--line); }
+.dot { width: 10px; height: 10px; margin-top: 6px; box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 0%, transparent); }
+.dot.green { box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 18%, transparent); }
+.dot.yellow { box-shadow: 0 0 0 4px color-mix(in srgb, var(--yellow) 20%, transparent); }
+.dot.red { box-shadow: 0 0 0 4px color-mix(in srgb, var(--red) 18%, transparent); }
+.dot.blue { box-shadow: 0 0 0 4px color-mix(in srgb, var(--blue) 18%, transparent); }
+
+/* Names: a soft tint for each kind, the kind in small lower case. */
+.named { border: 0; border-radius: 8px; font-size: 12.5px; }
+.named .kind { text-transform: lowercase; letter-spacing: 0; font-size: 11px; font-weight: 600; padding: 1px 2px 1px 8px; }
+.named .value { padding: 1px 8px 1px 4px; font-weight: 550; }
+.named.domain { background: color-mix(in srgb, #8b5cf6 13%, transparent); } .named.domain .kind { background: none; color: #8b5cf6; }
+.named.workspace { background: color-mix(in srgb, #10b981 13%, transparent); } .named.workspace .kind { background: none; color: #0e9f6e; }
+.named.repo { background: color-mix(in srgb, #64748b 13%, transparent); } .named.repo .kind { background: none; color: #64748b; }
+.named.branch { background: color-mix(in srgb, #f59e0b 15%, transparent); } .named.branch .kind { background: none; color: #d97706; }
+@media (prefers-color-scheme: dark) { .named.domain .kind { color: #b49cff; } .named.workspace .kind { color: #34d399; } .named.repo .kind { color: #94a3b8; } .named.branch .kind { color: #fbbf24; } }
+
+.pill { border: 0; border-radius: 8px; background: var(--tint); font-size: 12px; line-height: 20px; padding: 0 9px; font-weight: 500; }
+.pill.green { background: color-mix(in srgb, var(--green) 15%, transparent); } .pill.red { background: color-mix(in srgb, var(--red) 15%, transparent); }
+.pill.orange { background: color-mix(in srgb, var(--orange) 15%, transparent); } .pill.yellow { background: color-mix(in srgb, var(--yellow) 16%, transparent); color: color-mix(in srgb, var(--yellow) 70%, var(--ink)); }
+.pill.blue { background: color-mix(in srgb, var(--blue) 15%, transparent); }
+.pill.accent { border: 0; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.pill.repo { background: var(--tint); color: var(--ink); }
+
+#review { border-left: 0; border-radius: 22px 0 0 22px; box-shadow: -20px 0 60px rgba(30,27,46,0.18); overflow: hidden; }
+#review .resizer { border-right: 0; }
+.warnbox { border: 0; border-radius: 12px; }
+.warnbox.default-branch { border: 0; background: color-mix(in srgb, var(--red) 12%, transparent); box-shadow: inset 4px 0 0 var(--red); border-radius: 12px; }
+.sbs, pre.diff { border: 0; border-radius: 12px; background: var(--tint); }
+.sbs-file { background: var(--tint); }
+code { background: var(--tint); border-radius: 6px; }
+.what pre { background: var(--tint); border-radius: 10px; }
+.empty-ws, .resize { border: 0; background: var(--tint); border-radius: 14px; }
+details.branches { border-top: 0; }

@@ -60,6 +60,12 @@ const forgeRefs = () =>
       .map((line) => [line.split(" ")[0], line.split(" ")[1]]),
   ) as Record<string, string>;
 
+/** The names in what a selector matches, each as "<kind>:<name>" (the kind is the name's
+ *  class: its word is for the hover title and screen readers, not drawn). */
+const namesIn = (selector: string) =>
+  page.evaluate<string[]>(
+    `[...document.querySelectorAll(${JSON.stringify(`${selector} .named`)})].map((n) => n.classList[1] + ":" + n.querySelector(".value").textContent)`,
+  );
 let port = "";
 let link = "";
 let before_: { approve: number; git: number } = { approve: 0, git: 0 };
@@ -146,9 +152,9 @@ describe("T2 journeys through the dashboard", () => {
       "the workspace running, with its editor",
       180_000,
     );
-    const shown = await page.evaluate<string>(`document.querySelector('${row}').innerText`);
-    assert.match(shown, /WORKSPACE\s*main/, "the workspace's name, labelled as one");
-    assert.match(shown, /BRANCH\s*main/, "and the branch it is on, labelled as one");
+    const shown = await namesIn(row);
+    assert.ok(shown.includes("workspace:main"), `the workspace's name, as one: ${shown}`);
+    assert.ok(shown.includes("branch:main"), `and the branch it is on, as one: ${shown}`);
   });
 
   it("an agent's branch: offered, labelled, reviewed (files changed, Open in git on it), pushed with one click and an approval", async () => {
@@ -157,14 +163,24 @@ describe("T2 journeys through the dashboard", () => {
       `git checkout -q -b feature/greet && echo hi > greet.txt && git add greet.txt && ${commit("Greet")} && echo more >> README.md && ${commit("More")}`,
     );
     const offer = `[data-offer="${DOMAIN}/acme/app/feature/greet"]`;
-    const said = await page.until<string>(
-      `document.querySelector('${offer}')?.innerText`,
-      "the offer in Needs you",
-      60_000,
+    await page.until(`document.querySelector('${offer}')`, "the offer in Needs you", 60_000);
+    const said = await namesIn(offer);
+    assert.deepEqual(
+      said,
+      [
+        "branch:feature/greet",
+        "repo:acme/app",
+        "domain:acme--app",
+        "workspace:main",
+        `commit:${head.slice(0, 12)}`,
+      ],
+      "each name as what it is",
     );
-    assert.match(said, /BRANCH\s*feature\/greet/);
-    assert.match(said, /DOMAIN\s*acme--app/);
-    assert.match(said, /WORKSPACE\s*main/);
+    // What is offered and where from: their names start in one column.
+    const lefts = await page.evaluate<number[]>(
+      `[...document.querySelectorAll('${offer} .what > div')].map((d) => Math.round(d.firstElementChild.getBoundingClientRect().left))`,
+    );
+    assert.equal(new Set(lefts).size, 1, `the two lines' names line up: ${lefts}`);
     // Not on the remote yet, and the row says how much.
     await page.until(
       `/2 not on the remote/.test(document.querySelector('${row}').innerText)`,
@@ -202,6 +218,45 @@ describe("T2 journeys through the dashboard", () => {
       60_000,
     );
     await page.click("#review [data-change] button", "greet.txt");
+    // One commit's changes: "Greet" alone (the older of the two) changes greet.txt alone; then
+    // a shift-click to "More" picks both; then all of them again. Push sends all, whatever is
+    // picked, and says so.
+    const filesShown = () =>
+      page.evaluate<string>(
+        `[...document.querySelectorAll("#review [data-change]")].map((li) => li.dataset.change).join(",")`,
+      );
+    assert.match(
+      await page.evaluate<string>(`document.querySelector("#review [data-commits]").innerText`),
+      /All 2 commits, combined/,
+    );
+    await page.click("#review [data-pick]", "Greet");
+    await page.until(
+      `[...document.querySelectorAll("#review [data-change]")].map((li) => li.dataset.change).join(",") === "greet.txt"`,
+      "Greet's files alone",
+      30_000,
+    );
+    assert.match(
+      await page.evaluate<string>(`document.querySelector("#review [data-commits]").innerText`),
+      /One commit's changes\s*of 2\. Push still sends all 2\./,
+    );
+    await page.until(
+      `!document.querySelector('#review [data-file="README.md"]') && document.querySelector('#review [data-file="greet.txt"]')`,
+      "Greet's diff alone",
+      30_000,
+    );
+    await page.click("#review [data-pick]", "More", { shift: true });
+    await page.until(
+      `/2 commits' changes/.test(document.querySelector("#review [data-commits]").innerText)`,
+      "a run of two",
+      30_000,
+    );
+    assert.equal((await filesShown()).split(",").sort().join(","), "README.md,greet.txt");
+    await page.click("#review [data-pick-all]", "Show all");
+    await page.until(
+      `/All 2 commits, combined/.test(document.querySelector("#review [data-commits]").innerText)`,
+      "the whole review again",
+      30_000,
+    );
     // Push, then the person approves on the host.
     await press("#review button[data-action='offer.push']", "Push exactly");
     await page.until(

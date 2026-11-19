@@ -1,0 +1,66 @@
+/* Cloud: Soft without the pastel. Floating cards with deep, soft shadows, the most room of the
+   four, a translucent header over a faintly lit canvas. Names in capsules outlined in their
+   kind's colour, with its icon; states a dot and a word on neutral, red alone in its colour. */
+:root {
+  --bg: #eff0f4; --card: #ffffff; --ink: #17171c; --soft: #666675; --line: #e6e6ee; --accent: #4f46e5;
+  --gray: #a1a1aa; --blue: #2563eb; --green: #16a34a; --yellow: #ca8a04; --orange: #ea580c; --red: #dc2626;
+  --hover: #f2f2f6; --raise: #f3f3f7; --shadow: 0 1px 2px rgba(24,24,48,0.04), 0 10px 32px rgba(24,24,48,0.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0d0d12; --card: #18181f; --ink: #f2f2f6; --soft: #9c9cab; --line: #282830; --accent: #8b8cf8;
+    --gray: #71717a; --blue: #60a5fa; --green: #4ade80; --yellow: #facc15; --orange: #fb923c; --red: #f87171;
+    --hover: #1f1f27; --raise: #212129; --shadow: 0 1px 0 rgba(255,255,255,0.04) inset, 0 16px 40px rgba(0,0,0,0.4); }
+}
+body { font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased;
+  background: radial-gradient(1000px 520px at 85% -8%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 65%), var(--bg); background-attachment: fixed; }
+header { background: color-mix(in srgb, var(--card) 65%, transparent); backdrop-filter: blur(18px) saturate(1.5); border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent); padding-inline: 28px; }
+h1 { font-size: 16px; font-weight: 750; letter-spacing: -0.015em; }
+h2 { font-size: 13.5px; font-weight: 650; text-transform: none; letter-spacing: -0.005em; color: var(--ink); }
+h3 { font-size: 16px; font-weight: 700; letter-spacing: -0.015em; }
+main { gap: 40px; padding-top: 32px; }
+.chip { border: 0; background: color-mix(in srgb, var(--card) 70%, transparent); padding: 0 10px; font-size: 12px; border-radius: 8px; }
+
+button, a.button { font-size: 13px; font-weight: 600; padding: 0 15px; border-radius: 11px; border: 0; background: var(--raise); color: var(--ink); transition: background 0.15s, box-shadow 0.15s; }
+button:hover, a.button:hover { background: color-mix(in srgb, var(--ink) 8%, var(--raise)); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 86%, #fff), var(--accent)); color: #fff; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 32%, transparent); }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: #0d0d12; } }
+button.quiet, a.button.quiet { background: var(--raise); color: var(--ink); }
+button.small, a.button.small { padding: 0 10px; font-size: 12px; border-radius: 8px; }
+button.fold { background: none; }
+.danger { color: var(--red) !important; }
+input, select { border-radius: 11px; border: 1px solid transparent; background: var(--card); box-shadow: inset 0 0 0 1px var(--line); padding: 0 14px; }
+input:focus, select:focus { outline: 0; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent); }
+
+.card { border: 0; border-radius: 20px; padding: 26px 28px; box-shadow: var(--shadow); gap: var(--s4); }
+#needs ul.rows { background: var(--card); border-radius: 20px; padding: var(--s1) 28px; box-shadow: var(--shadow); }
+#needs ul.rows > li:first-child { padding-top: var(--s5); }
+ul.rows > li { border-top-color: var(--line); padding: var(--s5) 0; }
+.what { gap: 6px; }
+.what .line, .checkout { color: var(--soft); }
+
+/* names: a capsule outlined in the kind's colour, with its icon */
+.named, .pill.repo, .checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { background: var(--card); border: 1px solid color-mix(in srgb, var(--kind-color) 45%, transparent); border-radius: 8px; padding: 0 9px 0 7px; }
+.named { font-size: 12.5px; }
+.named .value { font-weight: 600; color: var(--ink); }
+.named.branch .value, .named.repo .value, .pill.repo, .checkout > span.mono:not(.pill) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pill.repo { color: var(--ink); font-weight: 500; }
+.checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { color: var(--soft); border-color: var(--line); }
+
+.pill { border: 0; background: var(--raise); color: var(--soft); font-size: 12px; font-weight: 500; padding: 0 10px; border-radius: 8px; gap: 6px; }
+.pill.green, .pill.yellow, .pill.blue, .pill.orange { background: var(--raise); color: var(--ink); font-weight: 550; }
+.pill.green::before, .pill.red::before, .pill.orange::before, .pill.yellow::before, .pill.blue::before { content: ""; width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.pill.green::before { background: var(--green); } .pill.yellow::before { background: var(--yellow); } .pill.blue::before { background: var(--blue); } .pill.orange::before { background: var(--orange); }
+.pill.red { background: var(--red); color: #fff; font-weight: 600; } .pill.red::before { background: #fff; }
+.pill.accent { border: 0; background: var(--raise); color: var(--accent); }
+a.pill.accent { text-decoration: none; } a.pill.accent:hover { text-decoration: underline; }
+
+#review { border-left: 0; border-radius: 24px 0 0 24px; overflow: hidden; box-shadow: -30px 0 80px rgba(20,20,48,0.2); }
+#review .resizer { border-right: 0; }
+#review-body > .card { padding: 0 28px; box-shadow: none; border-radius: 0; }
+.warnbox { border: 0; border-radius: 14px; background: color-mix(in srgb, var(--orange) 9%, var(--card)); padding: 14px 18px; }
+.warnbox.default-branch { border: 1px solid color-mix(in srgb, var(--red) 40%, transparent); background: color-mix(in srgb, var(--red) 8%, var(--card)); border-radius: 14px; padding: 14px 18px; }
+.sbs, pre.diff { border: 0; border-radius: 14px; box-shadow: inset 0 0 0 1px var(--line); }
+.sbs-file { background: var(--raise); }
+code, .what pre { background: var(--raise); border-radius: 7px; }
+.empty-ws, .resize { border: 0; background: var(--raise); border-radius: 14px; }
+details.branches { border-top: 1px solid var(--line); }

@@ -1,0 +1,56 @@
+/* Ink: Quiet's flat neutral page, with every name's kind back as an icon in its colour (the
+   kind's word on hover). States are a coloured dot and a word; only the row's own action is
+   filled. No shadows, hairline separators. */
+:root {
+  --bg: #fafafa; --card: #ffffff; --ink: #18181b; --soft: #6b6b73; --line: #e5e5e8; --accent: #18181b;
+  --gray: #a1a1aa; --blue: #2563eb; --green: #16a34a; --yellow: #ca8a04; --orange: #ea580c; --red: #dc2626;
+  --hover: #f4f4f5; --raise: #f2f2f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0a0a0c; --card: #111114; --ink: #f4f4f5; --soft: #a1a1aa; --line: #26262b; --accent: #f4f4f5;
+    --gray: #71717a; --blue: #60a5fa; --green: #4ade80; --yellow: #facc15; --orange: #fb923c; --red: #f87171; --hover: #18181c; --raise: #1c1c20; }
+}
+body { font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+header { background: var(--bg); padding-inline: var(--s6); }
+h1 { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+h2 { font-size: 12.5px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--soft); }
+h3 { font-size: 14.5px; font-weight: 650; }
+.chip { border: 0; background: var(--raise); padding: 0 var(--s2); font-size: 11.5px; border-radius: 6px; }
+
+button, a.button { font-size: 12.5px; font-weight: 500; padding: 0 var(--s3); border-radius: 7px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+button:hover, a.button:hover { background: var(--hover); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: var(--bg); } }
+button.quiet, a.button.quiet { background: var(--card); color: var(--ink); }
+button.small, a.button.small { padding: 0 var(--s2); font-size: 12px; border-radius: 6px; }
+button.fold { border: 0; background: none; }
+.danger { color: var(--red) !important; border-color: var(--line) !important; }
+input, select { border-radius: 7px; font-size: 13px; padding: 0 var(--s2); border-color: var(--line); background: var(--card); }
+input:focus, select:focus { outline: 0; border-color: var(--soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--soft) 18%, transparent); }
+
+.card { border-radius: 10px; padding: var(--s4) var(--s5); }
+ul.rows > li { border-top-color: var(--line); }
+.what .line, .checkout { color: var(--soft); }
+
+.named { font-size: 13px; }
+.named .value { font-weight: 550; color: var(--ink); }
+.named.branch .value, .named.repo .value, .pill.repo { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.pill.repo { border: 0; background: none; padding: 0; color: var(--ink); font-weight: 500; }
+.checkout > span.mono, #needs .what .line > span.mono, #review-body .title > span.mono { color: var(--soft); }
+
+.pill { border: 0; background: var(--raise); color: var(--soft); font-size: 11.5px; font-weight: 500; padding: 0 var(--s2); border-radius: 6px; gap: 6px; }
+.pill.green, .pill.red, .pill.orange, .pill.yellow, .pill.blue { background: var(--raise); color: var(--ink); font-weight: 500; }
+.pill.green::before, .pill.red::before, .pill.orange::before, .pill.yellow::before, .pill.blue::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.pill.green::before { background: var(--green); } .pill.red::before { background: var(--red); } .pill.orange::before { background: var(--orange); }
+.pill.yellow::before { background: var(--yellow); } .pill.blue::before { background: var(--blue); }
+.pill.accent { border: 0; background: var(--raise); color: var(--ink); }
+a.pill.accent { text-decoration: none; } a.pill.accent:hover { background: var(--hover); text-decoration: underline; }
+
+#review { box-shadow: -24px 0 48px rgba(0,0,0,0.12); }
+#review-body > .card { padding: 0 var(--s5); }
+.warnbox { border-radius: 8px; border-color: color-mix(in srgb, var(--orange) 35%, var(--line)); padding: var(--s3) var(--s4); }
+.warnbox.default-branch { border: 1px solid color-mix(in srgb, var(--red) 50%, transparent); background: color-mix(in srgb, var(--red) 7%, var(--card)); padding: var(--s3) var(--s4); }
+.sbs, pre.diff { border-radius: 8px; }
+.sbs-file { background: var(--raise); }
+code, .what pre { background: var(--raise); }
+.empty-ws, .resize { border-color: var(--line); border-radius: 10px; }

@@ -1,0 +1,103 @@
+/* The grid: the spacing and alignment every look below shares, laid over the shipped
+   stylesheet. A 4px scale; every chip, name, pill and small button one height (--row), each
+   line of a row centred on it; rows as dot | content | actions, the dot and the buttons
+   aligned to the first line; one gap between the parts of a card, and none from margins.
+   And what a thing is, said by an icon in its kind's colour: domain, workspace, repository,
+   branch, commit. (Icons are masks in the kind's colour: drawn here, no image fetched.) */
+:root {
+  --icon-domain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 1.75 13.25 3.6v4.05c0 3.05-2.15 5.55-5.25 6.6-3.1-1.05-5.25-3.55-5.25-6.6V3.6Z'/%3E%3C/svg%3E");
+  --icon-workspace: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='1.75' y='2.75' width='12.5' height='8.5' rx='1.5'/%3E%3Cpath d='M5.5 14h5M8 11.25V14'/%3E%3C/svg%3E");
+  --icon-repo: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 3.25A1.5 1.5 0 0 1 4.5 1.75h8.25v10H4.5A1.5 1.5 0 0 0 3 13.25ZM3 13.25a1.5 1.5 0 0 0 1.5 1.5h8.25v-3'/%3E%3C/svg%3E");
+  --icon-branch: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='4.75' cy='3.5' r='1.6'/%3E%3Ccircle cx='4.75' cy='12.5' r='1.6'/%3E%3Ccircle cx='11.25' cy='5' r='1.6'/%3E%3Cpath d='M4.75 5.1v5.8M11.25 6.6c0 3-6.5 2.2-6.5 4.3'/%3E%3C/svg%3E");
+  --icon-commit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='8' cy='8' r='2.6'/%3E%3Cpath d='M1 8h4.4M10.6 8H15'/%3E%3C/svg%3E");
+}
+:root {
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --s8: 32px;
+  --row: 22px; --btn: 28px; --icon: 14px;
+  --k-domain: #6f4ef2; --k-workspace: #0e9470; --k-repo: #56667f; --k-branch: #cf6a0a; --k-commit: #767c87;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --k-domain: #a28fff; --k-workspace: #3cc79c; --k-repo: #9eabc2; --k-branch: #f3a04c; --k-commit: #969ca7; }
+}
+
+/* ---- the page: sections, then cards, one gap each */
+main { gap: var(--s8); padding: var(--s6) var(--s6) 64px; }
+main > section { display: grid; gap: var(--s3); align-content: start; }
+main > section[hidden], [hidden] { display: none !important; }
+main h2, .section-head { margin: 0; }
+.section-head { min-height: var(--btn); gap: var(--s2); }
+.section-body, #domains { display: grid; gap: var(--s4); }
+#domains > .card, .section-body > .card, #first-run > .card, #issue > .card { margin: 0; }
+header { min-height: 52px; padding-block: 0; gap: var(--s2); }
+
+/* ---- one height for everything that sits on a line */
+.pill, .chip, .named, button.small, a.button.small { height: var(--row); box-sizing: border-box; display: inline-flex; align-items: center; vertical-align: middle; line-height: 1; white-space: nowrap; }
+button, a.button { min-height: var(--btn); box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+button.small, a.button.small { min-height: 0; }
+button.fold { min-height: 0; }
+input, select { height: var(--btn); box-sizing: border-box; }
+.tip { display: inline-flex; align-items: center; }
+
+/* ---- rows: dot | what | actions */
+ul.rows > li { grid-template-columns: 16px minmax(0, 1fr) auto; column-gap: var(--s3); row-gap: var(--s2); align-items: start; padding: var(--s4) 0; }
+ul.rows > li:first-child { padding-top: var(--s2); }
+.dot { justify-self: center; margin-top: calc((var(--row) - 8px) / 2); width: 8px; height: 8px; }
+.dot.hollow { box-sizing: border-box; }
+.buttons { gap: var(--s2); align-items: center; }
+ul.rows > li > .buttons { margin-top: calc((var(--row) - var(--btn)) / 2); }
+.what { display: grid; gap: var(--s1); min-width: 0; }
+.what > *, .what .name, .what .line, .checkout { margin: 0; }
+/* every line of a row: its parts in a row, one gap apart, centred on the line */
+.what .name, .what .line, .checkout, .meta, .repos, .toolbar, .stat, .card > .top, #review-body .title { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); min-height: var(--row); }
+.what .name { font-weight: 600; }
+.what .line, .checkout { font-size: 13px; }
+.what pre { margin: 0; }
+
+/* ---- a card: its parts one gap apart */
+.card { display: grid; gap: var(--s3); align-content: start; }
+.card > * { margin-top: 0; margin-bottom: 0; }
+.card > ul.rows { margin: 0; }
+.card > ul.rows > li:first-child { padding-top: var(--s3); }
+.card > .top { margin: 0; }
+.card > .top h3 { margin: 0; line-height: var(--row); }
+.card[data-folded] { gap: var(--s2); }
+details.branches { margin: 0; padding-top: var(--s2); }
+details.branches > summary { padding: 0; min-height: var(--row); display: flex; align-items: center; gap: var(--s2); }
+form.inline { margin: 0; gap: var(--s2); }
+hr.split { margin: 0; }
+.empty-ws { margin: 0; padding: var(--s4); gap: var(--s3); }
+.resize { margin: 0; padding: var(--s3) var(--s4); gap: var(--s3) var(--s4); }
+
+/* ---- what a thing is: an icon in its kind's colour, before its name */
+.named { gap: 6px; border: 0; background: none; padding: 0; overflow: visible; }
+.named .kind, .named.domain .kind, .named.workspace .kind, .named.repo .kind, .named.branch .kind { display: var(--kind-word, none); background: none; padding: 0; }
+.named .value { padding: 0; }
+.named::before, .pill.repo::before, .checkout > span.mono:not(.pill)::before, #needs .what .line > span.mono::before, #review-body .title > span.mono::before {
+  content: ""; flex: none; width: var(--icon); height: var(--icon); background: var(--kind-color);
+  -webkit-mask: var(--kind-icon) center / var(--icon) no-repeat; mask: var(--kind-icon) center / var(--icon) no-repeat;
+}
+.named.domain { --kind-icon: var(--icon-domain); --kind-color: var(--k-domain); }
+.named.workspace { --kind-icon: var(--icon-workspace); --kind-color: var(--k-workspace); }
+.named.repo, .pill.repo { --kind-icon: var(--icon-repo); --kind-color: var(--k-repo); }
+.named.branch { --kind-icon: var(--icon-branch); --kind-color: var(--k-branch); }
+.checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { --kind-icon: var(--icon-commit); --kind-color: var(--k-commit); display: inline-flex; align-items: center; gap: 5px; height: var(--row); }
+.pill.repo { gap: 6px; }
+
+/* ---- the review: its parts one gap apart, the files in columns */
+#review-card { gap: var(--s3); }
+#review-body .review-head { margin: 0; padding: var(--s4) 0 var(--s3); }
+#review-body .title-row { align-items: center; gap: var(--s3); }
+#review-body .title h3 { margin: 0; }
+.toolbar, .stat, .warnbox { margin: 0; }
+.files-changed { margin: 0; display: grid; gap: var(--s2); }
+.files-changed > summary { min-height: var(--row); display: flex; align-items: center; gap: var(--s2); }
+.files-changed .filter { margin: 0; }
+.files-changed ul.files { margin: 0; display: grid; }
+.files-changed li { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; column-gap: var(--s3); align-items: center; min-height: 28px; padding: 0; }
+.files-changed li > .pill { width: 76px; justify-content: center; }
+.files-changed button.link, button.link { min-height: 0; justify-content: flex-start; border: 0; background: none; box-shadow: none; padding: 0; color: var(--ink); }
+button.link:hover { background: none; text-decoration: underline; }
+.files-changed .counts { display: inline-grid; grid-template-columns: 5ch 5ch; column-gap: var(--s2); justify-items: end; font-variant-numeric: tabular-nums; }
+.num, .num-add, .num-del { font-variant-numeric: tabular-nums; }
+#review-card > pre.mono { margin: 0; line-height: 1.6; }
+#review-card > .buttons { margin: 0; }

@@ -255,8 +255,8 @@ export const openBrowser = async (
         }
       },
       /** The first element matching `selector` (and holding `text`, if given), clicked: the
-       *  pointer moves there, presses and lets go. */
-      click: async (selector: string, text = "") => {
+       *  pointer moves there, presses and lets go (holding shift, if asked). */
+      click: async (selector: string, text = "", options: { shift?: boolean } = {}) => {
         // Where it is, and that it is what the pointer would press there: a page that moved
         // under the pointer (a diff loading above a button) is measured again.
         const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.innerText.includes(${JSON.stringify(text)}))`;
@@ -287,12 +287,24 @@ export const openBrowser = async (
         if (!at) throw new Error(`nothing to click: ${selector} ${text}`);
         await send(
           "Input.dispatchMouseEvent",
-          { type: "mousePressed", ...at, button: "left", clickCount: 1 },
+          {
+            type: "mousePressed",
+            ...at,
+            button: "left",
+            clickCount: 1,
+            modifiers: options.shift ? 8 : 0,
+          },
           sessionId,
         );
         await send(
           "Input.dispatchMouseEvent",
-          { type: "mouseReleased", ...at, button: "left", clickCount: 1 },
+          {
+            type: "mouseReleased",
+            ...at,
+            button: "left",
+            clickCount: 1,
+            modifiers: options.shift ? 8 : 0,
+          },
           sessionId,
         );
         await sleep(300);
