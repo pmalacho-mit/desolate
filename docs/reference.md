@@ -144,6 +144,11 @@ button.
 - Domains and the activity fold and filter; the review opens as a panel on the right, as wide
   as you drag it, and compares with the remote's default branch as last fetched (Fetch now
   fetches it).
+- **A review's commits** can be read one at a time, or as a run (click, then shift-click):
+  the root diffs from the first one's parent to the last (`/diff?...&from=&to=`), and takes
+  only commits the review itself lists, in order. Push sends the whole branch all the same.
+- **A domain's card** is headed by its name (what commands and workspaces use), then its
+  title, when it says more than the name or the domain's one repository.
 
 ![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
 

@@ -1403,6 +1403,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
           url.searchParams.get("branch"),
           url.searchParams.get("against"),
           url.searchParams.get("whitespace"),
+          url.searchParams.get("from"),
+          url.searchParams.get("to"),
         ),
       );
     } catch (error) {
