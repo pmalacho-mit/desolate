@@ -1,0 +1,339 @@
+// What desolate does, as a person meets it, and what each part of it is made of: its code,
+// the tests that try it, the docs that describe it, and the pictures in those docs. From a
+// change (tests/v3/affected.ts): which features it touches, so which suites to run again,
+// which docs to read again, and which screenshots to take again. The T1 test beside this
+// (t1/features.test.ts) keeps the map whole: every shipped file belongs to a feature, and
+// every suite, doc and picture named here exists.
+//
+// `code` is a list of paths from the repository's root: a path names that file, and a path
+// ending in `/` everything under it. `boundary`: a change to it needs T4 (real VMs) before
+// it is believed (AGENTS.md).
+
+export type Feature = {
+  id: string;
+  what: string;
+  code: string[];
+  /** T2 and T3/T4 suites, by file name without `.test.ts` (t2/09-ui, t3/02-dev-stack). */
+  tests: string[];
+  /** Docs, each a file and the part of it that describes this. */
+  docs: string[];
+  /** Screenshots in the docs (tests/v3/demo/screenshots.ts SHOTS names). */
+  shots: string[];
+  boundary?: boolean;
+};
+
+export const FEATURES: Feature[] = [
+  {
+    id: "dashboard",
+    what: "the dashboard: domains, workspaces and their states, Needs you, filters, actions, Resize, Delete",
+    code: [
+      "release/root/ui/",
+      "release/root/stated.ts",
+      "release/shared/actions.ts",
+      "release/shared/status.ts",
+      "release/shared/stats.ts",
+      "release/shared/ui/",
+    ],
+    tests: ["t2/09-ui", "t2/19-journeys"],
+    docs: [
+      "release/docs/getting-started.md: 7. Review",
+      "release/docs/reference.md: Approving, pushing, and the pages desolate serves",
+    ],
+    shots: ["dashboard"],
+  },
+  {
+    id: "review-and-push",
+    what: "reviewing what a push sends (commits, files changed, the diff), pushing it, and approving it on the Mac",
+    code: [
+      "release/root/offers.ts",
+      "release/root/reviewer.ts",
+      "release/root/review-ask.ts",
+      "release/root/review-client.ts",
+      "release/root/push.ts",
+      "release/root/pusher.ts",
+      "release/root/pushed.ts",
+      "release/root/raw-push.ts",
+      "release/root/send.ts",
+      "release/root/approvals.ts",
+      "release/root/keyring.ts",
+      "release/root/keyring-client.ts",
+      "release/root/keyring-askpass",
+      "release/root/keyring-askpass.ts",
+      "release/host/push.ts",
+      "release/host/approver.ts",
+      "release/host/approver/",
+      "release/host/approve-web.ts",
+      "release/host/approve-ui/approve.css",
+      "release/host/approve-ui/approve.html",
+      "release/host/approve-ui/approve.js",
+      "release/shared/approval.ts",
+    ],
+    tests: ["t2/04-offers", "t2/09-ui", "t2/10-hostile-content", "t2/19-journeys"],
+    docs: [
+      "release/docs/getting-started.md: 7. Review, 8. Push it",
+      "release/docs/reference.md: Approving, pushing, and the pages desolate serves, What a push is, exactly",
+    ],
+    shots: ["dashboard"],
+    boundary: true,
+  },
+  {
+    id: "git-vm",
+    what: "the git terminal (Open in git): your clones, on a domain's branch, and a push from there",
+    code: [
+      "release/host/git-vm.ts",
+      "release/host/git-web.ts",
+      "release/host/git-ui/",
+      "release/git/desolate",
+      "release/git/desolate.ts",
+      "release/git/desolate-lfs-file",
+      "release/git/lfs-file.ts",
+      "release/git/git-remote-desolate-out",
+      "release/git/git-remote-desolate-out.ts",
+      "release/git/provision.sh",
+      "release/git/terminal.py",
+    ],
+    tests: ["t2/11-git-vm", "t2/19-journeys"],
+    docs: [
+      "release/docs/getting-started.md: 8. Push it",
+      "release/docs/reference.md: Git in your browser",
+    ],
+    shots: ["git"],
+    boundary: true,
+  },
+  {
+    id: "offers",
+    what: "a workspace's branches reaching the root: git push as an offer, sync, the outbox, what the root takes in",
+    code: [
+      "release/workspace/sync.ts",
+      "release/workspace/git-remote-desolate-offer",
+      "release/workspace/git-remote-desolate-mirror",
+      "release/workspace/git-urls.ts",
+      "release/root/outbox.ts",
+      "release/root/intake.ts",
+      "release/root/git-remote-desolate",
+      "release/root/git-remote-desolate.ts",
+      "release/root/git-remote-desolate-push",
+      "release/root/git-remote-desolate-push.ts",
+      "release/root/pre-push.ts",
+      "release/root/hooks/",
+    ],
+    tests: ["t2/04-offers", "t2/10-hostile-content", "t2/19-journeys"],
+    docs: [
+      "release/docs/getting-started.md: 5. Work in it",
+      "release/docs/reference.md: Git in a workspace",
+    ],
+    shots: [],
+    boundary: true,
+  },
+  {
+    id: "repos",
+    what: "cloning a repository: its deploy keys, mirror, the root's clone, fetching",
+    code: [
+      "release/host/repos.ts",
+      "release/root/repos.ts",
+      "release/root/git.ts",
+      "release/root/forge-pin.ts",
+      "release/root/github_known_hosts",
+    ],
+    tests: ["t2/01-root", "t2/02-domains"],
+    docs: ["release/docs/getting-started.md: 3. Clone a repository"],
+    shots: [],
+    boundary: true,
+  },
+  {
+    id: "workspaces",
+    what: "domains and workspaces: up, start, stop, rm, sizes and resize, templates, workspaces that start workspaces",
+    code: [
+      "release/host/workspaces.ts",
+      "release/host/templates.ts",
+      "release/host/spawn.ts",
+      "release/host/vm/",
+      "release/host/image.ts",
+      "release/image/",
+      "release/root/domains.ts",
+      "release/shared/plan.ts",
+      "release/shared/size.ts",
+      "release/shared/spawn.ts",
+      "release/workspace/init.ts",
+      "release/workspace/start.sh",
+      "release/workspace/wsd.ts",
+      "release/workspace/wsctl.ts",
+      "release/workspace/status",
+      "release/workspace/desolate",
+      "release/workspace/desolate.ts",
+      "release/workspace/entry",
+    ],
+    tests: [
+      "t2/02-domains",
+      "t2/13-rebuild",
+      "t2/16-spawn",
+      "t2/18-size",
+      "t3/01-boundaries",
+      "t3/02-dev-stack",
+    ],
+    docs: [
+      "release/docs/getting-started.md: 3. Clone a repository, 4. Start a workspace",
+      "release/docs/reference.md: Workspaces that start workspaces, A workspace's size, from its project",
+      "release/docs/home.md",
+    ],
+    shots: ["dashboard"],
+    boundary: true,
+  },
+  {
+    id: "devcontainer",
+    what: "the project's devcontainer in its workspace: single containers and compose, Docker inside",
+    code: [
+      "release/workspace/devcontainer.ts",
+      "release/workspace/enter.sh",
+      "release/workspace/bridge.ts",
+      "release/workspace/svcnet.ts",
+    ],
+    tests: ["t2/08-devcontainer", "t2/08-devcontainer-compose", "t3/02-dev-stack"],
+    docs: ["release/docs/reference.md: Devcontainers, Containers a dev stack starts"],
+    shots: [],
+  },
+  {
+    id: "editor",
+    what: "the editor in each workspace: its gate and hostname, its settings, your defaults (and their page)",
+    code: [
+      "release/workspace/editor.sh",
+      "release/workspace/editor-gate.ts",
+      "release/workspace/editor-settings.ts",
+      "release/workspace/editor-defaults.sh",
+      "release/host/editor-defaults.ts",
+      "release/host/approve-ui/editor-defaults.html",
+      "release/host/approve-ui/editor-defaults.js",
+      "release/host/retired.ts",
+    ],
+    tests: ["t2/06-editor", "t2/08-devcontainer", "t3/01-boundaries"],
+    docs: [
+      "release/docs/getting-started.md: 5. Work in it",
+      "release/docs/reference.md: The editor's settings, layer by layer",
+    ],
+    shots: ["editor"],
+  },
+  {
+    id: "network",
+    what: "a workspace's way out (its proxy, the relay, egress rules) and in (forwarded ports, dev server names)",
+    code: [
+      "release/workspace/net/",
+      "release/root/proxy/proxy.ts",
+      "release/root/proxy/manage.ts",
+      "release/root/proxy/as-proxy.ts",
+      "release/root/proxy-user.sh",
+      "release/root/wall.sh",
+      "release/shared/link.ts",
+      "release/shared/sniff.ts",
+      "release/host/held-ports.ts",
+    ],
+    tests: ["t2/03-ports", "t2/05-egress", "t3/01-boundaries", "t3/02-dev-stack"],
+    docs: [
+      "release/docs/reference.md: Dev servers, What a workspace can reach, Containers a dev stack starts",
+    ],
+    shots: [],
+    boundary: true,
+  },
+  {
+    id: "secrets",
+    what: "a domain's secrets: set, show, import a .env, the secrets page, the secrets proxy",
+    code: [
+      "release/root/proxy/secret-store.ts",
+      "release/root/proxy/secrets.ts",
+      "release/root/proxy/secrets_addon.py",
+      "release/host/domains.ts",
+      "release/host/env-import.ts",
+      "release/shared/envfile.ts",
+      "release/host/approve-ui/secrets.html",
+      "release/host/approve-ui/secrets.js",
+    ],
+    tests: ["t2/07-secrets", "t3/01-boundaries", "t3/02-dev-stack"],
+    docs: [
+      "release/docs/getting-started.md: 6. Or hand it to an agent",
+      "release/docs/reference.md: Secrets, A project's `.env`, imported",
+    ],
+    shots: ["secrets"],
+    boundary: true,
+  },
+  {
+    id: "agents",
+    what: "programs kept running in a workspace, agents, and the recipes",
+    code: ["release/host/agent.ts", "release/workspace/agent-holder.py", "release/recipes/"],
+    tests: ["t2/12-agent"],
+    docs: ["release/docs/agents.md", "release/recipes/README.md"],
+    shots: [],
+  },
+  {
+    id: "issues",
+    what: "GitHub issues a workspace offers, edited on the dashboard and published as you",
+    code: ["release/host/issues.ts", "release/root/issues.ts", "release/shared/issues.ts"],
+    tests: ["t2/17-issues"],
+    docs: ["release/docs/reference.md: Issues a workspace offers"],
+    shots: [],
+  },
+  {
+    id: "suede",
+    what: "suede: vendored dependencies proposed upstream",
+    code: [
+      "release/host/upstream.ts",
+      "release/git/upstream.ts",
+      "release/git/suede-upstream.sh",
+      "release/shared/suede.ts",
+    ],
+    tests: ["t2/13-upstream"],
+    docs: ["release/docs/suede.md"],
+    shots: [],
+  },
+  {
+    id: "stack",
+    what: "the stack itself: bootstrap, the host's daemon and CLI, the root's services, what every side shares",
+    code: [
+      "release/cli.sh",
+      "release/completion.bash",
+      "release/pins.env",
+      "release/package.json",
+      "release/nests.d.ts",
+      "release/.gitattributes",
+      "release/.gitignore",
+      "release/.gitrepo",
+      "release/host/bootstrap.ts",
+      "release/host/stack.ts",
+      "release/host/daemon.ts",
+      "release/host/cli.ts",
+      "release/host/paths.ts",
+      "release/host/carry.ts",
+      "release/host/status.ts",
+      "release/host/events.ts",
+      "release/host/notify.ts",
+      "release/root/rootd.ts",
+      "release/root/rootctl.ts",
+      "release/root/ops.ts",
+      "release/root/start.sh",
+      "release/root/layout.ts",
+      "release/shared/",
+    ],
+    tests: ["t2/01-root", "t2/13-rebuild", "t3/01-boundaries"],
+    docs: [
+      "release/docs/getting-started.md: 1. Install, 2. Bootstrap the stack, Upgrading desolate",
+      "release/docs/reference.md",
+      "release/docs/home.md",
+    ],
+    shots: [],
+    boundary: true,
+  },
+  {
+    id: "docs",
+    what: "the docs themselves, and what is said to agents",
+    code: ["release/docs/", "release/README.md", "release/AGENTS.md"],
+    tests: [],
+    docs: [],
+    shots: [],
+  },
+];
+
+/** Whether a path is one a feature's `code` names. */
+export const covers = (code: string[], file: string) =>
+  code.some((entry) => (entry.endsWith("/") ? file.startsWith(entry) : file === entry));
+
+/** The features a set of changed files touches. */
+export const touched = (files: string[]) =>
+  FEATURES.filter((f) => files.some((file) => covers(f.code, file)));

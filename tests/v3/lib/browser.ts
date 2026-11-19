@@ -200,6 +200,110 @@ export const openBrowser = async (
       await send("Target.closeTarget", { targetId });
     }
   };
+  /** A tab that stays open, driven as a person drives a page: the pointer moves to what it
+   *  clicks, keys are typed, and a confirm() is answered yes. For the dashboard's journeys
+   *  (t2/19-journeys): what a person does there, not the requests it makes. */
+  const tab = async (url: string) => {
+    const { targetId } = (await send("Target.createTarget", { url: "about:blank" })) as {
+      targetId: string;
+    };
+    const { sessionId } = (await send("Target.attachToTarget", { targetId, flatten: true })) as {
+      sessionId: string;
+    };
+    const said: string[] = [];
+    listeners.set(sessionId, (method, p) => {
+      if (method === "Page.javascriptDialogOpening")
+        void send("Page.handleJavaScriptDialog", { accept: true }, sessionId);
+      else if (method === "Runtime.exceptionThrown")
+        said.push(
+          `Uncaught ${p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? ""}`,
+        );
+    });
+    for (const domain of ["Page", "Runtime"]) await send(`${domain}.enable`, {}, sessionId);
+    await send(
+      "Emulation.setDeviceMetricsOverride",
+      { width, height, deviceScaleFactor: 1, mobile: false },
+      sessionId,
+    );
+    const evaluate = async <T = unknown>(expression: string): Promise<T> => {
+      const r = (await send(
+        "Runtime.evaluate",
+        { expression, returnByValue: true, awaitPromise: true },
+        sessionId,
+      )) as { result?: { value?: T }; exceptionDetails?: { text?: string } };
+      if (r.exceptionDetails) throw new Error(`in the page: ${r.exceptionDetails.text}`);
+      return r.result?.value as T;
+    };
+    let pointer = { x: width / 2, y: height / 2 };
+    const self = {
+      said,
+      evaluate,
+      goto: async (to: string) => {
+        await send("Page.navigate", { url: to }, sessionId);
+        await sleep(1000);
+      },
+      /** The value of `expression` once it is truthy; or a failure that says what the page
+       *  showed. */
+      until: async <T = unknown>(expression: string, what: string, ms = 30_000): Promise<T> => {
+        for (const end = Date.now() + ms; ; await sleep(250)) {
+          const value = await evaluate<T>(expression).catch(() => undefined);
+          if (value) return value;
+          if (Date.now() > end)
+            throw new Error(
+              `the page never showed ${what}: ${String(await evaluate("document.body ? document.body.innerText : ''")).slice(0, 1500)}`,
+            );
+        }
+      },
+      /** The first element matching `selector` (and holding `text`, if given), clicked: the
+       *  pointer moves there, presses and lets go. */
+      click: async (selector: string, text = "") => {
+        const at = await evaluate<{ x: number; y: number } | null>(`(() => {
+          const e = [...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.innerText.includes(${JSON.stringify(text)}));
+          if (!e) return null;
+          e.scrollIntoView({ block: "center" });
+          const r = e.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        })()`);
+        if (!at) throw new Error(`nothing to click: ${selector} ${text}`);
+        for (let i = 1; i <= 8; i++) {
+          const p = {
+            x: pointer.x + ((at.x - pointer.x) * i) / 8,
+            y: pointer.y + ((at.y - pointer.y) * i) / 8,
+          };
+          await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...p }, sessionId);
+        }
+        pointer = at;
+        await send(
+          "Input.dispatchMouseEvent",
+          { type: "mousePressed", ...at, button: "left", clickCount: 1 },
+          sessionId,
+        );
+        await send(
+          "Input.dispatchMouseEvent",
+          { type: "mouseReleased", ...at, button: "left", clickCount: 1 },
+          sessionId,
+        );
+        await sleep(300);
+      },
+      /** Text typed where the focus is. */
+      type: async (text: string) => {
+        await send("Input.insertText", { text }, sessionId);
+      },
+      text: () => evaluate<string>("document.body ? document.body.innerText : ''"),
+      shot: async (file: string) => {
+        const shot = (await send("Page.captureScreenshot", { format: "png" }, sessionId)) as {
+          data?: string;
+        };
+        if (shot.data) fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
+      },
+      close: async () => {
+        listeners.delete(sessionId);
+        await send("Target.closeTarget", { targetId });
+      },
+    };
+    await self.goto(url);
+    return self;
+  };
   const close = async () => {
     await Promise.race([send("Browser.close"), sleep(5000)]);
     ws.close();
@@ -207,7 +311,7 @@ export const openBrowser = async (
     browser.kill();
     await exited;
   };
-  return { load, close };
+  return { load, tab, close };
 };
 
 /** One page in a Chrome of its own, with the profile `profile`, closed after. */
