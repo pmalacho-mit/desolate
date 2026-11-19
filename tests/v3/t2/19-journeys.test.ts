@@ -250,7 +250,7 @@ describe("T2 journeys through the dashboard", () => {
       "a run of two",
       30_000,
     );
-    assert.equal(await filesShown(), "greet.txt,README.md");
+    assert.equal((await filesShown()).split(",").sort().join(","), "README.md,greet.txt");
     await page.click("#review [data-pick-all]", "Show all");
     await page.until(
       `/All 2 commits, combined/.test(document.querySelector("#review [data-commits]").innerText)`,

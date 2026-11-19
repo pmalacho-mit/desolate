@@ -537,7 +537,7 @@ describe("T2 section 4.8: the root UI", () => {
     const dom = page.stdout;
     assert.match(
       dom,
-      /<div class="card" data-domain="web">[\s\S]*<h3>the web app<\/h3>/,
+      /<div class="card" data-domain="web">[\s\S]*<h3><span class="named domain"[^>]*><span class="kind">domain<\/span><span class="value mono">web<\/span><\/span><\/h3><span class="domain-title"[^>]*>the web app<\/span>/,
       dom.slice(0, 600),
     );
     assert.match(
