@@ -47,16 +47,28 @@ const themeOf = (req: IncomingMessage, url: URL) => {
     : "shipped";
 };
 /** A theme is an overlay: the shipped stylesheet, then the theme's, which says only what it
- *  changes (every rule the pages rely on stays, unless a theme overrides it). */
+ *  changes (every rule the pages rely on stays, unless a theme overrides it). A theme with a
+ *  file `extends` (another theme's name) is laid over that one, which is laid first. */
+const layers = (theme: string): string[] => {
+  if (theme === "shipped") return [];
+  const base = path.join(THEMES, theme, "extends");
+  const under = fs.existsSync(base) ? fs.readFileSync(base, "utf8").trim() : "";
+  return [...(under && under !== theme ? layers(under) : []), theme];
+};
 const styled = (res: ServerResponse, theme: string, sheet: string, shipped: string) =>
   send(
     res,
     200,
     TYPES[".css"]!,
-    fs.readFileSync(shipped, "utf8") +
-      (theme === "shipped"
-        ? ""
-        : `\n/* ---- theme: ${theme} ---- */\n${fs.readFileSync(path.join(THEMES, theme, sheet), "utf8")}`),
+    [
+      fs.readFileSync(shipped, "utf8"),
+      ...layers(theme)
+        .filter((layer) => fs.existsSync(path.join(THEMES, layer, sheet)))
+        .map(
+          (layer) =>
+            `/* ---- theme: ${layer} ---- */\n${fs.readFileSync(path.join(THEMES, layer, sheet), "utf8")}`,
+        ),
+    ].join("\n"),
   );
 const page = (res: ServerResponse, url: URL, theme: string, html: string) => {
   res.setHeader("set-cookie", `theme=${theme}; Path=/; SameSite=Lax`);

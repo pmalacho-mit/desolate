@@ -19,7 +19,12 @@ const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const themes = only.length
   ? only
-  : ["shipped", ...fs.readdirSync(path.join(HERE, "themes")).filter((t) => !t.startsWith("."))];
+  : [
+      "shipped",
+      ...fs
+        .readdirSync(path.join(HERE, "themes"))
+        .filter((t) => !t.startsWith(".") && !t.startsWith("_")),
+    ];
 
 const server = spawn(process.execPath, [path.join(HERE, "preview.ts"), String(PORT)], {
   stdio: "ignore",

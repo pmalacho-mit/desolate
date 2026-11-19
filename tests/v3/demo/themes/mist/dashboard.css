@@ -1,0 +1,68 @@
+/* Mist: halfway. Soft's floating cards and room to breathe, on a neutral canvas: no pastel.
+   Names in neutral capsules with the kind's icon, and its word in small lower case. States are
+   a dot and a word, except those that need you (orange, red), which carry their colour. A
+   deep indigo primary. */
+:root {
+  --bg: #f1f1f4; --card: #ffffff; --ink: #18181d; --soft: #676773; --line: #e7e7ec; --accent: #4f46e5;
+  --gray: #a1a1aa; --blue: #2563eb; --green: #16a34a; --yellow: #ca8a04; --orange: #ea580c; --red: #dc2626;
+  --hover: #f3f3f6; --raise: #f2f2f5; --shadow: 0 1px 2px rgba(24,24,40,0.04), 0 6px 20px rgba(24,24,40,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0e0e12; --card: #17171c; --ink: #f1f1f5; --soft: #9d9daa; --line: #26262e; --accent: #8b8cf8;
+    --gray: #71717a; --blue: #60a5fa; --green: #4ade80; --yellow: #facc15; --orange: #fb923c; --red: #f87171;
+    --hover: #1e1e25; --raise: #202027; --shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 10px 28px rgba(0,0,0,0.35); }
+}
+body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+header { background: color-mix(in srgb, var(--card) 80%, transparent); backdrop-filter: blur(14px) saturate(1.4); border-bottom-color: var(--line); padding-inline: var(--s6); }
+h1 { font-size: 15.5px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 13px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--ink); }
+h3 { font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; }
+main { gap: 36px; }
+.chip { border: 0; background: var(--raise); padding: 0 var(--s2); font-size: 12px; border-radius: 7px; }
+
+button, a.button { font-size: 13px; font-weight: 550; padding: 0 14px; border-radius: 9px; border: 0; background: var(--raise); color: var(--ink); }
+button:hover, a.button:hover { background: color-mix(in srgb, var(--ink) 8%, var(--raise)); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { background: var(--accent); color: #fff; box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 40%, transparent); }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: #0e0e12; } }
+button.quiet, a.button.quiet { background: var(--raise); color: var(--ink); }
+button.small, a.button.small { padding: 0 10px; font-size: 12px; border-radius: 7px; }
+button.fold { background: none; }
+.danger { color: var(--red) !important; }
+input, select { border-radius: 9px; border: 1px solid transparent; background: var(--raise); padding: 0 var(--s3); }
+input:focus, select:focus { outline: 0; border-color: color-mix(in srgb, var(--accent) 50%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+
+.card { border: 0; border-radius: 16px; padding: var(--s6); box-shadow: var(--shadow); gap: var(--s4); }
+#needs ul.rows { background: var(--card); border-radius: 16px; padding: var(--s1) var(--s6); box-shadow: var(--shadow); }
+#needs ul.rows > li:first-child { padding-top: var(--s4); }
+ul.rows > li { border-top-color: var(--line); padding: 18px 0; }
+.what { gap: 6px; }
+.what .line, .checkout { color: var(--soft); }
+
+/* names: a neutral capsule, the kind's icon and word */
+:root { --kind-word: inline-flex; }
+.named, .pill.repo, .checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { background: var(--raise); border-radius: 7px; padding: 0 var(--s2) 0 7px; }
+.named { font-size: 12.5px; gap: 5px; }
+.named .kind { color: var(--kind-color); font-size: 11px; font-weight: 600; text-transform: lowercase; letter-spacing: 0; }
+.named .value { font-weight: 600; color: var(--ink); }
+.named.branch .value, .named.repo .value, .pill.repo, .checkout > span.mono:not(.pill) { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.pill.repo { border: 0; color: var(--ink); font-weight: 500; }
+.checkout > span.mono:not(.pill), #needs .what .line > span.mono, #review-body .title > span.mono { color: var(--soft); }
+
+.pill { border: 0; background: var(--raise); color: var(--soft); font-size: 12px; font-weight: 500; padding: 0 var(--s2); border-radius: 7px; gap: 6px; }
+.pill.green, .pill.yellow, .pill.blue { background: var(--raise); color: var(--ink); font-weight: 500; }
+.pill.green::before, .pill.red::before, .pill.orange::before, .pill.yellow::before, .pill.blue::before { content: ""; width: 6px; height: 6px; border-radius: 50%; flex: none; }
+.pill.green::before { background: var(--green); } .pill.yellow::before { background: var(--yellow); } .pill.blue::before { background: var(--blue); }
+.pill.red { background: color-mix(in srgb, var(--red) 13%, var(--card)); color: var(--red); font-weight: 600; } .pill.red::before { background: var(--red); }
+.pill.orange { background: color-mix(in srgb, var(--orange) 13%, var(--card)); color: var(--orange); font-weight: 600; } .pill.orange::before { background: var(--orange); }
+.pill.accent { border: 0; background: var(--raise); color: var(--accent); }
+a.pill.accent { text-decoration: none; } a.pill.accent:hover { text-decoration: underline; }
+
+#review { border-left: 0; box-shadow: -24px 0 60px rgba(20,20,40,0.16); }
+#review-body > .card { padding: 0 var(--s6); box-shadow: none; border-radius: 0; }
+.warnbox { border: 0; border-radius: 12px; background: color-mix(in srgb, var(--orange) 10%, var(--card)); padding: var(--s3) var(--s4); }
+.warnbox.default-branch { border: 0; background: color-mix(in srgb, var(--red) 10%, var(--card)); box-shadow: inset 3px 0 0 var(--red); border-radius: 12px; padding: var(--s3) var(--s4); }
+.sbs, pre.diff { border: 1px solid var(--line); border-radius: 12px; }
+.sbs-file { background: var(--raise); }
+code, .what pre { background: var(--raise); border-radius: 6px; }
+.empty-ws, .resize { border: 0; background: var(--raise); border-radius: 12px; }
+details.branches { border-top: 1px solid var(--line); }

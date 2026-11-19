@@ -1,0 +1,17 @@
+/* Cloud: the approval page. A plain canvas, unlike the dashboard's, and nothing holding Approve
+   is blurred, moved, filtered or see-through: beside the git terminal it would never arm. */
+:root { --bg: #eff0f4; --fg: #17171c; --muted: #666675; --card: #ffffff; --line: #e6e6ee; --accent: #4f46e5; --danger: #dc2626; --raise: #f3f3f7;
+  --k-repo: #56667f; --k-branch: #cf6a0a; --k-commit: #767c87; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0d0d12; --fg: #f2f2f6; --muted: #9c9cab; --card: #18181f; --line: #282830; --accent: #8b8cf8; --danger: #f87171; --raise: #212129; } }
+body { font: 14.5px/1.65 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; padding-top: 48px; }
+h1 { font-size: 24px; font-weight: 750; letter-spacing: -0.02em; }
+.card { border: 0; border-radius: 22px; padding: 26px 28px; box-shadow: 0 1px 2px rgba(24,24,48,0.04), 0 10px 32px rgba(24,24,48,0.08); }
+.names dd { font-weight: 600; }
+.names dd.repo, .names dd.branch, .names dd.commit { justify-self: start; border: 1px solid color-mix(in srgb, var(--kind-color) 45%, transparent); border-radius: 8px; padding: 0 9px 0 7px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.summary ul.long { border: 0; background: var(--raise); border-radius: 14px; }
+.summary code { background: var(--raise); padding: 1px 6px; border-radius: 6px; }
+.sensitive code { background: color-mix(in srgb, var(--danger) 12%, var(--card)); }
+button { border: 0; border-radius: 12px; background: var(--raise); font-weight: 600; padding: 0 20px; min-height: 40px; }
+button.approve { background: var(--accent); color: #fff; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 30%, transparent); }
+@media (prefers-color-scheme: dark) { button.approve { color: #0d0d12; } }
+.actions { border-top-color: var(--line); }
