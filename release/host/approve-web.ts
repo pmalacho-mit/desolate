@@ -282,9 +282,16 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     // The secrets page and the editor-defaults page, opened from the dashboard (another
     // site): static, and all they do is a request of their own origin with this page's cookie
     // (as the git page).
+    // And the approval page itself, which the dashboard's Push opens in a tab of its own
+    // (2026-11-19): its bare address only, never one carrying a token, and never in a frame.
+    // In a tab, the page is the person's: Approve arms only on the pointer's own movement, and
+    // everything it shows or does is a same-origin request with its cookie. (The root's user,
+    // which serves the dashboard, can already make a push wait here: opening the tab shows it.)
     const toSecrets =
       req.method === "GET" &&
-      (url.pathname === "/secrets" || url.pathname === "/editor-defaults") &&
+      (url.pathname === "/secrets" ||
+        url.pathname === "/editor-defaults" ||
+        (url.pathname === "/" && url.search === "")) &&
       req.headers["sec-fetch-mode"] === "navigate" &&
       req.headers["sec-fetch-dest"] === "document";
     const refused = refusal(APPROVE_HOSTNAME, req.headers, asFrame || toSecrets);
@@ -798,6 +805,73 @@ declare namespace handler {
     >
   >;
 
+  /** the approval page opens from the dashboard's Push (another site), at its bare address in
+   *  a tab: a token's address from another site, or the page in another site's frame, is not */
+  export type FromPush = Given<
+    HasToken,
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 200 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/?tkn=abababababababababababababababababababababababab";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "document";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Secrets,
+            request: {
+              method: "GET";
+              url: "/";
+              headers: {
+                host: "desolate-approve.localhost:31581";
+                "sec-fetch-site": "cross-site";
+                "sec-fetch-mode": "navigate";
+                "sec-fetch-dest": "iframe";
+              };
+            },
+          ]
+        >,
+        "matches",
+        { status: 403 }
+      >,
+    ]
+  >;
   /** the editor-defaults page opens from the dashboard (another site); reading or changing the
    *  defaults needs this page's cookie and origin, as the secrets do */
   export type EditorDefaults_ = Given<
