@@ -44,7 +44,7 @@ const agent = (script: string) => {
     .find((line) => /^[0-9a-f]{40}$/.test(line))!;
 };
 const commit = (message: string) =>
-  `git -c user.name=agent -c user.email=agent@example.test commit -qm '${message}'`;
+  `git -c user.name=agent -c user.email=agent@example.test commit -qam '${message}'`;
 const forgeRefs = () =>
   Object.fromEntries(
     stack
