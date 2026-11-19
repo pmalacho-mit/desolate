@@ -83,6 +83,14 @@ const PAGES = [
   ["review", (t: string) => `http://desolate.localhost:${PORT}/?theme=${t}&review`],
   ["pick", (t: string) => `http://desolate.localhost:${PORT}/?theme=${t}&review&pick`],
   ["approve", (t: string) => `http://desolate-approve.localhost:${PORT}/?theme=${t}`],
+  [
+    "secrets",
+    (t: string) => `http://desolate-approve.localhost:${PORT}/secrets?domain=shop&theme=${t}`,
+  ],
+  [
+    "editor-defaults",
+    (t: string) => `http://desolate-approve.localhost:${PORT}/editor-defaults?theme=${t}`,
+  ],
 ] as const;
 for (const theme of themes)
   for (const scheme of ["dark", "light"])

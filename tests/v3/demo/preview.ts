@@ -144,6 +144,26 @@ const approvals = (req: IncomingMessage, res: ServerResponse, url: URL) => {
     case "/highlight.js":
     case "/highlight-worker.js":
       return file(res, path.join(RELEASE, "shared/ui", url.pathname.slice(1)));
+    case "/secrets":
+      return page(res, url, theme, path.join(ui, "secrets.html"));
+    case "/editor-defaults":
+      return page(res, url, theme, path.join(ui, "editor-defaults.html"));
+    case "/secrets.js":
+    case "/editor-defaults.js":
+      return file(res, path.join(ui, url.pathname.slice(1)));
+    case "/secrets/list":
+      return json(res, {
+        domains: ["shop", "billing", "docs"],
+        secrets: [
+          { name: "STRIPE_KEY", on: true, hosts: ["api.stripe.com"] },
+          { name: "SENTRY_DSN", on: true, hosts: ["sentry.io"] },
+          { name: "OLD_TOKEN", on: false, hosts: [] },
+        ],
+      });
+    case "/editor-defaults/get":
+      return json(res, {
+        settings: { "workbench.colorTheme": "Default Dark+", "files.autoSave": "off" },
+      });
     case "/pending":
       return json(res, { pending });
     case "/issues":
