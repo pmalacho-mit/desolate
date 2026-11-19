@@ -26,9 +26,15 @@ while IFS= read -r line; do
       [ -n "$pushes" ] || exit 0
       for spec in $pushes; do
         spec=${spec#+} src=${spec%%:*} dst=${spec#*:} branch=${dst#refs/heads/}
+        # A branch pushed by its own name, or as HEAD while HEAD is that branch: `git push -u
+        # origin HEAD`, as agents push a new branch (refused until 2026-11-18, so an agent's
+        # branch never reached the dashboard).
+        own=''
+        [ "$src" = "$dst" ] && own=1
+        [ "$src" = HEAD ] && [ "$(git symbolic-ref -q HEAD 2>/dev/null)" = "$dst" ] && own=1
         if [ -z "$src" ]; then
           printf 'error %s deleting a branch is not something a workspace does: on the Mac, in desolate git\n' "$dst"
-        elif [ "$src" != "$dst" ] || [ "$branch" = "$dst" ]; then
+        elif [ -z "$own" ] || [ "$branch" = "$dst" ]; then
           printf 'error %s push a branch by its own name (git push origin <branch>): that branch is what is offered\n' "$dst"
         elif desolate offer "$repo" "$branch" >&2; then
           printf 'error %s offered to the root, not pushed: nothing went to the remote. Push it from the dashboard (desolate ui, on the Mac)\n' "$dst"

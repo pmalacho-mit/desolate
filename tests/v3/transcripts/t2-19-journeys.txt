@@ -1,0 +1,70 @@
+$ desolate bootstrap --forge stand-in:ssh://git@<forge>:22 --forge-known-hosts <work>/forge-state/known_hosts
+desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; tests only), instance <instance>
+  + home <home>
+    base image desolate/base:latest present (<id>)
+  = base image
+  + config: backend fake, forge stand-in (<forge>:22)
+    approver: a software key in <home>/approver; every push will ask on your terminal
+  + approver (terminal): the key that approves pushes, held on this host
+  + root VM dsl-<instance>-root created
+  + root VM running
+  + root services: keyring
+  + root: the approver's public key and the host daemon's token
+  dashboard    http://desolate.localhost:31591/?tkn=<token>   (and: desolate ui)
+  workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
+bootstrap: 7 step(s) done.
+  ok   home: <home>
+  ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
+  ok   docker daemon: docker <version>
+  ok   base image: desolate/base:latest <id>
+  ok   root VM running: dsl-<instance>-root
+  ok   approver: terminal; pushes are approved on this host
+  ok   root: keyring answers: 0 key(s) held
+  ok   root: the write agent's askpass socket is closed to the root's own user: only the keyring's user can answer for a signature
+  ok   root: private keys are unreadable to the root's own user: /var/lib/desolate-root/keyring is the keyring user's alone
+  ok   root: the root's own user cannot become root: sudo refuses it
+  ok   root: the programs root runs are root's: node (/usr/local/bin/node) and root's PATH
+  ok   root: each domain's proxies run as that domain's own user: none shares a group with the root's user, reaches the shares, or reaches another domain's secrets
+  ok   root: secret values are unreadable to the root's own user: /var/lib/desolate-proxies/secrets: root's, and each domain's proxies'
+  ok   root: git's settings are root's: /var/lib/desolate-root/gitconfig
+  ok   root: approver key installed: sha256 <oid>
+  ok   root: forge configured: yes
+  ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
+  ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
+  ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   root: runs this desolate's code: its share of the release is <repo>/release
+  ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
+doctor: all checks passed.
+[exit 0]
+
+## a first workspace
+
+## review and push a branch
+
+$ desolate approve    # at a terminal; the person types: feature/greet
+desolate: this push needs your confirmation.
+  repository  acme/app
+  branch      feature/greet
+  commit      <commit>
+  onto        none: the remote has no feature/greet yet
+  sends       2 commit(s) the remote does not have, 2 file(s)
+              (desolate's reviewer, in the root)
+Type the branch name (feature/greet) to push, or anything else to refuse: feature/greet
+approved; the push waiting in the root continues.
+[exit 0]
+
+## push the default branch
+
+$ desolate approve    # at a terminal; the person types: main
+desolate: this push needs your confirmation.
+  repository  acme/app
+  branch      main
+  commit      <commit>
+  onto        <commit>  (the remote's main now: it moves from this to the commit, or not at all)
+  sends       1 commit(s) the remote does not have, 1 file(s)
+              (desolate's reviewer, in the root)
+Type the branch name (main) to push, or anything else to refuse: main
+approved; the push waiting in the root continues.
+[exit 0]
+
+## resize and delete

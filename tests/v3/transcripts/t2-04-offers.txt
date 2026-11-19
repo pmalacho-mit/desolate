@@ -94,9 +94,9 @@ desolate: a push names the commit you reviewed
 [exit 64]
 
 $ desolate push dev acme/widgets main --expect <commit>
-desolate: main is acme/widgets's default branch
-  fix: push a branch and open a pull request; or, to push the default branch itself, add --allow-default
-[exit 77]
+desolate: main has nothing the remote lacks
+  fix: desolate review dev acme/widgets main
+[exit 1]
 
 $ desolate push dev acme/widgets issue/12 --expect <commit>    # at a terminal; the person types: yes
 desolate: this push needs your confirmation.

@@ -491,7 +491,16 @@ const checkPushed = async () => {
           );
         }
         const reposDir = path.join(domainPath(d.slug), "repos");
-        const heads = w.checkouts.map((c) => readHead(reposDir, c)?.commit ?? "").join(",");
+        // Counted again when a HEAD moves, and when the remote's side moves: a push fetches as
+        // it lands (push.ts), and the count must not say "2 not on the remote" after it
+        // (dogfooding, 2026-11-18).
+        const fetched = repos.list();
+        const heads = w.checkouts
+          .map(
+            (c) =>
+              `${readHead(reposDir, c)?.commit ?? ""}@${fetched.find((r) => r.repo === c.repo)?.fetchedAt ?? ""}`,
+          )
+          .join(",");
         const known = pushedOf.get(key);
         if (known && known.heads === heads && Date.now() - known.at < 120_000) continue;
         try {

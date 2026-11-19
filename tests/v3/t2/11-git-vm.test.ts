@@ -466,6 +466,74 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     );
   });
 
+  it("Open in git from a review: your clone, on the domain's branch, ahead of the remote's by what a push would send", async () => {
+    // What the review's button does (dogfooding, 2026-11-18: the git VM said "up to date with
+    // origin/main" where the workspace was two commits ahead). Two commits on from-git, a
+    // branch the remote has (the push above), in the workspace.
+    const ws = (script: string) =>
+      stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "bash", "-lc", script);
+    const made = ws(
+      "git fetch -q origin && git switch -q -c from-git origin/from-git && git -c user.name=a -c user.email=a@a commit -q --allow-empty -m one && git -c user.name=a -c user.email=a@a commit -q --allow-empty -m two && git rev-parse HEAD",
+    );
+    assert.equal(made.code, 0, made.stderr);
+    const head = made.stdout.trim();
+    let seen = "";
+    for (let i = 0; i < 60 && !seen.includes(head); i++) {
+      seen = stack.inVm(gitVm(), [
+        "bash",
+        "-lc",
+        "cd /git/acme/widgets && git fetch -q dev 2>&1; git rev-parse dev/from-git 2>/dev/null; true",
+      ]).stdout;
+      if (!seen.includes(head)) await sleep(500);
+    }
+    assert.match(seen, new RegExp(head), "the root has the workspace's from-git");
+    const port = Number(stack.env.DESOLATE_EDITOR_PORT);
+    const terminal = client("desolate-git.localhost", port);
+    await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
+    const first = async (body: Record<string, string>) => {
+      // (Six shells at most, each ending half a minute after its last reader: this suite's
+      // earlier ones, and these, wait their turn as a person closing a tab would.)
+      let opened = await terminal.post("/session", body);
+      for (let i = 0; i < 20 && opened.status === 429; i++) {
+        await sleep(3000);
+        opened = await terminal.post("/session", body);
+      }
+      assert.equal(opened.status, 200, opened.body);
+      const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
+      const stream = await terminal.get(`/session/${id}/stream?token=${token}`, 1500);
+      return stream.body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => Buffer.from(line.slice(6), "base64").toString())
+        .join("")
+        .replace(/\r/g, "");
+    };
+    const opened = await first({ repo: "acme/widgets", domain: "dev", branch: "from-git" });
+    assert.match(opened, /desolate: made from-git at dev\/from-git/, opened);
+    assert.match(
+      opened,
+      /On branch from-git\nYour branch is ahead of 'origin\/from-git' by 2 commits\./,
+    );
+    assert.equal(
+      stack
+        .inVm(gitVm(), ["git", "-C", "/git/acme/widgets", "rev-parse", "from-git"])
+        .stdout.trim(),
+      head,
+    );
+    // Again: already there, and said so.
+    assert.match(
+      await first({ repo: "acme/widgets", domain: "dev", branch: "from-git" }),
+      /desolate: from-git is at dev\/from-git/,
+    );
+    // CONTROL: with no branch named, the clone as it was, and nothing said first.
+    assert.doesNotMatch(await first({ repo: "acme/widgets" }), /desolate: /);
+    // And a name that is not a domain's or a branch's is not passed on.
+    assert.doesNotMatch(
+      await first({ repo: "acme/widgets", domain: "--all", branch: "from-git" }),
+      /desolate: /,
+    );
+  });
+
   it("an offered branch's new LFS file checks out in the git VM, from the root's store, whole", async () => {
     // (git-lfs's own file transfer runs git inside the bare mirror, which the git VM's
     // safe.bareRepository refuses: no LFS file was ever checked out there. desolate's agent,

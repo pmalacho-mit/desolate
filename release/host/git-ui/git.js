@@ -4,8 +4,12 @@
 // clipboard).
 "use strict";
 const status = document.getElementById("status");
-const repo = new URLSearchParams(location.search).get("repo") || "";
-document.getElementById("where").textContent = repo ? `/git/${repo}` : "/git";
+const params = new URLSearchParams(location.search);
+const repo = params.get("repo") || "";
+// The dashboard's review opens this on a domain's branch: the terminal starts on it.
+const domain = params.get("domain") || "";
+const branch = params.get("branch") || "";
+document.getElementById("where").textContent = repo ? `/git/${repo}${branch ? ` on ${branch}, as ${domain} has it` : ""}` : "/git";
 const term = new Terminal({
   cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionIsMeta: true,
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13,
@@ -29,7 +33,7 @@ const start = async () => {
   const slow = setTimeout(() => note("Starting the git VM and your clone there: the first time takes a minute or two..."), 1500);
   let answer;
   try {
-    answer = await post("/session", { repo });
+    answer = await post("/session", { repo, ...(domain && branch ? { domain, branch } : {}) });
   } catch (error) {
     clearTimeout(slow);
     status.textContent = "the host daemon did not answer";

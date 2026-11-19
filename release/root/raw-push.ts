@@ -42,8 +42,6 @@ export const pushCommit = async (
   const name = repoId(repo);
   const clone = clonePath(repo);
   if (!isBranch(branch)) return "desolate pushes branches";
-  if (repos.registry().repos[name]?.defaultBranch === branch)
-    return `${branch} is the default branch: push a branch; or, on the host: desolate push <domain> ${name} ${branch} --expect ${commit} --allow-default`;
   if (!repos.recordOf(repo).pushable)
     return `${name} is not pushable: the root holds no write key for it`;
   // A suede proposal: its own workflows run on the remote when it lands (shared/suede.ts).
@@ -127,8 +125,8 @@ declare namespace pushCommit {
     [repos: { "acme/app": { defaultBranch: "main" }; "acme/docs": { pushable: false } }]
   >;
   /** refused before anything is asked of the keyring or the person: a ref that is not a
-   *  branch, the default branch (that is `desolate push --allow-default`, on the host), and a
-   *  repository the root holds no write key for. (A push that passes these waits for the
+   *  branch, and a repository the root holds no write key for. (The default branch is pushed
+   *  like any other, since 2026-11-18.) (A push that passes these waits for the
    *  person's approval on the host: T2's and T4's.) */
   export type Refuses = Given<
     [Fresh, Registry],
@@ -147,21 +145,6 @@ declare namespace pushCommit {
         >,
         "=",
         "desolate pushes branches"
-      >,
-      Expect<
-        Invoke<
-          typeof pushCommit,
-          [
-            repo: { owner: "acme"; name: "app" },
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            branch: "main",
-            forced: false,
-            from: "a raw git push",
-            say: typeof console.error,
-          ]
-        >,
-        "=",
-        "main is the default branch: push a branch; or, on the host: desolate push <domain> acme/app main --expect 0123456789abcdef0123456789abcdef01234567 --allow-default"
       >,
       Expect<
         Invoke<

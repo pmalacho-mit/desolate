@@ -45,7 +45,7 @@ import { handler as approvePage } from "./approve-web.ts";
 import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
-import { ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
+import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
@@ -2644,17 +2644,20 @@ const serve = async () => {
       gitPage(
         (argv) => b.spawn(GIT_VM, argv),
         log,
-        async (repo) => {
+        async (repo, at) => {
           // A shell asked for from a link (the dashboard's "Open in git"): the VM and the clone
           // are made on the way, as `desolate git <repo>` would.
           if (!gitReady.has("")) {
             await ensureGitVm();
             gitReady.add("");
           }
-          if (repo && !gitReady.has(repo)) {
+          // (Again for a domain's branch: the clone gets a remote for a domain made since.)
+          if (repo && (!gitReady.has(repo) || at)) {
             await ensureGitClone(parseRepo(repo)!);
             gitReady.add(repo);
           }
+          // From a review: on the domain's branch, as its workspace has it (git-vm.ts).
+          return repo && at ? checkoutOffered(parseRepo(repo)!, at.domain, at.branch) : "";
         },
       ),
     ),

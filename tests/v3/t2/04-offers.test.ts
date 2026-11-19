@@ -389,12 +389,11 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const main = JSON.parse(
       stack.quiet("review", "dev", "acme/widgets", "main", "--json").stdout,
     ) as { commit: string };
+    // The default branch is pushed like any other (2026-11-18): not refused for being it. (Here
+    // it has nothing the remote lacks, which is what stops it.)
     const def = stack.desolate("push", "dev", "acme/widgets", "main", "--expect", main.commit);
-    assert.equal(def.code, 77);
-    assert.match(
-      def.stderr,
-      /fix: push a branch and open a pull request; or, to push the default branch itself, add --allow-default/,
-    );
+    assert.notEqual(def.code, 77);
+    assert.doesNotMatch(def.stderr, /default branch/);
     const wrong = stack.person(
       "Type the branch name",
       "yes",
@@ -525,11 +524,14 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const last = entries.filter((e) => e.event === "approved").pop();
     assert.deepEqual([last?.repo, last?.ref, last?.commit], ["acme/widgets", "raw-push", commit]);
     assert.equal(entries.pop()?.event, "revoked", "the approval did not outlive the push");
-    // The default branch is not pushed this way, approved or not; and nothing is deleted.
+    // The default branch is pushed this way too, and waits for the person like any branch
+    // (since 2026-11-18; unanswered here, so nothing goes); nothing is ever deleted.
     const def = inRootClone(
       `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/main 2>&1`,
     );
-    assert.match(def.stdout, /main is the default branch/);
+    assert.doesNotMatch(def.stdout, /default branch/);
+    assert.match(def.stdout, /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    assert.notEqual(forgeRefs("acme/widgets")["main"], commit, "unapproved: not pushed");
     assert.match(
       inRootClone("DESOLATE_APPROVAL_WAIT_MS=1500 git push origin :refs/heads/raw-push 2>&1")
         .stdout,
@@ -971,6 +973,18 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       offers.some((o) => o.branch === "pushed-here" && o.commit === tip),
       JSON.stringify(offers),
     );
+    // As agents push a new branch: `git push -u origin HEAD`. HEAD is that branch, so it is
+    // offered (refused until 2026-11-18: an agent's branch never reached the dashboard). Its
+    // control: HEAD under another branch's name is still refused, since what is offered is a
+    // branch itself.
+    inWs(
+      "dev/w1",
+      `cd ${WT} && git switch -q -c by-head && git commit -q --allow-empty -m 'by head'`,
+    );
+    const byHead = inWs("dev/w1", `cd ${WT} && git push -u origin HEAD 2>&1`);
+    assert.match(byHead.stdout, /offered acme\/widgets by-head at [0-9a-f]{12}/, byHead.stdout);
+    const renamed = inWs("dev/w1", `cd ${WT} && git push origin HEAD:refs/heads/other-name 2>&1`);
+    assert.match(renamed.stdout, /push a branch by its own name/, renamed.stdout);
     assert.equal(
       forgeRefs("acme/widgets")["pushed-here"],
       undefined,

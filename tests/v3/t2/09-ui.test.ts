@@ -639,6 +639,16 @@ describe("T2 section 4.8: the root UI", () => {
       false,
       "nothing has been pushed: the dashboard cannot approve",
     );
+    // The workspace's commits against the remote, as the dashboard counts them: one, before.
+    type Counted = { pushed?: { repo: string; count: number | null }[] | null };
+    const counted = async () =>
+      ((ws(await state(), "web/one") as Counted | undefined)?.pushed ?? []).find(
+        (c) => c.repo === "acme/app",
+      )?.count;
+    assert.ok(
+      await until(async () => (await counted()) === 1, 60_000),
+      `counted before the push: ${await counted()}`,
+    );
     const approved = stack.person("Type the branch name", "fix", "approve");
     assert.equal(approved.code, 0, approved.stdout);
     assert.ok(
@@ -653,6 +663,12 @@ describe("T2 section 4.8: the root UI", () => {
       [end.offers.length, end.approvals.length],
       [0, 0],
       "the offer is no longer waiting",
+    );
+    // And none once it has landed: the push fetches, and the dashboard counts again (it said
+    // "2 not on the remote" after a push until its two minutes were up: dogfooding, 2026-11-18).
+    assert.ok(
+      await until(async () => (await counted()) === 0, 30_000),
+      `counted after the push: ${await counted()}`,
     );
   });
 

@@ -17,7 +17,14 @@ import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
-import { APPROVE_HOSTNAME, editorHostPort, GIT_HOSTNAME, parseRepo } from "../shared/names.ts";
+import {
+  APPROVE_HOSTNAME,
+  editorHostPort,
+  GIT_HOSTNAME,
+  isBranch,
+  isSlug,
+  parseRepo,
+} from "../shared/names.ts";
 import { embedAddress } from "./approve-web.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
@@ -42,6 +49,41 @@ export const gitToken = (): string => {
   fs.writeFileSync(TOKEN_FILE, `${made}\n`, { mode: 0o600 });
   return made;
 };
+/** The page's own address after the token's: the repository, and a domain's branch to open
+ *  on, kept only when each is one. */
+export const pageOf = (search: string): string => {
+  const params = new URLSearchParams(search);
+  const kept = new URLSearchParams();
+  const repo = params.get("repo");
+  if (repo && parseRepo(repo)) {
+    kept.set("repo", repo);
+    const domain = params.get("domain");
+    const branch = params.get("branch");
+    if (isSlug(domain) && isBranch(branch)) {
+      kept.set("domain", domain!);
+      kept.set("branch", branch!);
+    }
+  }
+  return kept.size ? `/?${kept}` : "/";
+};
+
+declare namespace pageOf {
+  export type Kept = Expect<
+    Invoke<typeof pageOf, [search: "?tkn=x&repo=acme/web&domain=dev&branch=feature/x"]>,
+    "=",
+    "/?repo=acme%2Fweb&domain=dev&branch=feature%2Fx"
+  >;
+  /** a domain or branch that is not one is dropped; a repository that is not one drops all */
+  export type Dropped = [
+    Expect<
+      Invoke<typeof pageOf, [search: "?repo=acme/web&domain=--all&branch=main"]>,
+      "=",
+      "/?repo=acme%2Fweb"
+    >,
+    Expect<Invoke<typeof pageOf, [search: "?repo=../../etc&domain=dev&branch=main"]>, "=", "/">,
+  ];
+}
+
 export const gitAddress = (repo?: string) =>
   `http://${GIT_HOSTNAME}:${editorHostPort()}/?tkn=${gitToken()}${repo ? `&repo=${encodeURIComponent(repo)}` : ""}`;
 
@@ -96,11 +138,15 @@ type Session = {
 
 /** `spawn`: a process in the git VM with pipes (the backend's). */
 /** `prepare`: the git VM up and the person's clone of `repo` there (git-vm.ts), before a
- *  shell opens in it. */
+ *  shell opens in it; with `at` (the dashboard's review of a domain's branch), that branch
+ *  checked out. What it says, the terminal shows first. */
 export const handler = (
   spawn: (argv: string[]) => ChildProcess,
   log: (line: string) => void,
-  prepare: (repo: string | null) => Promise<void> = async () => {},
+  prepare: (
+    repo: string | null,
+    at?: { domain: string; branch: string },
+  ) => Promise<string | void> = async () => {},
 ) => {
   const sessions = new Map<string, Session>();
   const reap = setInterval(() => {
@@ -112,7 +158,7 @@ export const handler = (
   }, 5_000);
   reap.unref();
 
-  const open = (repo: string) => {
+  const open = (repo: string, first = "") => {
     const where = parseRepo(repo) ? `${guest.git}/${repo}` : guest.git;
     const s: Session = {
       id: randomBytes(8).toString("hex"),
@@ -130,6 +176,8 @@ export const handler = (
       while (s.keptBytes > LIMIT.kept && s.kept.length > 1) s.keptBytes -= s.kept.shift()!.length;
       for (const res of s.streams) res.write(`data: ${chunk.toString("base64")}\n\n`);
     };
+    // What readying it said (the branch it is on, and git status), before the shell's prompt.
+    if (first) out(Buffer.from(`${first.replace(/\r?\n/g, "\r\n")}\r\n`));
     s.child.stdout?.on("data", out);
     s.child.stderr?.on("data", out);
     s.child.stdin?.on("error", () => {});
@@ -173,9 +221,8 @@ export const handler = (
           "text/plain; charset=utf-8",
           "desolate: refused: that is not this stack's git terminal address; `desolate git` prints it\n",
         );
-      const repo = url.searchParams.get("repo");
       res.writeHead(303, {
-        location: repo && parseRepo(repo) ? `/?repo=${encodeURIComponent(repo)}` : "/",
+        location: pageOf(url.search),
         "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`,
         "content-length": 0,
         ...SECURITY,
@@ -246,14 +293,19 @@ export const handler = (
           error: `${LIMIT.sessions} shells are open already: close a tab (its shell ends half a minute later)`,
         });
       const repo = parseRepo(asked.repo) ? String(asked.repo) : null;
+      const at =
+        repo && isSlug(asked.domain) && isBranch(asked.branch)
+          ? { domain: String(asked.domain), branch: String(asked.branch) }
+          : undefined;
+      let said = "";
       try {
-        await prepare(repo);
+        said = (await prepare(repo, at)) ?? "";
       } catch (error) {
         return json(res, 502, {
           error: `the git VM could not be readied: ${(error as Error).message}`,
         });
       }
-      const s = open(repo ?? "");
+      const s = open(repo ?? "", said);
       return json(res, 200, { id: s.id, token: s.token });
     }
     const s = match ? sessions.get(match[1]!) : undefined;

@@ -157,3 +157,24 @@ body.reviewing main { margin-right: var(--review-w, min(820px, 56vw)); max-width
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
 .stat { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; margin: 6px 0; font-size: 13px; }
 .warnbox { border: 1px solid color-mix(in srgb, var(--orange) 60%, transparent); background: color-mix(in srgb, var(--orange) 9%, transparent); border-radius: 8px; padding: 8px 12px; margin: 8px 0; color: var(--ink); }
+
+/* What a name is: a domain, a workspace, a repository, a branch (dashboard.js named()). */
+.named { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; font-size: 12px; vertical-align: middle; max-width: 100%; }
+.named .kind { padding: 1px 6px; font-size: 10px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--card); display: inline-flex; align-items: center; }
+.named .value { padding: 1px 7px; overflow-wrap: anywhere; }
+.named.domain .kind { background: #7a5af5; }
+.named.workspace .kind { background: #0e8a6e; }
+.named.repo .kind { background: #5b6b80; }
+.named.branch .kind { background: #c2610c; }
+/* The review's default-branch warning, and its files changed. */
+.warnbox.default-branch { border: 2px solid var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); padding: 10px 12px; border-radius: 8px; margin: 8px 0; }
+.files-changed { margin: 8px 0; }
+.files-changed summary { cursor: pointer; font-weight: 600; }
+.files-changed .filter { margin: 6px 0; width: 260px; max-width: 100%; }
+.files-changed ul.files { list-style: none; margin: 4px 0; padding: 0; max-height: 18em; overflow: auto; }
+.files-changed li { display: flex; gap: 8px; align-items: center; padding: 2px 0; }
+.files-changed button.link { background: none; border: 0; padding: 0; color: var(--ink); cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.files-changed button.link:hover { text-decoration: underline; }
+.files-changed .counts { margin-left: auto; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.files-changed .plus { color: var(--green); }
+.files-changed .minus { color: var(--red); }
