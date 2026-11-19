@@ -79,7 +79,7 @@ describe("T2 journeys through the dashboard", () => {
     page = await browser.tab(address);
     // What the root answers each action the page asks for, for a failure to say.
     await page.evaluate(
-      `window.__answers = []; const f = window.fetch; window.fetch = async (...a) => { const r = await f(...a); if (String(a[0]).includes("/action")) window.__answers.push(r.status + " " + (await r.clone().text()).slice(0, 300)); return r; }; true`,
+      `window.__clicks = []; for (const kind of ["mousedown", "mouseup", "click"]) document.addEventListener(kind, (e) => window.__clicks.push(kind + " " + (e.target.outerHTML || "").slice(0, 80) + (e.target.isConnected ? "" : " (gone)")), true); window.__answers = []; const f = window.fetch; window.fetch = async (...a) => { const r = await f(...a); if (String(a[0]).includes("/action")) window.__answers.push(r.status + " " + (await r.clone().text()).slice(0, 300)); return r; }; true`,
     );
   });
   after(async () => {
@@ -209,7 +209,7 @@ describe("T2 journeys through the dashboard", () => {
       )
       .catch(async (error: Error) => {
         throw new Error(
-          `${error.message.slice(0, 300)} ... the root answered: ${await page.evaluate<string>("JSON.stringify(window.__answers)")}`,
+          `${error.message.slice(0, 300)} ... the root answered: ${await page.evaluate<string>("JSON.stringify(window.__answers)")} ... the last clicks: ${await page.evaluate<string>("JSON.stringify(window.__clicks.slice(-6))")}`,
         );
       });
     // The person approves once the push asks: it says so in Needs you.
