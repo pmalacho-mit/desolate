@@ -973,6 +973,18 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       offers.some((o) => o.branch === "pushed-here" && o.commit === tip),
       JSON.stringify(offers),
     );
+    // As agents push a new branch: `git push -u origin HEAD`. HEAD is that branch, so it is
+    // offered (refused until 2026-11-18: an agent's branch never reached the dashboard). Its
+    // control: HEAD under another branch's name is still refused, since what is offered is a
+    // branch itself.
+    inWs(
+      "dev/w1",
+      `cd ${WT} && git switch -q -c by-head && git commit -q --allow-empty -m 'by head'`,
+    );
+    const byHead = inWs("dev/w1", `cd ${WT} && git push -u origin HEAD 2>&1`);
+    assert.match(byHead.stdout, /offered acme\/widgets by-head at [0-9a-f]{12}/, byHead.stdout);
+    const renamed = inWs("dev/w1", `cd ${WT} && git push origin HEAD:refs/heads/other-name 2>&1`);
+    assert.match(renamed.stdout, /push a branch by its own name/, renamed.stdout);
     assert.equal(
       forgeRefs("acme/widgets")["pushed-here"],
       undefined,
