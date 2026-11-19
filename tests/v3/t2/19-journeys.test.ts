@@ -77,6 +77,10 @@ describe("T2 journeys through the dashboard", () => {
     const address = (JSON.parse(stack.quiet("ui", "--json").stdout) as { dashboard: string })
       .dashboard;
     page = await browser.tab(address);
+    // What the root answers each action the page asks for, for a failure to say.
+    await page.evaluate(
+      `window.__answers = []; const f = window.fetch; window.fetch = async (...a) => { const r = await f(...a); if (String(a[0]).includes("/action")) window.__answers.push(r.status + " " + (await r.clone().text()).slice(0, 300)); return r; }; true`,
+    );
   });
   after(async () => {
     await page?.close().catch(() => {});
@@ -198,10 +202,16 @@ describe("T2 journeys through the dashboard", () => {
     );
     assert.equal(push, `Push exactly ${head.slice(0, 12)} to main`);
     await press("#review button[data-action='offer.push']", "Push exactly");
-    await page.until(
-      `[...document.querySelectorAll("#activity-list li")].some((li) => /desolate push acme--app acme\\/app main/.test(li.innerText))`,
-      "the push of main",
-    );
+    await page
+      .until(
+        `[...document.querySelectorAll("#activity-list li")].some((li) => /desolate push acme--app acme\\/app main/.test(li.innerText))`,
+        "the push of main",
+      )
+      .catch(async (error: Error) => {
+        throw new Error(
+          `${error.message.slice(0, 300)} ... the root answered: ${await page.evaluate<string>("JSON.stringify(window.__answers)")}`,
+        );
+      });
     // The person approves once the push asks: it says so in Needs you.
     await page.until(
       `/A push is waiting for your approval: acme\\/app main/.test(document.body.innerText)`,
