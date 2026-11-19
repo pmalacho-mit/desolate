@@ -201,6 +201,12 @@ describe("T2 journeys through the dashboard", () => {
       "the Push button",
     );
     assert.equal(push, `Push exactly ${head.slice(0, 12)} to main`);
+    // Read before it is pushed: the diff, as a person reads it first.
+    await page.until(
+      `document.querySelector('#review [data-file="README.md"]')`,
+      "the diff",
+      60_000,
+    );
     await press("#review button[data-action='offer.push']", "Push exactly");
     await page
       .until(

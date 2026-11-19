@@ -257,22 +257,34 @@ export const openBrowser = async (
       /** The first element matching `selector` (and holding `text`, if given), clicked: the
        *  pointer moves there, presses and lets go. */
       click: async (selector: string, text = "") => {
-        const at = await evaluate<{ x: number; y: number } | null>(`(() => {
-          const e = [...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.innerText.includes(${JSON.stringify(text)}));
-          if (!e) return null;
-          e.scrollIntoView({ block: "center" });
-          const r = e.getBoundingClientRect();
-          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
-        })()`);
-        if (!at) throw new Error(`nothing to click: ${selector} ${text}`);
-        for (let i = 1; i <= 8; i++) {
-          const p = {
-            x: pointer.x + ((at.x - pointer.x) * i) / 8,
-            y: pointer.y + ((at.y - pointer.y) * i) / 8,
-          };
-          await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...p }, sessionId);
+        // Where it is, and that it is what the pointer would press there: a page that moved
+        // under the pointer (a diff loading above a button) is measured again.
+        const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.innerText.includes(${JSON.stringify(text)}))`;
+        let at: { x: number; y: number } | null = null;
+        for (let tries = 0; tries < 10; tries++) {
+          at = await evaluate<{ x: number; y: number } | null>(`(() => {
+            const e = ${find};
+            if (!e) return null;
+            e.scrollIntoView({ block: "center" });
+            const r = e.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          })()`);
+          if (!at) throw new Error(`nothing to click: ${selector} ${text}`);
+          for (let i = 1; i <= 8; i++) {
+            const p = {
+              x: pointer.x + ((at.x - pointer.x) * i) / 8,
+              y: pointer.y + ((at.y - pointer.y) * i) / 8,
+            };
+            await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...p }, sessionId);
+          }
+          pointer = at;
+          const there = await evaluate<boolean>(
+            `(() => { const e = ${find}; const hit = document.elementFromPoint(${at.x}, ${at.y}); return !!(e && hit && (hit === e || e.contains(hit))); })()`,
+          );
+          if (there) break;
+          await sleep(300);
         }
-        pointer = at;
+        if (!at) throw new Error(`nothing to click: ${selector} ${text}`);
         await send(
           "Input.dispatchMouseEvent",
           { type: "mousePressed", ...at, button: "left", clickCount: 1 },
