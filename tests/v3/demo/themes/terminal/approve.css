@@ -1,0 +1,14 @@
+/* Terminal: the approval page. (No transform, filter or opacity on anything that holds
+   Approve: beside the git terminal it would never arm.) */
+:root { --bg: #fbfaf6; --fg: #1f2430; --muted: #6b7180; --card: #fbfaf6; --line: #dedbd0; --accent: #2b8a3e; --danger: #c92a2a; --dim: #f1efe7; --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0f1419; --fg: #d6dbe5; --muted: #6c7686; --card: #0f1419; --line: #232b36; --accent: #a6da95; --danger: #f28779; --dim: #151c24; } }
+body { font: 13px/1.6 var(--mono); }
+.mono, code { font-family: var(--mono); font-size: 12.5px; }
+h1 { font-size: 15px; }
+h1::before { content: "▍"; color: var(--accent); }
+.card { border-radius: 0; border-left: 2px solid var(--accent); }
+.names dt::after { content: ":"; }
+.summary ul.long { border-radius: 0; background: var(--dim); }
+button { font: 13px var(--mono); border-radius: 0; background: none; }
+button.approve { background: var(--accent); color: var(--bg); }
+.actions { border-top-style: dashed; }

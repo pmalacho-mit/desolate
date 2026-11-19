@@ -1,0 +1,68 @@
+/* Quiet: neutral greys, colour only where it means something (a state), names as plain text
+   with a small muted kind before them. Tighter rows, hairline separators, one filled button
+   per row. In the spirit of Linear and Vercel's dashboards. */
+:root {
+  --bg: #fafafa; --card: #ffffff; --ink: #18181b; --soft: #71717a; --line: #e4e4e7; --accent: #18181b;
+  --gray: #a1a1aa; --blue: #2563eb; --green: #16a34a; --yellow: #ca8a04; --orange: #ea580c; --red: #dc2626;
+  --hover: #f4f4f5; --raise: #f4f4f5;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #09090b; --card: #0f0f12; --ink: #fafafa; --soft: #a1a1aa; --line: #232327; --accent: #fafafa;
+    --gray: #71717a; --blue: #60a5fa; --green: #4ade80; --yellow: #facc15; --orange: #fb923c; --red: #f87171; --hover: #18181b; --raise: #18181b; }
+}
+body { font: 13.5px/1.5 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.003em; }
+header { background: color-mix(in srgb, var(--bg) 85%, transparent); backdrop-filter: saturate(1.4) blur(10px); padding: 10px 24px; }
+h1 { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 12px; font-weight: 500; text-transform: none; letter-spacing: 0; color: var(--soft); }
+h3 { font-size: 14px; font-weight: 600; }
+main { gap: 32px; padding-top: 28px; }
+.chip { border: 0; background: var(--raise); padding: 1px 8px; font-size: 11.5px; }
+
+/* Buttons: neutral by default; the one that does the row's thing is filled. */
+button, a.button { font-size: 12.5px; font-weight: 500; padding: 4px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--ink); box-shadow: 0 1px 0 rgba(0,0,0,0.03); transition: background 0.12s, border-color 0.12s; }
+button:hover, a.button:hover { background: var(--hover); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+button:not(.quiet):not(.fold):not(.link):hover, a.button:not(.quiet):hover { opacity: 0.88; }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: var(--bg); } }
+button.quiet, a.button.quiet { background: var(--card); color: var(--ink); }
+button.small, a.button.small { padding: 1px 8px; font-size: 12px; }
+.danger { color: var(--red) !important; border-color: var(--line) !important; }
+input, select { border-radius: 6px; font-size: 13px; background: var(--card); }
+input:focus, select:focus { outline: 0; border-color: var(--soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--soft) 18%, transparent); }
+
+/* Domains: a section each, not a box in a box. */
+.card { border-radius: 10px; padding: 14px 18px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+@media (prefers-color-scheme: dark) { .card { box-shadow: none; } }
+ul.rows > li { padding: 12px 0; gap: 2px 12px; }
+ul.rows > li:hover { background: linear-gradient(90deg, transparent, var(--hover) 8%, var(--hover) 92%, transparent); }
+.dot { width: 8px; height: 8px; margin-top: 7px; margin-left: 4px; }
+.dot.hollow { border-width: 1.5px; }
+.what .line { font-size: 12.5px; }
+
+/* Names: the kind as a small muted word, the name itself plain. */
+.named { border: 0; border-radius: 0; background: none; font-size: 13px; gap: 4px; align-items: baseline; }
+.named .kind, .named.domain .kind, .named.workspace .kind, .named.repo .kind, .named.branch .kind { background: none; color: var(--soft); padding: 0; font-size: 10.5px; letter-spacing: 0.02em; text-transform: lowercase; font-weight: 500; }
+.named .value { padding: 0; font-weight: 500; }
+.named.branch .value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* Pills: no outline; a dot of colour and the word. */
+.pill { border: 0; background: var(--raise); color: var(--soft); font-size: 11.5px; padding: 0 7px; border-radius: 5px; font-weight: 500; }
+.pill.green, .pill.red, .pill.orange, .pill.yellow, .pill.blue { background: var(--raise); border: 0; font-weight: 500; color: var(--ink); }
+.pill.green::before, .pill.red::before, .pill.orange::before, .pill.yellow::before, .pill.blue:not(.pulse)::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.pill.green::before { background: var(--green); } .pill.red::before { background: var(--red); } .pill.orange::before { background: var(--orange); }
+.pill.yellow::before { background: var(--yellow); } .pill.blue::before { background: var(--blue); }
+.pill.red, .pill.orange { color: var(--ink); }
+.pill.pulse::before { background: var(--blue); }
+.pill.accent { border: 0; background: var(--raise); color: var(--ink); }
+.pill.repo { background: none; padding: 0; color: var(--ink); }
+a.pill.accent { text-decoration: none; }
+a.pill.accent:hover { background: var(--hover); text-decoration: underline; }
+
+/* The review panel. */
+#review { box-shadow: -24px 0 48px rgba(0,0,0,0.12); border-left: 1px solid var(--line); }
+.warnbox { border-radius: 8px; border-color: color-mix(in srgb, var(--orange) 35%, var(--line)); }
+.warnbox.default-branch { border: 1px solid color-mix(in srgb, var(--red) 55%, transparent); background: color-mix(in srgb, var(--red) 7%, var(--card)); }
+.sbs, pre.diff { border-radius: 8px; }
+.sbs-file { background: var(--raise); font-weight: 600; }
+code { background: var(--raise); }
+.what pre { background: var(--raise); }

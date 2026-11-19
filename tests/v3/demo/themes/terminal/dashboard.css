@@ -1,0 +1,66 @@
+/* Terminal: the dashboard as a well-made TUI. Monospace throughout, names as key:value, square
+   corners, ANSI-like colour on a deep slate, and states as bracketed words. Dense, and easy
+   on the eye for long sessions. In the spirit of Warp, lazygit and Charm's tools. */
+:root {
+  --bg: #fbfaf6; --card: #fbfaf6; --ink: #1f2430; --soft: #6b7180; --line: #dedbd0; --accent: #0b7285;
+  --gray: #8f95a3; --blue: #1c6dd0; --green: #2b8a3e; --yellow: #a67c00; --orange: #c2410c; --red: #c92a2a;
+  --dim: #f1efe7; --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1419; --card: #0f1419; --ink: #d6dbe5; --soft: #6c7686; --line: #232b36; --accent: #5ccfe6;
+    --gray: #5c6673; --blue: #73b8ff; --green: #a6da95; --yellow: #f2cf68; --orange: #ffa759; --red: #f28779; --dim: #151c24; }
+}
+body { font: 12.5px/1.6 var(--mono); font-variant-ligatures: none; }
+.mono, code, .pill.mono, textarea.wide, .sbs { font-family: var(--mono); }
+header { background: var(--dim); border-bottom: 1px solid var(--line); padding: 8px 20px; }
+h1 { font-size: 13px; font-weight: 700; color: var(--accent); }
+h1::before { content: "▍"; color: var(--accent); }
+h2 { font-size: 12px; text-transform: none; letter-spacing: 0; color: var(--accent); font-weight: 700; }
+h2::before { content: "## "; color: var(--soft); }
+h3 { font-size: 13px; font-weight: 700; }
+main { max-width: 1180px; gap: 24px; }
+.chip { border-radius: 0; border: 0; background: none; padding: 0; color: var(--soft); }
+.chip::before { content: "["; } .chip::after { content: "]"; }
+
+button, a.button { font: 12px/1.4 var(--mono); border-radius: 0; border: 1px solid var(--line); background: none; color: var(--ink); padding: 3px 10px; }
+button:hover, a.button:hover { background: var(--dim); border-color: var(--soft); }
+button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+@media (prefers-color-scheme: dark) { button, a.button { color: var(--ink); } button:not(.quiet):not(.fold):not(.link), a.button:not(.quiet) { color: var(--accent); } }
+button.quiet, a.button.quiet { background: none; color: var(--ink); }
+.danger { color: var(--red) !important; border-color: var(--line) !important; }
+input, select { border-radius: 0; font: 12px var(--mono); background: var(--dim); border-color: var(--line); }
+input:focus { outline: 1px solid var(--accent); }
+
+.card { border-radius: 0; border: 1px solid var(--line); border-left: 2px solid var(--accent); padding: 12px 16px; }
+ul.rows > li { padding: 8px 0; border-top: 1px dashed var(--line); }
+.dot { border-radius: 0; width: 8px; height: 8px; margin-top: 6px; }
+.dot.hollow { border-width: 1px; }
+.what .line, .sub, .checkout { font-size: 12px; }
+
+/* Names: kind:value. */
+.named { border: 0; border-radius: 0; font-size: 12.5px; background: none; }
+.named .kind { background: none !important; padding: 0; text-transform: lowercase; letter-spacing: 0; font-size: 12.5px; color: var(--soft); }
+.named .kind::after { content: ":"; }
+.named .value { padding: 0; }
+.named.domain .value { color: #a37acc; } .named.workspace .value { color: var(--green); } .named.branch .value { color: var(--orange); } .named.repo .value { color: var(--blue); }
+@media (prefers-color-scheme: dark) { .named.domain .value { color: #d2a6ff; } }
+
+/* States: bracketed words. */
+.pill { border: 0; border-radius: 0; background: none; padding: 0; gap: 0; font: 12px var(--mono); color: var(--soft); font-weight: 400; }
+.pill::before { content: "["; color: var(--soft); width: auto; height: auto; background: none; border-radius: 0; animation: none; }
+.pill::after { content: "]"; color: var(--soft); }
+.pill.pulse::before { content: "[◌ "; animation: pulse 1.2s ease-in-out infinite; background: none; width: auto; height: auto; }
+.pill.green, .pill.red, .pill.orange, .pill.yellow, .pill.blue { background: none; font-weight: 700; }
+.pill.repo { color: var(--blue); }
+.pill.repo::before, .pill.repo::after { content: none; }
+.pill.accent { color: var(--accent); }
+
+#review { border-left: 1px solid var(--accent); box-shadow: none; }
+.warnbox { border-radius: 0; border-left: 2px solid var(--orange); }
+.warnbox.default-branch { border: 1px solid var(--red); border-left-width: 3px; border-radius: 0; }
+.sbs { border-radius: 0; }
+.sbs-file { background: var(--dim); color: var(--accent); }
+code { border-radius: 0; background: var(--dim); }
+.what pre { border-radius: 0; background: var(--dim); }
+.empty-ws, .resize { border-radius: 0; }
+details.branches > summary { font-size: 12px; }

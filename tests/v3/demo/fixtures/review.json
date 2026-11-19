@@ -1,0 +1,108 @@
+{
+ "review": {
+  "domain": "shop",
+  "repo": "acme/storefront",
+  "branch": "feature/checkout-v2",
+  "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d",
+  "base": "1405df66cbe219b0bf6355bc3d60361a8376b6b4",
+  "against": "origin",
+  "againstLabel": "origin/main",
+  "defaultBranch": "main",
+  "pushable": true,
+  "isDefault": false,
+  "commits": [
+   {
+    "commit": "a625406f6977d45c1391b078f4d3656e0b75bfcb",
+    "subject": "Checkout: a step indicator, and tax shown before payment"
+   },
+   {
+    "commit": "6b1f53303a732ccc8c6aae6640399827c15250e3",
+    "subject": "Round money once, at the total, half to even"
+   },
+   {
+    "commit": "2f22765d04931a078909145ca628d2264c852d7d",
+    "subject": "Tests for three-item EUR orders"
+   }
+  ],
+  "files": [
+   "src/checkout/total.ts",
+   "src/money/round.ts",
+   "src/checkout/Checkout.tsx",
+   "README.md",
+   "src/checkout/Steps.tsx",
+   "src/checkout/Summary.tsx",
+   "src/checkout/total.test.ts",
+   "src/legacy/oldTotal.ts",
+   "public/fonts/inter.woff2"
+  ],
+  "changes": [
+   {
+    "path": "src/checkout/total.ts",
+    "status": "modified",
+    "added": 8,
+    "removed": 3
+   },
+   {
+    "path": "src/money/round.ts",
+    "status": "added",
+    "added": 9,
+    "removed": 0
+   },
+   {
+    "path": "src/checkout/Checkout.tsx",
+    "status": "modified",
+    "added": 4,
+    "removed": 2
+   },
+   {
+    "path": "README.md",
+    "status": "modified",
+    "added": 1,
+    "removed": 0
+   },
+   {
+    "path": "src/checkout/Steps.tsx",
+    "status": "added",
+    "added": 41,
+    "removed": 0
+   },
+   {
+    "path": "src/checkout/Summary.tsx",
+    "status": "modified",
+    "added": 12,
+    "removed": 4
+   },
+   {
+    "path": "src/checkout/total.test.ts",
+    "status": "modified",
+    "added": 58,
+    "removed": 6
+   },
+   {
+    "path": "src/legacy/oldTotal.ts",
+    "status": "deleted",
+    "added": 0,
+    "removed": 22
+   },
+   {
+    "path": "public/fonts/inter.woff2",
+    "status": "added",
+    "added": null,
+    "removed": null
+   }
+  ],
+  "stat": "9 files changed, 133 insertions(+), 37 deletions(-)",
+  "lfsObjects": 0,
+  "warnings": [],
+  "pushCommits": 3
+ },
+ "diff": {
+  "repo": "acme/storefront",
+  "branch": "feature/checkout-v2",
+  "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d",
+  "base": "1405df66cbe219b0bf6355bc3d60361a8376b6b4",
+  "against": "origin",
+  "whitespace": "show",
+  "text": "diff --git a/src/checkout/total.ts b/src/checkout/total.ts\nindex 3f2a1c0..9b8e7d2 100644\n--- a/src/checkout/total.ts\n+++ b/src/checkout/total.ts\n@@ -1,14 +1,22 @@\n import type { Line } from \"./cart\";\n+import { roundHalfEven } from \"../money/round\";\n \n-export function total(lines: Line[]): number {\n-  return lines.reduce((sum, line) => sum + line.price * line.quantity, 0);\n+/** The order's total, rounded once: per-line rounding drifted by a cent (#212). */\n+export function total(lines: Line[], currency = \"EUR\"): number {\n+  const exact = lines.reduce((sum, line) => sum + line.price * line.quantity, 0);\n+  return roundHalfEven(exact, currency === \"JPY\" ? 0 : 2);\n }\n \n-export function tax(amount: number): number {\n-  return Math.round(amount * 0.2 * 100) / 100;\n+export function tax(amount: number, rate: number): number {\n+  if (rate < 0 || rate > 1) throw new RangeError(`a tax rate is between 0 and 1, not ${rate}`);\n+  return roundHalfEven(amount * rate, 2);\n }\ndiff --git a/src/money/round.ts b/src/money/round.ts\nnew file mode 100644\nindex 0000000..c4d5e6f\n--- /dev/null\n+++ b/src/money/round.ts\n@@ -0,0 +1,9 @@\n+/** Banker's rounding, to `places` decimals: ties go to the even digit. */\n+export function roundHalfEven(value: number, places: number): number {\n+  const m = 10 ** places;\n+  const x = value * m;\n+  const r = Math.round(x);\n+  const tie = Math.abs(x % 1) === 0.5;\n+  return (tie && r % 2 !== 0 ? r - 1 : r) / m;\n+}\n+\ndiff --git a/src/checkout/Checkout.tsx b/src/checkout/Checkout.tsx\nindex 77aa012..88bb123 100644\n--- a/src/checkout/Checkout.tsx\n+++ b/src/checkout/Checkout.tsx\n@@ -12,9 +12,12 @@ export function Checkout({ cart }: Props) {\n   const [step, setStep] = useState<Step>(\"address\");\n-  const sum = total(cart.lines);\n+  const sum = total(cart.lines, cart.currency);\n+  const vat = tax(sum, cart.taxRate);\n   return (\n     <form onSubmit={next}>\n-      <Summary total={sum} />\n+      <Summary total={sum} tax={vat} />\n+      <Steps current={step} />\n       {step === \"address\" && <Address onDone={() => setStep(\"payment\")} />}\n       {step === \"payment\" && <Payment amount={sum + vat} />}\n     </form>\ndiff --git a/README.md b/README.md\nindex 1111111..2222222 100644\n--- a/README.md\n+++ b/README.md\n@@ -3,3 +3,4 @@\n ## Develop\n \n npm run dev\n+npm test -- --watch\n"
+ }
+}
