@@ -491,7 +491,13 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const terminal = client("desolate-git.localhost", port);
     await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
     const first = async (body: Record<string, string>) => {
-      const opened = await terminal.post("/session", body);
+      // (Six shells at most, each ending half a minute after its last reader: this suite's
+      // earlier ones, and these, wait their turn as a person closing a tab would.)
+      let opened = await terminal.post("/session", body);
+      for (let i = 0; i < 20 && opened.status === 429; i++) {
+        await sleep(3000);
+        opened = await terminal.post("/session", body);
+      }
       assert.equal(opened.status, 200, opened.body);
       const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
       const stream = await terminal.get(`/session/${id}/stream?token=${token}`, 1500);

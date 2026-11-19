@@ -524,11 +524,14 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const last = entries.filter((e) => e.event === "approved").pop();
     assert.deepEqual([last?.repo, last?.ref, last?.commit], ["acme/widgets", "raw-push", commit]);
     assert.equal(entries.pop()?.event, "revoked", "the approval did not outlive the push");
-    // The default branch is not pushed this way, approved or not; and nothing is deleted.
+    // The default branch is pushed this way too, and waits for the person like any branch
+    // (since 2026-11-18; unanswered here, so nothing goes); nothing is ever deleted.
     const def = inRootClone(
       `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/main 2>&1`,
     );
-    assert.match(def.stdout, /main is the default branch/);
+    assert.doesNotMatch(def.stdout, /default branch/);
+    assert.match(def.stdout, /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    assert.notEqual(forgeRefs("acme/widgets")["main"], commit, "unapproved: not pushed");
     assert.match(
       inRootClone("DESOLATE_APPROVAL_WAIT_MS=1500 git push origin :refs/heads/raw-push 2>&1")
         .stdout,
