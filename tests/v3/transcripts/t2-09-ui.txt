@@ -41,6 +41,8 @@ doctor: all checks passed.
 
 ## the dashboard's credential
 
+## one sign-in link for all three pages
+
 ## who may talk to the state service
 
 ## the budgets
