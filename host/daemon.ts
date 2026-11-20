@@ -2707,6 +2707,9 @@ const serve = async () => {
         ? `a program on this machine holds port ${editorHostPort()}`
         : error.message;
     log(`editors on port ${editorHostPort()}: ${error.message}`);
+    // As for [::1] below: a tab open on these pages, reloaded or polling while that program
+    // holds the port, sends it its cookie, and the cookie is the token (audit, 2026-11-20).
+    if (error.code === "EADDRINUSE") retire();
   });
   editors6.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EADDRNOTAVAIL" || error.code === "EAFNOSUPPORT") return; // no IPv6 here: nothing to look at there

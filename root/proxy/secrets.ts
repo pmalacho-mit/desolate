@@ -324,6 +324,11 @@ export const ensure = async (domain: string): Promise<Running | null> => {
       // Upstream certificates are checked against this VM's own trust store.
       "--set",
       "ssl_verify_upstream_trusted_ca=/etc/ssl/certs/ca-certificates.crt",
+      // A body is read whole before the add-on sees it (to substitute and to scrub): past
+      // 256 MiB one is refused, not buffered until the root runs out of memory (audit,
+      // 2026-11-20).
+      "--set",
+      "body_size_limit=256m",
       "--set",
       "flow_detail=0",
       "--set",

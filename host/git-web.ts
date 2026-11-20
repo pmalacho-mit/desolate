@@ -26,6 +26,7 @@ import {
   parseRepo,
 } from "../shared/names.ts";
 import { embedAddress } from "./approve-web.ts";
+import { terminalFilter } from "../shared/terminal-filter.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
 import { signins } from "./signin.ts";
@@ -172,7 +173,14 @@ export const handler = (
       ended: false,
       seen: Date.now(),
     };
-    const out = (chunk: Buffer) => {
+    // Through the same filter as an agent's terminal: what the shell prints holds what a
+    // commit holds, and git and less (-R) pass its escape sequences on, concealed text (SGR 8)
+    // among them, which would hide a line of a diff from the person reading it (audit,
+    // 2026-11-20). Colour, cursor movement and the alternate screen still pass.
+    const filter = terminalFilter();
+    const out = (raw: Buffer) => {
+      const chunk = Buffer.from(filter(raw));
+      if (chunk.length === 0) return;
       s.kept.push(chunk);
       s.keptBytes += chunk.length;
       while (s.keptBytes > LIMIT.kept && s.kept.length > 1) s.keptBytes -= s.kept.shift()!.length;

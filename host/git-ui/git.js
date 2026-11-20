@@ -64,7 +64,20 @@ const start = async () => {
   // No reconnecting by itself: a reconnect would replay what the shell printed.
   stream.onerror = () => { stream.close(); status.textContent = "disconnected: reload for another shell"; };
 };
-start();
+// An address that names a domain's branch changes the clone: the terminal checks that branch
+// out (git-vm.ts checkoutOffered). Any page can send the browser to such an address, so the
+// page says what it would do and waits for the person's click (audit, 2026-11-20). An address
+// with no branch only opens a shell, and starts at once.
+if (domain && branch) {
+  note(`This address asks to check out ${branch} of ${repo}, as the domain ${domain} has it, in your clone in the git VM.`);
+  note("Opened from the dashboard's Open in git, that is what you asked for. If you did not open it, close this tab.");
+  const go = document.createElement("button");
+  go.type = "button";
+  go.textContent = `Check out ${branch} from ${domain}`;
+  go.addEventListener("click", () => { go.remove(); start(); }, { once: true });
+  document.querySelector("header").insertBefore(go, document.getElementById("status"));
+  status.textContent = "waiting for you";
+} else start();
 
 // Pushes waiting for approval, beside the terminal: the approval page itself (its /embed),
 // in a frame of its own origin. This page gives it its address and learns from it how many
