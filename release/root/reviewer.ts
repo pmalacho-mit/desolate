@@ -479,7 +479,12 @@ export type Sends = { pack: string; size: number; lfs: string[] };
 // independent review of #165's fix: a pack kept by push, replaced, would have failed an
 // approved push). A push's own record (<commit>-<onto>.json) says which pack was made for it
 // last, so a summary asked again soon gives the same one.
-const PACKS = { freshMs: 10 * 60_000, keptMs: 60 * 60_000, mostBytes: 8 * 1024 ** 3 } as const;
+const PACKS = {
+  freshMs: 10 * 60_000,
+  keptMs: 60 * 60_000,
+  mostBytes: 8 * 1024 ** 3,
+  packBytes: 2 * 1024 ** 3,
+} as const;
 const packsDir = (repo: Repo) => path.join(REVIEWER.home, "packs", repo.owner, repo.name);
 const packKey = (commit: string, onto: string | null) => `${commit}-${onto ?? "none"}`;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -497,6 +502,7 @@ const prepare = async (
   const where = packsDir(repo);
   fs.mkdirSync(where, { recursive: true, mode: 0o700 });
   const record = path.join(where, `${packKey(tip, onto)}.json`);
+  prunePacks();
   try {
     const last = JSON.parse(fs.readFileSync(record, "utf8")) as { pack?: unknown; at?: unknown };
     const kept = typeof last.pack === "string" ? storedPack(repo, last.pack) : null;
@@ -519,6 +525,12 @@ const prepare = async (
         "pack-objects",
         "--stdout",
         "--revs",
+        // Every object compressed and deltified here, not copied as it arrived: the bytes of a
+        // compressed object are not the object (zlib's choices, a delta's form), and copied, the
+        // root's user's own would ride along to the forge inside an approved pack (the second
+        // independent review of #165's fix, shown with git 2.39: a crafted stream was in the
+        // forge's pack byte for byte).
+        "--no-reuse-object",
         "--delta-base-offset",
         "--quiet",
       ],
@@ -528,13 +540,19 @@ const prepare = async (
     child.stdout.on("data", (chunk: Buffer) => {
       hash.update(chunk);
       size += chunk.length;
-      fs.writeSync(out, chunk);
+      // As large as the pusher takes, and no larger (pusher.ts, LIMIT.pack).
+      if (size > PACKS.packBytes) child.kill("SIGKILL");
+      else fs.writeSync(out, chunk);
     });
     child.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-2000)));
     child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
     child.stdin.end([tip, ...known.map((id) => `^${id}`), ""].join("\n"));
   });
   fs.closeSync(out);
+  if (size > PACKS.packBytes) {
+    fs.rmSync(temporary, { force: true });
+    throw new Error("the push's pack is over 2 GiB, more than a push may send");
+  }
   if (packed.code !== 0) {
     fs.rmSync(temporary, { force: true });
     throw new Error(`cannot pack the push: ${packed.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
@@ -572,7 +590,7 @@ const storedPack = (repo: Repo, pack: string): { file: string; sends: Sends } | 
 
 /** What is kept goes after an hour (an approval lasts two minutes, a push half an hour), and
  *  the oldest first past 8 GiB in all: a root's user that asks for summaries of many pushes
- *  fills no disk. When the reviewer starts. */
+ *  fills no disk. When the reviewer starts, and before each pack is made. */
 const prunePacks = () => {
   const root = path.join(REVIEWER.home, "packs");
   const dirs = (dir: string) => {
@@ -588,7 +606,9 @@ const prunePacks = () => {
       const where = path.join(root, owner.name, name.name);
       for (const entry of fs.readdirSync(where)) {
         const file = path.join(where, entry);
-        const stat = fs.statSync(file);
+        // (One a summary renames as this looks is gone: nothing to do.)
+        const stat = fs.statSync(file, { throwIfNoEntry: false });
+        if (!stat) continue;
         if (Date.now() - stat.mtimeMs > PACKS.keptMs) fs.rmSync(file, { force: true });
         else if (entry.endsWith(".pack")) all.push({ file, at: stat.mtimeMs, size: stat.size });
       }

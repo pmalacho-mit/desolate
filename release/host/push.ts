@@ -553,7 +553,7 @@ export const push = async (args: string[]): Promise<number> => {
     again: `desolate push ${args.filter((a) => a !== "--squash" && a !== "--replace").join(" ")}`,
   });
   if (typeof chosen === "number") return chosen;
-  const signature = await sign(chosen.text, chosen.line, chosen.replaces);
+  const signature = await sign(chosen.text, chosen.line, chosen.replaces, chosen.size);
   void (await import("./daemon.ts")).announceApproved(plan.message);
   return backend().attach(
     ROOT_VM,
@@ -578,7 +578,7 @@ export const push = async (args: string[]): Promise<number> => {
 export const chosenText = async (
   message: string,
   choice: { squash: boolean; replace: boolean; again: string },
-): Promise<{ text: string; line: string; replaces: boolean } | number> => {
+): Promise<{ text: string; line: string; replaces: boolean; size: number } | number> => {
   const push = parseApproval(message);
   if (!push) return refuse("the root's approval text is not one", "desolate doctor");
   const { reviewerSummary } = await import("./daemon.ts");
@@ -602,7 +602,12 @@ export const chosenText = async (
   const sends = choice.squash
     ? { commit: s.squash!.commit, squashes: push.commit, ...s.squash!.sends }
     : { commit: push.commit, squashes: null, ...s.sends };
-  return { text: signedFor(message, sends), line: reviewedLine(s, choice.squash), replaces };
+  return {
+    text: signedFor(message, sends),
+    line: reviewedLine(s, choice.squash),
+    replaces,
+    size: sends.size,
+  };
 };
 
 /** The reviewer's account of a push, in one line for the terminal's prompt: what the
@@ -652,7 +657,7 @@ export const approve = async (
       again: "desolate approve",
     });
     if (typeof chosen === "number") return chosen;
-    const signature = await sign(chosen.text, chosen.line, chosen.replaces);
+    const signature = await sign(chosen.text, chosen.line, chosen.replaces, chosen.size);
     void (await import("./daemon.ts")).announceApproved(request.message);
     await rootctl("approvals.answer", { message: chosen.text, signature }, { quiet: true });
     out("approved; the push waiting in the root continues.");

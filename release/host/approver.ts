@@ -152,6 +152,12 @@ declare namespace init {
   >;
 }
 
+/** A pack's size, as a person reads it. */
+const formatSize = (bytes: number) =>
+  bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KiB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+
 const clean = (text: string) => text.replace(/[^\x20-\x7e]/g, "?").slice(0, 300);
 
 /** Ask the person, and sign the approval text if they say yes: the keyring's challenge with
@@ -163,6 +169,7 @@ export const sign = async (
   message: string,
   summary?: string,
   replaces = false,
+  size?: number,
 ): Promise<string> => {
   const push = parseSigned(message);
   const which = kind();
@@ -190,7 +197,7 @@ export const sign = async (
     push.onto
       ? `  onto        ${push.onto}  (the remote's ${push.branch} now: it moves from this to the commit, or not at all)`
       : `  onto        none: the remote has no ${push.branch} yet`,
-    `  pack        ${push.pack.slice(0, 12)}  (made by desolate's reviewer: nothing else is sent)`,
+    `  pack        ${push.pack.slice(0, 12)}${size === undefined ? "" : `, ${formatSize(size)}`}  (made by desolate's reviewer: nothing else is sent)`,
     `  LFS         ${push.lfs.count} object(s), only those its commits point to`,
     ...(replaces
       ? [

@@ -172,7 +172,7 @@ const summaryOf = (summary, card) => {
   if (commits.length) box.append(ul);
   const files = summary.files || [];
   if (files.length) {
-    box.append(el("p", `${files.length + (summary.moreFiles || 0)} file(s) changed${summary.base ? ` against ${summary.base.slice(0, 12)}` : ""}${summary.lfs ? `, ${summary.lfs} of them LFS objects` : ""}:`));
+    box.append(el("p", `${files.length + (summary.moreFiles || 0)} file(s) changed${summary.base ? ` against ${summary.base.slice(0, 12)}` : ""}:`));
     // What runs on the forge (CI workflows, hooks) or changes how git treats the repository:
     // always listed in full, outside any scrolling box, before the rest.
     const line = (f) => {
@@ -206,6 +206,11 @@ const summaryOf = (summary, card) => {
     for (const f of between) { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(el("code", f.path)); bl.append(li); }
     if (summary.moreBetween) bl.append(el("li", `and ${summary.moreBetween} more`));
     box.append(bl);
+  }
+  // What goes, exactly as it is signed: the reviewer's pack, its size, and the LFS objects.
+  if (summary.sends) {
+    const mib = summary.sends.size / 1024 / 1024;
+    box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${mib < 1 ? `${Math.max(1, Math.round(summary.sends.size / 1024))} KiB` : `${mib.toFixed(1)} MiB`}, and ${summary.sends.lfs.length} LFS object(s) they point to: nothing else.`));
   }
   if (summary.hasDiff !== undefined && card) box.append(...diffToggle(card, false));
   if (summary.hasEachDiff && card) box.append(...diffToggle(card, true));
