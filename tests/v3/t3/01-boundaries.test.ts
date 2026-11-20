@@ -313,6 +313,13 @@ describe(
           "the Mac's own",
           "control: unconfined, the VM reads the folder the swapped share names",
         );
+        // And doctor says so: a VM whose host process started with no profile is named.
+        const loose = stack.quiet("doctor");
+        assert.match(
+          loose.stdout + loose.stderr,
+          /VMs started confined: a\/w1 started before the profile/,
+          "doctor names the VM started unconfined",
+        );
         limactl("stop", vm);
         restore();
 
@@ -369,6 +376,12 @@ describe(
         again = stack.quiet("start", "a/w1");
       }
       assert.equal(again.code, 0, again.stderr + again.stdout);
+      const confined = stack.quiet("doctor");
+      assert.match(
+        confined.stdout + confined.stderr,
+        /VMs started confined: every running VM's host process may hand it only its own shares/,
+        "control: started by desolate, every VM is confined, and doctor says so",
+      );
       const back = asUser("a/w1", "cd /workspaces/acme/widgets && git log --oneline | wc -l");
       assert.equal(back.stdout.trim(), "2", "the workspace's own commit is still there");
     });
