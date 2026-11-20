@@ -79,6 +79,8 @@ next: desolate editor a/w1 --open      its editor, in your browser
 
 ## root in the VM against the read-only shares
 
+## a share swapped for a symlink as its VM starts
+
 ## out through the proxy
 
 $ desolate domain a net allow-internal <forge>

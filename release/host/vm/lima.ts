@@ -9,7 +9,9 @@
 //                     read-only mode, and root in the    (qemu-wrapper.sh).
 //                     guest remounts it rw (measured).
 //   vz    (macOS)     virtiofs; the host refuses the     Lima's host process under sandbox-exec,
-//                     write (measured on an M1).         allowed one loopback port: the link.
+//                     write (measured on an M1). The     allowed one loopback port: the link.
+//                     same profile lets it hand the VM
+//                     only its own shares (`profile`).
 //
 // desolate keeps its own Lima home under ~/.desolate, so it never touches a VM it did not
 // make, and refuses Lima's user-wide _config overrides, which could add a network.
@@ -344,19 +346,79 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     return text === "Running" ? "running" : text === "" ? "missing" : "stopped";
   };
 
-  /** The sandbox profile for a vz workspace's host process (decisions.md: measured on an M1).
-   *  Outbound: unix sockets except the Mac's resolver; this VM's ssh forward; its link. */
-  const profile = (m: Meta) =>
-    [
-      "(version 1)",
-      "(allow default)",
-      "(deny network-outbound)",
-      "(allow network-outbound (remote unix-socket))",
-      '(deny network-outbound (literal "/private/var/run/mDNSResponder"))',
-      '(deny network-outbound (literal "/var/run/mDNSResponder"))',
-      `(allow network-outbound (remote ip "localhost:${m.sshPort}"))`,
-      `(allow network-outbound (remote ip "localhost:${m.linkPort}"))`,
-    ].join("\n") + "\n";
+  /** Where each share of a VM must be, read-only or read-write, as Apple's VM process will be
+   *  allowed to open it: a share under desolate's home named from the home and its path,
+   *  never by following the share itself (the root's user can swap it for a link at any
+   *  moment, even between desolate's check and this line). The release, outside the home, is
+   *  the Mac's own checkout. */
+  const sharesAt = (m: Meta): { at: string; writable: boolean }[] => {
+    const home = path.resolve(paths.home);
+    return m.spec.shares.map((share) => {
+      const relative = path.relative(home, path.resolve(share.host));
+      const inHome = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+      return {
+        at: inHome
+          ? path.join(fs.realpathSync.native(home), relative)
+          : fs.realpathSync.native(share.host),
+        writable: share.writable,
+      };
+    });
+  };
+  /** A path in a sandbox profile's string. */
+  const sbString = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  /** The sandbox profile a vz VM's host process starts under, and keeps for its whole life
+   *  (decisions.md: measured on an M1).
+   *
+   *  SHARES. Apple's VM process opens a VM's shared folders by a sandbox extension that the
+   *  configuring process (Lima's host process) issues for each: what that process may hand
+   *  out, a VM gets, with everything under it. The root's user owns the folders workspaces
+   *  and the git VM share, and could swap one for a link between desolate's check
+   *  (shares.ts) and that moment. Measured on the M1 (2026-11-20, Lima 2.3.0): a loop
+   *  flipping a share won 3 of 4 starts, and one swap just after Lima's own checks won every
+   *  time; the VM then read and wrote a folder of the Mac's, or read Lima's private key
+   *  (`_config/user`, which opens root in every VM). So the process may issue an extension for
+   *  nothing but this VM's shares, each at exactly its path and with exactly its access (a
+   *  read-only share's is for reading). A swapped share is refused ("Failed to issue sandbox
+   *  extension for file system device with directory ...") and the VM does not start; with no
+   *  swap it starts as before. Measured beside two broader profiles that denied files by place
+   *  (each had a hole a reviewer found: what Lima's process could read, a VM could be handed).
+   *
+   *  NETWORK, for a VM with no egress: outbound, unix sockets except the Mac's resolver; this
+   *  VM's ssh forward; its link. */
+  const profile = (m: Meta) => {
+    const shares = sharesAt(m);
+    const allowed = (writable: boolean) =>
+      shares
+        .filter((share) => share.writable === writable)
+        .map((share) => `(literal ${sbString(share.at)})`);
+    return (
+      [
+        "(version 1)",
+        "(allow default)",
+        ...(m.spec.egress === "none"
+          ? [
+              "(deny network-outbound)",
+              "(allow network-outbound (remote unix-socket))",
+              '(deny network-outbound (literal "/private/var/run/mDNSResponder"))',
+              '(deny network-outbound (literal "/var/run/mDNSResponder"))',
+              `(allow network-outbound (remote ip "localhost:${m.sshPort}"))`,
+              `(allow network-outbound (remote ip "localhost:${m.linkPort}"))`,
+            ]
+          : []),
+        "(deny file-issue-extension)",
+        ...(allowed(false).length
+          ? [
+              `(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read") (require-any ${allowed(false).join(" ")})))`,
+            ]
+          : []),
+        ...(allowed(true).length
+          ? [
+              `(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read-write") (require-any ${allowed(true).join(" ")})))`,
+            ]
+          : []),
+      ].join("\n") + "\n"
+    );
+  };
 
   /** One argument for a remote shell, quoted so that it stays one argument. */
   const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
@@ -694,8 +756,9 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
           timeoutMs: 120_000,
         });
       const args = ["start", "--timeout", "30m", name];
-      if (kind === "vz" && cut) {
+      if (kind === "vz") {
         const file = path.join(LIMA_HOME, name, "confine.sb");
+        // After sharesPlain: the profile names each share where it must be.
         fs.writeFileSync(file, profile(m));
         // The host process starts under the profile and keeps it for its whole life.
         const result = await run("sandbox-exec", ["-f", file, LIMACTL, "--tty=false", ...args], {
@@ -704,7 +767,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         });
         if (result.code !== 0)
           throw new Error(
-            `could not start ${name} confined: ${(result.stderr || result.stdout).trim().split("\n").slice(-4).join(" | ")}`,
+            `could not start ${name} confined: ${(result.stderr || result.stdout).trim().split("\n").slice(-4).join(" | ")}. If it says "Failed to issue sandbox extension", a share of it changed after desolate checked it: see desolate doctor, and ${path.join(LIMA_HOME, name, "ha.stderr.log")}`,
           );
         return sharesReady(name, m);
       }
@@ -1044,7 +1107,9 @@ declare namespace limaBackend {
   >;
 
   /** a VM with no egress starts under a profile that lets its host process reach two loopback
-   *  ports, its ssh and its link, and unix sockets other than the Mac's resolver: nothing else */
+   *  ports, its ssh and its link, and unix sockets other than the Mac's resolver; and hand
+   *  Apple's VM process no folder but its own shares, each at exactly its path and with exactly
+   *  its access (the read-only one for reading): nothing else */
   export type Confined = Expect<
     Invoke<
       typeof confinement,
@@ -1054,14 +1119,41 @@ declare namespace limaBackend {
           name: "dsl-main-cut";
           role: "workspace";
           egress: "none";
-          shares: [];
+          shares: [
+            { host: "<home>/domains/acme/repos"; guest: "/workspaces"; writable: true },
+            {
+              host: "<home>/mirrors/acme/web.git";
+              guest: "/desolate/mirrors/acme/web.git";
+              writable: false;
+            },
+          ];
           sockets: [];
           labels: {};
         },
       ]
     >,
     "=",
-    '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n'
+    '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n(deny file-issue-extension)\n(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read") (require-any (literal "<home>/mirrors/acme/web.git"))))\n(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read-write") (require-any (literal "<home>/domains/acme/repos"))))\n'
+  >;
+  /** a VM with open egress (the root) is confined in what it is handed just the same, and
+   *  nothing more: its network is its own */
+  export type ConfinedFilesOnly = Expect<
+    Invoke<
+      typeof confinement,
+      [
+        backend: Vz,
+        spec: {
+          name: "dsl-main-root";
+          role: "root";
+          egress: "open";
+          shares: [{ host: "<home>/domains"; guest: "/desolate/domains"; writable: true }];
+          sockets: [];
+          labels: {};
+        },
+      ]
+    >,
+    "=",
+    '(version 1)\n(allow default)\n(deny file-issue-extension)\n(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read-write") (require-any (literal "<home>/domains"))))\n'
   >;
 
   /** a VM is started only if desolate made it (its record is beside Lima's) */

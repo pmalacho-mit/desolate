@@ -246,6 +246,133 @@ describe(
       );
     });
 
+    it("T4 a share swapped for a symlink as its VM starts is refused by the VM itself: it does not start, and the folder the link names is untouched", async (t) => {
+      if (stack.backend !== "vz") return t.skip("the sandbox profile is the vz backend's");
+      // The root's user owns domains/<d>/: taken over, it could swap a share for a link
+      // between desolate's check (shares.ts) and the moment the VM opens it. The swap here is
+      // made the moment desolate writes the VM's profile, just after its check: what follows
+      // (Lima's own look, then Apple's VM process) is the profile's to refuse. (By hand, on
+      // 2026-11-20, a swap after Lima's own look was refused by the VM process too.)
+      stack.step("a share swapped for a symlink as its VM starts");
+      const vm = vmOf("a/w1");
+      const repos = path.join(stack.home, "domains/a/repos");
+      const kept = `${repos}.kept`;
+      // Folders of the Mac's that no VM is given, outside desolate's home: the person's own,
+      // under /Users; and one the Mac's user may write outside it (as /opt/homebrew/bin is).
+      const outside = fs.mkdtempSync(path.join(os.homedir(), ".desolate-t4-outside-"));
+      const writable = fs.mkdtempSync("/private/tmp/desolate-t4-outside-");
+      for (const dir of [outside, writable])
+        fs.writeFileSync(path.join(dir, "the-macs-own.txt"), "the Mac's own\n");
+      const haLog = path.join(stack.home, "lima", vm, "ha.stderr.log");
+      const profile = path.join(stack.home, "lima", vm, "confine.sb");
+      const swap = (to: string) => {
+        fs.renameSync(repos, kept);
+        fs.symlinkSync(to, repos);
+      };
+      const swapWhenProfiled = async (to: string) => {
+        for (const until = Date.now() + 300_000; Date.now() < until;) {
+          if (fs.existsSync(profile)) {
+            swap(to);
+            return true;
+          }
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        return false;
+      };
+      const restore = () => {
+        if (fs.lstatSync(repos, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(repos);
+        if (fs.existsSync(kept)) fs.renameSync(kept, repos);
+      };
+      const limactl = (...args: string[]) =>
+        spawnSync(process.env.DESOLATE_LIMACTL ?? "limactl", ["--tty=false", ...args], {
+          env: stack.env,
+          encoding: "utf8",
+        });
+      const started = (command: string, args: string[]) =>
+        new Promise<{ code: number; out: string }>((resolve) => {
+          const child = spawn(command, args, { env: stack.env, stdio: ["ignore", "pipe", "pipe"] });
+          let out = "";
+          child.stdout!.on("data", (chunk) => (out += chunk));
+          child.stderr!.on("data", (chunk) => (out += chunk));
+          child.on("close", (code) => resolve({ code: code ?? 1, out }));
+        });
+      let again = { code: 1, stdout: "", stderr: "not started again" };
+      try {
+        assert.equal(stack.quiet("stop", "a/w1").code, 0);
+
+        // Control: the same VM, its share swapped, started by Lima with no profile. It mounts
+        // the folder the link names, so a refusal below is the profile's.
+        swap(outside);
+        const control = limactl("start", vm);
+        assert.equal(control.status, 0, (control.stderr ?? "").slice(-1500));
+        const seen = stack.inVm(vm, ["bash", "-c", "cat /workspaces/the-macs-own.txt"], {
+          root: true,
+        });
+        assert.equal(
+          seen.stdout.trim(),
+          "the Mac's own",
+          "control: unconfined, the VM reads the folder the swapped share names",
+        );
+        limactl("stop", vm);
+        restore();
+
+        // And the VM's own Lima directory, where desolate keeps what it reads of the VM (its
+        // ssh settings, its record): a VM that could write it could have the Mac run anything.
+        const own = path.join(stack.home, "lima", vm);
+        for (const target of [outside, writable, own]) {
+          // desolate's own start: its check passes, then the share is swapped, and the profile
+          // refuses it (EPERM): Lima's own look, or the VM process's.
+          fs.rmSync(profile, { force: true });
+          fs.rmSync(haLog, { force: true });
+          const [refused, swapped] = await Promise.all([
+            started(path.join(REPO_ROOT, "release", "cli.sh"), ["start", "a/w1"]),
+            swapWhenProfiled(target),
+          ]);
+          assert.ok(swapped, "the profile was written, and the swap made");
+          assert.notEqual(refused.code, 0, "the VM must not start on a swapped share");
+          assert.match(refused.out, /a share of it changed after desolate checked it/);
+          // (Lima's host process writes its last line as it exits: given a moment.)
+          const refusedBy =
+            /failed to issue sandbox extension|operation not permitted|directory sharing device configuration is invalid/i;
+          let ha = "";
+          for (const until = Date.now() + 15_000; Date.now() < until;) {
+            try {
+              ha = fs.readFileSync(haLog, "utf8");
+            } catch {}
+            if (refusedBy.test(`${refused.out}\n${ha}`)) break;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          assert.match(
+            `${refused.out}\n${ha}`,
+            refusedBy,
+            `refused by the profile: ${refused.out.slice(-1200)}\n${ha.split("\n").slice(-6).join("\n")}`,
+          );
+          assert.notEqual(
+            limactl("list", "--format", "{{.Status}}", vm).stdout.trim(),
+            "Running",
+            "the VM is not running",
+          );
+          if (target !== own)
+            assert.deepEqual(
+              fs.readdirSync(target),
+              ["the-macs-own.txt"],
+              "nothing was written there",
+            );
+          restore();
+        }
+      } finally {
+        restore();
+        for (const dir of [outside, writable]) fs.rmSync(dir, { recursive: true, force: true });
+        // Put back as it was, it starts (here, so that a failure above leaves the next test a
+        // running workspace).
+        limactl("stop", vm);
+        again = stack.quiet("start", "a/w1");
+      }
+      assert.equal(again.code, 0, again.stderr + again.stdout);
+      const back = asUser("a/w1", "cd /workspaces/acme/widgets && git log --oneline | wc -l");
+      assert.equal(back.stdout.trim(), "2", "the workspace's own commit is still there");
+    });
+
     it("T3 the one way out is the workspace's proxy, and it is attributed", () => {
       stack.step("out through the proxy");
       const forge = stack.env.DESOLATE_FORGE_SPEC!.replace(/^.*@/, "").replace(/:\d+$/, "");
