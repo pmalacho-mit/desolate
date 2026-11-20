@@ -229,6 +229,23 @@ declare namespace phoneRequest {
   >;
 }
 
+/** Set-Cookie headers made Secure: on the tailnet every page is HTTPS, but the root, behind
+ *  this, sets the dashboard's cookie as for plain HTTP on the Mac. */
+export const secured = (values: readonly string[]): string[] =>
+  values.map((value) => (/;\s*secure\s*(;|$)/i.test(value) ? value : `${value}; Secure`));
+
+declare namespace secured {
+  /** once, whatever its case */
+  export type Cases = Expect<
+    Invoke<
+      typeof secured,
+      [values: ["desolate_ui_ab=t; Path=/; HttpOnly; SameSite=Strict", "x=1; secure"]]
+    >,
+    "=",
+    ["desolate_ui_ab=t; Path=/; HttpOnly; SameSite=Strict; Secure", "x=1; secure"]
+  >;
+}
+
 /** The phone's port, on 127.0.0.1 only (Tailscale Serve is pointed there; nothing else is
  *  told of it). Each request is decided by phoneRequest, then passed to this daemon's own
  *  pages port, which routes it to the dashboard by its rewritten name. */
@@ -240,8 +257,11 @@ export const servePhone = (log: (line: string) => void) => {
       res.writeHead(decided.refused.status, { "content-type": "text/plain; charset=utf-8" });
       return res.end(`desolate: ${decided.refused.text}\n`);
     }
+    // A connection of its own (agent: false), as for the slots: what answers is chosen by the
+    // name a request carries, and never by a connection another request opened.
     const upstream = request(
       {
+        agent: false,
         host: "127.0.0.1",
         port: pagesPort,
         method: req.method,
@@ -249,7 +269,9 @@ export const servePhone = (log: (line: string) => void) => {
         headers: decided.headers,
       },
       (answer) => {
-        res.writeHead(answer.statusCode ?? 502, answer.headers);
+        const headers = { ...answer.headers };
+        if (headers["set-cookie"]) headers["set-cookie"] = secured(headers["set-cookie"]);
+        res.writeHead(answer.statusCode ?? 502, headers);
         answer.pipe(res);
       },
     );
@@ -652,8 +674,13 @@ export const serveSlots = (log: (line: string) => void, target: (slot: number) =
         res.writeHead(d.refused.status, { "content-type": "text/plain; charset=utf-8" });
         return res.end(`desolate: ${d.refused.text}\n`);
       }
+      // A connection of its own for each request (agent: false). The Mac's forwarder picks the
+      // workspace by a connection's first request, and every workspace's server on a port shares
+      // 127.0.0.1:<port>: through Node's pooled, kept-alive connections, a request for one
+      // workspace went to whichever workspace had opened the connection.
       const upstream = request(
         {
+          agent: false,
           host: "127.0.0.1",
           port: d.to.port,
           method: req.method,
