@@ -493,7 +493,7 @@ const filesChanged = (review) => {
   const shown = changes.filter((c) => !filesFilter || c.path.toLowerCase().includes(filesFilter.toLowerCase()));
   const colour = { added: "green", deleted: "red", modified: "blue", changed: "" };
   return el("details", { class: "files-changed", open: true, "data-files-changed": "" },
-    el("summary", {}, picked ? `Files these commits change (${changes.length} of ${(review.changes || review.files).length})` : `Files changed (${changes.length})`),
+    el("summary", {}, picked ? `Files ${reviewing.pick.lo === reviewing.pick.hi ? "this commit changes" : "these commits change"} (${changes.length} of ${(review.changes || review.files).length})` : `Files changed (${changes.length})`),
     changes.length > 6 ? el("input", { class: "filter", placeholder: "filter files", "aria-label": "filter the files changed", value: filesFilter, oninput: (event) => { filesFilter = event.target.value; render(); const box = document.querySelector("#review .files-changed .filter"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); } } }) : null,
     el("ul", { class: "files" }, shown.map((c) => el("li", { "data-change": c.path },
       pill(c.status, colour[c.status] || "", `${c.status} in this branch`),

@@ -150,7 +150,7 @@ button.
 - **A domain's card** is headed by its name (what commands and workspaces use), then its
   title, when it says more than the name or the domain's one repository.
 
-![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
+![Reviewing an offer with one of its three commits picked: the files that commit changes, and its diff as text](assets/review.png)
 
 **What the root takes from a workspace** is data, and it is checked before it is the
 root's: a bundle is copied out of the domain's reach and every object in it passes git's

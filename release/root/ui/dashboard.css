@@ -107,6 +107,13 @@ ul.rows > li:first-child { border-top: 0; }
 .dot.hollow { background: transparent; border: 1.5px solid var(--gray); }
 .buttons { display: flex; gap: var(--s2); flex-wrap: wrap; align-items: center; justify-content: flex-end; }
 ul.rows > li > .buttons { margin-top: calc((var(--row) - var(--btn)) / 2); }
+/* A narrow list (the dashboard beside an open review): the actions go under what they act on,
+   so the names keep the row's width instead of running under the buttons. */
+ul.rows { container-type: inline-size; }
+@container (max-width: 560px) {
+  ul.rows > li { grid-template-columns: 16px minmax(0, 1fr); }
+  ul.rows > li > .buttons { grid-column: 2; justify-content: flex-start; margin-top: 0; }
+}
 .what { display: grid; gap: var(--s1); min-width: 0; }
 .what .name, .what .line, .checkout { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); min-height: var(--row); margin: 0; }
 .what .name { font-weight: 600; }
