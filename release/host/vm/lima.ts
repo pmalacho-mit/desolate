@@ -366,9 +366,10 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
    *
    *  So: this VM's own Lima directory (its disks, logs and sockets, and its TMPDIR, where
    *  Lima builds the cloud-init disk); Lima's home itself, to list; Lima's key and settings,
-   *  each file alone and never their folder; Lima's own install; and each share as it really
-   *  is now, read-only ones for reading. Not other VMs' directories: a share swapped to one
-   *  would hand this VM another's disk. */
+   *  each file alone and never their folder; Lima's own install; and each share where it must
+   *  be, worked out from desolate's home and never by following it, read-only ones for
+   *  reading. Not other VMs' directories: a share swapped to one would hand this VM another's
+   *  disk. */
   const opens = (name: string, m: Meta): Opens => {
     // Lima's own install: the binary, and what it reads beside it (templates, the guest agent).
     const limactl = (() => {
@@ -381,6 +382,17 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     })();
     const prefix = path.dirname(path.dirname(limactl));
     const real = (p: string) => fs.realpathSync(p);
+    // A share under desolate's home is named where it must be, worked out from the home, never
+    // by following the share itself: the root's user can swap it for a link at any moment,
+    // even between desolate's check and this line, and a profile that followed it would allow
+    // what it names. (The release, outside the home, is the Mac's own checkout.)
+    const home = path.resolve(paths.home);
+    const shareAt = (host: string) => {
+      const relative = path.relative(home, path.resolve(host));
+      return relative && !relative.startsWith("..") && !path.isAbsolute(relative)
+        ? path.join(real(home), relative)
+        : real(host);
+    };
     return {
       files: [
         real(LIMA_HOME),
@@ -392,11 +404,11 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       read: [
         path.join(prefix, "share", "lima"),
         path.join(prefix, "libexec", "lima"),
-        ...m.spec.shares.filter((s) => !s.writable).map((s) => real(s.host)),
+        ...m.spec.shares.filter((s) => !s.writable).map((s) => shareAt(s.host)),
       ],
       write: [
         path.join(real(LIMA_HOME), name),
-        ...m.spec.shares.filter((s) => s.writable).map((s) => real(s.host)),
+        ...m.spec.shares.filter((s) => s.writable).map((s) => shareAt(s.host)),
       ],
     };
   };
