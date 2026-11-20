@@ -30,6 +30,17 @@ const message = formatApproval(push);
 // What desolate's reviewer says the push sends: the host signs the challenge with it.
 const SENDS = { pack: "e".repeat(64), size: 100, lfs: ["f".repeat(64)] };
 const signed = signedFor(message, { commit: push.commit, squashes: null, ...SENDS });
+// A second push, which replaces the remote's branch, with two commits to squash.
+const other = { ...push, branch: "issue/13", onto: "b".repeat(40), nonce: "2".repeat(32) };
+const otherMessage = formatApproval(other);
+const SQUASH_SENDS = { pack: "d".repeat(64), size: 90, lfs: [] };
+/** The page's own poll, as the page makes it: what it lists is what it may then sign. */
+const listedNow = async () => {
+  for (let i = 0; i < 2; i++) {
+    await call("GET", "/pending", asPage());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
 // What the root's user lists: a test can change it under the page, as a compromised one could.
 let listed = [{ message, at: "2026-11-12T00:00:00Z" }];
 const approved: string[] = [];
@@ -45,14 +56,32 @@ before(async () => {
     handler(
       {
         pending: async () => listed,
-        summary: async () => ({
-          ok: true,
-          commits: [
-            { commit: "a".repeat(40), subject: "<img src=x onerror=alert(1)>", author: "agent" },
-          ],
-          diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
-          sends: SENDS,
-        }),
+        summary: async (asked) =>
+          asked.nonce === other.nonce
+            ? {
+                ok: true,
+                fastForward: false,
+                sends: SENDS,
+                squash: {
+                  commit: "5".repeat(40),
+                  parent: null,
+                  count: 2,
+                  message: "x\n",
+                  sends: SQUASH_SENDS,
+                },
+              }
+            : {
+                ok: true,
+                commits: [
+                  {
+                    commit: "a".repeat(40),
+                    subject: "<img src=x onerror=alert(1)>",
+                    author: "agent",
+                  },
+                ],
+                diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
+                sends: SENDS,
+              },
         approve: async (m) => void approved.push(m),
         refuse: async (m) => void refused.push(m),
         issues: async () => issuesListed,
@@ -328,6 +357,7 @@ describe("T1 the approval page", () => {
   });
 
   it("control: the page's own approval signs exactly the push it showed, with what the reviewer says it sends", async () => {
+    await listedNow();
     const answer = await approve(good());
     assert.equal(answer.status, 200, answer.body);
     assert.deepEqual(approved, [signed]);
@@ -340,6 +370,33 @@ describe("T1 the approval page", () => {
     );
     assert.equal(no.status, 200);
     assert.deepEqual(refused, [message]);
+  });
+
+  it("a push signs only as the page listed it; a squash signs the reviewer's squash; a replace signs only confirmed", async () => {
+    listed = [{ message: otherMessage, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    const click = (extra: Record<string, unknown> = {}) =>
+      approve({
+        nonce: other.nonce,
+        token: pushToken(approveToken(), otherMessage),
+        commit: other.commit,
+        ...extra,
+      });
+    // Before the page has listed the reviewer's account: nothing is signed.
+    const early = await click({ replace: true });
+    assert.equal(early.status, 409, early.body);
+    assert.match(early.body, /has not shown it yet/);
+    await listedNow();
+    const unconfirmed = await click();
+    assert.equal(unconfirmed.status, 409);
+    assert.match(unconfirmed.body, /replaces the remote's branch: confirm the replace/);
+    assert.deepEqual(approved, [], "nothing signed without the replace confirmed");
+    const squashed = await click({ replace: true, squash: true });
+    assert.equal(squashed.status, 200, squashed.body);
+    assert.deepEqual(approved, [
+      signedFor(otherMessage, { commit: "5".repeat(40), squashes: other.commit, ...SQUASH_SENDS }),
+    ]);
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
   });
 
   it("/embed: framed by the git terminal's origin alone, and its key opens only what the page's own requests open", async () => {

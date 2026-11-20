@@ -266,7 +266,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   // What the reviewer said of each text, by the text's own digest: a text listed again under
   // the same nonce is another push, with a summary of its own. Asked once per text, in the
   // background, with a deadline: a slow reviewer never holds up the list.
-  const summaries = new Map<string, { at: number; value: Summary | null }>();
+  const summaries = new Map<string, { at: number; value: Summary | null; listed?: boolean }>();
   const summaryOf = (push: PushApproval, message: string): Summary => {
     const key = digestOf(message);
     for (const [k, entry] of summaries)
@@ -526,6 +526,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         // words about a push are not shown at all.
         // The diff stays here until asked for (/diff): not in a list polled every second.
         const { diff, eachDiff, ...summary } = summaryOf(push, waiting.message);
+        // The page is given this account now: from here it may be signed.
+        const given = summaries.get(digestOf(waiting.message));
+        if (given?.value?.ok) given.listed = true;
         out.push({
           nonce: push.nonce,
           repo: push.repo,
@@ -649,23 +652,17 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       // What is signed: the challenge, with what the reviewer says the push sends (it made the
       // pack, and the pusher sends no other). No account of it, no approval.
       // (As the page was shown it, or, if this daemon has not asked yet, asked now.)
-      let reviewed = summaries.get(digestOf(waiting.message))?.value ?? null;
-      if (url.pathname === "/approve" && !reviewed?.ok)
-        reviewed = await Promise.race([
-          backend.summary(push),
-          new Promise<Summary>((resolve) =>
-            setTimeout(
-              () => resolve({ ok: false, error: "the reviewer did not answer in time" }),
-              SUMMARY.deadlineMs,
-            ).unref(),
-          ),
-        ]).catch((error: Error): Summary => ({ ok: false, error: error.message }));
+      // Only an account the page was given (/pending listed it): what is signed is what the
+      // person could read, never one asked for at the click (the independent review of #165's
+      // fix: a button armed while the reviewer was still working signed what came after).
+      const entry = summaries.get(digestOf(waiting.message));
+      const reviewed = entry?.listed ? entry.value : null;
       let signed = "";
       if (url.pathname === "/approve") {
         if (!reviewed?.ok || !reviewed.sends)
           return json(res, 409, {
             error:
-              "desolate's reviewer has not said what this push would send, so it cannot be approved: nothing was signed",
+              "desolate's reviewer has not said what this push would send, or the page has not shown it yet, so it cannot be approved: nothing was signed",
           });
         // A push that replaces the remote's branch, only when the page said so and the
         // person confirmed that, apart from Approve (approve.js: the branch's name, typed).
@@ -1473,7 +1470,7 @@ declare namespace handler {
     typeof handler,
     [backend: Invoke<typeof waiting, [messages: [Push], summary: Reviewed]>, log: typeof quiet]
   >;
-  /** The click on Approve, as the page's script sends it; squashed; and replacing, confirmed. */
+  /** The click on Approve, as the page's script sends it. */
   type Click = {
     method: "POST";
     url: "/approve";
@@ -1484,63 +1481,18 @@ declare namespace handler {
       commit: "0123456789abcdef0123456789abcdef01234567";
     };
   };
-  type ClickSquashed = {
-    method: "POST";
-    url: "/approve";
-    headers: Script;
-    body: {
-      nonce: "00000000000000000000000000000001";
-      token: Invoke<typeof pushToken, [token: Token, message: Push]>;
-      commit: "0123456789abcdef0123456789abcdef01234567";
-      squash: true;
-    };
-  };
-  type ClickReplacing = {
-    method: "POST";
-    url: "/approve";
-    headers: Script;
-    body: {
-      nonce: "00000000000000000000000000000001";
-      token: Invoke<typeof pushToken, [token: Token, message: Push]>;
-      commit: "0123456789abcdef0123456789abcdef01234567";
-      replace: true;
-    };
-  };
-  /** the click: the push the page showed, by its nonce, its token and its commit, is signed,
-   *  as the challenge with what the reviewer says it sends (its pack, its LFS objects) */
-  export type Approves = Given<
+  /** a click before the page listed the reviewer's account signs nothing, though the reviewer
+   *  has one: what is signed is what the page was given to show (the T1 node test signs
+   *  after the page's own poll, squashed and replacing too) */
+  export type NotListed = Given<
     HasToken,
     [
       Expect<
         Invoke<typeof ask, [handler: ReviewedPage, request: Click]>,
         "matches",
-        { status: 200; json: { ok: true } }
+        { status: 409 }
       >,
-      Expect<
-        Invoke<typeof approved>,
-        "=",
-        [
-          "desolate push approval v3\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00000000000000000000000000000001\n",
-        ]
-      >,
-    ]
-  >;
-  /** squashed: the reviewer's squash of it, its own pack, and the commit it squashes */
-  export type Squashed = Given<
-    HasToken,
-    [
-      Expect<
-        Invoke<typeof ask, [handler: ReviewedPage, request: ClickSquashed]>,
-        "matches",
-        { status: 200; json: { ok: true } }
-      >,
-      Expect<
-        Invoke<typeof approved>,
-        "=",
-        [
-          "desolate push approval v3\nrepo: acme/web\nbranch: fix/login\ncommit: 5555555555555555555555555555555555555555\nonto: none\nsquashes: 0123456789abcdef0123456789abcdef01234567\npack: dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00000000000000000000000000000001\n",
-        ]
-      >,
+      Expect<Invoke<typeof approved>, "=", []>,
     ]
   >;
   /** a push the reviewer cannot describe is not signed at all: what it sends is what it names */
@@ -1568,64 +1520,11 @@ declare namespace handler {
         {
           status: 409;
           json: {
-            error: "desolate's reviewer has not said what this push would send, so it cannot be approved: nothing was signed";
+            error: "desolate's reviewer has not said what this push would send, or the page has not shown it yet, so it cannot be approved: nothing was signed";
           };
         }
       >,
       Expect<Invoke<typeof approved>, "=", []>,
-    ]
-  >;
-  /** a push that replaces the remote's branch is signed only with the replace confirmed (the
-   *  page's typed name); the same click without it signs nothing */
-  export type Replaces = Given<
-    HasToken,
-    [
-      Expect<
-        Invoke<
-          typeof ask,
-          [
-            handler: Invoke<
-              typeof handler,
-              [
-                backend: Invoke<
-                  typeof waiting,
-                  [messages: [Push], summary: { ok: true; fastForward: false; sends: Sends }]
-                >,
-                log: typeof quiet,
-              ]
-            >,
-            request: Click,
-          ]
-        >,
-        "matches",
-        {
-          status: 409;
-          json: {
-            error: "this push replaces the remote's branch: confirm the replace on the page, or nothing is signed";
-          };
-        }
-      >,
-      Expect<Invoke<typeof approved>, "=", []>,
-      Expect<
-        Invoke<
-          typeof ask,
-          [
-            handler: Invoke<
-              typeof handler,
-              [
-                backend: Invoke<
-                  typeof waiting,
-                  [messages: [Push], summary: { ok: true; fastForward: false; sends: Sends }]
-                >,
-                log: typeof quiet,
-              ]
-            >,
-            request: ClickReplacing,
-          ]
-        >,
-        "matches",
-        { status: 200; json: { ok: true } }
-      >,
     ]
   >;
   /** the root's list now has another text under that nonce: the page's token is not over it */

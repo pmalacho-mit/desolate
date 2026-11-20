@@ -29,14 +29,10 @@ export const WAIT_MS = Number(process.env.DESOLATE_APPROVAL_WAIT_MS) || 110_000;
  *  commit, or the squash of it they chose). */
 const approvedId = async (
   push: Record<string, unknown>,
-): Promise<{ id: string; commit: string; onto: string | null } | null> => {
+): Promise<{ id: string; commit: string; pack: string } | null> => {
   const reply = await ask(KEYRING.control, { op: "approved", ...push });
   return reply.ok === true
-    ? {
-        id: String(reply.id),
-        commit: String(reply.commit),
-        onto: typeof reply.onto === "string" ? reply.onto : null,
-      }
+    ? { id: String(reply.id), commit: String(reply.commit), pack: String(reply.pack) }
     : null;
 };
 
@@ -109,7 +105,7 @@ export const pushCommit = async (
     if (!approval) return "no person approved the push on the host, so nothing was pushed";
   }
   try {
-    const failed = await send(repo, approval.id, { commit: approval.commit, onto: approval.onto });
+    const failed = await send(repo, approval.id, { pack: approval.pack });
     if (failed) return failed.error.replace(/\n/g, " ");
   } finally {
     await ask(KEYRING.control, { op: "revoke", id: approval.id }).catch(() => {});

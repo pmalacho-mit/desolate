@@ -491,7 +491,7 @@ const main = async () => {
         EXIT.unconfirmed,
       );
     approval = String(filed.id);
-    const failed = await send(repo, approval, { commit: signed.commit, onto: signed.onto });
+    const failed = await send(repo, approval, { pack: signed.pack });
     if (failed)
       throw new Refusal(
         failed.error,

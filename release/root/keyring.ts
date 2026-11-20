@@ -449,7 +449,7 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
   };
   approvals.set(id, approval);
   audit({ event: "approved", ...approval, expires: new Date(approval.expires).toISOString() });
-  return { ok: true, id, commit: approval.commit, onto: approval.onto };
+  return { ok: true, id, commit: approval.commit, pack: approval.pack };
 };
 
 declare namespace approve {
@@ -584,7 +584,7 @@ const approved = (request: Record<string, unknown>): Record<string, unknown> => 
       (approval.commit === request.commit || approval.squashes === request.commit) &&
       approval.onto === (request.onto ?? null)
     )
-      return { ok: true, id: approval.id, commit: approval.commit, onto: approval.onto };
+      return { ok: true, id: approval.id, commit: approval.commit, pack: approval.pack };
   return { ok: false, error: "no approval on file for that push" };
 };
 

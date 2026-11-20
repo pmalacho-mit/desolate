@@ -167,7 +167,7 @@ declare namespace withPusher {
 export const send = async (
   repo: Repo,
   approval: string,
-  push: { commit: string; onto: string | null },
+  push: { pack: string },
 ): Promise<Failed | null> => {
   const clone = clonePath(repo);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-send-"));
@@ -175,7 +175,7 @@ export const send = async (
     const pack = path.join(work, "push.pack");
     let made: { pack: string; size: number; lfs: string[] };
     try {
-      made = await packFor(repo, push.commit, push.onto, pack);
+      made = await packFor(repo, push.pack, pack);
     } catch (error) {
       return {
         error: `the reviewer has no pack for this push (${(error as Error).message}), so nothing was pushed`,

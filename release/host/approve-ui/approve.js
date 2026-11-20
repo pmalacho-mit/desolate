@@ -68,13 +68,16 @@ const el = (tag, text, cls) => { const node = document.createElement(tag); if (t
 // A push that replaces the remote's branch arms only once its name is typed: a step of its
 // own, apart from the click (the host refuses the approval without it, too: approve-web.ts).
 const confirmed = (card) => !card.replaces || card.typed;
-const ready = (card, arm) => attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden && confirmed(card);
+// And a push arms only once the reviewer has said what it sends, and the page shows it: what
+// is signed is that (the host signs no other: approve-web.ts).
+const reviewedOf = (card) => Boolean(card.issue) || card.reviewed;
+const ready = (card, arm) => reviewedOf(card) && attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden && confirmed(card);
 const armedOf = (card) => card.arms.find((a) => a.armedAt);
 const disarm = (card) => {
   for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
   if (card.done) return;
   const first = card.arms.find((a) => !a.wrap.hidden);
-  card.hint.textContent = !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer over a button to arm it" : "arming in a moment...";
+  card.hint.textContent = !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer over a button to arm it" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
@@ -238,7 +241,7 @@ const add = (push, issue) => {
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
   const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, visible: VISIBILITY ? false : undefined }));
-  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), done: false, busy: false, shown: "", replaces: false, typed: false };
+  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
   for (const arm of arms) {
     if (watcher) watcher.observe(arm.wrap);
     // (A disabled button gets no pointer events in every browser: these are on its wrapper,
@@ -282,6 +285,7 @@ const add = (push, issue) => {
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
 const choicesOf = (card, summary) => {
   const ok = Boolean(summary && summary.ok);
+  card.reviewed = ok && Boolean(summary.sends);
   card.replaces = ok && summary.fastForward === false;
   const squash = card.arms.find((a) => a.squash);
   if (squash) squash.wrap.hidden = !(ok && summary.squash);

@@ -13,10 +13,9 @@
 // root's user could have been sent straight on to this one (the audit of that version said
 // so). Now nothing the root's user sends is parsed in this process, beyond one JSON line
 // (at most 1 MiB, read by node's own parser) that says how many bytes follow:
-//   - the pack is forwarded to the remote as bytes, counted and hashed, never read. Its last
-//     bytes go only if it hashes to the pack the person approved (the reviewer made it, of
-//     the approved commits' own objects): no other object rides along. The forge's git
-//     reads it;
+//   - the pack is taken whole and hashed, never read, and goes to the remote only if it is
+//     the pack the person approved (the reviewer made it, of the approved commits' own
+//     objects): no other object rides along. The forge's git reads it;
 //   - an LFS object is hashed as it arrives, and goes up only if it hashes to its name and is
 //     one the approved commits point to (the approval carries their ids' digest).
 //     git-lfs uploads it from a repository of this push's own that holds no git object;
@@ -113,15 +112,6 @@ type Approved = {
   lfs: { count: number; digest: string };
   pubkey: string;
 };
-
-/** The last bytes of a pack, held back until the whole pack has hashed to what the person
- *  approved. A pack ends with its checksum (20 bytes, or 32 in a sha256 repository), and the
- *  forge takes nothing from a pack that does not end: git's receive-pack keeps what it reads
- *  in a quarantine it removes when the pack is cut short (measured in T2 against git's own:
- *  the branch stays, no object of it is left). */
-const HOLD = 32;
-/** A pack or an LFS list that is not the one approved: refused, with nothing taken. */
-export class NotApproved extends Error {}
 
 /** The forge's address, from root's own copy (the host writes it, as root): the root's user
  *  cannot aim a push elsewhere. */
@@ -484,8 +474,6 @@ export const updateRef = async (
   try {
     await sendPack(forge.stdin);
   } catch (error) {
-    // Not the approved pack: its end was never sent, so the forge has taken nothing.
-    if (error instanceof NotApproved) throw error;
     const said = await Promise.race([
       report,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
@@ -879,11 +867,14 @@ const push = async (
   const identity = path.join(work, "write.pub");
   fs.writeFileSync(identity, `${approved.pubkey.trim()}\n`, { mode: 0o600 });
   try {
-    // LFS first: the remote never has a pointer without its object. Each object is the
-    // bytes that hash to its name, or nothing goes up.
+    // Everything is received, and checked, before anything goes to the forge: each LFS object
+    // is the bytes that hash to its name, and the pack is the one the person approved, whole.
+    // (Not forwarded as it came, its end held back: any stretch of what arrives may be a
+    // whole pack of its own, which the forge takes as soon as it ends, whatever follows. The
+    // independent review of #165's fix found that, in the first version of it.)
     let left = rest;
+    const dir = path.join(work, "lfs.git");
     if (lfs.length > 0) {
-      const dir = path.join(work, "lfs.git");
       const made = await run("git", ["init", "--bare", "--quiet", dir], { env: env() });
       if (made.code !== 0)
         return {
@@ -918,6 +909,26 @@ const push = async (
           };
         fs.renameSync(`${file}.part`, file);
       }
+    }
+    const packFile = path.join(work, "push.pack");
+    const packOut = fs.openSync(
+      packFile,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+      0o600,
+    );
+    let packed: { rest: Buffer; sha256: string };
+    try {
+      packed = await receive(socket, left, packSize, (chunk) => void fs.writeSync(packOut, chunk));
+    } finally {
+      fs.closeSync(packOut);
+    }
+    if (packed.sha256 !== approved.pack)
+      return {
+        ok: false,
+        error: `the pack is not the one approved (it hashes to ${packed.sha256.slice(0, 12)}, not ${approved.pack.slice(0, 12)}): nothing was pushed`,
+      };
+    // LFS first: the remote never has a pointer without its object.
+    if (lfs.length > 0) {
       const url = `ssh://${forge.user}@${forge.host}:${forge.port}/${repo.owner}/${repo.name}.git`;
       log(`${approved.repo}: uploading ${lfs.length} LFS object(s)`);
       const up = await run(
@@ -979,21 +990,9 @@ const push = async (
         approved.onto,
         approved.commit,
         async (sink) => {
-          // Forwarded as it arrives, all but its last bytes; those only once the whole pack has
-          // hashed to the approved one. Hashing is not parsing: nothing in it is read.
-          let tail = Buffer.alloc(0);
-          const got = await receive(socket, left, packSize, async (chunk) => {
-            const all = Buffer.concat([tail, chunk]);
-            const cut = Math.max(0, all.length - HOLD);
-            tail = all.subarray(cut);
-            if (cut > 0) await write(sink, all.subarray(0, cut));
-          });
-          left = got.rest;
-          if (got.sha256 !== approved.pack)
-            throw new NotApproved(
-              `the pack is not the one approved (it hashes to ${got.sha256.slice(0, 12)}, not ${approved.pack.slice(0, 12)})`,
-            );
-          await write(sink, tail);
+          // The approved pack, as checked above: its bytes, never read.
+          for await (const chunk of fs.createReadStream(packFile))
+            await write(sink, chunk as Buffer);
         },
       );
       ssh.stdin.end();

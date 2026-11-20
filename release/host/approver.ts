@@ -209,7 +209,7 @@ export const sign = async (
       EXIT.unconfirmed,
     );
 
-  if (which === "touchid") {
+  const touch = () => {
     process.stderr.write(
       shown.join("\n") +
         "\nConfirm with Touch ID (or your login password) in the dialog macOS is showing.\n",
@@ -226,7 +226,9 @@ export const sign = async (
         "run the push again and confirm it",
       );
     return signed.stdout.trim();
-  }
+  };
+  // With Touch ID, the touch is the confirmation; a replace is typed first all the same.
+  if (which === "touchid" && !replaces) return touch();
 
   // The terminal is this process's CONTROLLING terminal, opened by name: not stdin, which
   // a caller could point anywhere.
@@ -270,6 +272,7 @@ export const sign = async (
         ? `run the push again, and type '${wanted}' when it asks`
         : "run the push again, and type the branch name when it asks",
     );
+  if (which === "touchid") return touch();
   return signWith(
     "sha256",
     Buffer.from(message),

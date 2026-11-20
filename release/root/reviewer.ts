@@ -22,8 +22,9 @@
 //   {"op":"tips","repo"}                  -> {"ok":true,"tips":[commit...]}   what it holds
 //   {"op":"submit","repo","bundle":N}\n then N bytes: a bundle of refs/desolate/review/<16 hex>
 //     and the clone's refs/remotes/origin/* -> {"ok":true}
-//   {"op":"pack","repo","commit","onto"} -> {"ok":true,"pack","size","lfs":[oid...]}\n then
-//     the pack's bytes: the pack a summary made for that push and kept, for send.ts to carry
+//   {"op":"pack","repo","pack":sha256} -> {"ok":true,"pack","size","lfs":[oid...]}\n then
+//     the pack's bytes: a pack a summary made and kept, by its sha256 (which the approval
+//     names), for send.ts to carry
 // And for the host, not on the socket: `node reviewer.ts summary`, started by root
 // (review-ask.ts) as this user, one summary per process.
 import { spawn } from "node:child_process";
@@ -472,14 +473,20 @@ const pointersIn = async (dir: string, tip: string, known: string[]): Promise<st
 };
 
 export type Sends = { pack: string; size: number; lfs: string[] };
-const PACKS_MS = { fresh: 10 * 60_000, kept: 24 * 60 * 60_000 } as const;
+// Each pack is kept by its own sha256 (<sha>.pack, and <sha>.json: its size and LFS ids), and
+// a push asks for the one its approval names, by that sha256: two summaries at once, or one
+// made again later, make packs of their own, and never replace one an approval names (the
+// independent review of #165's fix: a pack kept by push, replaced, would have failed an
+// approved push). A push's own record (<commit>-<onto>.json) says which pack was made for it
+// last, so a summary asked again soon gives the same one.
+const PACKS = { freshMs: 10 * 60_000, keptMs: 60 * 60_000, mostBytes: 8 * 1024 ** 3 } as const;
 const packsDir = (repo: Repo) => path.join(REVIEWER.home, "packs", repo.owner, repo.name);
 const packKey = (commit: string, onto: string | null) => `${commit}-${onto ?? "none"}`;
+const SHA256 = /^[0-9a-f]{64}$/;
 
-/** The pack for pushing `tip` onto `onto`: made once, of the objects `tip` has that the
- *  remote's branches (`known`) do not, and kept with its sha256 and LFS ids. Asked again while
- *  it is fresh, the same pack (the approval may name it already); once it is ten minutes old,
- *  made again (the remote may have moved on). Two askers at once: the first one's is kept. */
+/** The pack for pushing `tip` onto `onto`: of the objects `tip` has that the remote's branches
+ *  (`known`) do not, kept with its sha256 and LFS ids. Asked again within ten minutes, the
+ *  same pack; after, a new one (the remote may have moved on). */
 const prepare = async (
   repo: Repo,
   dir: string,
@@ -490,11 +497,16 @@ const prepare = async (
   const where = packsDir(repo);
   fs.mkdirSync(where, { recursive: true, mode: 0o700 });
   const record = path.join(where, `${packKey(tip, onto)}.json`);
-  const kept = storedPack(repo, tip, onto);
-  if (kept && Date.now() - kept.at < PACKS_MS.fresh) return kept.sends;
-  const name = `${packKey(tip, onto)}-${randomBytes(6).toString("hex")}`;
-  const file = path.join(where, `${name}.pack`);
-  const out = fs.openSync(file, "w", 0o600);
+  try {
+    const last = JSON.parse(fs.readFileSync(record, "utf8")) as { pack?: unknown; at?: unknown };
+    const kept = typeof last.pack === "string" ? storedPack(repo, last.pack) : null;
+    if (kept && Number.isFinite(last.at) && Date.now() - (last.at as number) < PACKS.freshMs)
+      return kept.sends;
+  } catch {
+    /* none yet */
+  }
+  const temporary = path.join(where, `incoming-${randomBytes(8).toString("hex")}`);
+  const out = fs.openSync(temporary, "w", 0o600);
   const hash = createHash("sha256");
   let size = 0;
   const packed = await new Promise<{ code: number; stderr: string }>((resolve) => {
@@ -524,65 +536,43 @@ const prepare = async (
   });
   fs.closeSync(out);
   if (packed.code !== 0) {
-    fs.rmSync(file, { force: true });
+    fs.rmSync(temporary, { force: true });
     throw new Error(`cannot pack the push: ${packed.stderr.trim().split("\n").slice(-1)[0] ?? ""}`);
   }
   const sends: Sends = { pack: hash.digest("hex"), size, lfs: await pointersIn(dir, tip, known) };
-  const temporary = path.join(where, `${name}.json`);
-  fs.writeFileSync(
-    temporary,
-    JSON.stringify({ file: path.basename(file), at: Date.now(), ...sends }),
-    {
-      mode: 0o600,
-    },
-  );
-  if (kept) fs.renameSync(temporary, record);
-  else
-    try {
-      fs.linkSync(temporary, record);
-      fs.rmSync(temporary, { force: true });
-    } catch {
-      // Another asker's came first: that one is the push's pack.
-      fs.rmSync(temporary, { force: true });
-      fs.rmSync(file, { force: true });
-      const first = storedPack(repo, tip, onto);
-      if (!first) throw new Error("the reviewer's pack went missing as it was kept");
-      return first.sends;
-    }
+  // Its own name is its digest: the same bytes made twice are the same file.
+  fs.renameSync(temporary, path.join(where, `${sends.pack}.pack`));
+  const meta = path.join(where, `${sends.pack}.json`);
+  fs.writeFileSync(`${meta}.part`, JSON.stringify({ size, lfs: sends.lfs }), { mode: 0o600 });
+  fs.renameSync(`${meta}.part`, meta);
+  fs.writeFileSync(`${record}.part`, JSON.stringify({ pack: sends.pack, at: Date.now() }), {
+    mode: 0o600,
+  });
+  fs.renameSync(`${record}.part`, record);
   return sends;
 };
 
-/** The kept pack for a push, if there is one: its file, and what it sends. */
-const storedPack = (
-  repo: Repo,
-  tip: string,
-  onto: string | null,
-): { file: string; at: number; sends: Sends } | null => {
+/** The kept pack with this sha256, if there is one: its file, and what it sends. */
+const storedPack = (repo: Repo, pack: string): { file: string; sends: Sends } | null => {
+  if (!SHA256.test(pack)) return null;
   try {
     const where = packsDir(repo);
-    const kept = JSON.parse(
-      fs.readFileSync(path.join(where, `${packKey(tip, onto)}.json`), "utf8"),
-    ) as { file?: unknown; at?: unknown; pack?: unknown; size?: unknown; lfs?: unknown };
-    if (
-      typeof kept.file !== "string" ||
-      !/^[0-9a-f]{40}-(none|[0-9a-f]{40})-[0-9a-f]{12}\.pack$/.test(kept.file) ||
-      typeof kept.pack !== "string" ||
-      !Number.isInteger(kept.size) ||
-      !Array.isArray(kept.lfs) ||
-      !Number.isFinite(kept.at)
-    )
-      return null;
-    return {
-      file: path.join(where, kept.file),
-      at: kept.at as number,
-      sends: { pack: kept.pack, size: kept.size as number, lfs: kept.lfs as string[] },
+    const file = path.join(where, `${pack}.pack`);
+    const kept = JSON.parse(fs.readFileSync(path.join(where, `${pack}.json`), "utf8")) as {
+      size?: unknown;
+      lfs?: unknown;
     };
+    if (!Number.isInteger(kept.size) || !Array.isArray(kept.lfs) || !fs.existsSync(file))
+      return null;
+    return { file, sends: { pack, size: kept.size as number, lfs: kept.lfs as string[] } };
   } catch {
     return null;
   }
 };
 
-/** Packs kept past a day, and files no record names: gone, when the reviewer starts. */
+/** What is kept goes after an hour (an approval lasts two minutes, a push half an hour), and
+ *  the oldest first past 8 GiB in all: a root's user that asks for summaries of many pushes
+ *  fills no disk. When the reviewer starts. */
 const prunePacks = () => {
   const root = path.join(REVIEWER.home, "packs");
   const dirs = (dir: string) => {
@@ -592,35 +582,33 @@ const prunePacks = () => {
       return [];
     }
   };
+  const all: { file: string; at: number; size: number }[] = [];
   for (const owner of dirs(root))
     for (const name of dirs(path.join(root, owner.name))) {
       const where = path.join(root, owner.name, name.name);
-      const named = new Set<string>();
       for (const entry of fs.readdirSync(where)) {
-        if (!entry.endsWith(".json")) continue;
         const file = path.join(where, entry);
-        if (Date.now() - fs.statSync(file).mtimeMs > PACKS_MS.kept)
-          fs.rmSync(file, { force: true });
-        else
-          try {
-            named.add(
-              String((JSON.parse(fs.readFileSync(file, "utf8")) as { file?: unknown }).file),
-            );
-          } catch {
-            fs.rmSync(file, { force: true });
-          }
+        const stat = fs.statSync(file);
+        if (Date.now() - stat.mtimeMs > PACKS.keptMs) fs.rmSync(file, { force: true });
+        else if (entry.endsWith(".pack")) all.push({ file, at: stat.mtimeMs, size: stat.size });
       }
-      for (const entry of fs.readdirSync(where))
-        if (entry.endsWith(".pack") && !named.has(entry))
-          fs.rmSync(path.join(where, entry), { force: true });
     }
+  let total = all.reduce((n, p) => n + p.size, 0);
+  for (const pack of all.sort((a, b) => a.at - b.at)) {
+    if (total <= PACKS.mostBytes) break;
+    fs.rmSync(pack.file, { force: true });
+    fs.rmSync(pack.file.replace(/\.pack$/, ".json"), { force: true });
+    total -= pack.size;
+  }
 };
 
 /** The person's other choice: the commits pushed as one. Its tree is the commit's own, its
  *  parent is where the commit leaves the remote's history (what it builds on: `onto`, or the
  *  branch a new one starts from), and its author, committer and dates are the commit's. So
- *  the same push always squashes to the same commit, whoever asks. Its message: the first
- *  commit's subject, then every commit's. */
+ *  the same push, onto the same remote, always squashes to the same commit (for a new branch,
+ *  where it starts depends on the remote's branches the reviewer holds; either way the
+ *  approval names the very commit the person was shown). Its message: the first commit's
+ *  subject, then every commit's. */
 export type Squash = { commit: string; parent: string | null; count: number; message: string };
 const SQUASH_LISTED = 100;
 const squashOf = async (
@@ -1007,18 +995,15 @@ const handle = (socket: Socket) => {
     if (request.op === "ping") return answer({ ok: true });
     const repo = parseRepo(request.repo);
     if (!repo) return answer({ ok: false, error: "not a repository" });
-    // The pack a push sends, as kept: its header line, then its bytes. Nothing is made here:
-    // only the host's summary makes one, so what is sent is what the approval may name.
+    // A pack a summary made, by its sha256: its header line, then its bytes. Nothing is made
+    // here: only the host's summary makes one.
     if (request.op === "pack") {
-      const onto = request.onto ?? null;
-      const kept =
-        isCommit(request.commit) && (onto === null || isCommit(onto))
-          ? storedPack(repo, request.commit, onto as string | null)
-          : null;
-      if (!kept || !fs.existsSync(kept.file))
+      const kept = typeof request.pack === "string" ? storedPack(repo, request.pack) : null;
+      if (!kept)
         return answer({
           ok: false,
-          error: "the reviewer keeps no pack for that push: look at it on the approval page again",
+          error:
+            "the reviewer keeps no such pack (each is kept an hour): look at the push on the approval page again",
         });
       socket.write(JSON.stringify({ ok: true, ...kept.sends }) + "\n");
       const stream = fs.createReadStream(kept.file);

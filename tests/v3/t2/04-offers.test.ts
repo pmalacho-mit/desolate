@@ -416,15 +416,17 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     // The audit's F6, with a real approval live: the root's user, as if a bug in what it
     // parses had given it to an attacker, hands the pusher that approval's id and a pack of
     // its own: the approved commit, and an object nothing refers to (bytes of its choosing,
-    // which would stay in the repository's storage under the write key, #165). The pusher
-    // hashes the pack as it forwards it and holds back its end: it is not the approved one,
-    // so its end never goes, and the forge takes nothing.
+    // which would stay in the repository's storage under the write key, #165), whole, and
+    // then 32 bytes more: a first version of the pusher forwarded all but the last 32 bytes
+    // before checking, and so sent this pack whole, which the forge took (found by an
+    // independent review). The pusher takes the pack whole, and it is not the approved one:
+    // nothing is sent, and the forge takes nothing.
     const before = forgeRefs("acme/widgets");
     const extra = inRootClone(
       `printf 'bytes the attacker chose\\n' | git hash-object -w --stdin`,
     ).stdout.trim();
     inRootClone(
-      `(git rev-list --objects ${commit} --not --remotes=origin | cut -d' ' -f1; echo ${extra}) | git pack-objects --stdout --delta-base-offset --quiet > /tmp/own.pack`,
+      `(git rev-list --objects ${commit} --not --remotes=origin | cut -d' ' -f1; echo ${extra}) | git pack-objects --stdout --delta-base-offset --quiet > /tmp/own.pack && head -c 32 /dev/urandom >> /tmp/own.pack`,
     );
     const lfsFile = inRootClone(
       `ls .git/lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`,
@@ -464,8 +466,8 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       "--disable-warning=ExperimentalWarning",
       "--input-type=module",
       "-e",
-      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], null, process.argv[2]);`,
-      commit,
+      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], process.argv[2]);`,
+      said.sends!.pack,
       reviewerPack,
     ]);
     const plantedLfs = toPusher(
@@ -512,8 +514,8 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       "--disable-warning=ExperimentalWarning",
       "--input-type=module",
       "-e",
-      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], null, process.argv[2]);`,
-      controlCommit,
+      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], process.argv[2]);`,
+      saidControl.sends!.pack,
       controlPack,
     ]);
     const third = keyring({

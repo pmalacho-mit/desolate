@@ -144,13 +144,12 @@ export const submitForReview = async (repo: Repo, commit: string): Promise<strin
   }
 };
 
-/** The pack the reviewer made for a push and keeps (reviewer.ts, `prepare`), into `file`, and
+/** A pack the reviewer made and keeps (reviewer.ts, `prepare`), by its sha256, into `file`, and
  *  what it says the push sends. The root's user carries it to the pusher and can change
  *  nothing in it: the approval names its digest. */
 export const packFor = (
   repo: Repo,
-  commit: string,
-  onto: string | null,
+  pack: string,
   file: string,
 ): Promise<{ pack: string; size: number; lfs: string[] }> =>
   withReviewer(
@@ -206,7 +205,7 @@ export const packFor = (
           take(head.subarray(end + 1));
         });
         socket.on("connect", () =>
-          socket.write(JSON.stringify({ op: "pack", repo: repoId(repo), commit, onto }) + "\n"),
+          socket.write(JSON.stringify({ op: "pack", repo: repoId(repo), pack }) + "\n"),
         );
       }),
   );
