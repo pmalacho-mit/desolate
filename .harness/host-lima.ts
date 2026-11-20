@@ -29,7 +29,8 @@ const fakeLimactl = () => {
   fs.mkdirSync(bin(), { recursive: true });
   fs.writeFileSync(
     path.join(bin(), "limactl"),
-    `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >>'${log()}'\nprintf '%s\\n' '--end--' >>'${log()}'\nexit 0\n`,
+    // (Asked for the guest's /proc/mounts, it answers with what `confinement` wrote, if anything.)
+    `#!/bin/sh\nfor a in "$@"; do printf '%s\\n' "$a"; done >>'${log()}'\nprintf '%s\\n' '--end--' >>'${log()}'\ncase "$*" in *"cat /proc/mounts"*) cat '${path.join(bin(), "mounts")}' 2>/dev/null ;; esac\nexit 0\n`,
     { mode: 0o755 },
   );
   fs.writeFileSync(log(), "");
@@ -61,6 +62,10 @@ const meta = (name: string) =>
   };
 const shown = (text: string, ports?: { sshPort: number; linkPort: number }) => {
   let out = text
+    // (A temporary home is often reached through a link, /var to /private/var: a sandbox
+    // profile names it as it really is.)
+    .split(fs.realpathSync.native(home()))
+    .join("<home>")
     .split(home())
     .join("<home>")
     .split(release)
@@ -102,10 +107,15 @@ export const baseYaml = async (backend: Backend): Promise<string> => {
   return shown(fs.readFileSync(path.join(limaHome(), "base.yaml"), "utf8"));
 };
 
-/** The sandbox profile a vz VM with no egress is started under (its host process keeps it for
+/** The sandbox profile a vz VM is started under (its host process keeps it for
  *  life). On a machine without sandbox-exec the start fails after the profile is written. */
 export const confinement = async (backend: Backend, spec: VmSpec): Promise<string> => {
   fakeLimactl();
+  // The guest, once "started", has its shares mounted as the spec says.
+  fs.writeFileSync(
+    path.join(bin(), "mounts"),
+    spec.shares.map((s) => `m ${s.guest} virtiofs ${s.writable ? "rw" : "ro"} 0 0\n`).join(""),
+  );
   await backend.create(inHome(spec));
   await backend.start(spec.name).catch(() => {});
   return shown(

@@ -3,8 +3,9 @@
 // replace a domain's repos/ (or a cache, an outbox, a mirror) with a symlink to any folder of
 // the Mac's, and the next workspace started would mount that folder, writable, in a VM where
 // anything may run (audit, 2026-11-20). Lima resolves a share's location at every start, so
-// this is asked before a VM is made and before every start. (The time between this and
-// Lima's own look is not closed here: see docs/v3/decisions.md, "Shares the root can rename".)
+// this is asked before a VM is made and before every start. The time between this and the VM
+// process's own look is closed by the sandbox profile each vz VM starts under (lima.ts,
+// `profile`): a share swapped in between is refused there. This check stays, for its message.
 import * as fs from "node:fs";
 import * as path from "node:path";
 
