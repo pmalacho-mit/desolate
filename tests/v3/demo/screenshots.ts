@@ -172,15 +172,15 @@ const click = async (t: Tab, x: number, y: number) => {
   );
 };
 
-// SHOTS=dashboard,secrets,git,editor (the default: all four)
-const only = new Set((process.env.SHOTS ?? "dashboard,secrets,git,editor").split(","));
+// SHOTS=dashboard,review,secrets,git,editor (the default: all five)
+const only = new Set((process.env.SHOTS ?? "dashboard,review,secrets,git,editor").split(","));
 try {
   // ------------------------------------------------------------ the dashboard
   // UNFOLDED=<domain>,<domain>: only these domains' cards open, the rest folded to a line (a
   // stack with many domains, pictured as a person who folded the rest would see it).
   if (only.has("dashboard")) {
     const dashboard = await tab(address(/dashboard\s+(http:\S+)/, "ui"), 1100, 900);
-    await until(dashboard, /Offered: /);
+    await until(dashboard, /Offered/);
     if (process.env.UNFOLDED) {
       const open = process.env.UNFOLDED.split(",");
       await evaluate(
@@ -188,7 +188,7 @@ try {
         `localStorage.setItem("desolate-folded", JSON.stringify([...document.querySelectorAll("[data-domain]")].map((c) => c.dataset.domain).filter((d) => !${JSON.stringify(open)}.includes(d)).map((d) => "domain:" + d)))`,
       );
       await send("Page.reload", {}, dashboard.sessionId);
-      await until(dashboard, /Offered: /);
+      await until(dashboard, /Offered/);
     }
     await sleep(1500);
     await shot(dashboard, "dashboard.png", "main", 0);
@@ -204,13 +204,29 @@ try {
       `${offered ? `[data-domain="${offered}"] ` : ""}details.branches`,
       10,
     );
-    // The review: a panel on the right, the window's height.
+  }
+
+  // ------------------------------------------------------------ the review
+  // A panel on the right, the window's height. REVIEW=<branch> picks the offer to open (else
+  // the first); PICK=<n> clicks the commit at that index, newest first, to show one alone.
+  if (only.has("review")) {
+    const dashboard = await tab(address(/dashboard\s+(http:\S+)/, "ui"), 1100, 900);
+    await until(dashboard, /Offered/);
+    await sleep(1000);
     await evaluate(
       dashboard,
-      `[...document.querySelectorAll("#needs button")].find((b) => b.textContent === "Review")?.click()`,
+      `[...document.querySelectorAll("#needs li")].find((li) => li.textContent.includes(${JSON.stringify(process.env.REVIEW ?? "")}))?.querySelectorAll("button").forEach((b) => b.textContent === "Review" && b.click())`,
     );
     await until(dashboard, /commits?\b[\s\S]*\+\d/);
-    await sleep(2500);
+    await sleep(2000);
+    if (process.env.PICK) {
+      await evaluate(
+        dashboard,
+        `document.querySelectorAll("button.commit-pick")[${Number(process.env.PICK)}]?.click()`,
+      );
+      await until(dashboard, /One commit's changes|commits' changes/);
+      await sleep(2000);
+    }
     await shot(dashboard, "review.png");
   }
 
@@ -229,7 +245,12 @@ try {
     );
     await until(page, /To see its value|has no secrets yet/);
     await sleep(800);
-    await shot(page, "secrets.png", "main", 12);
+    // Down to the end of "Add a secret": the import below it is a section of its own.
+    const upTo = (await evaluate(
+      page,
+      "document.getElementById('import').getBoundingClientRect().top - document.querySelector('main').getBoundingClientRect().top",
+    )) as number;
+    await shot(page, "secrets.png", "main", 12, upTo + 4);
   }
 
   // ------------------------------------------------------------ the git terminal, a push, its approval beside it
