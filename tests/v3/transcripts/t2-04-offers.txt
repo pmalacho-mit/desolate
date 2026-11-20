@@ -104,6 +104,8 @@ desolate: this push needs your confirmation.
   branch      issue/12
   commit      <commit>
   onto        none: the remote has no issue/12 yet
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         1 object(s), only those its commits point to
   sends       1 commit(s) the remote does not have, 2 file(s), 1 of them LFS
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: yes
@@ -120,6 +122,8 @@ desolate: this push needs your confirmation.
   branch      issue/12
   commit      <commit>
   onto        none: the remote has no issue/12 yet
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         1 object(s), only those its commits point to
   sends       1 commit(s) the remote does not have, 2 file(s), 1 of them LFS
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: issue/12
@@ -129,6 +133,60 @@ pushed acme/widgets issue/12 at <commit> (1 commit(s), 1 LFS object(s) first).
 
 $ desolate offers
 no offers. In a workspace, `desolate offer` marks a branch ready for you.
+[exit 0]
+
+## a squashed push, then a replace
+
+$ desolate push dev acme/widgets squash-me --expect <commit> --squash    # at a terminal; the person types: squash-me
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      squash-me
+  commit      <commit>
+  squashes    <commit>  (its commits, pushed as this one commit)
+  onto        none: the remote has no squash-me yet
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
+  sends       2 commit(s) the remote does not have, squashed into one, 1 file(s)
+              (desolate's reviewer, in the root)
+Type the branch name (squash-me) to push, or anything else to refuse: squash-me
+pushed acme/widgets squash-me at <commit>: 2 commit(s) squashed into one. The workspace's squash-me keeps its own commits: reset it to origin/squash-me before working on, or its next push replaces the remote's.
+[exit 0]
+
+$ desolate push dev acme/widgets squash-me --expect <commit>
+desolate: this push REPLACES the remote's squash-me: it does not build on it, and the commits only the remote has would be dropped. Nothing was signed
+  fix: to replace it, say so: desolate push dev acme/widgets squash-me --expect <commit> --replace (or fetch, and rebase in the workspace)
+[exit 1]
+
+$ desolate push dev acme/widgets squash-me --expect <commit> --replace    # at a terminal; the person types: squash-me
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      squash-me
+  commit      <commit>
+  onto        <commit>  (the remote's squash-me now: it moves from this to the commit, or not at all)
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
+  REPLACES    the remote's squash-me: it does not build on it, and the commits only the remote has are dropped
+  sends       2 commit(s) the remote does not have, 0 file(s); 2 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
+              (desolate's reviewer, in the root)
+Type 'replace squash-me' to replace it, or anything else to refuse: squash-me
+desolate: not confirmed
+desolate: no person confirmed the push, so nothing was pushed
+  fix: run the push again, and type 'replace squash-me' when it asks
+[exit 78]
+
+$ desolate push dev acme/widgets squash-me --expect <commit> --replace    # at a terminal; the person types: replace squash-me
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      squash-me
+  commit      <commit>
+  onto        <commit>  (the remote's squash-me now: it moves from this to the commit, or not at all)
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
+  REPLACES    the remote's squash-me: it does not build on it, and the commits only the remote has are dropped
+  sends       2 commit(s) the remote does not have, 0 file(s); 2 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
+              (desolate's reviewer, in the root)
+Type 'replace squash-me' to replace it, or anything else to refuse: replace squash-me
+pushed acme/widgets squash-me at <commit> (2 commit(s)).
 [exit 0]
 
 ## a raw git push, approved on the host
@@ -149,6 +207,8 @@ desolate: this push needs your confirmation.
   branch      raw-push
   commit      <commit>
   onto        none: the remote has no raw-push yet
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         1 object(s), only those its commits point to
   sends       0 commit(s) the remote does not have, 2 file(s), 1 of them LFS
               (desolate's reviewer, in the root)
 Type the branch name (raw-push) to push, or anything else to refuse: raw-push
@@ -180,6 +240,8 @@ desolate: this push needs your confirmation.
   branch      issue/12
   commit      <commit>
   onto        <commit>  (the remote's issue/12 now: it moves from this to the commit, or not at all)
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
   sends       1 commit(s) the remote does not have, 1 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: issue/12
@@ -197,6 +259,8 @@ $ desolate branches dev
     review: desolate review dev acme/widgets issue/12
   dev  acme/widgets  main  <id>
     review: desolate review dev acme/widgets main
+  dev  acme/widgets  squash-me  <id>
+    review: desolate review dev acme/widgets squash-me
 [exit 0]
 
 ## git fetch and git push in a workspace
