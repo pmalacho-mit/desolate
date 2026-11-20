@@ -11,12 +11,12 @@
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 20px; --s6: 24px; --icon: 14px;
   --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --bg: #f3f3f5; --fg: #17171a; --muted: #686872; --card: #ffffff; --line: #e3e3e8; --accent: #17171a; --danger: #dc2626; --raise: #f0f0f3; --ok: #16a34a;
+  --bg: #f3f3f5; --fg: #17171a; --muted: #686872; --card: #ffffff; --line: #e3e3e8; --accent: #17171a; --danger: #dc2626; --raise: #f0f0f3; --ok: #16a34a; --caution: #b45309;
   --k-repo: #56667f; --k-branch: #cf6a0a; --k-commit: #767c87;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #0c0c0f; --fg: #f2f2f5; --muted: #a0a0ab; --card: #15151a; --line: #26262d; --accent: #f2f2f5; --danger: #f87171; --raise: #1f1f25; --ok: #4ade80;
+  :root { --bg: #0c0c0f; --fg: #f2f2f5; --muted: #a0a0ab; --card: #15151a; --line: #26262d; --accent: #f2f2f5; --danger: #f87171; --raise: #1f1f25; --ok: #4ade80; --caution: #fbbf24;
     --k-repo: #9eabc2; --k-branch: #f3a04c; --k-commit: #969ca7; }
 }
 * { box-sizing: border-box; }
@@ -54,6 +54,15 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 .summary ul { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s1); }
 .summary li { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s2); align-items: baseline; }
 .summary li { overflow-wrap: anywhere; }
+/* A commit: its id, its subject, who wrote it (quieter, at the end). A file: its path, then
+   lines added and removed in their own right-aligned columns, so the numbers line up. */
+.summary li.commit { grid-template-columns: max-content minmax(0, 1fr) auto; }
+.summary li.file { grid-template-columns: minmax(0, 1fr) 4.5em 4.5em; }
+.summary li.file > code { justify-self: start; }
+.summary .who { color: var(--muted); font-size: 12.5px; }
+.summary .add, .summary .del { font: 12.5px var(--mono); text-align: right; }
+.summary .add { color: var(--ok); }
+.summary .del { color: var(--danger); }
 .summary .error { color: var(--danger); }
 /* The decision stays in view: while a card is taller than the window, its buttons stay at the
    bottom of the window (inside the card, in front of nothing but the card's own text). */
@@ -97,7 +106,10 @@ label.field .hint { font-weight: 400; font-size: 13px; }
 input, select { font: inherit; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
 input:focus, select:focus, textarea:focus { outline: 0; border-color: var(--muted); box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 18%, transparent); }
 .actions.plain { position: static; border-top: 0; padding: 0; }
-.secret { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+/* A secret: what it is and where it goes, then its state and buttons in a column of their
+   own, the same place on every row whatever the length of its text (under it, when narrow). */
+.secret { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--s2) var(--s3); align-items: center; padding: 10px 0; border-top: 1px solid var(--line); container-type: inline-size; }
+@media (max-width: 640px) { .secret { grid-template-columns: minmax(0, 1fr); } }
 .secret:first-child { border-top: 0; }
 .secret .name { font-weight: 600; }
 .secret .buttons { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -122,3 +134,4 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 .planrows .why { grid-column: 1 / -1; color: var(--muted); padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .planrows .why .mono { color: var(--fg); }
 .planrows .warn { color: var(--danger); }
+.hint.warn { color: var(--caution); }
