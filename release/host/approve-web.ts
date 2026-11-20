@@ -126,9 +126,12 @@ const checkedIssue = (value: unknown): Issue | null => {
   };
 };
 
+// img-src data: is for the kinds' icons, which the page's own stylesheet draws as data: masks.
+// A data: image makes no request, so it carries nothing out; only desolate's own style and
+// script can place one, and the Markdown preview draws an image as a link, never as an image.
 export const SECURITY: Record<string, string> = {
   "content-security-policy":
-    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
   "x-frame-options": "DENY",
   "cross-origin-opener-policy": "same-origin",
   "cross-origin-resource-policy": "same-origin",
@@ -1511,7 +1514,7 @@ declare namespace handler {
         {
           status: 200;
           headers: {
-            "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://desolate-git.localhost:31581";
+            "content-security-policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors http://desolate-git.localhost:31581";
           };
         }
       >,

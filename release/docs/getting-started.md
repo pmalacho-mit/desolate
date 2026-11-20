@@ -315,8 +315,8 @@ the remote's default branch as last fetched (**Fetch now** fetches it).
 - **One commit at a time:** click a commit to see its changes alone, and shift-click another
   for a run of them; the files and the diff follow, and the list says how many of the commits
   you are seeing. **Show all** goes back. **Push** always sends the whole branch.
-- **Names carry an icon in their kind's colour:** a shield for a **domain**, a screen for a
-  **workspace**, a book for a **repository**, a branch, and a dot on a line for a **commit**.
+- **Names carry an icon in their kind's colour:** a locked shield for a **domain**, a screen
+  for a **workspace**, and for a **repository**, a **branch** and a **commit** GitHub's own icons.
   Hover one for its kind. Click a domain or a workspace to go to its card or row.
 
 ![Reviewing an offer with one of its three commits picked: the files that commit changes, and its diff as text](assets/review.png)
