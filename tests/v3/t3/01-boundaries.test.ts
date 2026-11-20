@@ -317,7 +317,7 @@ describe(
         const loose = stack.quiet("doctor");
         assert.match(
           loose.stdout + loose.stderr,
-          /VMs started confined: a\/w1 started before the profile/,
+          /VMs started confined: a\/w1 started without the profile/,
           "doctor names the VM started unconfined",
         );
         limactl("stop", vm);
