@@ -275,6 +275,15 @@ export const FEATURES: Feature[] = [
     shots: [],
   },
   {
+    id: "phone",
+    what: "desolate from a phone over Tailscale: the dashboard, the agents page, dev servers in slots, ntfy",
+    code: ["release/host/phone.ts", "release/host/agents-web.ts", "release/host/agents-ui/"],
+    tests: [],
+    docs: ["release/docs/phone.md"],
+    shots: [],
+    boundary: true,
+  },
+  {
     id: "issues",
     what: "GitHub issues a workspace offers, edited on the dashboard and published as you",
     code: ["release/host/issues.ts", "release/root/issues.ts", "release/shared/issues.ts"],
