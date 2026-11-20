@@ -106,7 +106,7 @@ desolate: this push needs your confirmation.
   onto        none: the remote has no issue/12 yet
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         1 object(s), only those its commits point to
-  sends       1 commit(s) the remote does not have, 2 file(s), 1 of them LFS
+  sends       1 commit(s) the remote does not have, 2 file(s), 1 LFS object(s) with them
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: yes
 desolate: not confirmed
@@ -124,7 +124,7 @@ desolate: this push needs your confirmation.
   onto        none: the remote has no issue/12 yet
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         1 object(s), only those its commits point to
-  sends       1 commit(s) the remote does not have, 2 file(s), 1 of them LFS
+  sends       1 commit(s) the remote does not have, 2 file(s), 1 LFS object(s) with them
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: issue/12
 uploading 1 LFS object(s)
@@ -209,7 +209,7 @@ desolate: this push needs your confirmation.
   onto        none: the remote has no raw-push yet
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         1 object(s), only those its commits point to
-  sends       0 commit(s) the remote does not have, 2 file(s), 1 of them LFS
+  sends       0 commit(s) the remote does not have, 2 file(s), 1 LFS object(s) with them
               (desolate's reviewer, in the root)
 Type the branch name (raw-push) to push, or anything else to refuse: raw-push
 approved; the push waiting in the root continues.
