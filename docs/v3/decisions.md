@@ -1356,7 +1356,7 @@ are left for the owner, with what would close them.
 
 | Finding | Severity | Fix |
 |---|---|---|
-| The root's ordinary user could replace a domain's `repos/` (or a cache, an outbox, a mirror) with a symlink to any folder of the Mac's: the next workspace started mounted it writable, in a VM where anything runs | high | `host/vm/shares.ts`: every share under desolate's home is a real directory reached through no symlink, asked before a VM is made and before every start (Lima resolves a share at each start). T1 `shares.test.ts`, with a control. Not closed: the time between this check and Lima's own look (below) |
+| The root's ordinary user could replace a domain's `repos/` (or a cache, an outbox, a mirror) with a symlink to any folder of the Mac's: the next workspace started mounted it writable, in a VM where anything runs | high | `host/vm/shares.ts`: every share under desolate's home is a real directory reached through no symlink, asked before a VM is made and before every start (Lima resolves a share at each start). T1 `shares.test.ts`, with a control. The time between this check and the VM process's own look: closed by the sandbox profile (below) |
 | `desolate push --expect <commit>`: the host signed whatever approval text the root prepared, never comparing it with what the person typed: a root user taken over could name another commit under the same branch | medium | `host/push.ts` `approvalDiffers`: the repository and branch typed, and the commit named, or nothing is signed |
 | The terminal filter passed a C1 control right after ESC (`ESC C2 9D` is OSC): everything it drops came through behind it, for `agent attach`, `exec` and the phone's agents page | medium | to the state that reads a C1, as in text; in-source case |
 | The git terminal's output was not filtered: concealed text (SGR 8) in a commit hid a line of a diff from the person reading it | medium | through the same filter as an agent's terminal |
@@ -1369,11 +1369,19 @@ are left for the owner, with what would close them.
 
 **Not fixed: for the owner, with what would close each.**
 
-- **Shares the root can rename.** The share check above runs, then Lima looks at the path
-  again when it starts the VM: a root user that swaps the folder for a link in between still
-  wins. Closing it means the root cannot rename what a workspace mounts: per-domain shares
-  into the root (a mount point cannot be renamed from inside the guest; a new domain then
-  restarts the root), or the workspace shares kept out of the tree the root shares writable.
+- **Shares the root can rename: closed the same day, by the sandbox profile.** The share
+  check above runs, then Apple's VM process opens the path again when the VM starts. Measured
+  on the M1 (Lima 2.3.0): a loop flipping a share between its folder and a link won 3 of 4
+  starts, and one swap just after Lima's own checks won every time; the VM then read and
+  wrote a folder of the Mac's, or read Lima's private key. Now every vz VM's host process
+  starts under a profile (`host/vm/lima.ts`, `opens`) that lets it open, under `/Users` and
+  `/Volumes`, only its own Lima directory, Lima's key and settings (each file alone), Lima's
+  install, and its shares as they really are when it starts. Apple's VM process honours the
+  profile of the process that configures it: a swapped share is refused ("A directory sharing
+  device configuration is invalid", EPERM) and the VM does not start. T4 tries it on a real
+  workspace, beside a control (the same swap, Lima unconfined, reads the Mac's folder). Not
+  covered: the qemu backend (Linux), and `sandbox-exec` is deprecated by Apple, though it
+  ships (macOS 14.5 here); doctor says so if it ever stops working.
 - **Cookies are the tokens, and cookies ignore ports.** Any program on the Mac that listens on
   any loopback port, given a browser that visits `desolate-approve.localhost:<its port>` (any
   web page can send it there), is sent all three pages' cookies, and with them can approve a

@@ -246,6 +246,103 @@ describe(
       );
     });
 
+    it("T4 a share swapped for a symlink as its VM starts is refused by the VM itself: it does not start, and the folder the link names is untouched", async (t) => {
+      if (stack.backend !== "vz") return t.skip("the sandbox profile is the vz backend's");
+      // The root's user owns domains/<d>/: taken over, it could swap a share for a link
+      // between desolate's check (shares.ts) and the moment Apple's VM process opens it. The
+      // swap is made the moment the VM's host process says its socket is up: after both
+      // desolate's and Lima's own checks, before the VM process opens the share (measured,
+      // 2026-11-20: a swap there won every time against an unconfined start).
+      stack.step("a share swapped for a symlink as its VM starts");
+      const vm = vmOf("a/w1");
+      const repos = path.join(stack.home, "domains/a/repos");
+      const kept = `${repos}.kept`;
+      // A folder of the Mac's that no VM is given: outside desolate's home, under /Users.
+      const outside = fs.mkdtempSync(path.join(os.homedir(), ".desolate-t4-outside-"));
+      fs.writeFileSync(path.join(outside, "the-macs-own.txt"), "the Mac's own\n");
+      const haLog = path.join(stack.home, "lima", vm, "ha.stderr.log");
+      const swapWhenUp = async () => {
+        for (const until = Date.now() + 300_000; Date.now() < until;) {
+          let text = "";
+          try {
+            text = fs.readFileSync(haLog, "utf8");
+          } catch {}
+          if (text.includes("hostagent socket created")) {
+            fs.renameSync(repos, kept);
+            fs.symlinkSync(outside, repos);
+            return true;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        return false;
+      };
+      const restore = () => {
+        if (fs.lstatSync(repos, { throwIfNoEntry: false })?.isSymbolicLink()) fs.unlinkSync(repos);
+        if (fs.existsSync(kept)) fs.renameSync(kept, repos);
+      };
+      const started = (command: string, args: string[]) =>
+        new Promise<{ code: number; out: string }>((resolve) => {
+          const child = spawn(command, args, { env: stack.env, stdio: ["ignore", "pipe", "pipe"] });
+          let out = "";
+          child.stdout!.on("data", (chunk) => (out += chunk));
+          child.stderr!.on("data", (chunk) => (out += chunk));
+          child.on("close", (code) => resolve({ code: code ?? 1, out }));
+        });
+      try {
+        assert.equal(stack.quiet("stop", "a/w1").code, 0);
+
+        // Control: the same VM, the same swap, started by Lima with no profile. It mounts the
+        // folder the link names, so a refusal below is the profile's, not the swap's timing.
+        fs.rmSync(haLog, { force: true });
+        const [control, swappedControl] = await Promise.all([
+          started(process.env.DESOLATE_LIMACTL ?? "limactl", ["--tty=false", "start", vm]),
+          swapWhenUp(),
+        ]);
+        assert.ok(swappedControl, "control: the host process came up, and the swap was made");
+        assert.equal(control.code, 0, control.out.slice(-1500));
+        const seen = stack.inVm(vm, ["bash", "-c", "cat /workspaces/the-macs-own.txt"], {
+          root: true,
+        });
+        assert.equal(
+          seen.stdout.trim(),
+          "the Mac's own",
+          "control: unconfined, the VM reads the folder the swapped share names",
+        );
+        spawnSync(process.env.DESOLATE_LIMACTL ?? "limactl", ["--tty=false", "stop", vm], {
+          env: stack.env,
+        });
+        restore();
+
+        // desolate's own start, under its profile: the VM process refuses the share.
+        fs.rmSync(haLog, { force: true });
+        const [refused, swapped] = await Promise.all([
+          started(path.join(REPO_ROOT, "release", "cli.sh"), ["start", "a/w1"]),
+          swapWhenUp(),
+        ]);
+        assert.ok(swapped, "the host process came up, and the swap was made");
+        assert.notEqual(refused.code, 0, "the VM must not start on a swapped share");
+        assert.match(refused.out, /a share of it changed after desolate checked it/);
+        assert.match(
+          fs.readFileSync(haLog, "utf8"),
+          /A directory sharing device configuration is invalid/,
+          "refused by Apple's VM process, as the profile has it",
+        );
+        assert.deepEqual(
+          fs.readdirSync(outside),
+          ["the-macs-own.txt"],
+          "nothing was written there",
+        );
+      } finally {
+        restore();
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+      // Put back as it was, it starts, with its work where it was.
+      const again = stack.quiet("start", "a/w1");
+      assert.equal(again.code, 0, again.stderr + again.stdout);
+      const back = asUser("a/w1", "cd /workspaces/acme/widgets && git log --oneline | wc -l");
+      assert.equal(back.stdout.trim(), "2", "the workspace's own commit is still there");
+    });
+
     it("T3 the one way out is the workspace's proxy, and it is attributed", () => {
       stack.step("out through the proxy");
       const forge = stack.env.DESOLATE_FORGE_SPEC!.replace(/^.*@/, "").replace(/:\d+$/, "");

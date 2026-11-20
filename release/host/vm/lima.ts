@@ -9,7 +9,9 @@
 //                     read-only mode, and root in the    (qemu-wrapper.sh).
 //                     guest remounts it rw (measured).
 //   vz    (macOS)     virtiofs; the host refuses the     Lima's host process under sandbox-exec,
-//                     write (measured on an M1).         allowed one loopback port: the link.
+//                     write (measured on an M1). The     allowed one loopback port: the link.
+//                     same profile lets it open only
+//                     its own shares (`opens`).
 //
 // desolate keeps its own Lima home under ~/.desolate, so it never touches a VM it did not
 // make, and refuses Lima's user-wide _config overrides, which could add a network.
@@ -344,18 +346,87 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     return text === "Running" ? "running" : text === "" ? "missing" : "stopped";
   };
 
-  /** The sandbox profile for a vz workspace's host process (decisions.md: measured on an M1).
-   *  Outbound: unix sockets except the Mac's resolver; this VM's ssh forward; its link. */
-  const profile = (m: Meta) =>
+  /** Where the Mac's people keep their files: a vz VM's host process opens nothing here but
+   *  what `opens` names. */
+  const PRIVATE = ["/Users", "/Volumes", "/System/Volumes/Data/Users"];
+  /** Under PRIVATE: files alone (`literal`), and folders with what is in them, read and read-write. */
+  type Opens = { files: string[]; read: string[]; write: string[] };
+  /** What a vz VM's host process may open under PRIVATE, read and read-write.
+   *
+   *  WHY. The root's user owns the folders a workspace or the git VM shares (shares.ts): it
+   *  could swap one for a symlink between desolate's check and the moment Apple's VM process
+   *  opens it, and the VM would mount whatever the link names, writable. Measured on the M1
+   *  (2026-11-20, Lima 2.3.0): a loop flipping a share between its folder and a link won 3 of
+   *  4 starts, and one swap just after Lima's own checks won every time; a VM so started read
+   *  and wrote a folder of the Mac's, or read Lima's private key (`_config/user`, which opens
+   *  root in every VM). Under this profile the VM process refuses the swapped share ("A
+   *  directory sharing device configuration is invalid", EPERM) and the VM does not start;
+   *  with no swap, it starts as before. The sandbox judges a path as it really is, so neither
+   *  a symlink nor /System/Volumes/Data gets around it (measured).
+   *
+   *  So: this VM's own Lima directory (its disks, logs and sockets, and its TMPDIR, where
+   *  Lima builds the cloud-init disk); Lima's home itself, to list; Lima's key and settings,
+   *  each file alone and never their folder; Lima's own install; and each share as it really
+   *  is now, read-only ones for reading. Not other VMs' directories: a share swapped to one
+   *  would hand this VM another's disk. */
+  const opens = (name: string, m: Meta): Opens => {
+    // Lima's own install: the binary, and what it reads beside it (templates, the guest agent).
+    const limactl = (() => {
+      if (LIMACTL.includes("/")) return fs.realpathSync(LIMACTL);
+      for (const dir of (process.env.PATH ?? "").split(":")) {
+        const candidate = path.join(dir, LIMACTL);
+        if (fs.existsSync(candidate)) return fs.realpathSync(candidate);
+      }
+      return LIMACTL;
+    })();
+    const prefix = path.dirname(path.dirname(limactl));
+    const real = (p: string) => fs.realpathSync(p);
+    return {
+      files: [
+        real(LIMA_HOME),
+        ...["user", "user.pub", "networks.yaml", "default.yaml", "override.yaml"].map((file) =>
+          path.join(real(LIMA_HOME), "_config", file),
+        ),
+        limactl,
+      ],
+      read: [
+        path.join(prefix, "share", "lima"),
+        path.join(prefix, "libexec", "lima"),
+        ...m.spec.shares.filter((s) => !s.writable).map((s) => real(s.host)),
+      ],
+      write: [
+        path.join(real(LIMA_HOME), name),
+        ...m.spec.shares.filter((s) => s.writable).map((s) => real(s.host)),
+      ],
+    };
+  };
+  /** A path in a sandbox profile's string. */
+  const sbString = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  /** The sandbox profile a vz VM's host process starts under, and keeps for its whole life
+   *  (decisions.md: measured on an M1). Files: only what `opens` names, under PRIVATE. A VM
+   *  with no egress, also: outbound, unix sockets except the Mac's resolver; this VM's ssh
+   *  forward; its link. */
+  const profile = (m: Meta, may: Opens) =>
     [
       "(version 1)",
       "(allow default)",
-      "(deny network-outbound)",
-      "(allow network-outbound (remote unix-socket))",
-      '(deny network-outbound (literal "/private/var/run/mDNSResponder"))',
-      '(deny network-outbound (literal "/var/run/mDNSResponder"))',
-      `(allow network-outbound (remote ip "localhost:${m.sshPort}"))`,
-      `(allow network-outbound (remote ip "localhost:${m.linkPort}"))`,
+      ...(m.spec.egress === "none"
+        ? [
+            "(deny network-outbound)",
+            "(allow network-outbound (remote unix-socket))",
+            '(deny network-outbound (literal "/private/var/run/mDNSResponder"))',
+            '(deny network-outbound (literal "/var/run/mDNSResponder"))',
+            `(allow network-outbound (remote ip "localhost:${m.sshPort}"))`,
+            `(allow network-outbound (remote ip "localhost:${m.linkPort}"))`,
+          ]
+        : []),
+      // (One operation name on both sides: a rule naming file-read-data outranks one naming
+      // file-read*, whatever their order, measured.)
+      `(deny file-read* file-write* ${PRIVATE.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
+      "(allow file-read-metadata)",
+      `(allow file-read* ${may.files.map((p) => `(literal ${sbString(p)})`).join(" ")})`,
+      `(allow file-read* ${may.read.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
+      `(allow file-read* file-write* ${may.write.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
     ].join("\n") + "\n";
 
   /** One argument for a remote shell, quoted so that it stays one argument. */
@@ -694,17 +765,21 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
           timeoutMs: 120_000,
         });
       const args = ["start", "--timeout", "30m", name];
-      if (kind === "vz" && cut) {
+      if (kind === "vz") {
         const file = path.join(LIMA_HOME, name, "confine.sb");
-        fs.writeFileSync(file, profile(m));
+        // After sharesPlain: each share is its own folder now, and the profile names it as it is.
+        fs.writeFileSync(file, profile(m, opens(name, m)));
+        // Lima builds the cloud-init disk in TMPDIR: this VM's own, inside what it may open.
+        const tmp = path.join(LIMA_HOME, name, "tmp");
+        fs.mkdirSync(tmp, { recursive: true });
         // The host process starts under the profile and keeps it for its whole life.
         const result = await run("sandbox-exec", ["-f", file, LIMACTL, "--tty=false", ...args], {
-          env: env(),
+          env: env({ TMPDIR: tmp }),
           timeoutMs: 2_400_000,
         });
         if (result.code !== 0)
           throw new Error(
-            `could not start ${name} confined: ${(result.stderr || result.stdout).trim().split("\n").slice(-4).join(" | ")}`,
+            `could not start ${name} confined: ${(result.stderr || result.stdout).trim().split("\n").slice(-4).join(" | ")}. If it says "A directory sharing device configuration is invalid", a share of it changed after desolate checked it: see desolate doctor, and ${path.join(LIMA_HOME, name, "ha.stderr.log")}`,
           );
         return sharesReady(name, m);
       }
@@ -1044,7 +1119,10 @@ declare namespace limaBackend {
   >;
 
   /** a VM with no egress starts under a profile that lets its host process reach two loopback
-   *  ports, its ssh and its link, and unix sockets other than the Mac's resolver: nothing else */
+   *  ports, its ssh and its link, and unix sockets other than the Mac's resolver; and open,
+   *  under /Users and /Volumes, only its own Lima directory, Lima's key and settings (each
+   *  file alone), Lima's install, and its shares as they really are, a read-only one for
+   *  reading: nothing else */
   export type Confined = Expect<
     Invoke<
       typeof confinement,
@@ -1054,14 +1132,41 @@ declare namespace limaBackend {
           name: "dsl-main-cut";
           role: "workspace";
           egress: "none";
-          shares: [];
+          shares: [
+            { host: "<home>/domains/acme/repos"; guest: "/workspaces"; writable: true },
+            {
+              host: "<home>/mirrors/acme/web.git";
+              guest: "/desolate/mirrors/acme/web.git";
+              writable: false;
+            },
+          ];
           sockets: [];
           labels: {};
         },
       ]
     >,
     "=",
-    '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n'
+    '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n(deny file-read* file-write* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))\n(allow file-read-metadata)\n(allow file-read* (literal "<home>/lima") (literal "<home>/lima/_config/user") (literal "<home>/lima/_config/user.pub") (literal "<home>/lima/_config/networks.yaml") (literal "<home>/lima/_config/default.yaml") (literal "<home>/lima/_config/override.yaml") (literal "<home>/nests-bin/limactl"))\n(allow file-read* (subpath "<home>/share/lima") (subpath "<home>/libexec/lima") (subpath "<home>/mirrors/acme/web.git"))\n(allow file-read* file-write* (subpath "<home>/lima/dsl-main-cut") (subpath "<home>/domains/acme/repos"))\n'
+  >;
+  /** a VM with open egress (the root) is confined in what it opens just the same, and nothing
+   *  more: its network is its own */
+  export type ConfinedFilesOnly = Expect<
+    Invoke<
+      typeof confinement,
+      [
+        backend: Vz,
+        spec: {
+          name: "dsl-main-root";
+          role: "root";
+          egress: "open";
+          shares: [{ host: "<home>/domains"; guest: "/desolate/domains"; writable: true }];
+          sockets: [];
+          labels: {};
+        },
+      ]
+    >,
+    "=",
+    '(version 1)\n(allow default)\n(deny file-read* file-write* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))\n(allow file-read-metadata)\n(allow file-read* (literal "<home>/lima") (literal "<home>/lima/_config/user") (literal "<home>/lima/_config/user.pub") (literal "<home>/lima/_config/networks.yaml") (literal "<home>/lima/_config/default.yaml") (literal "<home>/lima/_config/override.yaml") (literal "<home>/nests-bin/limactl"))\n(allow file-read* (subpath "<home>/share/lima") (subpath "<home>/libexec/lima"))\n(allow file-read* file-write* (subpath "<home>/lima/dsl-main-root") (subpath "<home>/domains"))\n'
   >;
 
   /** a VM is started only if desolate made it (its record is beside Lima's) */
