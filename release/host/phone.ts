@@ -22,6 +22,7 @@
 // Anything on this Mac can reach the loopback port and claim a Tailscale login. That is no
 // more than it can do already (the dashboard's own port is on loopback too): the token is the
 // key, here as there.
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createServer, request } from "node:http";
 import { connect } from "node:net";
@@ -486,18 +487,39 @@ declare namespace assignSlots {
 }
 
 const COOKIE_PAIR = /^\s*([^=;\s]+)=(.*)$/;
-const ours = (name: string) => /^desolate/i.test(name) || /^slot\d+__/.test(name);
+/** desolate's own cookies, and every dev server's renamed ones (`slot<n>__`: the names before
+ *  they were keyed by server, never passed on either). */
+const ours = (name: string) =>
+  /^desolate/i.test(name) || /^s[0-9a-f]{10}__/.test(name) || /^slot\d+__/.test(name);
 
-/** The Cookie header a dev server in `slot` is sent: none of desolate's, its own slot's
- *  under the names it set them with, another slot's not at all, and what a page's script set. */
-export const slotCookies = (header: string | undefined, slot: number): string | undefined => {
+/** The prefix a dev server's cookies are kept under on the tailnet: from the server itself (its
+ *  workspace's dev hostname, which names the domain and the workspace, and its port), never from
+ *  its slot. A slot is dealt to the next server when one stops, and dealt again whenever the
+ *  daemon restarts: keyed by slot, one server's login session went to whichever had the slot
+ *  next, in another workspace or another domain. */
+export const cookieTag = (devHost: string, port: number) =>
+  `s${createHash("sha256").update(`${devHost} ${port}`).digest("hex").slice(0, 10)}`;
+
+declare namespace cookieTag {
+  /** the same server, the same tag; another port, another */
+  export type Cases = Table<
+    typeof cookieTag,
+    [
+      [args: [devHost: "acme-w1-0a1b2c.localhost", port: 5173], expected: "sf650b90ea0"],
+      [args: [devHost: "acme-w1-0a1b2c.localhost", port: 8080], expected: "s9ce031d08c"],
+    ]
+  >;
+}
+
+/** The Cookie header a dev server is sent (`tag`: cookieTag of it): none of desolate's, its own
+ *  under the names it set them with, another server's not at all, and what a page's script set. */
+export const slotCookies = (header: string | undefined, tag: string): string | undefined => {
   const kept: string[] = [];
   for (const part of String(header ?? "").split(";")) {
     const pair = COOKIE_PAIR.exec(part);
     if (!pair) continue;
     const [, name, value] = pair as unknown as [string, string, string];
-    const own = new RegExp(`^slot${slot}__(.+)$`).exec(name);
-    if (own) kept.push(`${own[1]}=${value}`);
+    if (name.startsWith(`${tag}__`)) kept.push(`${name.slice(tag.length + 2)}=${value}`);
     else if (!ours(name)) kept.push(`${name}=${value}`);
   }
   return kept.length ? kept.join("; ") : undefined;
@@ -505,44 +527,62 @@ export const slotCookies = (header: string | undefined, slot: number): string | 
 
 declare namespace slotCookies {
   /** the dashboard's and the agents page's cookies never reach a dev server; another
-   *  slot's neither; its own come back under its own names */
+   *  server's neither, nor any under the old slot names; its own come back under its own names */
   export type Isolated = Expect<
     Invoke<
       typeof slotCookies,
       [
-        header: "desolate_ui_ab12=tok; desolate_agents_cd34=tok2; slot3__sid=mine; slot4__sid=theirs; theme=dark",
-        slot: 3,
+        header: "desolate_ui_ab12=tok; desolate_agents_cd34=tok2; sf650b90ea0__sid=mine; s9ce031d08c__sid=theirs; slot3__sid=old; theme=dark",
+        tag: "sf650b90ea0",
       ]
     >,
     "=",
     "sid=mine; theme=dark"
   >;
+  /** a server new to a slot gets none of the slot's last server's cookies */
+  export type NotTheSlots = Expect<
+    Invoke<typeof slotCookies, [header: "sf650b90ea0__sid=mine", tag: "s9ce031d08c"]>,
+    "=",
+    undefined
+  >;
   /** nothing left: no Cookie header at all */
   export type Nothing = Expect<
-    Invoke<typeof slotCookies, [header: "desolate_ui_ab12=tok", slot: 0]>,
+    Invoke<typeof slotCookies, [header: "desolate_ui_ab12=tok", tag: "sf650b90ea0"]>,
     "=",
     undefined
   >;
 }
 
-/** The Set-Cookie headers a dev server in `slot` may send back: each renamed for its slot,
- *  and none that would set one of desolate's (or another slot's). */
-export const slotSetCookies = (values: readonly string[] | undefined, slot: number): string[] =>
+/** The Set-Cookie headers a dev server may send back: each renamed for it, and HttpOnly, so no
+ *  other dev server's page script can read it (they share the tailnet name, so one cookie jar);
+ *  none that would set one of desolate's, or another server's. */
+export const slotSetCookies = (values: readonly string[] | undefined, tag: string): string[] =>
   (values ?? []).flatMap((value) => {
     const pair = COOKIE_PAIR.exec(value);
     if (!pair || ours(pair[1]!)) return [];
-    return [`slot${slot}__${value.trimStart()}`];
+    const renamed = `${tag}__${value.trimStart()}`;
+    return [/;\s*httponly\s*(;|$)/i.test(renamed) ? renamed : `${renamed}; HttpOnly`];
   });
 
 declare namespace slotSetCookies {
-  /** its own, renamed for its slot; one that would be desolate's, dropped */
+  /** its own, renamed for it and HttpOnly (once); desolate's, another server's, or an old slot
+   *  name, dropped */
   export type Renamed = Expect<
     Invoke<
       typeof slotSetCookies,
-      [values: ["sid=abc; Path=/; HttpOnly", "desolate_ui_ab12=x; Path=/", "slot1__sid=y"], slot: 2]
+      [
+        values: [
+          "sid=abc; Path=/; HttpOnly",
+          "theme=dark; Path=/",
+          "desolate_ui_ab12=x; Path=/",
+          "s9ce031d08c__sid=y",
+          "slot1__sid=z",
+        ],
+        tag: "sf650b90ea0",
+      ]
     >,
     "=",
-    ["slot2__sid=abc; Path=/; HttpOnly"]
+    ["sf650b90ea0__sid=abc; Path=/; HttpOnly", "sf650b90ea0__theme=dark; Path=/; HttpOnly"]
   >;
 }
 
@@ -598,7 +638,7 @@ export const serveSlots = (log: (line: string) => void, target: (slot: number) =
       passed.origin = devOrigin;
     if (typeof headers.referer === "string" && headers.referer.startsWith(slotOrigin))
       passed.referer = `${devOrigin}${headers.referer.slice(slotOrigin.length)}`;
-    const cookie = slotCookies(headers.cookie, slot);
+    const cookie = slotCookies(headers.cookie, cookieTag(to.devHost, to.port));
     if (cookie) passed.cookie = cookie;
     else delete passed.cookie;
     for (const name of Object.keys(passed))
@@ -622,7 +662,10 @@ export const serveSlots = (log: (line: string) => void, target: (slot: number) =
         },
         (answer) => {
           const headers = { ...answer.headers };
-          const set = slotSetCookies(answer.headers["set-cookie"], slot);
+          const set = slotSetCookies(
+            answer.headers["set-cookie"],
+            cookieTag(d.to.devHost, d.to.port),
+          );
           if (set.length) headers["set-cookie"] = set;
           else delete headers["set-cookie"];
           if (typeof headers.location === "string")

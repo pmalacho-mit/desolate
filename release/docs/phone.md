@@ -73,13 +73,21 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   reads every domain's data; the agents page is served by the Mac's own daemon, the root never
   sees what it is asked, and the dashboard's script, on another origin, cannot call it. (The
   approval page is the Mac's for the same reason.)
-- **Dev servers share one name on the tailnet, so desolate keeps their cookies apart.** A
-  browser sends a name's cookies to every port of it. So the dashboard's and the agents page's
-  cookies are never passed to a dev server, and a dev server cannot set them; the cookies a
-  server sets are renamed for its address and returned to it only. (A cookie a page's own
-  script sets goes to every dev server, as it would on any one host.) And the dashboard and
-  the agents page refuse any request another page starts, so a dev server's page cannot make
-  them do or read anything.
+- **Dev servers share one name on the tailnet, so desolate keeps their cookies apart, as far
+  as a proxy can.** A browser sends a name's cookies to every port of it.
+  - The dashboard's and the agents page's cookies are never passed to a dev server, and a dev
+    server cannot set them.
+  - The cookies a server sets are renamed for that server (its workspace and port, never the
+    address it happens to have now) and returned to it only, so a session cookie never reaches
+    the next server given its address. They are made `HttpOnly`, so no other dev server's page
+    can read them. That also hides them from the server's own page: an app whose script reads a
+    cookie its server set (Django's `csrftoken`, Angular's `XSRF-TOKEN`) breaks on the phone.
+  - **What a proxy cannot keep apart:** a cookie a page's own script sets goes to every dev
+    server, and any dev server's page can read it, change it, or set one under another app's
+    name. On the Mac each workspace has a name of its own (`*.localhost`), so this happens only
+    on the phone, and across domains. Open a dev server you do not trust in a private tab.
+  - The dashboard and the agents page refuse any request another page starts, so a dev
+    server's page cannot make them do or read anything.
 - **What the agents page shows is drawn as a terminal draws it,** through the same filter as
   `desolate agent attach`: an agent's output is never put on the page as HTML.
 
