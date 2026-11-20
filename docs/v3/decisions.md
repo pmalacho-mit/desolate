@@ -1345,3 +1345,66 @@ nodes only, the dashboard's POST routes behind the cookie, Host, Sec-Fetch-Site 
 header checks, per-domain stats and events (each domain sees only its own), and
 `git-urls.ts` reaching only the domain's own mirrors.
 
+
+## The audit of 2026-11-20: the whole stack, by six reviewers with one area each (fixed, and what is not)
+
+Six reviewers, each given the threat model and one area only (the push path; what the root
+takes in; what a workspace or the root can make the Mac do; the network and secrets; the
+dashboard and its sign-in; the git VM and the editors), none told what another found. Each
+finding below was checked against the code before it was fixed; the ones marked "not fixed"
+are left for the owner, with what would close them.
+
+| Finding | Severity | Fix |
+|---|---|---|
+| The root's ordinary user could replace a domain's `repos/` (or a cache, an outbox, a mirror) with a symlink to any folder of the Mac's: the next workspace started mounted it writable, in a VM where anything runs | high | `host/vm/shares.ts`: every share under desolate's home is a real directory reached through no symlink, asked before a VM is made and before every start (Lima resolves a share at each start). T1 `shares.test.ts`, with a control. Not closed: the time between this check and Lima's own look (below) |
+| `desolate push --expect <commit>`: the host signed whatever approval text the root prepared, never comparing it with what the person typed: a root user taken over could name another commit under the same branch | medium | `host/push.ts` `approvalDiffers`: the repository and branch typed, and the commit named, or nothing is signed |
+| The terminal filter passed a C1 control right after ESC (`ESC C2 9D` is OSC): everything it drops came through behind it, for `agent attach`, `exec` and the phone's agents page | medium | to the state that reads a C1, as in text; in-source case |
+| The git terminal's output was not filtered: concealed text (SGR 8) in a commit hid a line of a diff from the person reading it | medium | through the same filter as an agent's terminal |
+| A link to the git page with `domain` and `branch` checked that branch out in the person's clone with no click, from any page | medium | the page says what it would do and waits for a click |
+| `secret import --in-place` wrote a temporary file at a guessable name beside the .env, through a symlink a workspace could plant, to a file of the Mac's; a symlinked .env was read and written back | medium | a new random name, `O_EXCL | O_NOFOLLOW`; a symlinked source refused |
+| A program in a VM writing without end grew a string in the host's daemon until V8 refused it, and the throw stopped the daemon | medium | `run()` keeps at most 192 MiB of each stream, then stops the program and says so |
+| The pages port held by another program on 127.0.0.1 (not only [::1]) did not retire the tokens | medium | it does, as for [::1] |
+| Under an allowlist, the root proxy checked the CONNECT name only: a workspace could name an allowed CDN host and then speak TLS (or HTTP) to another site the CDN serves | medium | the first bytes' name (TLS server name, or Host) must be the host checked. Not closed: a Host inside TLS that differs from its server name (domain fronting proper), which only a CDN can refuse while TLS stays end to end |
+| The secrets proxy read any body whole, without a limit; the proxies' audit logs grew without end, and a full disk made the next audit line throw and stop a proxy | medium | bodies over 256 MiB refused (a larger download through a secret's host now fails, closed); logs rotated at 64 MiB; an audit write never throws |
+
+**Not fixed: for the owner, with what would close each.**
+
+- **Shares the root can rename.** The share check above runs, then Lima looks at the path
+  again when it starts the VM: a root user that swaps the folder for a link in between still
+  wins. Closing it means the root cannot rename what a workspace mounts: per-domain shares
+  into the root (a mount point cannot be renamed from inside the guest; a new domain then
+  restarts the root), or the workspace shares kept out of the tree the root shares writable.
+- **Cookies are the tokens, and cookies ignore ports.** Any program on the Mac that listens on
+  any loopback port, given a browser that visits `desolate-approve.localhost:<its port>` (any
+  web page can send it there), is sent all three pages' cookies, and with them can approve a
+  push waiting. While the daemon is down, any program can take the pages port itself and be
+  sent them. Closing it: a credential bound to the page's origin (port included), such as a
+  key the page keeps in its own storage and sends as a header, so the cookie alone is not
+  enough; or pages on a Unix socket only desolate can bind.
+- **Secrets with no header named are substituted everywhere, the body included.** A workspace
+  can then have the service itself hand the value back changed (a model asked to spell it
+  backwards; an API that fetches a URL the workspace names, with the key in it), past the
+  scrubbing, which knows the value only as it is. Closing it: no secret substituted in a
+  request body unless the person says so for that secret; the import presets naming each
+  service's header (Gemini's `x-goog-api-key`, Tavily's `Authorization`).
+- **What a push carries beyond its commit is not in its approval.** The LFS objects and the
+  pack the pusher sends come from the root's request: a root user taken over could add objects
+  to an approved push (they are uploaded before the branch's compare-and-swap). Closing it: the
+  reviewer computes the objects and the oids, the approval covers them, the pusher sends only
+  those, after the swap. Also: the approval shows the net change, while every commit between
+  is pushed (content added then removed is still in the history), and `desolate push` replaces
+  a remote branch that does not build on the commit with no flag asked for it.
+- **Tokens in a command line.** `desolate approve --web --open`, `git --open` and
+  `editor --open` pass the page's address, its token in it, to `open`, whose arguments any
+  user of the Mac can read in `ps`. Closing it: open them through a one-time sign-in code, as
+  `desolate ui --open` does, after checking how each browser marks such a navigation.
+- **The root's availability.** One domain can keep rootd busy for hours (a fetch whose helper
+  outlives its timeout; many bundles; a million tiny blobs, each a process). LFS objects are
+  copied before they are checked, and kept when nothing references them. A domain can name
+  another domain's commit (by its id) in its own branch in a shared clone. None of these
+  pushes anything; each makes the stack slower or mislabels whose work it is.
+- **Smaller ones:** a workspace listening on a port the person's own Mac service holds on the
+  wildcard address shadows it on loopback; an editor's name outlives its workspace (a service
+  worker left by a compromised one could serve the next workspace of the same name); a slot's
+  or editor's page in a popup over the approval page could take a click; wildcard secret hosts
+  accept public suffixes (`*.github.io`).

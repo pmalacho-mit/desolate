@@ -83,6 +83,13 @@ export const terminalFilter = (): TerminalFilter => {
         } else {
           out.push(ESC);
           if (byte === ESC) continue;
+          // A C1 control after ESC is still one (C2 9D is OSC, C2 9B CSI, C2 90 DCS): it goes
+          // to the state that reads it, as in text. Passed raw, everything the filter drops
+          // came through behind it (audit, 2026-11-20).
+          if (byte === 0xc2) {
+            state = "c2";
+            continue;
+          }
           out.push(byte);
           state = "text";
         }
@@ -161,6 +168,11 @@ declare namespace terminalFilter {
       [
         args: [make: typeof terminalFilter, text: "a\u001b]52;c;eA==\u0007b\u009dc"],
         expected: "abc",
+      ],
+      // A C1 control right after ESC is still dropped (it once passed: audit, 2026-11-20).
+      [
+        args: [make: typeof terminalFilter, text: "a\u001b\u009d52;c;eA==\u0007b\u001b\u009b8mc"],
+        expected: "a\u001b52;c;eA==\u0007b\u001b8mc",
       ],
     ]
   >;
