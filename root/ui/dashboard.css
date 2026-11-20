@@ -122,7 +122,9 @@ ul.rows { container-type: inline-size; }
 .what .line, .checkout { font-size: 13px; color: var(--soft); overflow-wrap: anywhere; }
 .what pre { margin: 0; padding: var(--s2) 10px; background: var(--raise); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
 /* An offer: "Offered" and "from" in one column, so the names after them line up. */
-.what.pairs { grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s2); }
+/* One label column for every row of a list (Issue, Offered, Asks, Stuck, Outlived, Failed), so
+   the names start at the same place on every row, not at each row's own longest label. */
+.what.pairs { grid-template-columns: minmax(4.75em, max-content) minmax(0, 1fr); column-gap: var(--s2); }
 .what.pairs > .label { justify-self: end; align-self: start; line-height: var(--row); color: var(--soft); font-size: 13px; font-weight: 400; }
 .what.pairs > .label.name { color: var(--ink); font-weight: 600; font-size: 13.5px; }
 /* What a workspace said of itself: its colour, as a dot, before its words. */
