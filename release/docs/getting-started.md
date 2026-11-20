@@ -352,7 +352,24 @@ git push origin you--app/feature/greet-by-name:refs/heads/feature/greet-by-name
 
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
-it; one click, and the root pushes exactly that commit.
+it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes
+is the one desolate's reviewer made of its commits, and what you approve names it.
+
+What the approval page shows, and the two choices it may add:
+
+- **Files changed in between.** The file list is the net change. Each commit is pushed,
+  though, so a file one commit added and a later one took out again is in the history. The
+  page lists those files, and **Show each commit's diff** shows every commit on its own.
+- **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
+  the last commit's files, on what the branch builds on, with a message listing every
+  commit. Nothing that was in between reaches the remote. The workspace's branch keeps its
+  own commits: reset it to the remote's (`git reset --hard origin/<branch>`) before working
+  on, or its next push replaces the remote's.
+  From a terminal: `desolate push ... --squash`, or `desolate approve --squash`.
+- **Replacing a branch.** A push that does not build on the remote's branch replaces it, and
+  drops the commits only the remote has. The page says so in red, and approves it only once
+  you type the branch's name. `desolate push` needs `--replace` for it, and the terminal asks
+  you to type `replace <branch>`.
 
 ![A push from the git terminal, waiting for approval beside it](assets/git-approve.png)
 

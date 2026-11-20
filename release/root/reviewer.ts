@@ -149,44 +149,40 @@ const env = (extra: Record<string, string> = {}) => ({
   GIT_ATTR_NOSYSTEM: "1",
   ...extra,
 });
+/** The settings every git run here starts with: nothing an earlier request could have left in
+ *  the repository (hooks, attributes, a commit graph, a pack index over packs) is trusted. */
+const hardened = (dir: string) => [
+  "-c",
+  `safe.directory=${dir}`,
+  "-c",
+  "core.hooksPath=/dev/null",
+  "-c",
+  "core.attributesFile=/dev/null",
+  "-c",
+  "core.commitGraph=false",
+  "-c",
+  "core.multiPackIndex=false",
+  "-c",
+  "fetch.writeCommitGraph=false",
+  "-c",
+  "gc.auto=0",
+  "-c",
+  "maintenance.auto=false",
+];
 const gitIn = (
   dir: string,
   args: string[],
   options: { input?: string; timeoutMs?: number; ssh?: string; env?: Record<string, string> } = {},
 ) =>
-  run(
-    "git",
-    [
-      "--git-dir",
-      dir,
-      "-c",
-      `safe.directory=${dir}`,
-      "-c",
-      "core.hooksPath=/dev/null",
-      "-c",
-      "core.attributesFile=/dev/null",
-      "-c",
-      "core.commitGraph=false",
-      "-c",
-      "core.multiPackIndex=false",
-      "-c",
-      "fetch.writeCommitGraph=false",
-      "-c",
-      "gc.auto=0",
-      "-c",
-      "maintenance.auto=false",
-      ...args,
-    ],
-    {
-      env: env({
-        GIT_DIR: dir,
-        ...(options.ssh ? { GIT_SSH_COMMAND: options.ssh } : {}),
-        ...options.env,
-      }),
-      input: options.input,
-      timeoutMs: options.timeoutMs ?? 300_000,
-    },
-  );
+  run("git", ["--git-dir", dir, ...hardened(dir), ...args], {
+    env: env({
+      GIT_DIR: dir,
+      ...(options.ssh ? { GIT_SSH_COMMAND: options.ssh } : {}),
+      ...options.env,
+    }),
+    input: options.input,
+    timeoutMs: options.timeoutMs ?? 300_000,
+  });
 const gitOk = async (dir: string, args: string[], options: Parameters<typeof gitIn>[2] = {}) => {
   const result = await gitIn(dir, args, options);
   if (result.code !== 0)
@@ -422,7 +418,7 @@ const has = async (dir: string, id: string) =>
 /** A git command's whole output as bytes (a blob's content is not always text). */
 const gitBytes = (dir: string, args: string[], input: string): Promise<Buffer | null> =>
   new Promise((resolve) => {
-    const child = spawn("git", ["--git-dir", dir, "-c", `safe.directory=${dir}`, ...args], {
+    const child = spawn("git", ["--git-dir", dir, ...hardened(dir), ...args], {
       env: env({ GIT_DIR: dir }),
       stdio: ["pipe", "pipe", "ignore"],
     });
@@ -507,8 +503,7 @@ const prepare = async (
       [
         "--git-dir",
         dir,
-        "-c",
-        `safe.directory=${dir}`,
+        ...hardened(dir),
         "pack-objects",
         "--stdout",
         "--revs",

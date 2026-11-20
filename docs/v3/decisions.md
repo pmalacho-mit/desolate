@@ -1413,13 +1413,32 @@ are left for the owner, with what would close them.
   scrubbing, which knows the value only as it is. Closing it: no secret substituted in a
   request body unless the person says so for that secret; the import presets naming each
   service's header (Gemini's `x-goog-api-key`, Tavily's `Authorization`).
-- **What a push carries beyond its commit is not in its approval.** The LFS objects and the
-  pack the pusher sends come from the root's request: a root user taken over could add objects
-  to an approved push (they are uploaded before the branch's compare-and-swap). Closing it: the
-  reviewer computes the objects and the oids, the approval covers them, the pusher sends only
-  those, after the swap. Also: the approval shows the net change, while every commit between
-  is pushed (content added then removed is still in the history), and `desolate push` replaces
-  a remote branch that does not build on the commit with no flag asked for it.
+- **What a push carries beyond its commit is not in its approval: closed the same day (#165).**
+  The LFS objects and the pack the pusher sent came from the root's request: a root user
+  taken over could add objects to an approved push, uploaded under the write key. Now the
+  reviewer makes the pack (`root/reviewer.ts`, `prepare`: the objects the commit has that the
+  remote's branches do not) and keeps it, and lists the LFS objects its new blobs point to.
+  The HOST puts the pack's sha256 and the LFS ids' digest in the text the person signs
+  (`shared/approval.ts`, v3: the root's user writes neither). The pusher forwards the pack
+  holding back its last 32 bytes, its checksum among them, until the whole pack hashes to the
+  approved one: a pack that does not, it cuts short, and git's receive-pack keeps nothing of
+  a pack that does not end (T2 04: the root's user's own pack, the approved commit and an
+  object of its own, leaves the branch, the object store and the quarantine as they were,
+  beside a control with the reviewer's pack that lands). It uploads an LFS object only if it
+  is on the approved list. Left open on purpose: the LFS objects still go up before the
+  branch's swap, as they must (the remote never has a pointer without its object), so a push
+  the forge then refuses leaves approved objects there, and nothing else.
+  The same change closes the other two: the approval page lists the files changed in a
+  commit but not in the net change, shows each commit's diff, and offers to push the commits
+  squashed into one (the reviewer's commit: the last commit's tree, on where the branch
+  leaves the remote's history, with the last commit's author and dates, so the same push
+  always squashes to the same commit, which the approval names, `squashes:` the reviewed
+  one). And a push that replaces the remote's branch is signed only once the person
+  confirms the replace apart from Approve: the branch's name typed on the page (the host
+  refuses the click without it), `--replace` for `desolate push`, `replace <branch>` typed at
+  the terminal. The keyring files a signed text only if it answers its own challenge: the
+  same repository, branch, onto and nonce, and the challenge's commit, or a commit that
+  squashes it. A push the reviewer cannot describe can no longer be approved at all.
 - **Tokens in a command line.** `desolate approve --web --open`, `git --open` and
   `editor --open` pass the page's address, its token in it, to `open`, whose arguments any
   user of the Mac can read in `ps`. Closing it: open them through a one-time sign-in code, as

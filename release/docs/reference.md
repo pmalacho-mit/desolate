@@ -15,6 +15,22 @@ hostile code on your Mac (see [the one rule](../README.md#the-one-rule-you-keep)
 behind Touch ID; that path is written and has never been run. `desolate approve --selftest`
 checks whichever you have without pushing anything.
 
+**What you approve is everything the push sends.** The text you sign names the repository,
+the branch, the commit and what the remote's branch is now, and also what desolate's
+reviewer says the push sends: the sha256 of the pack it made of the commits (the objects the
+commit has that the remote's branches do not), and the LFS objects those commits point to.
+The pusher sends that pack and those objects, and no other: a pack that does not hash to the
+approved one is cut short before its end, and the forge takes nothing of it. A push the
+reviewer cannot describe cannot be approved. Two choices go in the same text:
+- **Squashed into one commit** (`desolate push ... --squash`, `desolate approve --squash`,
+  or the page's second button): the reviewer's commit with the last commit's files, on what
+  the branch builds on, so nothing a commit in between held reaches the remote's history.
+  The page lists files a commit changed and a later one changed back, which the net change
+  does not show, and shows each commit's own diff.
+- **Replacing the remote's branch**, when the commit does not build on it: `desolate push`
+  refuses it without `--replace`, the terminal asks you to type `replace <branch>`, and the
+  page approves it only after you type the branch's name.
+
 **Use Chrome or Firefox for desolate's pages** (the dashboard, the approval page, the git
 terminal, the editors): they are at names under `localhost`, which those browsers resolve
 themselves. Safari asks macOS, which resolves `localhost` alone, and says it cannot find
