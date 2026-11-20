@@ -5,7 +5,7 @@
 // change <= 1 s later, a click acknowledged <= 100 ms later.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -22,12 +22,20 @@ const HOST = "desolate.localhost";
 /** The dashboard's address from `desolate ui`, and the cookie a browser gets for it. */
 let token = "";
 let cookie = "";
+/** The page key (shared/page-key.ts) the dashboard's page keeps and sends beside the cookie. */
+let key = "";
 type Answer = { status: number; headers: string; body: string; ms: number };
 /** One request to the host's loopback, as a browser at the dashboard would send it. */
 const http = (
   method: string,
   pathAndQuery: string,
-  options: { host?: string; headers?: string[]; body?: unknown; cookie?: string | null } = {},
+  options: {
+    host?: string;
+    headers?: string[];
+    body?: unknown;
+    cookie?: string | null;
+    key?: string | null;
+  } = {},
 ): Promise<Answer> =>
   new Promise((resolve) => {
     const started = performance.now();
@@ -42,6 +50,10 @@ const http = (
           `Host: ${options.host ?? HOST}:${port}`,
           ...((options.cookie === undefined ? cookie : options.cookie)
             ? [`Cookie: ${options.cookie ?? cookie}`]
+            : []),
+          // The page's key goes with the page's own cookie, as its script sends it.
+          ...((options.key === undefined ? (options.cookie === undefined ? key : "") : options.key)
+            ? [`X-Desolate-Key: ${options.key ?? key}`]
             : []),
           ...(options.headers ?? []),
           ...(payload
@@ -166,7 +178,11 @@ describe("T2 section 4.8: the root UI", () => {
     port = Number(address.port);
     token = address.searchParams.get("tkn") ?? "";
     // What the browser is given in exchange for the address (checked in a test below).
-    cookie = `desolate_ui_${createHash("sha256").update(token).digest("hex").slice(0, 12)}=${token}`;
+    // Both from the token, one way (shared/page-key.ts): the cookie is not the token.
+    const derived = (purpose: string) =>
+      createHmac("sha256", Buffer.from(token, "hex")).update(purpose).digest("hex");
+    cookie = `desolate_ui_${createHash("sha256").update(token).digest("hex").slice(0, 12)}=${derived("desolate page cookie")}`;
+    key = derived("desolate page key");
   });
   after(() => stack.destroy());
 
@@ -282,17 +298,25 @@ describe("T2 section 4.8: the root UI", () => {
     );
     // The address `desolate ui` prints is exchanged for a cookie the page cannot read, sent
     // to this name only and never on a request another site starts, and it leaves the bar.
+    // And a page of this origin's own, which keeps the page's key and goes on to the page.
     const opened = await http("GET", `/?tkn=${token}&once`, { cookie: null });
-    assert.equal(opened.status, 303);
-    assert.match(opened.headers, /\r\nlocation: \/\?once\r\n/i);
+    assert.equal(opened.status, 200);
     assert.match(
       opened.headers,
-      new RegExp(
-        `\\r\\nset-cookie: ${cookie.replace(/=.*/, "")}=${token}; HttpOnly; SameSite=Strict; Path=/\\r\\n`,
-        "i",
-      ),
+      new RegExp(`\\r\\nset-cookie: ${cookie}; HttpOnly; SameSite=Strict; Path=/\\r\\n`, "i"),
     );
-    // Control: with it, the state is there.
+    assert.match(opened.body, new RegExp(`<meta name="desolate-key" content="${key}">`));
+    assert.match(opened.body, /<meta name="desolate-next" content="\/\?once">/);
+    // The cookie alone (what a program on another port of this name is sent): the page and
+    // its scripts, which hold nothing, and nothing else.
+    assert.equal((await http("GET", "/", { key: null })).status, 200, "the page, by the cookie");
+    for (const target of ["/state", "/events", "/diff?domain=web&repo=acme%2Fapp&branch=x"])
+      assert.equal(
+        (await http("GET", target, { key: null })).status,
+        401,
+        `${target}, the cookie alone`,
+      );
+    // Control: with both, the state is there.
     assert.equal((await http("GET", "/state")).status, 200);
   });
 
@@ -311,33 +335,35 @@ describe("T2 section 4.8: the root UI", () => {
         cookie: null,
         headers: navigate(site),
       });
-      const location = /\r\nlocation: (\S+)\r\n/i.exec(answer.headers)?.[1];
-      return { answer, next: location ? new URL(location) : undefined };
+      // Where a sign-in sends the browser on: its page's (shared/page-key.ts).
+      const location = /<meta name="desolate-next" content="([^"]+)">/.exec(answer.body)?.[1];
+      return { answer, next: location ? new URL(location, `http://${url.host}`) : undefined };
     };
     // Another site cannot start the chain (the command opens it, as no site's).
     assert.equal((await hop(link, "cross-site")).answer.status, 403, "the first link, from a site");
     const approve = await hop(link, "none");
-    assert.equal(approve.answer.status, 303);
+    assert.equal(approve.answer.status, 200);
     assert.match(
       approve.answer.headers,
-      /\r\nset-cookie: desolate_approve_[0-9a-f]{12}=[0-9a-f]{48}; HttpOnly; SameSite=Strict; Path=\/\r\n/i,
+      /\r\nset-cookie: desolate_approve_[0-9a-f]{12}=[0-9a-f]{64}; HttpOnly; SameSite=Strict; Path=\/\r\n/i,
     );
     assert.equal(approve.next?.hostname, "desolate-git.localhost");
     const git = await hop(approve.next!, "cross-site");
-    assert.equal(git.answer.status, 303);
+    assert.equal(git.answer.status, 200);
     assert.match(
       git.answer.headers,
-      /\r\nset-cookie: desolate_git_[0-9a-f]{12}=[0-9a-f]{48}; HttpOnly; SameSite=Strict; Path=\/\r\n/i,
+      /\r\nset-cookie: desolate_git_[0-9a-f]{12}=[0-9a-f]{64}; HttpOnly; SameSite=Strict; Path=\/\r\n/i,
     );
     assert.equal(git.next?.hostname, HOST);
-    // The dashboard's: the cookie, and a page that goes on to the dashboard by itself.
+    // The dashboard's: the cookie, and a page that keeps its key and goes on to the dashboard.
     const dashboard = await hop(git.next!, "cross-site");
     assert.equal(dashboard.answer.status, 200);
     assert.match(
       dashboard.answer.headers,
       new RegExp(`\\r\\nset-cookie: ${cookie}; HttpOnly; SameSite=Strict; Path=/\\r\\n`, "i"),
     );
-    assert.match(dashboard.answer.body, /<meta http-equiv="refresh" content="0; url=\/">/);
+    assert.match(dashboard.answer.body, new RegExp(`<meta name="desolate-key" content="${key}">`));
+    assert.match(dashboard.answer.body, /<meta name="desolate-next" content="\/">/);
     // Each link once: the same three again get nothing.
     for (const [url, site] of [
       [link, "none"],

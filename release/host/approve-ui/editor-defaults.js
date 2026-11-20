@@ -39,7 +39,7 @@ $("autosave").addEventListener("change", () => fromChoice(AUTOSAVE, $("autosave"
 $("json").addEventListener("input", fromJson);
 const save = async (settings) => {
   try {
-    const answer = await fetch("/editor-defaults/set", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ settings }), credentials: "same-origin" });
+    const answer = await fetch("/editor-defaults/set", { method: "POST", headers: { "content-type": "application/json", ...window.desolateKey.headers }, body: JSON.stringify({ settings }), credentials: "same-origin" });
     const done = await answer.json().catch(() => ({}));
     if (!answer.ok) throw new Error(done.error || `HTTP ${answer.status}`);
     show(done.settings);
@@ -50,7 +50,7 @@ $("save").addEventListener("click", () => { try { save(parsed()); } catch (error
 $("reset").addEventListener("click", () => save({ [AUTOSAVE]: "off" }));
 (async () => {
   try {
-    const answer = await fetch("/editor-defaults/get", { credentials: "same-origin" });
+    const answer = await fetch("/editor-defaults/get", { credentials: "same-origin", headers: window.desolateKey.headers });
     const body = await answer.json().catch(() => ({}));
     if (answer.status === 401) { say("This browser has not opened the approval page's own address yet. On the Mac, run desolate approve --web --open once: it gives this browser the cookie this page needs too. Then reload this page."); return; }
     if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);

@@ -105,7 +105,7 @@ const act = async (key, kind, args) => {
   busy.add(key);
   render();
   try {
-    const response = await fetch("/action", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1" }, body: JSON.stringify({ kind, args }) });
+    const response = await fetch("/action", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1", ...window.desolateKey.headers }, body: JSON.stringify({ kind, args }) });
     if (!response.ok) alertLine((await response.json()).error || "the dashboard could not do that");
   } catch (error) {
     alertLine(String(error));
@@ -303,7 +303,7 @@ const loadDiff = async () => {
   render();
   let answer;
   try {
-    const response = await fetch(`/diff?${query(offer, against)}${reviewing.whitespace === "ignore" ? "&whitespace=ignore" : ""}${pick}`);
+    const response = await fetch(`/diff?${query(offer, against)}${reviewing.whitespace === "ignore" ? "&whitespace=ignore" : ""}${pick}`, { headers: window.desolateKey.headers });
     answer = await response.json();
     if (!response.ok) answer = { error: answer.error || `HTTP ${response.status}` };
   } catch (error) {
@@ -331,7 +331,7 @@ const openReview = async (offer, against = "origin") => {
   reviewing = { offer, against, fetchedAt, loading: true };
   render();
   try {
-    const response = await fetch(`/review?${query(offer, against)}`);
+    const response = await fetch(`/review?${query(offer, against)}`, { headers: window.desolateKey.headers });
     reviewing = { offer, against, fetchedAt, review: await response.json() };
   } catch (error) {
     reviewing = { offer, against, fetchedAt, review: { error: String(error) } };
@@ -346,11 +346,11 @@ const openReview = async (offer, against = "origin") => {
 // form fields, and the preview is built as elements (shared/ui/markdown.js), never as HTML.
 let editing = null; // { id, element, parts }
 const dismissOffer = async (o) => {
-  const response = await fetch("/offer", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1" }, body: JSON.stringify({ domain: o.domain, repo: o.repo, branch: o.branch, do: "dismiss" }) });
+  const response = await fetch("/offer", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1", ...window.desolateKey.headers }, body: JSON.stringify({ domain: o.domain, repo: o.repo, branch: o.branch, do: "dismiss" }) });
   if (!response.ok) alert(`Not dismissed: ${(await response.json().catch(() => ({}))).error || `HTTP ${response.status}`}`);
 };
 const issueCall = async (id, what, fields) => {
-  const response = await fetch("/issue", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1" }, body: JSON.stringify({ id, do: what, ...fields }) });
+  const response = await fetch("/issue", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1", ...window.desolateKey.headers }, body: JSON.stringify({ id, do: what, ...fields }) });
   const answer = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(answer.error || `HTTP ${response.status}`);
   return answer;
@@ -973,7 +973,7 @@ const arrived = (now) => {
   if (offer) { pending = false; openReview(offer); }
 };
 const listen = () => {
-  const events = new EventSource("/events");
+  const events = new EventSource(`/events?${window.desolateKey.query}`);
   events.onmessage = (event) => arrived(JSON.parse(event.data));
   events.onerror = () => { events.close(); setTimeout(listen, 1500); };
 };
@@ -1015,5 +1015,5 @@ document.getElementById("new-domain-open").addEventListener("click", () => (newD
 
 // `?once`: the state as it is now, drawn once, with no stream left open. For a screenshot
 // or a printed page; the dashboard itself always listens.
-if (asked.has("once")) fetch("/state").then((response) => response.json()).then(arrived);
+if (asked.has("once")) fetch("/state", { headers: window.desolateKey.headers }).then((response) => response.json()).then(arrived);
 else listen();

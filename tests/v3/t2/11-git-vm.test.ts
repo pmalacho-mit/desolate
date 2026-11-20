@@ -25,6 +25,8 @@ const forgeRefs = (repo: string) =>
 /** HTTP to one of the host daemon's pages, by its name, as the browser would send it. */
 const client = (name: string, port: number) => {
   let cookie = "";
+  /** The page key its sign-in page carries (shared/page-key.ts), sent beside the cookie. */
+  let key = "";
   const call = (
     method: string,
     url: string,
@@ -43,7 +45,11 @@ const client = (name: string, port: number) => {
           port,
           method,
           path: url,
-          headers: { host: `${name}:${port}`, ...(cookie ? { cookie } : {}), ...headers },
+          headers: {
+            host: `${name}:${port}`,
+            ...(cookie ? { cookie, "x-desolate-key": key } : {}),
+            ...headers,
+          },
         },
         (res) => {
           let text = "";
@@ -68,8 +74,9 @@ const client = (name: string, port: number) => {
     login: async (address: string) => {
       const at = new URL(address);
       const answer = await call("GET", at.pathname + at.search);
-      assert.equal(answer.status, 303);
+      assert.equal(answer.status, 200);
       cookie = String(answer.headers["set-cookie"]).split(";")[0]!;
+      key = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(answer.body)![1]!;
     },
     get: (url: string, untilMs?: number) =>
       call("GET", url, { "sec-fetch-site": "same-origin" }, undefined, untilMs),

@@ -1387,13 +1387,20 @@ are left for the owner, with what would close them.
   directory, beside a control (the same swap, Lima unconfined, reads the Mac's folder). Not
   covered: the qemu backend (Linux), and `sandbox-exec` is deprecated by Apple, though it
   ships (macOS 14.5 here); doctor says so if it ever stops working.
-- **Cookies are the tokens, and cookies ignore ports.** Any program on the Mac that listens on
-  any loopback port, given a browser that visits `desolate-approve.localhost:<its port>` (any
-  web page can send it there), is sent all three pages' cookies, and with them can approve a
-  push waiting. While the daemon is down, any program can take the pages port itself and be
-  sent them. Closing it: a credential bound to the page's origin (port included), such as a
-  key the page keeps in its own storage and sends as a header, so the cookie alone is not
-  enough; or pages on a Unix socket only desolate can bind.
+- **Cookies are the tokens, and cookies ignore ports: closed the same day, by a page key.** A
+  browser sends a name's cookies to every port of that name: any program on the Mac that
+  listens on a loopback port, given a browser that visits `desolate-approve.localhost:<its
+  port>` (any web page can send it there), was sent all three pages' cookies, and with them
+  could approve a push waiting. Now each page's credential is two parts
+  (`shared/page-key.ts`): the cookie, and a key the page's own script keeps in its origin's
+  storage (scheme, name and port) and sends as `x-desolate-key`, which a page at another port
+  cannot read. Both are derived one way from the page's token: the cookie is no longer the
+  token, so a cookie that leaks cannot sign in (`?tkn=` takes only the token) or be turned into
+  the key. A sign-in answers with a page of the origin's own that keeps the key and goes on.
+  T1 and T2: the cookie alone, from the page's own origin, opens nothing; with the key, it
+  does. Still open: a program that holds a page's own port while the daemon is not running is
+  that origin, and could serve a script that reads the key; and an older browser tab needs
+  `desolate ui --open` once (its cookie was the token).
 - **Secrets with no header named are substituted everywhere, the body included.** A workspace
   can then have the service itself hand the value back changed (a model asked to spell it
   backwards; an API that fetches a URL the workspace names, with the key in it), past the

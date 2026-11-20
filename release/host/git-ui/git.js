@@ -20,7 +20,7 @@ term.loadAddon(fit);
 term.open(document.getElementById("terminal"));
 fit.fit();
 
-const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body), credentials: "same-origin" });
+const post = (url, body) => fetch(url, { method: "POST", headers: { "content-type": "application/json", ...window.desolateKey.headers }, body: JSON.stringify(body), credentials: "same-origin" });
 const b64 = (bytes) => { let s = ""; for (const b of bytes) s += String.fromCharCode(b); return btoa(s); };
 const unb64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
@@ -57,7 +57,7 @@ const start = async () => {
   term.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0) & 255)));
   const resize = () => { fit.fit(); post(`/session/${id}/resize`, { token, cols: term.cols, rows: term.rows }).catch(() => {}); };
   window.addEventListener("resize", resize);
-  const stream = new EventSource(`/session/${id}/stream?token=${token}`);
+  const stream = new EventSource(`/session/${id}/stream?token=${token}&${window.desolateKey.query}`);
   stream.onopen = () => { status.textContent = ""; resize(); term.focus(); };
   stream.onmessage = (event) => term.write(unb64(event.data));
   stream.addEventListener("end", () => { status.textContent = "the shell ended: reload for another"; stream.close(); });
@@ -101,7 +101,7 @@ window.addEventListener("message", (event) => {
   if (waiting > 0 && chosen !== false) show(true);
   if (waiting === 0 && chosen === null) show(false);
 });
-fetch("/approvals-frame", { credentials: "same-origin" }).then((answer) => answer.ok ? answer.json() : null).then((body) => {
+fetch("/approvals-frame", { credentials: "same-origin", headers: window.desolateKey.headers }).then((answer) => answer.ok ? answer.json() : null).then((body) => {
   if (!body || typeof body.url !== "string" || !body.url.startsWith(`${APPROVE_ORIGIN}/embed#`)) return;
   document.getElementById("frame").src = body.url;
   toggle.hidden = false;

@@ -85,7 +85,9 @@ const call = (
   });
 
 let cookie = "";
-const page = () => ({ cookie, "sec-fetch-site": "same-origin" });
+/** The page key the sign-in page carried, which the page's script keeps and sends. */
+let storedKey = "";
+const page = () => ({ cookie, "x-desolate-key": storedKey, "sec-fetch-site": "same-origin" });
 const post = (url: string, body: Record<string, unknown>, headers: Record<string, string> = {}) =>
   call(
     "POST",
@@ -118,9 +120,17 @@ describe("T1 the git terminal", () => {
   it("the address gives the cookie; nothing opens a shell without it, or from another origin", async () => {
     assert.equal((await call("GET", `/?tkn=${"0".repeat(48)}`, {})).status, 403);
     const login = await call("GET", `/?tkn=${gitToken()}&repo=acme%2Fwidgets`, {});
-    assert.equal(login.status, 303);
-    assert.equal(login.headers.location, "/?repo=acme%2Fwidgets");
+    // A page of this origin's own, which keeps the key and goes on to the page.
+    assert.equal(login.status, 200);
+    assert.match(login.body, /<meta name="desolate-next" content="\/\?repo=acme%2Fwidgets">/);
     cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+    assert.ok(!cookie.includes(gitToken()), "the cookie is not the token");
+    storedKey = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(login.body)![1]!;
+    assert.equal(
+      (await call("GET", "/approvals-frame", { cookie, "sec-fetch-site": "same-origin" })).status,
+      401,
+      "the cookie alone opens nothing (what a program on another port of this name is sent)",
+    );
     const html = await call("GET", "/", { cookie });
     assert.match(String(html.headers["content-security-policy"]), /script-src 'self'/);
     assert.match(String(html.headers["content-security-policy"]), /frame-ancestors 'none'/);
@@ -136,14 +146,17 @@ describe("T1 the git terminal", () => {
       "no cookie",
     );
     assert.equal(
-      (await call("GET", "/approvals-frame", { cookie, "sec-fetch-site": "same-site" })).status,
+      (
+        await call("GET", "/approvals-frame", {
+          cookie,
+          "x-desolate-key": storedKey,
+          "sec-fetch-site": "same-site",
+        })
+      ).status,
       403,
       "another page's request",
     );
-    const frame = await call("GET", "/approvals-frame", {
-      cookie,
-      "sec-fetch-site": "same-origin",
-    });
+    const frame = await call("GET", "/approvals-frame", page());
     assert.match(
       JSON.parse(frame.body).url,
       /^http:\/\/desolate-approve\.localhost:31598\/embed#k=[0-9a-f]{64}$/,
@@ -210,10 +223,18 @@ describe("T1 the git terminal", () => {
       200,
     );
     assert.equal((await post(`/session/${id}/resize`, { token, cols: 100, rows: 30 })).status, 200);
+    // As an EventSource asks, which sends no header: the key in the address.
+    const asEventSource = { cookie, "sec-fetch-site": "same-origin" };
+    assert.equal(
+      (await call("GET", `/session/${id}/stream?token=${token}`, asEventSource, undefined, 200))
+        .status,
+      401,
+      "a stream asked for with the cookie alone",
+    );
     const stream = await call(
       "GET",
-      `/session/${id}/stream?token=${token}`,
-      page(),
+      `/session/${id}/stream?token=${token}&key=${storedKey}`,
+      asEventSource,
       undefined,
       400,
     );
