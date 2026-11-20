@@ -28,6 +28,7 @@ import {
 import { embedAddress } from "./approve-web.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
+import { carriesCredential, cookieValue, signedInPage } from "../shared/page-key.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
 import { signins } from "./signin.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -109,11 +110,18 @@ const headers = () => ({
   ...SECURITY,
   "content-security-policy": `${SECURITY["content-security-policy"]}; frame-src http://${APPROVE_HOSTNAME}:${editorHostPort()}`,
 });
-const send = (res: ServerResponse, status: number, type: string, content: string | Buffer) => {
+const send = (
+  res: ServerResponse,
+  status: number,
+  type: string,
+  content: string | Buffer,
+  extra: Record<string, string> = {},
+) => {
   res.writeHead(status, {
     "content-type": type,
     "content-length": Buffer.byteLength(content),
     ...headers(),
+    ...extra,
   });
   res.end(content);
 };
@@ -126,6 +134,8 @@ const STATIC: Record<string, [string, string]> = {
   "/vendor/xterm.js": ["vendor/xterm.js", "text/javascript; charset=utf-8"],
   "/vendor/xterm.css": ["vendor/xterm.css", "text/css; charset=utf-8"],
   "/vendor/addon-fit.js": ["vendor/addon-fit.js", "text/javascript; charset=utf-8"],
+  // The page key's keeper (shared/page-key.ts): the page loads it first.
+  "/page-key.js": ["../../shared/ui/page-key.js", "text/javascript; charset=utf-8"],
 };
 
 type Session = {
@@ -234,13 +244,10 @@ export const handler = (
           "text/plain; charset=utf-8",
           "desolate: refused: that sign-in link is spent or too old; `desolate ui --open` makes another\n",
         );
-      res.writeHead(303, {
-        location: next,
-        "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`,
-        "content-length": 0,
-        ...SECURITY,
+      // A page of this origin's own, which keeps its key and sends the browser on.
+      return send(res, 200, "text/html; charset=utf-8", signedInPage(token, next), {
+        "set-cookie": `${name}=${cookieValue(token)}; HttpOnly; SameSite=Strict; Path=/`,
       });
-      return res.end();
     }
     const given = url.searchParams.get("tkn");
     if (req.method === "GET" && url.pathname === "/" && given !== null) {
@@ -251,22 +258,25 @@ export const handler = (
           "text/plain; charset=utf-8",
           "desolate: refused: that is not this stack's git terminal address; `desolate git` prints it\n",
         );
-      res.writeHead(303, {
-        location: pageOf(url.search),
-        "set-cookie": `${name}=${token}; HttpOnly; SameSite=Strict; Path=/`,
-        "content-length": 0,
-        ...SECURITY,
+      return send(res, 200, "text/html; charset=utf-8", signedInPage(token, pageOf(url.search)), {
+        "set-cookie": `${name}=${cookieValue(token)}; HttpOnly; SameSite=Strict; Path=/`,
       });
-      return res.end();
     }
-    const cookie = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]{48})(?:;|$)`).exec(
-      String(req.headers.cookie ?? ""),
-    )?.[1];
+    // The page's own credential: its cookie and its key (shared/page-key.ts); a shell's stream,
+    // an EventSource, which sends no header, carries the key in its address.
+    const streaming =
+      req.method === "GET" && /^\/session\/[0-9a-f]{16}\/stream$/.test(url.pathname);
+    const credential = carriesCredential(
+      req.headers,
+      name,
+      token,
+      streaming ? url.searchParams : undefined,
+    );
     if (req.method === "GET" && STATIC[url.pathname]) {
       const [file, type] = STATIC[url.pathname]!;
       return send(res, 200, type, fs.readFileSync(path.join(UI, file)));
     }
-    if (cookie === undefined || !sameSecret(cookie, token))
+    if (!credential)
       return json(res, 401, {
         error:
           "open the git terminal at the address `desolate git` prints, on this Mac's terminal: it carries this stack's token",
@@ -370,7 +380,11 @@ declare namespace handler {
   /** This stack's token, as `desolate git` put it in the address. */
   type Token = "abababababababababababababababababababababababab";
   type HasToken = Invoke<typeof writeState, [name: "git-token", text: Token]>;
-  type Cookie = "desolate_git_5e00ea51cf17=abababababababababababababababababababababababab";
+  /** The cookie: derived from the token (shared/page-key.ts), never the token. */
+  type Cookie =
+    "desolate_git_5e00ea51cf17=a68dde9918abf2477e02d622c6f39ef452f5b629efb668fbe721f74a83b5665c";
+  /** The key the page keeps in its own storage and sends beside the cookie. */
+  type Key = "d06d2405795a703a9cc213d47a96539f21c9f2e783374a7b0ded41d75a690f59";
   type Page = Invoke<typeof handler, [spawn: typeof noShell, log: typeof quiet]>;
   /** What the page's own script sends. */
   type Script = {
@@ -378,6 +392,7 @@ declare namespace handler {
     "sec-fetch-site": "same-origin";
     origin: "http://desolate-git.localhost:31581";
     cookie: Cookie;
+    "x-desolate-key": Key;
     "content-type": "application/json";
   };
 
@@ -423,11 +438,11 @@ declare namespace handler {
         >,
         "matches",
         {
-          status: 303;
+          status: 200;
           headers: {
-            location: "http://desolate.localhost:31581/?signin=787878787878787878787878787878787878787878787878";
-            "set-cookie": "desolate_git_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/";
+            "set-cookie": "desolate_git_5e00ea51cf17=a68dde9918abf2477e02d622c6f39ef452f5b629efb668fbe721f74a83b5665c; HttpOnly; SameSite=Strict; Path=/";
           };
+          text: '<!doctype html><meta charset="utf-8"><meta name="desolate-key" content="d06d2405795a703a9cc213d47a96539f21c9f2e783374a7b0ded41d75a690f59"><meta name="desolate-next" content="http://desolate.localhost:31581/?signin=787878787878787878787878787878787878787878787878"><title>desolate</title><script src="/page-key.js"></script><p>Signed in.</p>\n';
         }
       >,
       Expect<
@@ -480,11 +495,11 @@ declare namespace handler {
         >,
         "matches",
         {
-          status: 303;
+          status: 200;
           headers: {
-            location: "/?repo=acme%2Fweb";
-            "set-cookie": "desolate_git_5e00ea51cf17=abababababababababababababababababababababababab; HttpOnly; SameSite=Strict; Path=/";
+            "set-cookie": "desolate_git_5e00ea51cf17=a68dde9918abf2477e02d622c6f39ef452f5b629efb668fbe721f74a83b5665c; HttpOnly; SameSite=Strict; Path=/";
           };
+          text: '<!doctype html><meta charset="utf-8"><meta name="desolate-key" content="d06d2405795a703a9cc213d47a96539f21c9f2e783374a7b0ded41d75a690f59"><meta name="desolate-next" content="/?repo=acme%2Fweb"><title>desolate</title><script src="/page-key.js"></script><p>Signed in.</p>\n';
         }
       >,
       Expect<
@@ -500,7 +515,10 @@ declare namespace handler {
           ]
         >,
         "matches",
-        { status: 303; headers: { location: "/" } }
+        {
+          status: 200;
+          text: '<!doctype html><meta charset="utf-8"><meta name="desolate-key" content="d06d2405795a703a9cc213d47a96539f21c9f2e783374a7b0ded41d75a690f59"><meta name="desolate-next" content="/"><title>desolate</title><script src="/page-key.js"></script><p>Signed in.</p>\n';
+        }
       >,
       Expect<
         Invoke<
@@ -670,6 +688,7 @@ declare namespace handler {
               headers: {
                 host: "desolate-git.localhost:31581";
                 cookie: Cookie;
+                "x-desolate-key": Key;
                 "content-type": "application/json";
               };
               body: {};
@@ -692,6 +711,7 @@ declare namespace handler {
                 "sec-fetch-site": "same-origin";
                 origin: "http://acme-web-0a1b2c.localhost:31581";
                 cookie: Cookie;
+                "x-desolate-key": Key;
                 "content-type": "application/json";
               };
               body: {};
@@ -717,6 +737,7 @@ declare namespace handler {
                 "sec-fetch-site": "same-origin";
                 origin: "http://desolate-git.localhost:31581";
                 cookie: Cookie;
+                "x-desolate-key": Key;
                 "content-type": "text/plain";
               };
               body: "{}";

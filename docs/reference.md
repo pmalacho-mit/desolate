@@ -31,7 +31,9 @@ address, the one way into it from another site: a token's address from another s
 refused, and so is the page in a frame. Every push waiting for you shows there, with what it would
 send, as desolate's reviewer in the root worked it out (its commits and files, and whether
 it builds on the remote's branch or replaces it). The page is the host's, not a VM's, and it
-signs only for a request from its own tab: a cookie only that address gives, its own origin
+signs only for a request from its own tab: a cookie only that address gives, and beside it a
+key the page keeps in its own storage (a browser sends a name's cookies to every port of it,
+so a program listening on another port is sent the cookie, but never the key), its own origin
 (a page an agent wrote, on a workspace's name, is another), a token per push, a JSON body.
 It cannot be framed, and its Approve button arms only after the tab has had your attention
 for a second and the pointer then moves onto it, so a click aimed at something else when a

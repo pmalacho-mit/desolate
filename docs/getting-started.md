@@ -86,7 +86,7 @@ choosing.)
 
 The link goes through the approval page, then the git terminal, then the dashboard, where it
 stops. Each page trades a code that works once, for a minute, for a cookie only that page's own
-name gets. The pages are separate on purpose: each is its own site, so no page can act as
+name gets, and a key only that page's own address keeps. The pages are separate on purpose: each is its own site, so no page can act as
 another.
 - **The dashboard can never approve a push, see a secret's value, or type in your git
   terminal.** It is served by the root VM's ordinary user, which reads everything domains

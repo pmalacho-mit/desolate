@@ -11,7 +11,7 @@ const asked = new URLSearchParams(location.search);
 let domain = asked.get("domain") || "";
 const say = (text) => { $("status").textContent = text; };
 const post = async (path, body) => {
-  const answer = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ domain, ...body }), credentials: "same-origin" });
+  const answer = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...window.desolateKey.headers }, body: JSON.stringify({ domain, ...body }), credentials: "same-origin" });
   const value = await answer.json().catch(() => ({}));
   if (!answer.ok) throw new Error(value.error || `HTTP ${answer.status}`);
   return value;
@@ -51,7 +51,7 @@ const show = (secrets) => {
 
 const load = async () => {
   try {
-    const answer = await fetch(`/secrets/list?domain=${encodeURIComponent(domain)}`, { credentials: "same-origin" });
+    const answer = await fetch(`/secrets/list?domain=${encodeURIComponent(domain)}`, { credentials: "same-origin", headers: window.desolateKey.headers });
     const body = await answer.json().catch(() => ({}));
     if (answer.status === 401) {
       $("list").replaceChildren(el("p", "This browser has not opened the approval page's own address yet. On the Mac, run desolate approve --web --open once: it gives this browser the cookie the secrets page needs too. Then reload this page.", "error"));
