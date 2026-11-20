@@ -28,6 +28,7 @@ import { imageFingerprint } from "../image.ts";
 import { INSTANCE, paths, RELEASE_DIR } from "../paths.ts";
 import { duplexOf, parseSs } from "./fake.ts";
 import { socatAddress } from "./types.ts";
+import { shareRefused } from "./shares.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
 import type {
   Call,
@@ -68,6 +69,17 @@ const baseStamp = () => {
 const QEMU_LINK = "tcp:192.168.5.100:15000";
 
 type Meta = { spec: VmSpec; sshPort: number; linkPort: number; linkToken: string };
+/** Every share a real directory, reached through no symlink (shares.ts): else nothing starts. */
+const sharesPlain = (shares: { host: string }[]) => {
+  for (const share of shares) {
+    const why = shareRefused(share.host, paths.home);
+    if (why)
+      throw new Error(
+        `refused to share ${share.host} with a VM: ${why}. Something replaced a folder desolate shares; look at it before anything starts (desolate doctor)`,
+      );
+  }
+};
+
 const metaFile = (name: string) => path.join(LIMA_HOME, name, "desolate.json");
 const meta = (name: string) => readJson<Meta | null>(metaFile(name), null);
 
@@ -650,7 +662,9 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     async clone(from, spec) {
+      sharesPlain(spec.shares);
       for (const share of spec.shares) fs.mkdirSync(share.host, { recursive: true });
+      sharesPlain(spec.shares);
       for (const socket of spec.sockets)
         fs.mkdirSync(path.dirname(socket.host), { recursive: true });
       const m: Meta = {
@@ -672,6 +686,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     async start(name) {
       const m = meta(name);
       if (!m) throw new Error(`${name} is not a VM desolate made`);
+      sharesPlain(m.spec.shares);
       const cut = m.spec.egress === "none";
       // A VM made by an older desolate gets today's forwarding rules before it boots.
       if (!forwardsClosed(name))

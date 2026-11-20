@@ -1,5 +1,6 @@
 // `desolate domain ...`: create, add, show.
 import { EXIT, refuse } from "../shared/exit.ts";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { guest, paths } from "./paths.ts";
@@ -355,6 +356,10 @@ export const domainCommand = async (
       const { decide, describePlan, ENV_MAX, importEnv, parseChoose } =
         await import("./env-import.ts");
       const file = path.resolve(name);
+      // A link is refused: a .env in a domain's files may be one a workspace made, to a file
+      // of the Mac's, whose lines --in-place would write back where the workspace reads them.
+      if (fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink())
+        refuse(`${file} is a symlink`, "import the file it points to, by its own path");
       const stat = fs.statSync(file, { throwIfNoEntry: false });
       if (!stat?.isFile()) refuse(`${name} is not a file`, how, EXIT.usage);
       if (stat.size > ENV_MAX) refuse(`${name} is over 64 KiB: not a .env`, how, EXIT.usage);
@@ -419,8 +424,23 @@ export const domainCommand = async (
         );
       if (values["print-env"] === true) process.stdout.write(done.env);
       else if (values["in-place"] === true) {
-        const temporary = `${file}.desolate-${process.pid}`;
-        fs.writeFileSync(temporary, done.env, { mode: stat.mode & 0o777 });
+        // A new file of its own, never one already there: in a domain's files, anything in
+        // its workspaces could have put a symlink at a name it could guess, to a file of the
+        // Mac's (audit, 2026-11-20). O_EXCL refuses one that exists, a link included.
+        const temporary = `${file}.desolate-${randomBytes(12).toString("hex")}`;
+        const fd = fs.openSync(
+          temporary,
+          fs.constants.O_WRONLY |
+            fs.constants.O_CREAT |
+            fs.constants.O_EXCL |
+            fs.constants.O_NOFOLLOW,
+          stat.mode & 0o777,
+        );
+        try {
+          fs.writeSync(fd, done.env);
+        } finally {
+          fs.closeSync(fd);
+        }
         fs.renameSync(temporary, file);
         say(`${name} now holds each secret's name in place of its value.`);
       } else

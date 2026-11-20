@@ -12,7 +12,15 @@ export type RunOptions = {
   timeoutMs?: number;
   /** Echo the child's stderr to ours as it arrives (progress for a person). */
   inheritStderr?: boolean;
+  /** The most of each stream kept (default 192 MiB): past it, the program is stopped. */
+  maxBytes?: number;
 };
+
+/** What run() keeps of a program's output, at most, on each stream. Many of the programs run
+ *  are in a VM, where anything may run: one that wrote without end grew a string in this
+ *  process until V8 refused it, and the throw, in a 'data' listener, stopped the host's daemon
+ *  (audit, 2026-11-20). Past it, the program is killed and the answer says so: a failure. */
+export const RUN_MAX = 192 * 1024 * 1024;
 
 export const run = (
   command: string,
@@ -28,8 +36,24 @@ export const run = (
     let stdout = "";
     let stderr = "";
     let timer: NodeJS.Timeout | undefined;
-    child.stdout!.on("data", (chunk) => (stdout += chunk));
-    child.stderr?.on("data", (chunk) => (stderr += chunk));
+    const max = options.maxBytes ?? RUN_MAX;
+    let over = false;
+    const tooMuch = () => {
+      if (over) return;
+      over = true;
+      stderr += `\n(more than ${max} bytes of output: stopped)`;
+      child.kill("SIGKILL");
+    };
+    child.stdout!.on("data", (chunk) => {
+      if (over) return;
+      if (stdout.length + chunk.length > max) return tooMuch();
+      stdout += chunk;
+    });
+    child.stderr?.on("data", (chunk) => {
+      if (over) return;
+      if (stderr.length + chunk.length > max) return tooMuch();
+      stderr += chunk;
+    });
     child.on("error", (error) => {
       if (timer) clearTimeout(timer);
       resolve({ code: 127, stdout, stderr: stderr + String(error.message) });
@@ -71,6 +95,12 @@ declare namespace run {
     Invoke<typeof run, [command: "desolate-no-such-program", args: []]>,
     "matches",
     { code: 127; stdout: ""; stderr: "spawn desolate-no-such-program ENOENT" }
+  >;
+  /** past its most output it is killed, and says so: 128, never a success */
+  export type TooMuch = Expect<
+    Invoke<typeof run, [command: "yes", args: [], options: { maxBytes: 100000 }]>,
+    "matches",
+    { code: 128; stderr: "\n(more than 100000 bytes of output: stopped)" }
   >;
   /** past its time it is killed, and says so: 128 (a signal), never a success */
   export type Timeout = Expect<

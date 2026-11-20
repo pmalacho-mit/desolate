@@ -9,13 +9,20 @@
 // Nothing in a VM can do step 2, so nothing in a VM can push.
 import { printable, printableLines } from "../shared/text.ts";
 import { EXIT, refuse } from "../shared/exit.ts";
-import { editorHostPort, ROOT_HOSTNAME } from "../shared/names.ts";
+import { editorHostPort, parseRepo, repoId, ROOT_HOSTNAME } from "../shared/names.ts";
+import { parseArgs } from "node:util";
 import { sign } from "./approver.ts";
 import { parseApproval } from "../shared/approval.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import type { Issue } from "../shared/issues.ts";
-import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Mock,
+  Table,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { collect, fakeStack, rootAnswers, said } from "../.harness/host-stack.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
@@ -431,6 +438,76 @@ declare namespace review {
 
 const PUSH = ["node", "--disable-warning=ExperimentalWarning", `${guest.release}/root/push.ts`];
 
+/** Whether the approval text the root prepared names what the person asked to push: the
+ *  repository and the branch they typed, and the commit they named with --expect, when they
+ *  did. The text comes from the root's ordinary user, which reads every domain's data; the
+ *  person's own words are here, on the Mac, and nowhere else. Without this check a root user
+ *  taken over could name another commit under the same branch, and the person, typing the
+ *  branch to approve, would approve it (audit, 2026-11-20). Null if it does; else why not. */
+export const approvalDiffers = (
+  message: string,
+  repo: string | undefined,
+  branch: string | undefined,
+  expect: string | undefined,
+): string | null => {
+  const approval = parseApproval(message);
+  if (!approval) return "the root's approval text is not one";
+  const asked = parseRepo(repo ?? "");
+  if (!asked || repoId(asked).toLowerCase() !== approval.repo.toLowerCase())
+    return `the root named ${approval.repo}, not ${printable(repo ?? "")}`;
+  if (approval.branch !== branch) return `the root named the branch ${approval.branch}`;
+  if (
+    expect !== undefined &&
+    !(/^[0-9a-f]{7,40}$/.test(expect) && approval.commit.startsWith(expect))
+  )
+    return `the root named the commit ${approval.commit}, not ${printable(expect)}`;
+  return null;
+};
+
+declare namespace approvalDiffers {
+  export type Cases = Table<
+    typeof approvalDiffers,
+    [
+      [
+        args: [
+          message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nonto: none\nnonce: 0123456789abcdef0123456789abcdef\n",
+          repo: "acme/app",
+          branch: "fix",
+          expect: "aaaaaaaaaaaa",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\nonto: none\nnonce: 0123456789abcdef0123456789abcdef\n",
+          repo: "acme/app",
+          branch: "fix",
+          expect: "aaaaaaaaaaaa",
+        ],
+        expected: "the root named the commit bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb, not aaaaaaaaaaaa",
+      ],
+      [
+        args: [
+          message: "desolate push approval v2\nrepo: acme/app\nbranch: main\ncommit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nonto: none\nnonce: 0123456789abcdef0123456789abcdef\n",
+          repo: "acme/app",
+          branch: "fix",
+          expect: undefined,
+        ],
+        expected: "the root named the branch main",
+      ],
+      [
+        args: [
+          message: "desolate push approval v2\nrepo: acme/other\nbranch: fix\ncommit: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nonto: none\nnonce: 0123456789abcdef0123456789abcdef\n",
+          repo: "acme/app",
+          branch: "fix",
+          expect: undefined,
+        ],
+        expected: "the root named acme/other, not acme/app",
+      ],
+    ]
+  >;
+}
+
 export const push = async (args: string[]): Promise<number> => {
   const prepared = await backend().exec(ROOT_VM, [...PUSH, "prepare", ...args], {
     cwd: guest.rootClones,
@@ -444,6 +521,24 @@ export const push = async (args: string[]): Promise<number> => {
   } catch {
     return refuse("the root did not describe the push", "desolate doctor");
   }
+  // What the person typed, against what the root prepared: refused before anything is signed.
+  const { values, positionals } = parseArgs({
+    args,
+    options: { expect: { type: "string" }, "allow-default": { type: "boolean" } },
+    allowPositionals: true,
+    strict: false,
+  });
+  const differs = approvalDiffers(
+    plan.message,
+    positionals[1],
+    positionals[2],
+    typeof values.expect === "string" ? values.expect : undefined,
+  );
+  if (differs)
+    return refuse(
+      `${differs}: nothing was signed or pushed`,
+      "desolate doctor (the root answered for another push than yours)",
+    );
   for (const warning of plan.warnings)
     process.stderr.write(`desolate: WARNING: this push ${plain(warning)}\n`);
   const signature = await sign(plan.message, await reviewed(plan.message));

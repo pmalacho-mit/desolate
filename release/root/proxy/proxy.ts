@@ -24,7 +24,8 @@ import * as fs from "node:fs";
 import { connect, createServer, isIP } from "node:net";
 import type { Socket } from "node:net";
 import { readJson } from "../../shared/json.ts";
-import { normalizeName } from "../../shared/sniff.ts";
+import { normalizeName, sniffSocket } from "../../shared/sniff.ts";
+import type { Sniffed } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import type { Running } from "./secrets.ts";
 import { listenerUid } from "./as-proxy.ts";
@@ -64,11 +65,25 @@ const policy = (): Policy => ({
   ...readJson<Partial<Policy>>(`${DOMAIN_DIR}/policy.json`, {}),
 });
 
-const audit = (entry: Record<string, unknown>) =>
-  fs.appendFileSync(
-    AUDIT,
-    JSON.stringify({ time: new Date().toISOString(), domain, workspace, ...entry }) + "\n",
-  );
+// At most 64 MiB, then the last 64 MiB as audit.log.1; and a write that fails (a full disk)
+// is not a throw in a connection's handler, which stopped the whole proxy, every workspace of
+// the domain then without a network (audit, 2026-11-20).
+let audited = -1;
+const audit = (entry: Record<string, unknown>) => {
+  try {
+    if (audited < 0) audited = fs.statSync(AUDIT, { throwIfNoEntry: false })?.size ?? 0;
+    if (audited > 64 * 1024 * 1024) {
+      fs.renameSync(AUDIT, `${AUDIT}.1`);
+      audited = 0;
+    }
+    const line =
+      JSON.stringify({ time: new Date().toISOString(), domain, workspace, ...entry }) + "\n";
+    fs.appendFileSync(AUDIT, line);
+    audited += Buffer.byteLength(line);
+  } catch {
+    /* the connection is still decided as it was; only its line is lost */
+  }
+};
 
 /** Addresses a workspace must never be carried to: this machine, the LAN, link-local,
  *  carrier NAT, cloud metadata, multicast, and anything that is not a public unicast IPv4. */
@@ -375,6 +390,53 @@ declare namespace handoff {
   >;
 }
 
+/** Under an allowlist (enforce), what a connection's first bytes name must be the host that
+ *  was checked: the server name of its TLS hello, or the Host of its first HTTP request. Else
+ *  one allowed name (a CDN's) carries a connection to any site the same CDN serves, the name
+ *  the workspace sends after the CONNECT being the one the CDN goes by (audit, 2026-11-20).
+ *  (A Host inside TLS that differs from its server name is the CDN's to refuse: end-to-end
+ *  TLS is not read here.) Null if it may go on; else why not. */
+export const namedOtherwise = (sniffed: Sniffed, host: string): string | null => {
+  if (sniffed.kind !== "tls" && sniffed.kind !== "http")
+    return `${host} is allowed for TLS or HTTP that names it, and this was neither`;
+  if (sniffed.name === null)
+    return `a connection to ${host} must name it (TLS server name or Host)`;
+  return sniffed.name === host.toLowerCase()
+    ? null
+    : `a connection checked for ${host} named ${sniffed.name.slice(0, 100)}`;
+};
+
+declare namespace namedOtherwise {
+  export type Cases = Table<
+    typeof namedOtherwise,
+    [
+      [
+        args: [sniffed: { kind: "tls"; name: "registry.npmjs.org" }, host: "registry.npmjs.org"],
+        expected: null,
+      ],
+      [
+        args: [sniffed: { kind: "http"; name: "registry.npmjs.org" }, host: "Registry.npmjs.org"],
+        expected: null,
+      ],
+      [
+        args: [
+          sniffed: { kind: "tls"; name: "exfil.attacker.example" },
+          host: "registry.npmjs.org",
+        ],
+        expected: "a connection checked for registry.npmjs.org named exfil.attacker.example",
+      ],
+      [
+        args: [sniffed: { kind: "tls"; name: null }, host: "registry.npmjs.org"],
+        expected: "a connection to registry.npmjs.org must name it (TLS server name or Host)",
+      ],
+      [
+        args: [sniffed: { kind: "raw" }, host: "registry.npmjs.org"],
+        expected: "registry.npmjs.org is allowed for TLS or HTTP that names it, and this was neither",
+      ],
+    ]
+  >;
+}
+
 const handle = async (client: Socket, head: string) => {
   const { host, target, port, refused } = destinationOf(head);
   const refuse = (reason: string) => {
@@ -412,11 +474,24 @@ const handle = async (client: Socket, head: string) => {
     : connect({ host: address, port });
   let open = false;
   upstream.setTimeout(30_000, () => upstream.destroy(new Error("timed out")));
-  const established = () => {
+  const established = async () => {
     open = true;
     upstream.setTimeout(0);
-    audit({ host, port, address, verdict: "allowed", ...(viaSecrets ? { via: "secrets" } : {}) });
     client.write("HTTP/1.1 200 Connection established\r\n\r\n");
+    // Under an allowlist, the name in its first bytes too (namedOtherwise). (The secrets
+    // proxy checks its own: the server name must be the host, there.)
+    if (rules.mode === "enforce" && !viaSecrets) {
+      const { sniffed, head: first } = await sniffSocket(client, 10_000);
+      const why = namedOtherwise(sniffed, host);
+      if (why) {
+        audit({ host, port, address, verdict: "refused", reason: why });
+        client.destroy();
+        return void upstream.destroy();
+      }
+      upstream.write(first);
+      client.resume();
+    }
+    audit({ host, port, address, verdict: "allowed", ...(viaSecrets ? { via: "secrets" } : {}) });
     client.pipe(upstream);
     upstream.pipe(client);
   };

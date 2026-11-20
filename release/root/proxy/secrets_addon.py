@@ -245,6 +245,10 @@ class DesolateSecrets:
         if reason:
             entry["reason"] = reason
         try:
+            # At most 64 MiB, then the last 64 MiB as audit.log.1: a workspace sending requests
+            # refused here, as fast as it can, must not fill the root's disk (audit, 2026-11-20).
+            if os.path.exists(AUDIT_PATH) and os.path.getsize(AUDIT_PATH) > 64 * 1024 * 1024:
+                os.replace(AUDIT_PATH, AUDIT_PATH + ".1")
             with open(AUDIT_PATH, "a") as handle:
                 handle.write(json.dumps(entry) + "\n")
         except OSError as error:
