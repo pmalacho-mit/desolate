@@ -106,6 +106,7 @@ The stack itself:
 Recipes (scripts of these commands, for tasks you do often: an agent on a task, Claude Code, issues):
   ~/desolate/recipes/README.md. Tab completion names your domains and workspaces: echo 'source <(desolate completion)' >> ~/.zshrc
 
+<command> --help shows that command's lines of this text, and runs nothing.
 Every command that reads takes --json. Exit codes: 0 ok, 1 failed, 64 usage, 75 busy,
 77 default branch refused, 78 no person confirmed the push, 79 --expect did not match.`;
 
@@ -175,6 +176,82 @@ declare namespace flags {
   ];
 }
 
+/** Whether a command line asks for help: `--help` or `-h` anywhere before a `--`. Asked, the
+ *  command does not run. (Every verb's flags take `--help`, and none acted on it: `desolate
+ *  destroy --help` destroyed the stack.) After `--` the words are another program's, as in
+ *  `desolate agent start acme/w1 -- npm --help`. */
+const askedForHelp = (argv: string[]): boolean => {
+  const end = argv.indexOf("--");
+  return (end === -1 ? argv : argv.slice(0, end)).some(
+    (word) => word === "--help" || word === "-h",
+  );
+};
+
+declare namespace askedForHelp {
+  /** before `--` only */
+  export type Reads = Table<
+    typeof askedForHelp,
+    [
+      [[argv: ["destroy", "--help"]], true],
+      [[argv: ["rm", "acme/w1", "-h"]], true],
+      [[argv: ["domain", "acme", "net", "--help", "allow"]], true],
+      [[argv: ["agent", "start", "acme/w1", "--name", "web", "--", "npm", "--help"]], false],
+      [[argv: ["exec", "acme/w1", "--", "ls", "-h"]], false],
+      [[argv: ["list", "--json"]], false],
+      [[argv: ["domain", "create", "acme", "--title", "help"]], false],
+    ]
+  >;
+}
+
+/** The help's lines for one verb (each `  desolate <verb> ...` line and the lines that carry it
+ *  on), or none: the caller then prints the whole help. */
+const helpFor = (help: string, verb: string): string[] => {
+  const lines: string[] = [];
+  let taking = false;
+  for (const line of help.split("\n")) {
+    // A line may name several verbs: `  desolate stop | start | rm <domain>/<workspace>`.
+    const named = /^  desolate ((?:[\w-]+ \| )*[\w-]+)/.exec(line);
+    if (named) taking = named[1]!.split(" | ").includes(verb);
+    else if (!/^ {4,}\S/.test(line)) taking = false;
+    if (taking) lines.push(line);
+  }
+  return lines;
+};
+
+declare namespace helpFor {
+  /** a verb's lines, with their carried-on lines; another verb's are left out */
+  export type Picks = Expect<
+    Invoke<
+      typeof helpFor,
+      [
+        help: "Workspaces:\n  desolate rm <w>      remove it\n                       its branches stay\n  desolate rmx         another\n  desolate rm --all    all of them\nExit codes: 0 ok",
+        verb: "rm",
+      ]
+    >,
+    "=",
+    [
+      "  desolate rm <w>      remove it",
+      "                       its branches stay",
+      "  desolate rm --all    all of them",
+    ]
+  >;
+  /** a line that names several verbs is each one's */
+  export type Several = Expect<
+    Invoke<
+      typeof helpFor,
+      [help: "  desolate stop | start | rm <w>   one\n  desolate starts   another", verb: "start"]
+    >,
+    "=",
+    ["  desolate stop | start | rm <w>   one"]
+  >;
+  /** an unknown verb has no lines */
+  export type None = Expect<
+    Invoke<typeof helpFor, [help: "  desolate rm <w>   remove it", verb: "nope"]>,
+    "=",
+    []
+  >;
+}
+
 /** `--open`: the address in a browser on this Mac. Chrome or Firefox if there is one:
  *  Safari cannot find desolate's *.localhost names. */
 const openInBrowser = (url: string) => {
@@ -196,6 +273,11 @@ const main = async (argv: string[]): Promise<number> => {
   if (!verb || verb === "help" || verb === "--help" || verb === "-h") {
     out(HELP);
     return verb ? EXIT.ok : EXIT.usage;
+  }
+  if (askedForHelp(rest)) {
+    const lines = helpFor(HELP, verb);
+    for (const line of lines.length ? lines : HELP.split("\n")) out(line);
+    return EXIT.ok;
   }
   if (verb === "bootstrap") {
     const { values } = flags(rest, {
