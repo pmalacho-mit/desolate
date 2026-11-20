@@ -155,7 +155,8 @@ const summaryOf = (summary, card) => {
   // A long list scrolls in a box of its own: the card stays short enough that Approve is in
   // view, and what is scrolled away is never what needs attention (see the files below).
   const ul = el("ul", undefined, commits.length > 8 ? "long" : "");
-  for (const c of commits) { const li = el("li"); li.append(el("code", c.commit.slice(0, 12)), document.createTextNode(` ${c.subject}  (${c.author})`)); ul.append(li); }
+  // Its id, its subject, and who wrote it, quieter: the subject is what is read.
+  for (const c of commits) { const li = el("li", undefined, "commit"); li.append(el("code", c.commit.slice(0, 12)), el("span", ` ${c.subject}`), el("span", `  ${c.author}`, "who")); ul.append(li); }
   if (summary.more) ul.append(el("li", `and ${summary.more} more`));
   if (commits.length) box.append(ul);
   const files = summary.files || [];
@@ -164,8 +165,11 @@ const summaryOf = (summary, card) => {
     // What runs on the forge (CI workflows, hooks) or changes how git treats the repository:
     // always listed in full, outside any scrolling box, before the rest.
     const line = (f) => {
-      const li = el("li", undefined, f.sensitive ? "sensitive" : "");
-      li.append(el("code", f.path), document.createTextNode(f.binary ? "  (binary)" : `  +${f.added} -${f.removed}`));
+      const li = el("li", undefined, f.sensitive ? "file sensitive" : "file");
+      // Lines added and removed in colour, as the dashboard's review shows them.
+      li.append(el("code", f.path));
+      if (f.binary) li.append(el("span", "binary", "who"));
+      else li.append(el("span", `+${f.added}`, "add"), el("span", `\u2212${f.removed}`, "del"));
       return li;
     };
     const sensitive = files.filter((f) => f.sensitive);

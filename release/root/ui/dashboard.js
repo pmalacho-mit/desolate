@@ -419,10 +419,13 @@ const needsYou = () => {
   const items = [];
   for (const i of state.issues || []) {
     if (i.state !== "offered" && i.state !== "approving") continue;
-    items.push(el("li", { "data-issue-offer": i.id }, el("span", { class: `dot ${i.state === "approving" ? "orange" : "blue"}` }), el("div", { class: "what" },
-      el("div", { class: "name" }, i.state === "approving" ? `An issue waits for your approval on the Mac: ${i.repo}` : `An issue offered for ${i.repo}`),
-      el("div", { class: "line" }, i.title),
-      el("div", { class: "line sub" }, `from ${i.domain}/${i.workspace}${i.labels.length ? `, labelled ${i.labels.join(", ")}` : ""}${i.problem ? `. Not published: ${i.problem}` : ""}`)),
+    // As an offer: what, for which repository, from where, its names in one column.
+    items.push(el("li", { "data-issue-offer": i.id }, el("span", { class: `dot ${i.state === "approving" ? "orange" : "blue"}` }), el("div", { class: "what pairs" },
+      el("span", { class: "label name" }, "Issue"), el("div", { class: "name" }, i.title),
+      el("span", { class: "label" }, "for"), el("div", { class: "line" }, named("repo", i.repo), ...i.labels.map((label) => pill(label, "", "a label it asks for"))),
+      el("span", { class: "label" }, "from"), el("div", { class: "line" }, named("domain", i.domain, null, i.domain), named("workspace", i.workspace, null, `${i.domain}/${i.workspace}`)),
+      i.state === "approving" ? [el("span", {}), el("div", { class: "line warn" }, "Waits for your approval on the Mac.")] : null,
+      i.problem ? [el("span", {}), el("div", { class: "line warn" }, `Not published: ${i.problem}`)] : null),
       el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openIssue(i) }, i.state === "approving" ? "Open" : "Read and edit"))));
   }
   for (const a of state.approvals) items.push(el("li", {}, el("span", { class: "dot orange" }), el("div", { class: "what" },
@@ -445,12 +448,19 @@ const needsYou = () => {
   }
   for (const d of state.domains) for (const w of d.workspaces) {
     const says = w.says.status;
+    // A workspace asking for you (orange) or stuck (red), in its own words.
     if (says && (says.color === "orange" || says.color === "red"))
-      items.push(el("li", {}, el("span", { class: `dot ${says.color}` }), el("div", { class: "what" }, el("div", { class: "name" }, named("domain", d.slug, null, d.slug), named("workspace", w.workspace, null, `${d.slug}/${w.workspace}`)), el("div", { class: "line" }, says.message)), el("div", {})));
+      items.push(el("li", { "data-asks": `${d.slug}/${w.workspace}` }, el("span", { class: `dot ${says.color}` }), el("div", { class: "what pairs" },
+        el("span", { class: "label name" }, says.color === "orange" ? "Asks" : "Stuck"), el("div", { class: "name" }, named("domain", d.slug, null, d.slug), named("workspace", w.workspace, null, `${d.slug}/${w.workspace}`)),
+        el("span", {}), el("div", { class: "line" }, says.message)), el("div", {})));
     if (w.outlived)
-      items.push(el("li", { "data-outlived": `${d.slug}/${w.workspace}` }, el("span", { class: "dot orange" }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace} outlived the workspace that started it`), el("div", { class: "line" }, `${w.startedBy} is gone; this one is still here. Look at its branches, then `, el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " when you are done with it.")), el("div", {})));
+      items.push(el("li", { "data-outlived": `${d.slug}/${w.workspace}` }, el("span", { class: "dot orange" }), el("div", { class: "what pairs" },
+        el("span", { class: "label name" }, "Outlived"), el("div", { class: "name" }, named("domain", d.slug, null, d.slug), named("workspace", w.workspace, null, `${d.slug}/${w.workspace}`)),
+        el("span", {}), el("div", { class: "line" }, `${w.startedBy}, which started it, is gone; this one is still here. Look at its branches, then `, el("code", {}, `desolate rm ${d.slug}/${w.workspace}`), " when you are done with it.")), el("div", {})));
     if (w.host && w.host.devcontainer && /^FAILED/.test(w.host.devcontainer))
-      items.push(el("li", {}, el("span", { class: "dot red" }), el("div", { class: "what" }, el("div", { class: "name" }, `${d.slug}/${w.workspace}: its devcontainer did not come up`), el("div", { class: "line" }, w.host.devcontainer)), el("div", {})));
+      items.push(el("li", { "data-devcontainer-failed": `${d.slug}/${w.workspace}` }, el("span", { class: "dot red" }), el("div", { class: "what pairs" },
+        el("span", { class: "label name" }, "Failed"), el("div", { class: "name" }, named("domain", d.slug, null, d.slug), named("workspace", w.workspace, null, `${d.slug}/${w.workspace}`), el("span", { class: "sub" }, "its devcontainer did not come up")),
+        el("span", {}), el("div", { class: "line mono" }, w.host.devcontainer)), el("div", {})));
   }
   return items;
 };

@@ -22,15 +22,17 @@ const show = (secrets) => {
   const list = $("list");
   if (!domain) return list.replaceChildren(el("p", "Choose a domain.", "hint"));
   if (!secrets.length) return list.replaceChildren(el("p", `The domain ${domain} has no secrets yet. Add one below.`, "hint"));
-  list.replaceChildren(...secrets.map((s) => {
+  // Its value is never sent to a page. The person's own terminal can have it: said once.
+  const see = el("p", "To see a value, in a terminal on your Mac: ", "hint");
+  see.append(el("code", `desolate domain ${domain} secret show <NAME>`));
+  list.replaceChildren(see, ...secrets.map((s) => {
     const row = el("div", undefined, "secret");
     const what = el("div", undefined, "what");
     what.append(el("div", s.name, "mono name"));
-    what.append(el("div", `to ${s.hosts.join(", ")}${s.headers ? `, in ${s.headers.join(", ")} only` : ""}`, "hint"));
-    // Its value is never sent to a page. The person's own terminal can have it.
-    const see = el("div", "To see its value, in a terminal on your Mac: ", "hint");
-    see.append(el("code", `desolate domain ${domain} secret show ${s.name}`));
-    what.append(see);
+    // Where it goes, and where in a request: with no header named it is put in place of its
+    // name anywhere in a request to those hosts, its body included (an echoing service could
+    // then hand it back changed: docs/v3/decisions.md, the audit of 2026-11-20).
+    what.append(el("div", !s.hosts.length ? "to no host: it is sent nowhere" : `to ${s.hosts.join(", ")}${s.headers ? `, in ${s.headers.join(", ")} only` : ", anywhere in a request (no header named)"}`, s.headers || !s.hosts.length ? "hint" : "hint warn"));
     const state = el("span", !s.on ? "off" : s.secondsLeft !== undefined ? `on, ${Math.round(s.secondsLeft / 60)} min left` : "on", `pill ${s.on ? "on" : "off"}`);
     const buttons = el("div", undefined, "buttons");
     const toggle = el("button", s.on ? "Switch off" : "Switch on");
