@@ -489,14 +489,44 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     assert.equal(forgeHasLfs("acme/widgets", oid), false, "nor the commit's own: nothing went up");
     assert.deepEqual(forgeRefs("acme/widgets"), before);
-    // CONTROL: the reviewer's own pack and the approved LFS object, under a third approval (for
-    // another branch, so the person's push below is still the first of issue/12), land.
-    const third = keyring({ op: "challenge", repo: "acme/widgets", ref: "f6-control", commit });
+    // CONTROL: the reviewer's own pack and the approved LFS object, under a third approval,
+    // land. (Of a commit of its own, the same files on the same parent, on another branch: the
+    // person's push below is still the first of the reviewed commit.)
+    const controlCommit = inRootClone(
+      `git -c user.name=control -c user.email=control@example.invalid commit-tree ${commit}^{tree} -p ${commit}^ -m control`,
+    ).stdout.trim();
+    const sentControl = stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+      controlCommit,
+    ]);
+    assert.equal(sentControl.code, 0, sentControl.stderr);
+    const saidControl = reviewerSays("f6-control", controlCommit);
+    assert.equal(saidControl.ok, true, String(saidControl.error));
+    const controlPack = "/tmp/control.pack";
+    stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], null, process.argv[2]);`,
+      controlCommit,
+      controlPack,
+    ]);
+    const third = keyring({
+      op: "challenge",
+      repo: "acme/widgets",
+      ref: "f6-control",
+      commit: controlCommit,
+    });
     const thirdText = signedFor(third.message, {
-      commit,
+      commit: controlCommit,
       squashes: null,
-      pack: said.sends!.pack,
-      lfs: said.sends!.lfs,
+      pack: saidControl.sends!.pack,
+      lfs: saidControl.sends!.lfs,
     });
     const approved3 = keyring({
       op: "approve",
@@ -506,14 +536,14 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.equal(approved3.ok, true, String(approved3.error));
     const control = toPusher(
       approved3.id!,
-      reviewerPack,
+      controlPack,
       [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
-      said.sends!.lfs,
+      saidControl.sends!.lfs,
     );
     assert.equal(control.ok, true, String(control.error));
     assert.equal(
       forgeRefs("acme/widgets")["f6-control"],
-      commit,
+      controlCommit,
       "control: the approved pack lands",
     );
     assert.equal(forgeHasLfs("acme/widgets", oid), true, "with its LFS object");

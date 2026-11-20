@@ -193,11 +193,12 @@ const summaryOf = (summary, card) => {
     if (summary.moreFiles) fl.append(el("li", `and ${summary.moreFiles} more (every one that runs on the forge is listed above)`));
     if (rest.length || summary.moreFiles) box.append(fl);
   }
-  // What the net change does not show: files a commit changed and a later one changed back.
-  // Every commit is pushed, so what they held is in the history all the same.
+  // What the net change does not show: files a commit changes that end as they were (changed,
+  // then changed back, or as the branch it replaces has them). Every commit is pushed, so what
+  // they held is in the history all the same.
   const between = summary.between || [];
   if (between.length || summary.moreBetween) {
-    box.append(el("p", `${between.length + (summary.moreBetween || 0)} more file(s) changed in one of these commits and changed back, so they are not in the list above. Each commit is pushed, so what they held is in the branch's history:`, "error"));
+    box.append(el("p", `${between.length + (summary.moreBetween || 0)} more file(s) that these commits change, though the list above (the net change) does not show them. Each commit is pushed, so what they held is in the branch's history:`, "error"));
     const bl = el("ul", undefined, between.length > 8 ? "long" : "");
     for (const f of between) { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(el("code", f.path)); bl.append(li); }
     if (summary.moreBetween) bl.append(el("li", `and ${summary.moreBetween} more`));

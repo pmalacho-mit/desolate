@@ -190,7 +190,7 @@ export const sign = async (
     push.onto
       ? `  onto        ${push.onto}  (the remote's ${push.branch} now: it moves from this to the commit, or not at all)`
       : `  onto        none: the remote has no ${push.branch} yet`,
-    `  pack        ${push.pack.slice(0, 16)}  (made by desolate's reviewer: nothing else is sent)`,
+    `  pack        ${push.pack.slice(0, 12)}  (made by desolate's reviewer: nothing else is sent)`,
     `  LFS         ${push.lfs.count} object(s), only those its commits point to`,
     ...(replaces
       ? [

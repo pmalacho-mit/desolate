@@ -618,7 +618,7 @@ const reviewedLine = (s: Summary, squashed: boolean): string => {
       : `${commits} commit(s) the remote does not have, ${files} file(s)`,
     s.lfs ? `, ${s.lfs} of them LFS` : "",
     !squashed && between
-      ? `; ${between} more file(s) changed in a commit and changed back (in the history, not in the net change): --squash pushes only the net change`
+      ? `; ${between} more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change`
       : "",
     ...(s.warnings ?? []).map((w) => `; warning: ${w}`),
     s.files?.some((f) => f.sensitive) ? "; changes what runs on the forge" : "",
