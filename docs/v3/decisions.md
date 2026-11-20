@@ -1417,28 +1417,37 @@ are left for the owner, with what would close them.
   The LFS objects and the pack the pusher sent came from the root's request: a root user
   taken over could add objects to an approved push, uploaded under the write key. Now the
   reviewer makes the pack (`root/reviewer.ts`, `prepare`: the objects the commit has that the
-  remote's branches do not) and keeps it, and lists the LFS objects its new blobs point to.
-  The HOST puts the pack's sha256 and the LFS ids' digest in the text the person signs
-  (`shared/approval.ts`, v3: the root's user writes neither). The pusher forwards the pack
-  holding back its last 32 bytes, its checksum among them, until the whole pack hashes to the
-  approved one: a pack that does not, it cuts short, and git's receive-pack keeps nothing of
-  a pack that does not end (T2 04: the root's user's own pack, the approved commit and an
-  object of its own, leaves the branch, the object store and the quarantine as they were,
-  beside a control with the reviewer's pack that lands). It uploads an LFS object only if it
-  is on the approved list. Left open on purpose: the LFS objects still go up before the
-  branch's swap, as they must (the remote never has a pointer without its object), so a push
-  the forge then refuses leaves approved objects there, and nothing else.
-  The same change closes the other two: the approval page lists the files changed in a
-  commit but not in the net change, shows each commit's diff, and offers to push the commits
-  squashed into one (the reviewer's commit: the last commit's tree, on where the branch
-  leaves the remote's history, with the last commit's author and dates, so the same push
-  always squashes to the same commit, which the approval names, `squashes:` the reviewed
-  one). And a push that replaces the remote's branch is signed only once the person
-  confirms the replace apart from Approve: the branch's name typed on the page (the host
-  refuses the click without it), `--replace` for `desolate push`, `replace <branch>` typed at
-  the terminal. The keyring files a signed text only if it answers its own challenge: the
-  same repository, branch, onto and nonce, and the challenge's commit, or a commit that
-  squashes it. A push the reviewer cannot describe can no longer be approved at all.
+  remote's branches do not, each compressed by the reviewer's git itself, `--no-reuse-object`)
+  and keeps it by its sha256, and lists the LFS objects its new blobs point to. The HOST puts
+  the pack's sha256 and the LFS ids' digest in the text the person signs (`shared/approval.ts`,
+  v3: the root's user writes neither). The pusher takes the whole pack, and every LFS object,
+  before it sends a byte: the pack only if it hashes to the approved one, an LFS object only if
+  it hashes to its name and is on the approved list.
+  Two independent reviews of the first version found two ways round it, each now a test:
+  - It forwarded the pack as it came, holding back its last 32 bytes until the hash was
+    checked. But any stretch of what arrives can be a whole pack of its own: the root's user's
+    own pack, whole, with 32 bytes after it, went whole to the forge, which took it before the
+    hash was checked (T2 04 sends exactly that; run against that pusher, the branch moved).
+  - The reviewer's pack-objects copied each object's compressed bytes as the root's user sent
+    them. zlib's choices (a stored block's padding, its tables) and a delta's form are not the
+    object, so they carried bytes of the root's user's choosing inside the approved pack, to the
+    forge's own pack store (shown with git 2.39 by the review).
+  Left open on purpose: the LFS objects go up before the branch's swap, as they must (the
+  remote never has a pointer without its object), so a push the forge then refuses leaves
+  approved objects there, and nothing else. The reviewer's repositories still grow with what
+  the root's user submits, as before.
+  The same change closes the other two items. The approval page lists the files a commit
+  changes that the net change does not show, shows each commit's diff, and offers to push the
+  commits squashed into one. The squash is the reviewer's commit: the last commit's tree, on
+  where the branch leaves the remote's history, with the last commit's author and dates. The
+  approval names it, and `squashes:` the reviewed one. And a push that replaces the remote's
+  branch is signed only once the person confirms the replace apart from Approve: the branch's
+  name typed on the page (the host refuses the click without it), `--replace` for `desolate
+  push`, `replace <branch>` typed at the terminal (before Touch ID too). The keyring files a
+  signed text only if it answers its own challenge: the same repository, branch, onto and
+  nonce, and the challenge's commit or a commit that squashes it. The page signs only an
+  account it listed, and its Approve arms only once that account is on it. A push the reviewer
+  cannot describe can no longer be approved at all.
 - **Tokens in a command line.** `desolate approve --web --open`, `git --open` and
   `editor --open` pass the page's address, its token in it, to `open`, whose arguments any
   user of the Mac can read in `ps`. Closing it: open them through a one-time sign-in code, as
