@@ -1,36 +1,56 @@
-/* Your agents, on a phone first (host/agents-web.ts). */
-:root { --bg: #f4f6f8; --card: #ffffff; --ink: #1a1f26; --soft: #5b6573; --line: #dde2e8; --accent: #2457c5; --green: #1f8a4c; --orange: #c26a00; --red: #c4342d; --gray: #8a93a0; color-scheme: light dark; }
-@media (prefers-color-scheme: dark) { :root { --bg: #11151b; --card: #181d25; --ink: #e6e9ee; --soft: #9aa4b2; --line: #2a313c; --accent: #7ea6ff; } }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; background: var(--card); border-bottom: 1px solid var(--line);
-  padding: max(10px, env(safe-area-inset-top)) max(14px, env(safe-area-inset-right)) 10px max(14px, env(safe-area-inset-left)); }
-h1 { font-size: 18px; margin: 0; }
-h2 { font-size: 16px; margin: 0; overflow-wrap: anywhere; }
+/* Your agents, on a phone first (host/agents-web.ts). The dashboard's look (Slate): neutral
+   greys, colour only for a state, and one filled button, the one that acts (Send); sized for a
+   thumb, inputs at 16px so iOS does not zoom, and clear of the notch and the home bar. */
+:root {
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px;
+  --font: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --bg: #f3f3f5; --card: #ffffff; --ink: #17171a; --soft: #686872; --line: #e3e3e8; --hover: #f1f1f4; --raise: #f0f0f3;
+  --gray: #a1a1aa; --green: #16a34a; --orange: #ea580c; --red: #dc2626;
+  --shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04);
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0c0c0f; --card: #15151a; --ink: #f2f2f5; --soft: #a0a0ab; --line: #26262d; --hover: #1c1c22; --raise: #1f1f25;
+    --gray: #71717a; --green: #4ade80; --orange: #fb923c; --red: #f87171;
+    --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 4px 16px rgba(0, 0, 0, 0.3); }
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font); -webkit-font-smoothing: antialiased; }
+header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: var(--s2); background: var(--card); border-bottom: 1px solid var(--line);
+  padding: max(var(--s2), env(safe-area-inset-top)) max(var(--s4), env(safe-area-inset-right)) var(--s2) max(var(--s4), env(safe-area-inset-left)); }
+h1 { font-size: 17px; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+h2 { font-size: 15px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 #status { flex: 1; }
-main { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px;
-  padding: 14px max(12px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+main { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s3);
+  padding: var(--s4) max(var(--s3), env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(var(--s3), env(safe-area-inset-left)); }
 .sub { color: var(--soft); font-size: 13px; }
-code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-ul.rows { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+code { font: 12.5px var(--mono); background: var(--raise); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+ul.rows { list-style: none; margin: 0; padding: 0; background: var(--card); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden; }
 ul.rows > li { border-top: 1px solid var(--line); }
 ul.rows > li:first-child { border-top: 0; }
-ul.rows button.open { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 2px 10px; width: 100%; text-align: left; background: none; border: 0; color: inherit; padding: 12px 14px; font: inherit; cursor: pointer; min-height: 56px; }
-.dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 6px; background: var(--gray); }
+ul.rows button.open { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 2px var(--s3); width: 100%; text-align: left; background: none; border: 0; border-radius: 0;
+  color: inherit; padding: var(--s3) var(--s4); font: inherit; cursor: pointer; min-height: 56px; }
+ul.rows button.open:hover { background: var(--hover); }
+.dot { justify-self: center; width: 8px; height: 8px; border-radius: 50%; margin-top: 7px; background: var(--gray); }
 .dot.running { background: var(--green); }
 .dot.lost { background: var(--red); }
 .what { min-width: 0; }
 .what .name { font-weight: 600; overflow-wrap: anywhere; }
 .what .line { color: var(--soft); font-size: 13px; overflow-wrap: anywhere; }
-button { font: inherit; font-size: 15px; padding: 9px 14px; min-height: 42px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
-@media (prefers-color-scheme: dark) { button { color: #10131a; } }
-button.quiet { background: transparent; color: var(--accent); }
-button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.what .line + .line { font: 12.5px var(--mono); }
+/* Buttons: neutral; the one that acts filled, in ink. */
+button { font: 550 15px var(--font); padding: 0 var(--s4); min-height: 42px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; }
+button:hover { background: var(--hover); }
+button[type="submit"] { background: var(--ink); border-color: var(--ink); color: var(--card); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 button:disabled { opacity: 0.55; }
-.top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-[hidden] { display: none !important; }
-section { min-width: 0; display: grid; gap: 10px; }
-#screen { background: #000; border-radius: 8px; padding: 6px; overflow-x: auto; max-width: 100%; }
-#say { display: flex; gap: 8px; }
-#line { flex: 1; min-width: 0; font: 16px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
-.keys { display: flex; gap: 6px; flex-wrap: wrap; }
-.keys button { flex: 1 1 auto; background: transparent; color: var(--accent); min-width: 56px; }
+.top { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+section { min-width: 0; display: grid; gap: var(--s3); }
+#screen { background: #000; border-radius: 10px; padding: 6px; overflow-x: auto; max-width: 100%; }
+#say { display: flex; gap: var(--s2); }
+#line { flex: 1; min-width: 0; font: 16px var(--mono); padding: 0 var(--s3); min-height: 42px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.keys { display: flex; gap: var(--s2); flex-wrap: wrap; }
+.keys button { flex: 1 1 auto; min-width: 56px; font: 550 14px var(--mono); }

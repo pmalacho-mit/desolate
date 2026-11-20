@@ -279,6 +279,7 @@ pre.diff span.hl { display: inline; min-width: 0; padding: 0; }
   button.small, a.button.small { font-size: 13px; min-height: 32px; }
   input, select, textarea, textarea.wide { font-size: 16px; }
   form.inline > * { flex: 1 1 100%; }
+  #domain-filter { flex: 1 1 100%; width: 100%; }
   .sbs, pre.diff { max-height: 70vh; }
   #review-card > .buttons { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 }
