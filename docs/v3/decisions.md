@@ -1373,16 +1373,18 @@ are left for the owner, with what would close them.
   check above runs, then Apple's VM process opens the path again when the VM starts. Measured
   on the M1 (Lima 2.3.0): a loop flipping a share between its folder and a link won 3 of 4
   starts, and one swap just after Lima's own checks won every time; the VM then read and
-  wrote a folder of the Mac's, or read Lima's private key. Now every vz VM's host process
-  starts under a profile (`host/vm/lima.ts`, `opens`) that lets it write nowhere but its own
-  Lima directory and its writable shares, and read, under `/Users`, `/Volumes` and the Mac's
-  temporary folders, only those, Lima's key and settings (each file alone), Lima's install,
-  and its read-only shares, each share named where it must be, never by following it. (Not
-  only /Users: a folder the Mac's user may write elsewhere, /opt/homebrew/bin or an admin's
-  /Applications, swapped in, would have handed a VM the programs the Mac runs.) Apple's VM process honours the
-  profile of the process that configures it: a swapped share is refused ("A directory sharing
-  device configuration is invalid", EPERM) and the VM does not start. T4 tries it on a real
-  workspace, beside a control (the same swap, Lima unconfined, reads the Mac's folder). Not
+  wrote a folder of the Mac's, or read Lima's private key. Apple's VM process opens a share by
+  a sandbox extension that Lima's host process issues for it, so whatever that process may
+  hand out, a VM can be given, with all that is under it. Now every vz VM's host process
+  starts under a profile (`host/vm/lima.ts`, `profile`) that lets it issue an extension for
+  nothing but its own shares, each at exactly its path (named from desolate's home, never by
+  following the share) and with exactly its access: a swapped share is refused ("Failed to
+  issue sandbox extension ...") and the VM does not start. Two broader profiles came first,
+  denying files by place; independent reviewers found a hole in each (a share swapped to the
+  VM's own Lima directory, where desolate reads its ssh settings, or to a readable folder
+  outside the denied places), because what the process could open, a VM could be handed. T4
+  tries a folder of the person's, a writable one outside /Users, and the VM's own Lima
+  directory, beside a control (the same swap, Lima unconfined, reads the Mac's folder). Not
   covered: the qemu backend (Linux), and `sandbox-exec` is deprecated by Apple, though it
   ships (macOS 14.5 here); doctor says so if it ever stops working.
 - **Cookies are the tokens, and cookies ignore ports.** Any program on the Mac that listens on

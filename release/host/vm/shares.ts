@@ -5,7 +5,7 @@
 // anything may run (audit, 2026-11-20). Lima resolves a share's location at every start, so
 // this is asked before a VM is made and before every start. The time between this and the VM
 // process's own look is closed by the sandbox profile each vz VM starts under (lima.ts,
-// `opens`): a share swapped in between is refused there. This check stays, for its message.
+// `profile`): a share swapped in between is refused there. This check stays, for its message.
 import * as fs from "node:fs";
 import * as path from "node:path";
 

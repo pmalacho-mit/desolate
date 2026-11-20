@@ -316,7 +316,10 @@ describe(
         limactl("stop", vm);
         restore();
 
-        for (const target of [outside, writable]) {
+        // And the VM's own Lima directory, where desolate keeps what it reads of the VM (its
+        // ssh settings, its record): a VM that could write it could have the Mac run anything.
+        const own = path.join(stack.home, "lima", vm);
+        for (const target of [outside, writable, own]) {
           // desolate's own start: its check passes, then the share is swapped, and the profile
           // refuses it (EPERM): Lima's own look, or the VM process's.
           fs.rmSync(profile, { force: true });
@@ -330,7 +333,7 @@ describe(
           assert.match(refused.out, /a share of it changed after desolate checked it/);
           // (Lima's host process writes its last line as it exits: given a moment.)
           const refusedBy =
-            /operation not permitted|directory sharing device configuration is invalid/i;
+            /failed to issue sandbox extension|operation not permitted|directory sharing device configuration is invalid/i;
           let ha = "";
           for (const until = Date.now() + 15_000; Date.now() < until;) {
             try {
@@ -349,11 +352,12 @@ describe(
             "Running",
             "the VM is not running",
           );
-          assert.deepEqual(
-            fs.readdirSync(target),
-            ["the-macs-own.txt"],
-            "nothing was written there",
-          );
+          if (target !== own)
+            assert.deepEqual(
+              fs.readdirSync(target),
+              ["the-macs-own.txt"],
+              "nothing was written there",
+            );
           restore();
         }
       } finally {
