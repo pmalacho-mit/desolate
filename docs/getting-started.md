@@ -319,7 +319,7 @@ the remote's default branch as last fetched (**Fetch now** fetches it).
   **workspace**, a book for a **repository**, a branch, and a dot on a line for a **commit**.
   Hover one for its kind. Click a domain or a workspace to go to its card or row.
 
-![Reviewing an offer: commits, files, and the diff as text](assets/review.png)
+![Reviewing an offer with one of its three commits picked: the files that commit changes, and its diff as text](assets/review.png)
 
 ## 8. Push it
 
