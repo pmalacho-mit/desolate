@@ -29,7 +29,7 @@ import { accept as acceptLink } from "../shared/link.ts";
 import { hostArgv, SIGNED_KINDS, signedOf } from "../shared/actions.ts";
 import { createServer as createHttpServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { parseApproval } from "../shared/approval.ts";
+import { parseApproval, parseSigned } from "../shared/approval.ts";
 import {
   APPROVE_HOSTNAME,
   GIT_HOSTNAME,
@@ -419,21 +419,22 @@ const approvalBackend = (): ApprovalBackend => {
         )
       ).map((p) => ({ message: p.message, at: p.at })),
     summary: reviewerSummary,
-    approve: async (message) => {
-      if (!parseApproval(message)) throw new Error("not a push approval");
+    approve: async (signed) => {
+      const push = parseSigned(signed);
+      if (!push) throw new Error("not a push approval");
       const { signClicked } = await import("./approver.ts");
       await rootctl(
         "approvals.answer",
-        { message, signature: signClicked(message) },
+        { message: signed, signature: signClicked(signed) },
         { quiet: true, timeoutMs: 60_000 },
       );
-      const push = parseApproval(message)!;
       events.publish(
         events.host("approved", {
           repo: push.repo,
           branch: push.branch,
           commit: push.commit,
           onto: push.onto,
+          ...(push.squashes ? { squashes: push.squashes } : {}),
         }),
       );
     },

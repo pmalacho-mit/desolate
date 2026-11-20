@@ -50,31 +50,37 @@ if (EMBED) {
   document.documentElement.addEventListener("pointerenter", () => { pointerInside = true; attention(); });
   document.documentElement.addEventListener("pointerleave", () => { pointerInside = false; attention(); });
 }
-// Each card's Approve, as the browser sees it: drawn, whole, and under nothing.
+// Each card's Approve buttons, as the browser sees them: drawn, whole, and under nothing.
 const watcher = VISIBILITY ? new IntersectionObserver((entries) => {
   for (const entry of entries) {
-    const card = [...cards.values()].find((c) => c.wrap === entry.target);
-    if (!card) continue;
-    card.visible = entry.isVisible && entry.intersectionRatio >= 0.99;
-    if (!card.visible) disarm(card);
+    for (const card of cards.values()) {
+      const arm = card.arms.find((a) => a.wrap === entry.target);
+      if (!arm) continue;
+      arm.visible = entry.isVisible && entry.intersectionRatio >= 0.99;
+      if (!arm.visible) disarm(card);
+    }
   }
 }, { threshold: [0, 1], trackVisibility: true, delay: 100 }) : null;
 
 const say = (text) => { status.textContent = text; };
 const el = (tag, text, cls) => { const node = document.createElement(tag); if (text !== undefined) node.textContent = text; if (cls) node.className = cls; return node; };
 
-const ready = (card) => attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && card.visible !== false;
+// A push that replaces the remote's branch arms only once its name is typed: a step of its
+// own, apart from the click (the host refuses the approval without it, too: approve-web.ts).
+const confirmed = (card) => !card.replaces || card.typed;
+const ready = (card, arm) => attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden && confirmed(card);
+const armedOf = (card) => card.arms.find((a) => a.armedAt);
 const disarm = (card) => {
-  card.armedAt = 0;
+  for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
   if (card.done) return;
-  card.button.disabled = true;
-  card.hint.textContent = ready(card) ? "move the pointer over Approve to arm it" : "arming in a moment...";
+  const first = card.arms.find((a) => !a.wrap.hidden);
+  card.hint.textContent = !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer over a button to arm it" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
-setInterval(() => { for (const card of cards.values()) if (!card.armedAt && !card.done) disarm(card); }, 250);
+setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
 
-const post = async (what, card) => {
-  const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, commit: card.push.commit } };
+const post = async (what, card, squash) => {
+  const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
   const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
   const body = await answer.json().catch(() => ({}));
   if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
@@ -101,20 +107,21 @@ const diffView = (text, tokens) => {
 };
 /** "Show the diff": asked of the host once, for the very text the card shows (its token).
  *  Opening it changes the card, so Approve disarms and arms again only as it always does. */
-const diffToggle = (card) => {
+const diffToggle = (card, each) => {
   const box = el("div", undefined, "diffbox");
-  const button = el("button", "Show the diff", "quiet");
+  const label = each ? ["Show each commit's diff", "Hide each commit's diff"] : ["Show the diff", "Hide the diff"];
+  const button = el("button", label[0], "quiet");
   button.type = "button";
   let open = false;
   button.addEventListener("click", async (event) => {
     if (!event.isTrusted) return;
     open = !open;
-    button.textContent = open ? "Hide the diff" : "Show the diff";
+    button.textContent = open ? label[1] : label[0];
     if (!open) box.replaceChildren();
     else {
       box.replaceChildren(el("p", "asking desolate's reviewer...", "hint"));
       try {
-        const answer = await fetch(`/diff?nonce=${card.push.nonce}&token=${card.push.token}`, { credentials: sendCookie, headers: credential });
+        const answer = await fetch(`/diff?nonce=${card.push.nonce}&token=${card.push.token}${each ? "&each=1" : ""}`, { credentials: sendCookie, headers: credential });
         const body = await answer.json();
         if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
         box.replaceChildren(...(body.diff === null ? [el("p", "Too large to show here (over 20 000 lines): read it with git in the git terminal.", "error")] : [diffView(body.diff), ...(body.cut ? [el("p", "Cut at 256 KiB: read the rest with git in the git terminal.", "error")] : [])]));
@@ -145,11 +152,11 @@ const diffToggle = (card) => {
 const summaryOf = (summary, card) => {
   const box = document.createDocumentFragment();
   if (!summary || !summary.ok) {
-    box.append(el("p", summary && summary.waiting ? "desolate's reviewer is working out what this push would send..." : `desolate's reviewer could not say what this push would send: ${summary && summary.error ? summary.error : "no answer"}. Approve only if you know what it is.`, summary && summary.waiting ? "" : "error"));
+    box.append(el("p", summary && summary.waiting ? "desolate's reviewer is working out what this push would send..." : `desolate's reviewer could not say what this push would send: ${summary && summary.error ? summary.error : "no answer"}. It cannot be approved: what the reviewer makes is what a push sends.`, summary && summary.waiting ? "" : "error"));
     return box;
   }
   for (const warning of summary.warnings || []) box.append(el("p", `Warning: ${warning}`, "error"));
-  if (summary.fastForward === false) box.append(el("p", "This does not build on the remote's branch: it REPLACES it, and the commits only the remote has are dropped from the branch.", "error"));
+  if (summary.fastForward === false) box.append(el("p", "This does not build on the remote's branch: it REPLACES it, and the commits only the remote has are dropped from the branch. To do that, type the branch's name below.", "error"));
   const commits = summary.commits || [];
   const total = commits.length + (summary.more || 0);
   box.append(el("p", total ? `${total} commit(s) the remote does not have:` : "No commit the remote does not have already."));
@@ -186,7 +193,25 @@ const summaryOf = (summary, card) => {
     if (summary.moreFiles) fl.append(el("li", `and ${summary.moreFiles} more (every one that runs on the forge is listed above)`));
     if (rest.length || summary.moreFiles) box.append(fl);
   }
-  if (summary.hasDiff !== undefined && card) box.append(...diffToggle(card));
+  // What the net change does not show: files a commit changed and a later one changed back.
+  // Every commit is pushed, so what they held is in the history all the same.
+  const between = summary.between || [];
+  if (between.length || summary.moreBetween) {
+    box.append(el("p", `${between.length + (summary.moreBetween || 0)} more file(s) changed in one of these commits and changed back, so they are not in the list above. Each commit is pushed, so what they held is in the branch's history:`, "error"));
+    const bl = el("ul", undefined, between.length > 8 ? "long" : "");
+    for (const f of between) { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(el("code", f.path)); bl.append(li); }
+    if (summary.moreBetween) bl.append(el("li", `and ${summary.moreBetween} more`));
+    box.append(bl);
+  }
+  if (summary.hasDiff !== undefined && card) box.append(...diffToggle(card, false));
+  if (summary.hasEachDiff && card) box.append(...diffToggle(card, true));
+  // The other choice: the same push as one commit (its tree is the last commit's), so nothing
+  // in between reaches the history.
+  if (summary.squash) {
+    const sq = summary.squash;
+    box.append(el("p", `Or push it squashed into one commit, ${sq.commit.slice(0, 12)}, ${sq.parent ? `on ${sq.parent.slice(0, 12)}` : "with no parent"}: the same files as the last commit, and none of what was in between. The workspace's branch keeps its ${sq.count} commits.`));
+    box.append(el("pre", sq.message, "message"));
+  }
   return box;
 };
 
@@ -211,40 +236,62 @@ const add = (push, issue) => {
     element.querySelector(".commit").textContent = push.commit;
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
-  const wrap = element.querySelector(".arm");
-  const card = { element, push, issue, wrap, visible: VISIBILITY ? false : undefined, button: element.querySelector(".approve"), hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), armedAt: 0, done: false, busy: false, shown: "" };
-  if (watcher) watcher.observe(wrap);
-  // (A disabled button gets no pointer events in every browser: these are on its wrapper,
-  // and the button lets them through while disabled: approve.css.)
-  wrap.addEventListener("pointermove", (event) => {
-    if (card.done || card.busy || card.armedAt || !ready(card)) return;
-    if (event.movementX === 0 && event.movementY === 0) return;
-    card.armedAt = performance.now();
-    card.button.disabled = false;
-    card.hint.textContent = "";
-  });
-  wrap.addEventListener("pointerleave", () => disarm(card));
-  card.button.addEventListener("click", async (event) => {
-    // A real pointer's click, on a button armed a moment ago: not a key, not a script.
-    if (!event.isTrusted || event.detail === 0 || !card.armedAt || performance.now() - card.armedAt < DWELL_MS || card.busy || card.done) return;
-    card.busy = true;
-    card.button.disabled = true;
-    card.hint.textContent = issue ? "publishing..." : "approving...";
-    // The issue's address, as text: the host took it from gh only if it is this repository's
-    // issue page (shared/issues.ts, issueUrl).
-    try { const answer = await post("approve", card); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : "approved: the push continues in the root"; }
-    catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
-    finally { card.busy = false; disarm(card); }
-  });
+  const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, visible: VISIBILITY ? false : undefined }));
+  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), done: false, busy: false, shown: "", replaces: false, typed: false };
+  for (const arm of arms) {
+    if (watcher) watcher.observe(arm.wrap);
+    // (A disabled button gets no pointer events in every browser: these are on its wrapper,
+    // and the button lets them through while disabled: approve.css.)
+    arm.wrap.addEventListener("pointermove", (event) => {
+      if (card.done || card.busy || arm.armedAt || !ready(card, arm)) return;
+      if (event.movementX === 0 && event.movementY === 0) return;
+      disarm(card);
+      arm.armedAt = performance.now();
+      arm.button.disabled = false;
+      card.hint.textContent = "";
+    });
+    arm.wrap.addEventListener("pointerleave", () => disarm(card));
+    arm.button.addEventListener("click", async (event) => {
+      // A real pointer's click, on a button armed a moment ago: not a key, not a script.
+      if (!event.isTrusted || event.detail === 0 || !arm.armedAt || performance.now() - arm.armedAt < DWELL_MS || card.busy || card.done || !confirmed(card)) return;
+      card.busy = true;
+      arm.button.disabled = true;
+      card.hint.textContent = issue ? "publishing..." : "approving...";
+      // The issue's address, as text: the host took it from gh only if it is this repository's
+      // issue page (shared/issues.ts, issueUrl).
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : arm.squash ? "approved, squashed into one commit: the push continues in the root" : "approved: the push continues in the root"; }
+      catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
+      finally { card.busy = false; disarm(card); }
+    });
+  }
+  // The replace's own step: the branch's name, typed.
+  const typed = element.querySelector(".replace-name");
+  if (typed) typed.addEventListener("input", () => { card.typed = typed.value === push.branch; disarm(card); });
   element.querySelector(".refuse").addEventListener("click", async (event) => {
     if (!event.isTrusted || card.busy || card.done) return;
     card.busy = true;
-    try { await post("refuse", card); card.done = true; card.button.disabled = true; card.hint.textContent = issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"; }
+    try { await post("refuse", card); card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"; }
     catch (error) { card.hint.textContent = error.message; }
     finally { card.busy = false; }
   });
   disarm(card);
   return card;
+};
+
+/** What the reviewer said decides the choices: a squash, and a replace's typed name. */
+const choicesOf = (card, summary) => {
+  const ok = Boolean(summary && summary.ok);
+  card.replaces = ok && summary.fastForward === false;
+  const squash = card.arms.find((a) => a.squash);
+  if (squash) squash.wrap.hidden = !(ok && summary.squash);
+  const main = card.arms.find((a) => !a.squash);
+  main.button.textContent = card.replaces ? `Replace ${card.push.branch}` : "Approve push";
+  if (squash) squash.button.textContent = card.replaces ? `Replace ${card.push.branch}, squashed into one commit` : "Approve, squashed into one commit";
+  const row = card.element.querySelector(".confirm-replace");
+  if (row) {
+    row.hidden = !card.replaces;
+    row.querySelector(".branch-name").textContent = card.push.branch;
+  }
 };
 
 const render = (pending, issues) => {
@@ -271,6 +318,7 @@ const render = (pending, issues) => {
     if (shown !== card.shown) {
       card.shown = shown;
       card.summary.replaceChildren(summaryOf(push.summary, card));
+      choicesOf(card, push.summary);
       card.changedAt = performance.now();
       changed = true;
     }
@@ -279,7 +327,7 @@ const render = (pending, issues) => {
   for (const card of cards.values())
     if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
-      if (!card.done) { card.done = true; card.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or its two minutes ran out)"; }
+      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or its two minutes ran out)"; }
       card.element.classList.add("gone");
       changed = true;
     }

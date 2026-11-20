@@ -6,18 +6,18 @@
 //
 // This user does not push. It cannot reach a write key at all (the independent audit's F6:
 // it is the user that parses what domains send). It hands the pusher (root/pusher.ts, a user
-// of its own) the approval's id, a pack, and the LFS objects the remote lacks. The pusher
-// asks the keyring what that id names, and asks the forge for that one ref update and no
-// other; it reads nothing of what this sends (the pack goes to the forge as bytes).
-import { spawn } from "node:child_process";
+// of its own) the approval's id, the reviewer's pack, and the LFS objects the remote lacks.
+// The pusher asks the keyring what that id names, and asks the forge for that one ref update
+// and no other; it reads nothing of what this sends (the pack goes to the forge as bytes),
+// and sends it only if it is the pack the person approved. This user no longer makes the
+// pack: when it did, it could have put any object in it (#165).
 import * as fs from "node:fs";
 import { connect } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Repo } from "../shared/names.ts";
-import { git, gitInvocation } from "./git.ts";
 import { clonePath, PUSHER } from "./layout.ts";
-import { lfsOf } from "./offers.ts";
+import { packFor } from "./review-client.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Call,
@@ -160,48 +160,33 @@ declare namespace withPusher {
 }
 
 /** Returns null when the remote took it, or why it did not. The pusher pushes what the
- *  approval names, whatever this sends; what this sends is what makes that possible: a pack
- *  with the commit and what the remote lacks of its history (as the mirror last saw the
- *  remote), and the LFS objects that history adds. */
+ *  approval names, whatever this sends; what this sends is what makes that possible, and the
+ *  pusher takes nothing else: the pack desolate's reviewer made of the approved commits (its
+ *  digest is in the approval), and of the LFS objects those commits point to, the ones this
+ *  clone holds. */
 export const send = async (
   repo: Repo,
   approval: string,
-  commit: string,
+  push: { commit: string; onto: string | null },
 ): Promise<Failed | null> => {
   const clone = clonePath(repo);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-send-"));
   try {
     const pack = path.join(work, "push.pack");
-    // What the remote has, as the mirror saw it, is left out (the clone's origin/* are the
-    // mirror's branches). Not thin: the forge resolves every delta from the pack itself.
-    const have = (
-      await git(clone, ["for-each-ref", "--format=%(objectname)", "refs/remotes/origin"])
-    ).stdout
-      .split("\n")
-      .filter((id) => /^[0-9a-f]{40}$/.test(id));
-    const out = fs.openSync(pack, "w", 0o600);
-    const packed = await new Promise<{ code: number; stderr: string }>((resolve) => {
-      const how = gitInvocation(clone);
-      const child = spawn(
-        "git",
-        [...how.args, "pack-objects", "--stdout", "--revs", "--delta-base-offset", "--quiet"],
-        { env: how.env, stdio: ["pipe", out, "pipe"] },
-      );
-      let stderr = "";
-      child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
-      child.on("close", (code) => resolve({ code: code ?? 1, stderr }));
-      child.stdin!.end([commit, ...have.map((id) => `^${id}`), ""].join("\n"));
-    });
-    fs.closeSync(out);
-    if (packed.code !== 0)
+    let made: { pack: string; size: number; lfs: string[] };
+    try {
+      made = await packFor(repo, push.commit, push.onto, pack);
+    } catch (error) {
       return {
-        error: `cannot pack the commit for the pusher: ${packed.stderr.trim().split("\n").slice(-2).join(" | ")}`,
+        error: `the reviewer has no pack for this push (${(error as Error).message}), so nothing was pushed`,
         moved: false,
       };
+    }
     // LFS objects the remote lacks and this clone holds (what came with offers).
     const files: string[] = [];
     const lfs: { oid: string; size: number }[] = [];
-    for (const oid of await lfsOf(repo, commit)) {
+    for (const oid of made.lfs) {
+      if (!/^[0-9a-f]{64}$/.test(oid)) continue;
       const file = path.join(
         clone,
         ".git",
@@ -218,7 +203,10 @@ export const send = async (
     if (lfs.length > 0) process.stderr.write(`uploading ${lfs.length} LFS object(s)\n`);
     files.push(pack);
     const reply = await withPusher(() =>
-      handOver({ op: "push", approval, pack: fs.statSync(pack).size, lfs }, files),
+      handOver(
+        { op: "push", approval, pack: fs.statSync(pack).size, lfs, lfsListed: made.lfs },
+        files,
+      ),
     );
     if (reply.ok === true) return null;
     return {

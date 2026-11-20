@@ -27,7 +27,13 @@ import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
-import { formatApproval, parseApproval } from "../shared/approval.ts";
+import {
+  answers,
+  formatApproval,
+  parseApproval,
+  parseSigned,
+  signedFor,
+} from "../shared/approval.ts";
 import { parseRepo, repoId, isBranch, isCommit } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { KEYRING } from "./layout.ts";
@@ -138,6 +144,11 @@ export type Approval = {
   ref: string;
   commit: string;
   onto: string | null;
+  /** The commit the person reviewed, when they approved it squashed into `commit`. */
+  squashes: string | null;
+  /** What the push sends, as the person signed it: the pusher sends nothing else. */
+  pack: string;
+  lfs: { count: number; digest: string };
   expires: number;
   uses: number;
   by: string;
@@ -379,7 +390,9 @@ const approverKey = (): { key: ReturnType<typeof createPublicKey> } | { error: s
 };
 
 const approve = (request: Record<string, unknown>): Record<string, unknown> => {
-  const parsed = parseApproval(request.message);
+  // The text the person signed: the challenge's fields, and what the push sends, put in by
+  // the host from desolate's reviewer (shared/approval.ts).
+  const parsed = parseSigned(request.message);
   if (!parsed) return { ok: false, error: "that is not an approval message" };
   const refused = (reason: string) => {
     audit({
@@ -392,8 +405,13 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
     return { ok: false, error: reason };
   };
   const issued = challenges.get(parsed.nonce);
-  if (!issued || issued.expires < Date.now() || issued.message !== request.message)
+  const asked = issued ? parseApproval(issued.message) : null;
+  if (!issued || !asked || issued.expires < Date.now())
     return refused("that challenge is not outstanding: each lasts two minutes and approves once");
+  // About this challenge's push: its repository, branch and onto, and its commit as it is,
+  // or the squash of it the person chose.
+  if (!answers(parsed, asked))
+    return refused("that approval is not for the push this challenge names");
   const approver = approverKey();
   if ("error" in approver) return refused(approver.error);
   let valid = false;
@@ -402,7 +420,7 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
       typeof request.signature === "string" &&
       verify(
         "sha256",
-        Buffer.from(issued.message),
+        Buffer.from(String(request.message)),
         approver.key,
         Buffer.from(request.signature, "base64"),
       );
@@ -421,6 +439,9 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
     ref: parsed.branch,
     commit: parsed.commit,
     onto: parsed.onto,
+    squashes: parsed.squashes,
+    pack: parsed.pack,
+    lfs: parsed.lfs,
     expires: Date.now() + APPROVAL.lifeMs,
     uses: APPROVAL.uses,
     by: "host approver",
@@ -428,7 +449,7 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
   };
   approvals.set(id, approval);
   audit({ event: "approved", ...approval, expires: new Date(approval.expires).toISOString() });
-  return { ok: true, id };
+  return { ok: true, id, commit: approval.commit, onto: approval.onto };
 };
 
 declare namespace approve {
@@ -448,6 +469,42 @@ declare namespace approve {
       },
     ]
   >;
+  /** The text the host signs for that challenge: it, with what the reviewer says it sends. */
+  type Signed = Invoke<
+    typeof signedFor,
+    [
+      message: Issued["message"],
+      sends: {
+        commit: "0123456789abcdef0123456789abcdef01234567";
+        squashes: null;
+        pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        lfs: [];
+      },
+    ]
+  >;
+  /** And one under the same nonce about another commit, which squashes nothing of it. */
+  type Another = Invoke<
+    typeof signedFor,
+    [
+      message: Issued["message"],
+      sends: {
+        commit: "89abcdef0123456789abcdef0123456789abcdef";
+        squashes: null;
+        pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        lfs: [];
+      },
+    ]
+  >;
+  /** a text that answers the challenge's nonce but names another push is refused before any
+   *  signature is looked at: a nonce approves only the push it was issued for */
+  export type NotItsPush = Given<
+    [Fresh, Pushable, Issued],
+    Expect<
+      Invoke<typeof approve, [request: { message: Another; signature: "AAAA" }]>,
+      "=",
+      { ok: false; error: "that approval is not for the push this challenge names" }
+    >
+  >;
   /** a challenge the keyring issued, answered with a signature that is not the host
    *  approver's, files no approval: the push it names is still not approved. (The approver's
    *  key is root's, at /etc/desolate: a test cannot install one, so the signature that would
@@ -458,7 +515,7 @@ declare namespace approve {
       Expect<
         Invoke<
           typeof approve,
-          [request: { message: Issued["message"]; signature: "c2lnbmVkIGJ5IHNvbWVvbmUgZWxzZQ==" }]
+          [request: { message: Signed; signature: "c2lnbmVkIGJ5IHNvbWVvbmUgZWxzZQ==" }]
         >,
         "matches",
         { ok: false }
@@ -489,7 +546,7 @@ declare namespace approve {
           typeof approve,
           [
             request: {
-              message: "desolate push approval v2\nrepo: acme/app\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n";
+              message: "desolate push approval v3\nrepo: acme/app\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00112233445566778899aabbccddeeff\n";
               signature: "AAAA";
             },
           ]
@@ -515,7 +572,8 @@ declare namespace approve {
   >;
 }
 
-/** Whether a live approval names exactly this push. The pre-push hook's question. */
+/** Whether a live approval names exactly this push: its commit, or that commit squashed (the
+ *  answer then says which commit goes). A raw push's question, while it waits. */
 const approved = (request: Record<string, unknown>): Record<string, unknown> => {
   for (const approval of approvals.values())
     if (
@@ -523,10 +581,10 @@ const approved = (request: Record<string, unknown>): Record<string, unknown> => 
       approval.uses > 0 &&
       approval.repo === request.repo &&
       approval.ref === request.ref &&
-      approval.commit === request.commit &&
+      (approval.commit === request.commit || approval.squashes === request.commit) &&
       approval.onto === (request.onto ?? null)
     )
-      return { ok: true, id: approval.id };
+      return { ok: true, id: approval.id, commit: approval.commit, onto: approval.onto };
   return { ok: false, error: "no approval on file for that push" };
 };
 
@@ -777,6 +835,8 @@ const pusherOps = (request: Record<string, unknown>): Record<string, unknown> =>
         ref: approval.ref,
         commit: approval.commit,
         onto: approval.onto,
+        pack: approval.pack,
+        lfs: approval.lfs,
         pubkey,
       },
     };

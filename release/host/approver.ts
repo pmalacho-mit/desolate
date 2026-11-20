@@ -28,7 +28,7 @@ import {
 } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { formatApproval, parseApproval } from "../shared/approval.ts";
+import { formatSigned, parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -154,10 +154,17 @@ declare namespace init {
 
 const clean = (text: string) => text.replace(/[^\x20-\x7e]/g, "?").slice(0, 300);
 
-/** Ask the person, and sign the keyring's challenge if they say yes. Everything shown is
- *  read out of the very text that gets signed. Refuses (exit 78) on anything else. */
-export const sign = async (message: string, summary?: string): Promise<string> => {
-  const push = parseApproval(message);
+/** Ask the person, and sign the approval text if they say yes: the keyring's challenge with
+ *  what the reviewer says the push sends (shared/approval.ts, signedFor). Everything shown is
+ *  read out of the very text that gets signed. A push that replaces the remote's branch is
+ *  confirmed by typing `replace <branch>`, not the branch alone. Refuses (exit 78) on
+ *  anything else. */
+export const sign = async (
+  message: string,
+  summary?: string,
+  replaces = false,
+): Promise<string> => {
+  const push = parseSigned(message);
   const which = kind();
   if (!push)
     throw new Refusal(
@@ -177,9 +184,19 @@ export const sign = async (message: string, summary?: string): Promise<string> =
     `  repository  ${push.repo}`,
     `  branch      ${push.branch}`,
     `  commit      ${push.commit}`,
+    ...(push.squashes
+      ? [`  squashes    ${push.squashes}  (its commits, pushed as this one commit)`]
+      : []),
     push.onto
       ? `  onto        ${push.onto}  (the remote's ${push.branch} now: it moves from this to the commit, or not at all)`
       : `  onto        none: the remote has no ${push.branch} yet`,
+    `  pack        ${push.pack.slice(0, 16)}  (made by desolate's reviewer: nothing else is sent)`,
+    `  LFS         ${push.lfs.count} object(s), only those its commits point to`,
+    ...(replaces
+      ? [
+          `  REPLACES    the remote's ${push.branch}: it does not build on it, and the commits only the remote has are dropped`,
+        ]
+      : []),
     ...(summary
       ? [`  sends       ${clean(summary)}`, "              (desolate's reviewer, in the root)"]
       : []),
@@ -197,7 +214,7 @@ export const sign = async (message: string, summary?: string): Promise<string> =
       shown.join("\n") +
         "\nConfirm with Touch ID (or your login password) in the dialog macOS is showing.\n",
     );
-    const reason = `approve pushing ${push.branch} of ${push.repo} to ${push.commit.slice(0, 12)}, from ${push.onto ? push.onto.slice(0, 12) : "nothing (a new branch)"}`;
+    const reason = `${replaces ? "REPLACE the remote's" : "approve pushing"} ${push.branch} of ${push.repo} with ${push.commit.slice(0, 12)}${push.squashes ? " (squashed)" : ""}, from ${push.onto ? push.onto.slice(0, 12) : "nothing (a new branch)"}`;
     const signed = spawnSync(FILES.helper, ["sign", FILES.key, reason], {
       input: message,
       encoding: "utf8",
@@ -222,11 +239,15 @@ export const sign = async (message: string, summary?: string): Promise<string> =
       "run it from a terminal of your own, on the host",
     );
   }
+  const wanted = replaces ? `replace ${push.branch}` : push.branch;
   fs.writeSync(
     tty,
-    [...shown, `Type the branch name (${push.branch}) to push, or anything else to refuse: `].join(
-      "\n",
-    ),
+    [
+      ...shown,
+      replaces
+        ? `Type '${wanted}' to replace it, or anything else to refuse: `
+        : `Type the branch name (${push.branch}) to push, or anything else to refuse: `,
+    ].join("\n"),
   );
   const answer = await new Promise<string>((resolve) => {
     let text = "";
@@ -242,8 +263,13 @@ export const sign = async (message: string, summary?: string): Promise<string> =
     input.on("end", () => resolve(text.trim()));
     input.on("error", () => resolve(""));
   });
-  if (answer !== push.branch)
-    throw unconfirmed("not confirmed", "run the push again, and type the branch name when it asks");
+  if (answer !== wanted)
+    throw unconfirmed(
+      "not confirmed",
+      replaces
+        ? `run the push again, and type '${wanted}' when it asks`
+        : "run the push again, and type the branch name when it asks",
+    );
   return signWith(
     "sha256",
     Buffer.from(message),
@@ -271,7 +297,7 @@ declare namespace sign {
           [
             run: typeof sign,
             args: [
-              message: "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n",
+              message: "desolate push approval v3\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00000000000000000000000000000001\n",
             ],
           ]
         >,
@@ -290,7 +316,7 @@ declare namespace sign {
  *  this Mac, is the confirmation; the page is what checks it was theirs. With the Touch ID
  *  approver the Secure Enclave asks as well. */
 export const signClicked = (message: string): string => {
-  const push = parseApproval(message);
+  const push = parseSigned(message);
   const which = kind();
   if (!push) throw new Error("not a push approval; nothing was signed");
   if (which === "touchid") {
@@ -319,7 +345,7 @@ export const signClicked = (message: string): string => {
 
 declare namespace signClicked {
   type Push =
-    "desolate push approval v2\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n";
+    "desolate push approval v3\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00000000000000000000000000000001\n";
   /** the approver's signature over exactly the text the page showed, and no other */
   export type Signs = Given<
     [
@@ -340,7 +366,7 @@ declare namespace signClicked {
         Invoke<
           typeof keyringTakes,
           [
-            message: "desolate push approval v2\nrepo: acme/web\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n",
+            message: "desolate push approval v3\nrepo: acme/web\nbranch: main\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00000000000000000000000000000001\n",
             signature: Invoke<typeof signClicked, [message: Push]>,
           ]
         >,
@@ -370,11 +396,14 @@ declare namespace signClicked {
  *  first real push needs it. */
 export const selftest = async (out: (line: string) => void): Promise<number> => {
   // A commit no repository has (every digit 1), on a repository that is not one of yours.
-  const message = formatApproval({
+  const message = formatSigned({
     repo: "desolate/selftest",
     branch: "selftest",
     commit: "1".repeat(40),
     onto: null,
+    squashes: null,
+    pack: "0".repeat(64),
+    lfs: { count: 0, digest: "0".repeat(64) },
     nonce: "0".repeat(32),
   });
   const signature = await sign(message, "nothing: this is the approver's self-test");

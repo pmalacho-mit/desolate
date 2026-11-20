@@ -13,9 +13,12 @@
 // root's user could have been sent straight on to this one (the audit of that version said
 // so). Now nothing the root's user sends is parsed in this process, beyond one JSON line
 // (at most 1 MiB, read by node's own parser) that says how many bytes follow:
-//   - the pack is forwarded to the remote as bytes, counted, never read. The forge's git
+//   - the pack is forwarded to the remote as bytes, counted and hashed, never read. Its last
+//     bytes go only if it hashes to the pack the person approved (the reviewer made it, of
+//     the approved commits' own objects): no other object rides along. The forge's git
 //     reads it;
-//   - an LFS object is hashed as it arrives, and goes up only if it hashes to its name.
+//   - an LFS object is hashed as it arrives, and goes up only if it hashes to its name and is
+//     one the approved commits point to (the approval carries their ids' digest).
 //     git-lfs uploads it from a repository of this push's own that holds no git object;
 //   - what is pushed is decided by the keyring's record of the approval, not by anything
 //     sent: this process speaks git's push protocol itself (receive-pack: a few lines of
@@ -35,8 +38,10 @@
 // The socket (PUSHER.control) is in a directory only the root's user and this user enter.
 // One request per connection:
 //   {"op":"ping"}                                             -> {"ok":true}
-//   {"op":"push","approval":id,"pack":N,"lfs":[{"oid","size"}...]}\n
-//     then each LFS object's bytes in that order, then N bytes of pack
+//   {"op":"push","approval":id,"pack":N,"lfs":[{"oid","size"}...],"lfsListed":[oid...]}\n
+//     then each LFS object's bytes in that order, then N bytes of pack. `lfsListed` is every
+//     LFS object the approved commits point to (the reviewer's list, whose digest the person
+//     signed); `lfs` is those of them the root holds, sent
 //                                       -> {"ok":true,...} | {"ok":false,"error","moved"}
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -45,6 +50,7 @@ import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { lfsDigest } from "../shared/approval.ts";
 import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 import { ask } from "./keyring-client.ts";
@@ -103,8 +109,19 @@ type Approved = {
   ref: string;
   commit: string;
   onto: string | null;
+  pack: string;
+  lfs: { count: number; digest: string };
   pubkey: string;
 };
+
+/** The last bytes of a pack, held back until the whole pack has hashed to what the person
+ *  approved. A pack ends with its checksum (20 bytes, or 32 in a sha256 repository), and the
+ *  forge takes nothing from a pack that does not end: git's receive-pack keeps what it reads
+ *  in a quarantine it removes when the pack is cut short (measured in T2 against git's own:
+ *  the branch stays, no object of it is left). */
+const HOLD = 32;
+/** A pack or an LFS list that is not the one approved: refused, with nothing taken. */
+export class NotApproved extends Error {}
 
 /** The forge's address, from root's own copy (the host writes it, as root): the root's user
  *  cannot aim a push elsewhere. */
@@ -467,6 +484,8 @@ export const updateRef = async (
   try {
     await sendPack(forge.stdin);
   } catch (error) {
+    // Not the approved pack: its end was never sent, so the forge has taken nothing.
+    if (error instanceof NotApproved) throw error;
     const said = await Promise.race([
       report,
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
@@ -813,7 +832,9 @@ const push = async (
     !isBranch(approved.ref) ||
     !isCommit(approved.commit) ||
     (approved.onto !== null && !isCommit(approved.onto)) ||
-    typeof approved.pubkey !== "string"
+    typeof approved.pubkey !== "string" ||
+    !/^[0-9a-f]{64}$/.test(String(approved.pack)) ||
+    !/^[0-9a-f]{64}$/.test(String(approved.lfs?.digest))
   )
     return { ok: false, error: "the keyring's approval is not well formed" };
   const packSize = Number(request.pack);
@@ -833,6 +854,25 @@ const push = async (
     )
   )
     return { ok: false, error: "LFS objects are named by sha256, with a size of at most 5 GiB" };
+  // The LFS objects the person approved (their ids' digest is in the text they signed): the
+  // whole list, which must be that one, and of it only those the root holds go up.
+  const listed = Array.isArray(request.lfsListed) ? (request.lfsListed as unknown[]) : [];
+  if (
+    listed.length > LIMIT.objects ||
+    !listed.every(isLfsOid) ||
+    new Set(listed).size !== approved.lfs.count ||
+    lfsDigest(listed as string[]) !== approved.lfs.digest
+  )
+    return {
+      ok: false,
+      error: "the LFS objects listed are not the ones approved: nothing was pushed",
+    };
+  const allowed = new Set(listed as string[]);
+  if (lfs.some((o) => !allowed.has(o.oid as string)))
+    return {
+      ok: false,
+      error: "an LFS object sent is not one the approved commits point to: nothing was pushed",
+    };
   const onto = approved.onto ?? ZERO;
   const forge = forgeAddress();
   const work = fs.mkdtempSync(path.join(PUSHER.home, "push-"));
@@ -939,7 +979,21 @@ const push = async (
         approved.onto,
         approved.commit,
         async (sink) => {
-          left = (await receive(socket, left, packSize, (chunk) => write(sink, chunk))).rest;
+          // Forwarded as it arrives, all but its last bytes; those only once the whole pack has
+          // hashed to the approved one. Hashing is not parsing: nothing in it is read.
+          let tail = Buffer.alloc(0);
+          const got = await receive(socket, left, packSize, async (chunk) => {
+            const all = Buffer.concat([tail, chunk]);
+            const cut = Math.max(0, all.length - HOLD);
+            tail = all.subarray(cut);
+            if (cut > 0) await write(sink, all.subarray(0, cut));
+          });
+          left = got.rest;
+          if (got.sha256 !== approved.pack)
+            throw new NotApproved(
+              `the pack is not the one approved (it hashes to ${got.sha256.slice(0, 12)}, not ${approved.pack.slice(0, 12)})`,
+            );
+          await write(sink, tail);
         },
       );
       ssh.stdin.end();

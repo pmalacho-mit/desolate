@@ -15,7 +15,7 @@ process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31599";
 const { approveToken, embedAddress, handler, issueToken, pushToken } =
   await import("../../../release/host/approve-web.ts");
-const { formatApproval } = await import("../../../release/shared/approval.ts");
+const { formatApproval, signedFor } = await import("../../../release/shared/approval.ts");
 
 const NAME = "desolate-approve.localhost";
 const ORIGIN = `http://${NAME}:31599`;
@@ -27,6 +27,9 @@ const push = {
   nonce: "1".repeat(32),
 };
 const message = formatApproval(push);
+// What desolate's reviewer says the push sends: the host signs the challenge with it.
+const SENDS = { pack: "e".repeat(64), size: 100, lfs: ["f".repeat(64)] };
+const signed = signedFor(message, { commit: push.commit, squashes: null, ...SENDS });
 // What the root's user lists: a test can change it under the page, as a compromised one could.
 let listed = [{ message, at: "2026-11-12T00:00:00Z" }];
 const approved: string[] = [];
@@ -48,6 +51,7 @@ before(async () => {
             { commit: "a".repeat(40), subject: "<img src=x onerror=alert(1)>", author: "agent" },
           ],
           diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
+          sends: SENDS,
         }),
         approve: async (m) => void approved.push(m),
         refuse: async (m) => void refused.push(m),
@@ -323,10 +327,11 @@ describe("T1 the approval page", () => {
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
   });
 
-  it("control: the page's own approval signs exactly the message it showed", async () => {
+  it("control: the page's own approval signs exactly the push it showed, with what the reviewer says it sends", async () => {
     const answer = await approve(good());
     assert.equal(answer.status, 200, answer.body);
-    assert.deepEqual(approved, [message]);
+    assert.deepEqual(approved, [signed]);
+    assert.match(signed, /\npack: e{64}\nlfs: 1 [0-9a-f]{64}\n/);
     const no = await call(
       "POST",
       "/refuse",

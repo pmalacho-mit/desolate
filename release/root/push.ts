@@ -13,7 +13,7 @@
 // Nothing here can make the signature: the approver's key is not in this VM (P2).
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseApproval } from "../shared/approval.ts";
+import { parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
@@ -100,7 +100,7 @@ declare namespace argsOf {
           "--expect",
           "0123456789abcdef0123456789abcdef01234567",
           "--message",
-          "ZGVzb2xhdGUgcHVzaCBhcHByb3ZhbCB2MgpyZXBvOiBhY21lL2FwcApicmFuY2g6IGZpeApjb21taXQ6IDAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1NjcKb250bzogbm9uZQpub25jZTogMDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmYK",
+          "ZGVzb2xhdGUgcHVzaCBhcHByb3ZhbCB2MwpyZXBvOiBhY21lL2FwcApicmFuY2g6IGZpeApjb21taXQ6IDAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1NjcKb250bzogbm9uZQpzcXVhc2hlczogbm9uZQpwYWNrOiBlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlCmxmczogMCBlM2IwYzQ0Mjk4ZmMxYzE0OWFmYmY0Yzg5OTZmYjkyNDI3YWU0MWU0NjQ5YjkzNGNhNDk1OTkxYjc4NTJiODU1Cm5vbmNlOiAwMDExMjIzMzQ0NTU2Njc3ODg5OWFhYmJjY2RkZWVmZgo=",
           "--signature",
           "c2ln",
         ],
@@ -111,7 +111,7 @@ declare namespace argsOf {
       mode: "run";
       branch: "main";
       allowDefault: true;
-      message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n";
+      message: "desolate push approval v3\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00112233445566778899aabbccddeeff\n";
       signature: "c2ln";
     }
   >;
@@ -328,8 +328,13 @@ export const refuseOtherApproval = (
   domain: string,
   branch: string,
 ) => {
-  const named = parseApproval(message);
-  if (!named || named.repo !== r.repo || named.branch !== branch || named.commit !== r.commit)
+  const named = parseSigned(message);
+  if (
+    !named ||
+    named.repo !== r.repo ||
+    named.branch !== branch ||
+    (named.squashes ?? named.commit) !== r.commit
+  )
     refuse(
       "the approval is not for this push",
       `run it again: desolate push ${domain} ${r.repo} ${branch} --expect ${r.commit}`,
@@ -346,7 +351,7 @@ declare namespace refuseOtherApproval {
       [
         f: typeof refuseOtherApproval,
         args: [
-          message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n",
+          message: "desolate push approval v3\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00112233445566778899aabbccddeeff\n",
           r: Reviewed,
           domain: "acme",
           branch: "fix",
@@ -364,7 +369,7 @@ declare namespace refuseOtherApproval {
         [
           f: typeof refuseOtherApproval,
           args: [
-            message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n",
+            message: "desolate push approval v3\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00112233445566778899aabbccddeeff\n",
             r: Reviewed,
             domain: "acme",
             branch: "main",
@@ -384,7 +389,7 @@ declare namespace refuseOtherApproval {
         [
           f: typeof refuseOtherApproval,
           args: [
-            message: "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n",
+            message: "desolate push approval v3\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00112233445566778899aabbccddeeff\n",
             r: { repo: "acme/app"; commit: "89abcdef0123456789abcdef0123456789abcdef" },
             domain: "acme",
             branch: "fix",
@@ -429,10 +434,13 @@ const main = async () => {
     // What the person is shown at the prompt is the reviewer's account (host/push.ts): it is
     // sent the commit first, as a raw push sends it (raw-push.ts). Until this, a branch never
     // pushed raw was described as "the reviewer could not say" (found by T2 04).
+    // It also makes the pack the push sends, which the approval names: a push it was not
+    // sent cannot be approved.
     const unreviewed = await submitForReview(repo, r.commit);
     if (unreviewed)
-      process.stderr.write(
-        `desolate: the reviewer was not sent this push (${unreviewed}); the prompt will say it cannot describe it\n`,
+      refuse(
+        `the reviewer was not sent this push (${unreviewed}), and a push is approved only as the reviewer describes it`,
+        "desolate doctor",
       );
     // What the remote's branch is now, as the mirror last saw it: the push moves it from
     // exactly this (pusher.ts). If the remote moved since, the push is refused, not forced.
@@ -472,6 +480,8 @@ const main = async () => {
     fs.mkdirSync(lock);
   }
   let approval: string | null = null;
+  // What goes: the approved commit (the reviewed one, or its squash) onto what the remote had.
+  const signed = parseSigned(message)!;
   try {
     const filed = await ask(KEYRING.control, { op: "approve", message, signature });
     if (filed.ok !== true)
@@ -481,7 +491,7 @@ const main = async () => {
         EXIT.unconfirmed,
       );
     approval = String(filed.id);
-    const failed = await send(repo, approval, r.commit);
+    const failed = await send(repo, approval, { commit: signed.commit, onto: signed.onto });
     if (failed)
       throw new Refusal(
         failed.error,
@@ -495,14 +505,16 @@ const main = async () => {
   }
   const base =
     offersOf(domain).find((o) => o.repo === r.repo && o.branch === branch)?.base ?? r.defaultBranch;
-  const link = afterPush({ repo: r.repo, branch, commit: r.commit, base }, (line) =>
+  const link = afterPush({ repo: r.repo, branch, commit: signed.commit, base }, (line) =>
     process.stderr.write(`${line}\n`),
   );
   withdraw(domain, r.repo, branch);
   // What the remote now has, the mirror has: origin/* in every clone follows.
   await repos.fetch(repo).catch(() => {});
   process.stdout.write(
-    `pushed ${r.repo} ${branch} at ${r.commit} (${r.commits.length} commit(s)${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s) first` : ""}).\n`,
+    signed.squashes
+      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${r.commits.length} commit(s) squashed into one${signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : ""}. The workspace's ${branch} keeps its own commits: reset it to origin/${branch} before working on, or its next push replaces the remote's.\n`
+      : `pushed ${r.repo} ${branch} at ${r.commit} (${r.commits.length} commit(s)${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s) first` : ""}).\n`,
   );
   if (link)
     process.stdout.write(

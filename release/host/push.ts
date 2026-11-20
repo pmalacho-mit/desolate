@@ -12,7 +12,8 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import { editorHostPort, parseRepo, repoId, ROOT_HOSTNAME } from "../shared/names.ts";
 import { parseArgs } from "node:util";
 import { sign } from "./approver.ts";
-import { parseApproval } from "../shared/approval.ts";
+import { parseApproval, signedFor } from "../shared/approval.ts";
+import type { Summary } from "./approve-web.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import type { Issue } from "../shared/issues.ts";
@@ -524,7 +525,12 @@ export const push = async (args: string[]): Promise<number> => {
   // What the person typed, against what the root prepared: refused before anything is signed.
   const { values, positionals } = parseArgs({
     args,
-    options: { expect: { type: "string" }, "allow-default": { type: "boolean" } },
+    options: {
+      expect: { type: "string" },
+      "allow-default": { type: "boolean" },
+      squash: { type: "boolean" },
+      replace: { type: "boolean" },
+    },
     allowPositionals: true,
     strict: false,
   });
@@ -541,16 +547,22 @@ export const push = async (args: string[]): Promise<number> => {
     );
   for (const warning of plan.warnings)
     process.stderr.write(`desolate: WARNING: this push ${plain(warning)}\n`);
-  const signature = await sign(plan.message, await reviewed(plan.message));
+  const chosen = await chosenText(plan.message, {
+    squash: values.squash === true,
+    replace: values.replace === true,
+    again: `desolate push ${args.filter((a) => a !== "--squash" && a !== "--replace").join(" ")}`,
+  });
+  if (typeof chosen === "number") return chosen;
+  const signature = await sign(chosen.text, chosen.line, chosen.replaces);
   void (await import("./daemon.ts")).announceApproved(plan.message);
   return backend().attach(
     ROOT_VM,
     [
       ...PUSH,
       "run",
-      ...args,
+      ...args.filter((a) => a !== "--squash" && a !== "--replace"),
       "--message",
-      Buffer.from(plan.message).toString("base64"),
+      Buffer.from(chosen.text).toString("base64"),
       "--signature",
       signature,
     ],
@@ -558,32 +570,68 @@ export const push = async (args: string[]): Promise<number> => {
   );
 };
 
-/** `desolate approve`: answer the raw `git push` that is waiting in the root's terminal. */
+/** The text the person signs for a challenge: the challenge, with what desolate's reviewer
+ *  says the push sends (the host asks it, as root). The person's choices: the commits as they
+ *  are, or squashed into one; and a push that replaces the remote's branch goes only with
+ *  --replace. A push the reviewer cannot describe is not approved at all: what it would send
+ *  is what the approval names. A number is the exit code of a refusal, said. */
+export const chosenText = async (
+  message: string,
+  choice: { squash: boolean; replace: boolean; again: string },
+): Promise<{ text: string; line: string; replaces: boolean } | number> => {
+  const push = parseApproval(message);
+  if (!push) return refuse("the root's approval text is not one", "desolate doctor");
+  const { reviewerSummary } = await import("./daemon.ts");
+  const s = await reviewerSummary(push);
+  if (!s.ok || !s.sends)
+    return refuse(
+      `desolate's reviewer could not say what this push would send (${printable(s.error ?? "no answer")}), so it cannot be approved: nothing was signed`,
+      "desolate doctor, then push again",
+    );
+  const replaces = s.fastForward === false;
+  if (replaces && !choice.replace)
+    return refuse(
+      `this push REPLACES the remote's ${push.branch}: it does not build on it, and the commits only the remote has would be dropped. Nothing was signed`,
+      `to replace it, say so: ${choice.again} --replace (or fetch, and rebase in the workspace)`,
+    );
+  if (choice.squash && !s.squash)
+    return refuse(
+      "there is nothing to squash: the push is one commit on what it builds on",
+      `push it as it is: ${choice.again}`,
+    );
+  const sends = choice.squash
+    ? { commit: s.squash!.commit, squashes: push.commit, ...s.squash!.sends }
+    : { commit: push.commit, squashes: null, ...s.sends };
+  return { text: signedFor(message, sends), line: reviewedLine(s, choice.squash), replaces };
+};
+
 /** The reviewer's account of a push, in one line for the terminal's prompt: what the
  *  approval page shows, from the root's reviewer, not the root's ordinary user (which reads
  *  what domains write). */
-const reviewed = async (message: string): Promise<string> => {
-  const push = parseApproval(message);
-  if (!push) return "";
-  const { reviewerSummary } = await import("./daemon.ts");
-  const s = await reviewerSummary(push);
-  if (!s.ok)
-    return `desolate's reviewer could not say what this push would send (${s.error ?? "no answer"}): approve only if you know`;
+const reviewedLine = (s: Summary, squashed: boolean): string => {
   const commits = (s.commits?.length ?? 0) + (s.more ?? 0);
   const files = (s.files?.length ?? 0) + (s.moreFiles ?? 0);
+  const between = (s.between?.length ?? 0) + (s.moreBetween ?? 0);
   return [
-    s.fastForward === false
-      ? "REPLACES the remote's branch (commits only the remote has are dropped);"
+    squashed
+      ? `${commits} commit(s) the remote does not have, squashed into one, ${files} file(s)`
+      : `${commits} commit(s) the remote does not have, ${files} file(s)`,
+    s.lfs ? `, ${s.lfs} of them LFS` : "",
+    !squashed && between
+      ? `; ${between} more file(s) changed in a commit and changed back (in the history, not in the net change): --squash pushes only the net change`
       : "",
-    `${commits} commit(s) the remote does not have, ${files} file(s)${s.lfs ? `, ${s.lfs} of them LFS` : ""}`,
     ...(s.warnings ?? []).map((w) => `; warning: ${w}`),
     s.files?.some((f) => f.sensitive) ? "; changes what runs on the forge" : "",
   ]
-    .join(" ")
+    .join("")
     .trim();
 };
 
-export const approve = async (out: Out): Promise<number> => {
+/** `desolate approve`: answer the raw `git push` that is waiting in the root's terminal. */
+export const approve = async (
+  out: Out,
+  choice: { squash: boolean; replace: boolean } = { squash: false, replace: false },
+): Promise<number> => {
   const pending = await rootctl<{ message: string; summary: string }[]>(
     "approvals.pending",
     {},
@@ -596,9 +644,17 @@ export const approve = async (out: Out): Promise<number> => {
     return 0;
   }
   for (const request of pending) {
-    const signature = await sign(request.message, await reviewed(request.message));
+    // (A raw push that replaces the remote's branch was asked for with git's own `+`: the
+    // prompt asks to type `replace <branch>` all the same.)
+    const chosen = await chosenText(request.message, {
+      squash: choice.squash,
+      replace: true,
+      again: "desolate approve",
+    });
+    if (typeof chosen === "number") return chosen;
+    const signature = await sign(chosen.text, chosen.line, chosen.replaces);
     void (await import("./daemon.ts")).announceApproved(request.message);
-    await rootctl("approvals.answer", { message: request.message, signature }, { quiet: true });
+    await rootctl("approvals.answer", { message: chosen.text, signature }, { quiet: true });
     out("approved; the push waiting in the root continues.");
   }
   return 0;
