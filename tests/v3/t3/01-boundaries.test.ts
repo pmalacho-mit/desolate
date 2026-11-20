@@ -6,7 +6,7 @@
 //
 // Run: tests/v3/run.sh t3   (tens of minutes under TCG: each VM takes minutes to boot)
 import assert from "node:assert/strict";
-import { createHash, createHmac } from "node:crypto";
+import { createHash, createHmac, createPrivateKey, sign } from "node:crypto";
 import * as fs from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
+import { signedFor } from "../../../release/shared/approval.ts";
 
 let stack: Stack;
 let listener: ChildProcess;
@@ -527,6 +528,146 @@ describe(
         "0",
         "the state service and rootd ran throughout",
       );
+    });
+
+    it("T4 a push from the real root VM: a pack the root's user made is not sent, and the reviewer's lands", () => {
+      stack.step("a push from the real root VM, and the root's user's own pack");
+      // The pusher is a user of its own in the root VM: here, on the Mac's hypervisor. The
+      // root's user, taken over, holds a live approval for a branch and hands the pusher its
+      // own pack: the approved commit's objects, one of its own, and 32 bytes after (a whole
+      // pack of its own followed by more: what a first version of the pusher sent on, T2 04).
+      const offered = (
+        JSON.parse(stack.quiet("offers", "--json").stdout) as { branch: string; commit: string }[]
+      ).find((o) => o.branch === "offered")!;
+      const commit = offered.commit;
+      const clone = "/desolate/root/acme/widgets";
+      const inClone = (script: string) =>
+        stack.inRoot([
+          "bash",
+          "-c",
+          `export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig; cd ${clone} && ${script}`,
+        ]);
+      const node = (code: string, ...args: string[]) =>
+        stack.inRoot([
+          "node",
+          "--disable-warning=ExperimentalWarning",
+          "--input-type=module",
+          "-e",
+          code,
+          ...args,
+        ]);
+      const forgeRefs = () =>
+        Object.fromEntries(
+          stack
+            .forge("refs", "acme/widgets")
+            .trim()
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => line.split(" ") as [string, string]),
+        );
+      const forgeHas = (id: string) => {
+        try {
+          stack.forge("has", "acme/widgets", id);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      const sent = node(
+        `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+        commit,
+      );
+      assert.equal(sent.code, 0, sent.stderr);
+      const challenge = JSON.parse(
+        node(
+          `import { ask } from "/desolate/release/root/keyring-client.ts"; console.log(JSON.stringify(await ask("/run/desolate/keyring/control.sock", JSON.parse(process.argv[1]))));`,
+          JSON.stringify({ op: "challenge", repo: "acme/widgets", ref: "t4-attack", commit }),
+        ).stdout,
+      ) as { ok: boolean; message: string };
+      assert.equal(challenge.ok, true);
+      const said = JSON.parse(
+        stack.inRoot(
+          ["node", "--disable-warning=ExperimentalWarning", "/desolate/release/root/review-ask.ts"],
+          {
+            root: true,
+            input: JSON.stringify({
+              repo: "acme/widgets",
+              branch: "t4-attack",
+              commit,
+              onto: null,
+            }),
+          },
+        ).stdout,
+      ) as { ok: boolean; error?: string; sends: { pack: string; lfs: string[] } };
+      assert.equal(said.ok, true, String(said.error));
+      const text = signedFor(challenge.message, {
+        commit,
+        squashes: null,
+        pack: said.sends.pack,
+        lfs: said.sends.lfs,
+      });
+      // (The approver's key is on the Mac, the terminal approver's documented limit: this test,
+      // on the Mac, signs as the person would.)
+      const key = createPrivateKey(
+        fs.readFileSync(path.join(stack.home, "approver", "key"), "utf8"),
+      );
+      const filed = JSON.parse(
+        node(
+          `import { ask } from "/desolate/release/root/keyring-client.ts"; console.log(JSON.stringify(await ask("/run/desolate/keyring/control.sock", JSON.parse(process.argv[1]))));`,
+          JSON.stringify({
+            op: "approve",
+            message: text,
+            signature: sign("sha256", Buffer.from(text), key).toString("base64"),
+          }),
+        ).stdout,
+      ) as { ok: boolean; id: string; error?: string };
+      assert.equal(filed.ok, true, String(filed.error));
+      const extra = inClone(
+        "printf 'bytes the attacker chose\\n' | git hash-object -w --stdin",
+      ).stdout.trim();
+      inClone(
+        `(git rev-list --objects ${commit} --not --remotes=origin | cut -d' ' -f1; echo ${extra}) | git pack-objects --stdout --delta-base-offset --quiet > /tmp/own.pack && head -c 32 /dev/urandom >> /tmp/own.pack`,
+      );
+      const before = forgeRefs();
+      const answer = JSON.parse(
+        node(
+          `import * as fs from "node:fs"; import { connect } from "node:net";
+const [approval, pack, listed] = [process.argv[1], process.argv[2], JSON.parse(process.argv[3])];
+const attempt = (tries) => {
+  const socket = connect("/run/desolate/pusher/control.sock");
+  let answer = "";
+  let connected = false;
+  socket.on("data", (c) => { answer += c; if (answer.includes("\\n")) { console.log(answer.split("\\n")[0]); process.exit(0); } });
+  socket.on("error", (e) => { if (!connected && tries > 0) setTimeout(() => attempt(tries - 1), 500); else { console.log(JSON.stringify({ ok: false, error: "no answer: " + e.message })); process.exit(0); } });
+  socket.on("connect", () => {
+    connected = true;
+    socket.write(JSON.stringify({ op: "push", approval, pack: fs.statSync(pack).size, lfs: [], lfsListed: listed }) + "\\n");
+    socket.write(fs.readFileSync(pack));
+  });
+};
+attempt(60);`,
+          filed.id,
+          "/tmp/own.pack",
+          JSON.stringify(said.sends.lfs),
+        ).stdout,
+      ) as { ok: boolean; error?: string };
+      assert.equal(answer.ok, false);
+      assert.match(String(answer.error), /the pack is not the one approved .*nothing was pushed/);
+      assert.deepEqual(forgeRefs(), before, "no ref of the remote moved");
+      assert.equal(forgeHas(extra), false, "the object it added is not on the forge");
+      // CONTROL: the person's own push of the same commit, through the same pusher, lands.
+      const pushed = stack.person(
+        "Type the branch name",
+        "offered",
+        "push",
+        "a",
+        "acme/widgets",
+        "offered",
+        "--expect",
+        commit,
+      );
+      assert.equal(pushed.code, 0, pushed.stdout);
+      assert.equal(forgeRefs()["offered"], commit, "control: the reviewer's pack lands");
     });
 
     it("T3 the editor runs inside the workspace's VM and answers at its own hostname", async () => {
