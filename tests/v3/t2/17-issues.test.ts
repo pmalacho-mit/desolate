@@ -17,6 +17,7 @@ import type { Stack } from "../lib/harness.ts";
 let stack: Stack;
 let port = 0;
 let cookie = "";
+let key = "";
 let gh = "";
 let record = "";
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,6 +60,7 @@ const dashboard = (body: unknown): Promise<{ status: number; body: string }> =>
           origin: `http://desolate.localhost:${port}`,
           "sec-fetch-site": "same-origin",
           cookie,
+          "x-desolate-key": key,
           "x-desolate-ui": "1",
           "content-type": "application/json",
           "content-length": Buffer.byteLength(payload),
@@ -103,8 +105,13 @@ describe("T2 issues offered by a workspace, published by the person", () => {
           headers: { host: `desolate.localhost:${port}` },
         },
         (res) => {
-          res.resume();
-          resolve(String(res.headers["set-cookie"] ?? "").split(";")[0]!);
+          // The cookie, and the page key its sign-in page carries (shared/page-key.ts).
+          let text = "";
+          res.on("data", (chunk) => (text += chunk));
+          res.on("end", () => {
+            key = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(text)?.[1] ?? "";
+            resolve(String(res.headers["set-cookie"] ?? "").split(";")[0]!);
+          });
         },
       );
       req.on("error", reject);

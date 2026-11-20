@@ -2708,7 +2708,8 @@ const serve = async () => {
         : error.message;
     log(`editors on port ${editorHostPort()}: ${error.message}`);
     // As for [::1] below: a tab open on these pages, reloaded or polling while that program
-    // holds the port, sends it its cookie, and the cookie is the token (audit, 2026-11-20).
+    // holds the port, sends it its cookie, and that program is then the page's own origin,
+    // which can read its key (audit, 2026-11-20).
     if (error.code === "EADDRINUSE") retire();
   });
   editors6.on("error", (error: NodeJS.ErrnoException) => {
@@ -2719,8 +2720,9 @@ const serve = async () => {
         : `[::1]: ${error.message}`;
     log(`editors on [::1]:${editorHostPort()}: ${error.message}`);
     editors.close();
-    // A tab already open on these pages, reloaded, sends its cookie there, and the cookie is
-    // the token: the tokens are retired (retired.ts says how each is made again).
+    // A tab already open on these pages, reloaded, sends its cookie there, and that program is
+    // then the page's own origin, which can read its key: the tokens are retired (retired.ts
+    // says how each is made again).
     if (error.code === "EADDRINUSE") retire();
   });
   editors.on("listening", () =>

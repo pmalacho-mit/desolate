@@ -19,7 +19,8 @@ if (EMBED) {
   history.replaceState(null, "", "/embed");
   document.documentElement.classList.add("embed");
 }
-const credential = embedKey ? { "x-desolate-embed": embedKey } : {};
+// Otherwise the page's own key, beside its cookie (shared/ui/page-key.js).
+const credential = embedKey ? { "x-desolate-embed": embedKey } : EMBED ? {} : window.desolateKey.headers;
 // In the frame the key alone signs in: the cookie, if this browser has one, stays out.
 const sendCookie = EMBED ? "omit" : "same-origin";
 const VISIBILITY = EMBED && "IntersectionObserver" in window && "isVisible" in IntersectionObserverEntry.prototype;

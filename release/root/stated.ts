@@ -59,6 +59,7 @@ import {
 import { readHead, statusView } from "../shared/status.ts";
 import type { Head } from "../shared/status.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
+import { carriesCredential, cookieIn, cookieValue, signedInPage } from "../shared/page-key.ts";
 import * as domains from "./domains.ts";
 import { branchesOf, refusalsOf } from "./outbox.ts";
 import { forge, safeIn } from "./git.ts";
@@ -1161,7 +1162,6 @@ const takeSignin = (given: string, now = Date.now()) => {
  *  303 would not do: the browser came by way of the other two pages' names, so it counts the
  *  dashboard's address as another site's request, and sends it no cookie (SameSite=Strict).
  *  A refresh from this page of its own is the dashboard's own request. */
-const SIGNED_IN = `<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=/"><title>desolate</title><p>Signed in. Opening the dashboard…</p>`;
 
 const fromHost = (req: IncomingMessage) => {
   const token = hostToken();
@@ -1313,13 +1313,16 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
         "text/plain; charset=utf-8",
         "desolate: refused: that sign-in link is spent or too old; `desolate ui --open` makes another\n",
       );
+    // A page of this origin's own, which keeps the page key (shared/page-key.ts) and opens the
+    // dashboard: a navigation of this name's own, which is sent the cookie this answer sets.
+    const page = signedInPage(ui, "/");
     res.writeHead(200, {
       "content-type": "text/html; charset=utf-8",
-      "content-length": Buffer.byteLength(SIGNED_IN),
-      "set-cookie": `${name}=${ui}; HttpOnly; SameSite=Strict; Path=/`,
+      "content-length": Buffer.byteLength(page),
+      "set-cookie": `${name}=${cookieValue(ui)}; HttpOnly; SameSite=Strict; Path=/`,
       ...SECURITY,
     });
-    return res.end(SIGNED_IN);
+    return res.end(page);
   }
   const given = url.searchParams.get("tkn");
   if (req.method === "GET" && url.pathname === "/" && given !== null) {
@@ -1337,18 +1340,28 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       .split("&")
       .filter((part) => part !== "" && !part.startsWith("tkn="))
       .join("&");
-    res.writeHead(303, {
-      location: `/${rest ? `?${rest}` : ""}`,
-      "set-cookie": `${name}=${ui}; HttpOnly; SameSite=Strict; Path=/`,
-      "content-length": 0,
+    const page = signedInPage(ui, `/${rest ? `?${rest}` : ""}`);
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      "content-length": Buffer.byteLength(page),
+      "set-cookie": `${name}=${cookieValue(ui)}; HttpOnly; SameSite=Strict; Path=/`,
       ...SECURITY,
     });
-    return res.end();
+    return res.end(page);
   }
-  const cookie = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]{48})(?:;|$)`).exec(
-    String(req.headers.cookie ?? ""),
-  )?.[1];
-  if (!cookie || !sameSecret(cookie, ui))
+  // The page key's keeper, which holds nothing: loaded by the page above before any cookie.
+  if (req.method === "GET" && url.pathname === "/page-key.js")
+    return send(
+      res,
+      200,
+      "text/javascript; charset=utf-8",
+      fs.readFileSync(path.join(HERE, "..", "shared", "ui", "page-key.js"), "utf8"),
+    );
+  // The page itself and its scripts, by the cookie: they hold no data. Everything else, by
+  // the cookie and the page's key (shared/page-key.ts); the event stream, an EventSource,
+  // which sends no header, carries the key in its address.
+  const cookie = cookieIn(req.headers, name);
+  if (!cookie || !sameSecret(cookie, cookieValue(ui)))
     return send(
       res,
       401,
@@ -1359,6 +1372,20 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const [file, type] = STATIC[url.pathname]!;
     return send(res, 200, type, fs.readFileSync(path.join(HERE, "ui", file), "utf8"));
   }
+  if (
+    !carriesCredential(
+      req.headers,
+      name,
+      ui,
+      req.method === "GET" && url.pathname === "/events" ? url.searchParams : undefined,
+    )
+  )
+    return send(
+      res,
+      401,
+      "text/plain; charset=utf-8",
+      "desolate: this page has no key for the dashboard (a page from before an upgrade, or another port): open it again with `desolate ui --open`\n",
+    );
   if (req.method === "GET" && url.pathname === "/state")
     return send(res, 200, "application/json; charset=utf-8", last || JSON.stringify(snapshot()));
   if (req.method === "GET" && url.pathname === "/events") {

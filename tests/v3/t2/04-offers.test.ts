@@ -577,9 +577,11 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       });
     const at = new URL(address![1]!);
     const login = await call("GET", at.pathname + at.search, {});
-    assert.equal(login.status, 303);
+    // The cookie, and the page key its sign-in page carries (shared/page-key.ts).
+    assert.equal(login.status, 200);
     const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
-    const asPage = { cookie, "sec-fetch-site": "same-origin" };
+    const key = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(login.body)![1]!;
+    const asPage = { cookie, "x-desolate-key": key, "sec-fetch-site": "same-origin" };
     type Waiting = {
       nonce: string;
       token: string;

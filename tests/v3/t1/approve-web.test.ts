@@ -102,8 +102,10 @@ const call = (
   });
 
 let cookie = "";
+/** The page key the sign-in page carried, which the page's script keeps and sends. */
+let storedKey = "";
 const page = { "sec-fetch-site": "same-origin" };
-const asPage = () => ({ cookie, ...page });
+const asPage = () => ({ cookie, "x-desolate-key": storedKey, ...page });
 const approve = (body: Record<string, unknown>, headers: Record<string, string> = {}) =>
   call(
     "POST",
@@ -123,11 +125,25 @@ describe("T1 the approval page", () => {
     assert.equal(wrong.status, 403);
     assert.equal(wrong.headers["set-cookie"], undefined);
     const right = await call("GET", `/?tkn=${approveToken()}`, {});
-    assert.equal(right.status, 303);
+    assert.equal(right.status, 200);
     const set = String(right.headers["set-cookie"]);
     assert.match(set, /HttpOnly/);
     assert.match(set, /SameSite=Strict/);
     cookie = set.split(";")[0]!;
+    assert.ok(!cookie.includes(approveToken()), "the cookie is not the token");
+    // The answer is a page of this origin's own, with the key for its script to keep.
+    assert.match(right.body, /<script src="\/page-key\.js"><\/script>/);
+    storedKey = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(right.body)![1]!;
+    assert.equal(
+      (await call("GET", "/pending", { cookie, ...page })).status,
+      401,
+      "the cookie alone opens nothing (what a program on another port of this name is sent)",
+    );
+    assert.equal(
+      (await call("GET", "/pending", asPage())).status,
+      200,
+      "control: the cookie and the key open the page",
+    );
   });
 
   it("every answer forbids framing, inline script and an opener", async () => {
@@ -158,21 +174,38 @@ describe("T1 the approval page", () => {
       "a workspace's editor name",
     );
     assert.equal(
-      (await call("GET", "/pending", { cookie, "sec-fetch-site": "same-site" })).status,
+      (
+        await call("GET", "/pending", {
+          cookie,
+          "x-desolate-key": storedKey,
+          "sec-fetch-site": "same-site",
+        })
+      ).status,
       403,
       "a request a workspace's page started",
     );
     assert.equal(
-      (await call("GET", "/pending", { cookie, "sec-fetch-site": "cross-site" })).status,
+      (
+        await call("GET", "/pending", {
+          cookie,
+          "x-desolate-key": storedKey,
+          "sec-fetch-site": "cross-site",
+        })
+      ).status,
       403,
     );
     assert.equal(
-      (await call("GET", "/pending", { cookie, origin: "http://web-one-abc123.localhost:31599" }))
-        .status,
+      (
+        await call("GET", "/pending", {
+          cookie,
+          "x-desolate-key": storedKey,
+          origin: "http://web-one-abc123.localhost:31599",
+        })
+      ).status,
       403,
     );
     assert.equal(
-      (await call("GET", "/pending", { cookie })).status,
+      (await call("GET", "/pending", { cookie, "x-desolate-key": storedKey })).status,
       403,
       "a request that says nothing of where it came from is not the page's",
     );
@@ -233,6 +266,7 @@ describe("T1 the approval page", () => {
       (
         await ask(push.nonce, pushToken(approveToken(), message), {
           cookie,
+          "x-desolate-key": storedKey,
           "sec-fetch-site": "cross-site",
         })
       ).status,
