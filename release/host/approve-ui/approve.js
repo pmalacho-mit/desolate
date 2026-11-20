@@ -210,7 +210,9 @@ const summaryOf = (summary, card) => {
   // What goes, exactly as it is signed: the reviewer's pack, its size, and the LFS objects.
   if (summary.sends) {
     const mib = summary.sends.size / 1024 / 1024;
-    box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${mib < 1 ? `${Math.max(1, Math.round(summary.sends.size / 1024))} KiB` : `${mib.toFixed(1)} MiB`}, and ${summary.sends.lfs.length} LFS object(s) they point to: nothing else.`));
+    const lfsBytes = summary.sends.lfs.reduce((n, entry) => n + Number(entry.split(" ")[1] || 0), 0);
+    const size = (bytes) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(summary.sends.size)}, and ${summary.sends.lfs.length} LFS object(s) they point to${summary.sends.lfs.length ? `, ${size(lfsBytes)}` : ""}: nothing else.`));
   }
   if (summary.hasDiff !== undefined && card) box.append(...diffToggle(card, false));
   if (summary.hasEachDiff && card) box.append(...diffToggle(card, true));
@@ -219,7 +221,7 @@ const summaryOf = (summary, card) => {
   if (summary.squash) {
     const sq = summary.squash;
     box.append(el("p", `Or push it squashed into one commit, ${sq.commit.slice(0, 12)}, ${sq.parent ? `on ${sq.parent.slice(0, 12)}` : "with no parent"}: the same files as the last commit, and none of what was in between. The workspace's branch keeps its ${sq.count} commits.`));
-    box.append(el("pre", sq.message, "message"));
+    box.append(el("pre", `${sq.message}${sq.author ? `\nAuthor:    ${sq.author}\nCommitter: ${sq.committer}` : ""}`, "message"));
   }
   return box;
 };

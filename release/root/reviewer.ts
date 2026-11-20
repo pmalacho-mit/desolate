@@ -436,7 +436,7 @@ const gitBytes = (dir: string, args: string[], input: string): Promise<Buffer | 
   });
 
 /** The LFS objects a pack's commits point to: each blob in it that is a pointer (git-lfs's
- *  own form: a version line, the oid, the size, nothing else), by its oid. */
+ *  own form: a version line, the oid, the size, nothing else), as `<oid> <size>`. */
 const pointersIn = async (dir: string, tip: string, known: string[]): Promise<string[]> => {
   const listed = await gitOk(
     dir,
@@ -465,8 +465,10 @@ const pointersIn = async (dir: string, tip: string, known: string[]): Promise<st
     if (end < 0) break;
     const size = Number(bytes.subarray(at, end).toString("latin1").split(" ")[2]);
     const content = bytes.subarray(end + 1, end + 1 + size).toString("utf8");
+    // By its oid AND the size its pointer says: the pusher sends an object only of that size
+    // (the third independent review: a pointer saying 12 bytes could carry gigabytes).
     const match = POINTER.exec(content);
-    if (match) oids.add(match[1]!);
+    if (match && Number(match[2]) <= 5 * 1024 ** 3) oids.add(`${match[1]} ${Number(match[2])}`);
     at = end + 1 + size + 1;
   }
   return [...oids].sort();
@@ -629,7 +631,14 @@ const prunePacks = () => {
  *  where it starts depends on the remote's branches the reviewer holds; either way the
  *  approval names the very commit the person was shown). Its message: the first commit's
  *  subject, then every commit's. */
-export type Squash = { commit: string; parent: string | null; count: number; message: string };
+export type Squash = {
+  commit: string;
+  parent: string | null;
+  count: number;
+  message: string;
+  author: string;
+  committer: string;
+};
 const SQUASH_LISTED = 100;
 const squashOf = async (
   dir: string,
@@ -657,7 +666,7 @@ const squashOf = async (
   const listed = subjects.slice(0, SQUASH_LISTED).map((s) => `- ${s}`);
   if (subjects.length > SQUASH_LISTED) listed.push(`- and ${subjects.length - SQUASH_LISTED} more`);
   const message = `${subjects[0] ?? "Squashed"}\n\nSquashed from ${count} commits:\n${listed.join("\n")}\n`;
-  const [an, ae, ad, cn, ce, cd] = (
+  const [anRaw, aeRaw, ad, cnRaw, ceRaw, cd] = (
     await gitOk(dir, [
       "log",
       "-1",
@@ -669,6 +678,21 @@ const squashOf = async (
   )
     .replace(/\n$/, "")
     .split("\x00");
+  // Who the squash names, made safe and short, as the page shows them (the third independent
+  // review: copied as they were, an agent's 100 KB "email" would ride along unseen in a
+  // commit the reviewer itself made). Dates as git keeps them, or no squash.
+  const named = (text: string | undefined, max: number) =>
+    shown(text ?? "", max)
+      .replace(/[<>\n]/g, "?")
+      .trim();
+  const [an, ae, cn, ce] = [
+    named(anRaw, 80),
+    named(aeRaw, 120),
+    named(cnRaw, 80),
+    named(ceRaw, 120),
+  ];
+  if (!/^[0-9]{1,12} [+-][0-9]{4}$/.test(ad ?? "") || !/^[0-9]{1,12} [+-][0-9]{4}$/.test(cd ?? ""))
+    return null;
   const made = await gitIn(
     dir,
     [
@@ -682,19 +706,28 @@ const squashOf = async (
     {
       input: message,
       env: {
-        GIT_AUTHOR_NAME: an ?? "",
-        GIT_AUTHOR_EMAIL: ae ?? "",
-        GIT_AUTHOR_DATE: ad ?? "",
-        GIT_COMMITTER_NAME: cn ?? "",
-        GIT_COMMITTER_EMAIL: ce ?? "",
-        GIT_COMMITTER_DATE: cd ?? "",
+        GIT_AUTHOR_NAME: an,
+        GIT_AUTHOR_EMAIL: ae,
+        GIT_AUTHOR_DATE: ad!,
+        GIT_COMMITTER_NAME: cn,
+        GIT_COMMITTER_EMAIL: ce,
+        GIT_COMMITTER_DATE: cd!,
       },
     },
   );
   // (git's own identity rules: an author it refuses, say an empty name, gets no squash.)
   if (made.code !== 0) return null;
   const id = made.stdout.trim();
-  return isCommit(id) ? { commit: id, parent: parent || null, count, message } : null;
+  return isCommit(id)
+    ? {
+        commit: id,
+        parent: parent || null,
+        count,
+        message,
+        author: `${an} <${ae}>`,
+        committer: `${cn} <${ce}>`,
+      }
+    : null;
 };
 
 export type Summary = {
@@ -909,6 +942,29 @@ const summary = async (
   const fastForward = onto
     ? (await gitIn(dir, ["merge-base", "--is-ancestor", onto, commit])).code === 0
     : null;
+  // A commit's headers git itself writes, and no other: anything else in one (fsck takes any
+  // well-formed header) travels unseen, so it is said (the third independent review).
+  const ids = commits.map((c) => c.commit);
+  if (ids.length) {
+    const raw = await gitBytes(dir, ["cat-file", "--batch"], ids.join("\n") + "\n");
+    const KNOWN = /^(tree|parent|author|committer|encoding|gpgsig|gpgsig-sha256|mergetag) /;
+    for (let at = 0; raw && at < raw.length;) {
+      const end = raw.indexOf(10, at);
+      if (end < 0) break;
+      const [id, , size] = raw.subarray(at, end).toString("latin1").split(" ");
+      const body = raw.subarray(end + 1, end + 1 + Number(size)).toString("utf8");
+      const headers = body.slice(0, body.indexOf("\n\n") < 0 ? body.length : body.indexOf("\n\n"));
+      const odd = headers
+        .split("\n")
+        .filter((line) => line !== "" && !line.startsWith(" ") && !KNOWN.test(line))
+        .map((line) => shown(line.split(" ")[0] ?? "", 40));
+      if (odd.length)
+        warnings.push(
+          `commit ${String(id).slice(0, 12)} carries header(s) git itself does not write (${[...new Set(odd)].join(", ")}): what they hold is pushed, and shown nowhere here`,
+        );
+      at = end + 1 + Number(size) + 1;
+    }
+  }
   // What the push sends, made here (prepare): the pack, its digest, and its LFS ids. And the
   // squash, with its own.
   const sends = await prepare(repo, dir, commit, onto, known);
@@ -961,7 +1017,9 @@ const summary = async (
         "--no-color",
         "--no-show-signature",
         "--no-decorate",
-        "--format=commit %H%n%n    %s%n",
+        // Each commit whole: who wrote and committed it, its whole message (what a person
+        // pushes is all of it, not the subject alone).
+        "--format=commit %H%nAuthor:    %an <%ae>%nCommitter: %cn <%ce>%n%n%w(0,4,4)%B",
         `--max-count=${LIMIT.commits}`,
         commit,
         ...known.map((id) => `^${id}`),

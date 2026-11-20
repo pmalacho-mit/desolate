@@ -199,6 +199,8 @@ export type Summary = {
     parent: string | null;
     count: number;
     message: string;
+    author?: string;
+    committer?: string;
     sends: { pack: string; size: number; lfs: string[] };
   };
   /** Files a commit changes that the net change does not list: changed, then put back. */

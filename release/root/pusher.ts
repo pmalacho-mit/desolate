@@ -844,10 +844,13 @@ const push = async (
     return { ok: false, error: "LFS objects are named by sha256, with a size of at most 5 GiB" };
   // The LFS objects the person approved (their ids' digest is in the text they signed): the
   // whole list, which must be that one, and of it only those the root holds go up.
+  // Each as `<oid> <size>`: the size its pointer says, which the object sent must have.
   const listed = Array.isArray(request.lfsListed) ? (request.lfsListed as unknown[]) : [];
   if (
     listed.length > LIMIT.objects ||
-    !listed.every(isLfsOid) ||
+    !listed.every(
+      (entry) => typeof entry === "string" && /^[0-9a-f]{64} [0-9]{1,12}$/.test(entry),
+    ) ||
     new Set(listed).size !== approved.lfs.count ||
     lfsDigest(listed as string[]) !== approved.lfs.digest
   )
@@ -856,10 +859,11 @@ const push = async (
       error: "the LFS objects listed are not the ones approved: nothing was pushed",
     };
   const allowed = new Set(listed as string[]);
-  if (lfs.some((o) => !allowed.has(o.oid as string)))
+  if (lfs.some((o) => !allowed.has(`${String(o.oid)} ${String(o.size)}`)))
     return {
       ok: false,
-      error: "an LFS object sent is not one the approved commits point to: nothing was pushed",
+      error:
+        "an LFS object sent is not one the approved commits point to, of the size they say: nothing was pushed",
     };
   const onto = approved.onto ?? ZERO;
   const forge = forgeAddress();

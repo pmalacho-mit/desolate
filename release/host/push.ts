@@ -621,7 +621,7 @@ const reviewedLine = (s: Summary, squashed: boolean): string => {
     squashed
       ? `${commits} commit(s) the remote does not have, squashed into one, ${files} file(s)`
       : `${commits} commit(s) the remote does not have, ${files} file(s)`,
-    s.lfs ? `, ${s.lfs} of them LFS` : "",
+    s.sends?.lfs.length ? `, ${s.sends.lfs.length} LFS object(s) with them` : "",
     !squashed && between
       ? `; ${between} more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change`
       : "",

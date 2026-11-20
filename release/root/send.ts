@@ -185,7 +185,8 @@ export const send = async (
     // LFS objects the remote lacks and this clone holds (what came with offers).
     const files: string[] = [];
     const lfs: { oid: string; size: number }[] = [];
-    for (const oid of made.lfs) {
+    for (const entry of made.lfs) {
+      const [oid = "", size = ""] = entry.split(" ");
       if (!/^[0-9a-f]{64}$/.test(oid)) continue;
       const file = path.join(
         clone,
@@ -197,6 +198,11 @@ export const send = async (
         oid,
       );
       if (!fs.existsSync(file)) continue;
+      if (fs.statSync(file).size !== Number(size))
+        return {
+          error: `the LFS object ${oid.slice(0, 12)} is ${fs.statSync(file).size} bytes, not the ${size} its pointer says, so nothing was pushed`,
+          moved: false,
+        };
       lfs.push({ oid, size: fs.statSync(file).size });
       files.push(file);
     }

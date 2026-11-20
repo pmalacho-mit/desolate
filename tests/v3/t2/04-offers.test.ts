@@ -319,7 +319,11 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       pack: said.sends!.pack,
       lfs: said.sends!.lfs,
     });
-    assert.deepEqual(said.sends!.lfs, [oid], "the reviewer lists the commit's LFS object");
+    assert.deepEqual(
+      said.sends!.lfs,
+      [`${oid} 50000`],
+      "the reviewer lists the commit's LFS object, by the size its pointer says",
+    );
     const own = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey;
     const forged = keyring({
       op: "approve",
@@ -477,7 +481,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         { oid, file: `${ROOT_CLONE}/${lfsFile}` },
         { oid: planted, file: "/tmp/planted" },
       ],
-      [...said.sends!.lfs, planted],
+      [...said.sends!.lfs, `${planted} 32`],
     );
     assert.equal(plantedLfs.ok, false);
     assert.match(
@@ -801,7 +805,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.equal(approved.code, 0, approved.stdout);
     assert.match(
       approved.stdout,
-      /repository {2}acme\/widgets\s+branch {6}raw-push\s+commit {6}[0-9a-f]{40}\s+onto {8}none: the remote has no raw-push yet\s+pack {8}[0-9a-f]{12}, [0-9.]+ (KiB|MiB) {2}\(made by desolate's reviewer: nothing else is sent\)\s+LFS {9}\d+ object\(s\), only those its commits point to\s+sends {7}\d+ commit\(s\) the remote does not have, \d+ file\(s\)(, \d+ of them LFS)?\s+\(desolate's reviewer, in the root\)/,
+      /repository {2}acme\/widgets\s+branch {6}raw-push\s+commit {6}[0-9a-f]{40}\s+onto {8}none: the remote has no raw-push yet\s+pack {8}[0-9a-f]{12}, [0-9.]+ (KiB|MiB) {2}\(made by desolate's reviewer: nothing else is sent\)\s+LFS {9}\d+ object\(s\), only those its commits point to\s+sends {7}\d+ commit\(s\) the remote does not have, \d+ file\(s\)(, \d+ LFS object\(s\) with them)?\s+\(desolate's reviewer, in the root\)/,
       "the reviewer's account, not the root's ordinary user's",
     );
     let landed = false;
