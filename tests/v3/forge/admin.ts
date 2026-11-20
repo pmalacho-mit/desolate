@@ -8,7 +8,9 @@
 //   admin.ts access                                      every request, allowed or denied
 //   admin.ts refs <owner/repo>                           its branches and their commits
 //   admin.ts lfs-has <owner/repo> <oid>                  exit 0 if the forge holds that object
-import { execFileSync } from "node:child_process";
+//   admin.ts has <owner/repo> <git id>                   exit 0 if the repository holds that git object
+//   admin.ts quarantine <owner/repo>                     what receive-pack left of pushes it refused
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { lfsDir, readJson, repoDir, REPO, STATE, writeJson } from "./common.ts";
@@ -172,7 +174,26 @@ done
   process.exit(
     fs.existsSync(path.join(lfsDir(need(args[0])), oid.slice(0, 2), oid.slice(2, 4), oid)) ? 0 : 1,
   );
+} else if (verb === "has") {
+  const known = spawnSync(
+    "git",
+    ["-c", "safe.directory=*", "-C", repoDir(need(args[0])), "cat-file", "-e", String(args[1])],
+    { stdio: "ignore" },
+  );
+  process.exit(known.status === 0 ? 0 : 1);
+} else if (verb === "quarantine") {
+  // git's receive-pack keeps an incoming pack in objects/incoming-* (tmp_objdir) until it is
+  // taken; one cut short is removed. Whatever is still there, by name.
+  const objects = path.join(repoDir(need(args[0])), "objects");
+  process.stdout.write(
+    fs
+      .readdirSync(objects)
+      .filter((name) => /^(incoming-|tmp_objdir)/.test(name))
+      .join("\n"),
+  );
 } else {
-  console.error("usage: admin.ts create-repo|add-key|pulls|pushes|access|refs|lfs-has ...");
+  console.error(
+    "usage: admin.ts create-repo|add-key|pulls|pushes|access|refs|lfs-has|has|quarantine ...",
+  );
   process.exit(64);
 }

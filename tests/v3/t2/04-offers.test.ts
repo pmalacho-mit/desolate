@@ -10,6 +10,7 @@ import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 import { findChrome, loadPage } from "../lib/browser.ts";
+import { signedFor } from "../../../release/shared/approval.ts";
 
 let stack: Stack;
 let commit = "";
@@ -62,6 +63,14 @@ const keyring = (request: Record<string, unknown>) =>
       JSON.stringify(request),
     ]).stdout,
   ) as { ok: boolean; error?: string; message?: string; id?: string };
+const forgeHas = (repo: string, id: string) => {
+  try {
+    stack.forge("has", repo, id);
+    return true;
+  } catch {
+    return false;
+  }
+};
 const forgeHasLfs = (repo: string, id: string) => {
   try {
     stack.forge("lfs-has", repo, id);
@@ -71,6 +80,49 @@ const forgeHasLfs = (repo: string, id: string) => {
   }
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** What desolate's reviewer says a push sends, asked as the host asks it: as root. */
+const reviewerSays = (branch: string, commit: string, onto: string | null = null) =>
+  JSON.parse(
+    stack.inRoot(
+      ["node", "--disable-warning=ExperimentalWarning", "/desolate/release/root/review-ask.ts"],
+      { root: true, input: JSON.stringify({ repo: "acme/widgets", branch, commit, onto }) },
+    ).stdout,
+  ) as {
+    ok: boolean;
+    error?: string;
+    sends?: { pack: string; size: number; lfs: string[] };
+  };
+/** As the root's ordinary user, taken over: hand the pusher an approval's id, a pack of its
+ *  own making (a file in the root VM), and LFS objects (files there too). */
+const toPusher = (
+  approval: string,
+  pack: string,
+  lfs: { oid: string; file: string }[],
+  lfsListed: string[],
+) =>
+  JSON.parse(
+    stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import * as fs from "node:fs"; import { connect } from "node:net";
+const [approval, pack, lfs, listed] = [process.argv[1], process.argv[2], JSON.parse(process.argv[3]), JSON.parse(process.argv[4])];
+const socket = connect("/run/desolate/pusher/control.sock");
+let answer = "";
+socket.on("data", (c) => { answer += c; if (answer.includes("\n")) { console.log(answer.split("\n")[0]); process.exit(0); } });
+socket.on("error", () => {});
+socket.on("connect", () => {
+  socket.write(JSON.stringify({ op: "push", approval, pack: fs.statSync(pack).size, lfs: lfs.map((o) => ({ oid: o.oid, size: fs.statSync(o.file).size })), lfsListed: listed }) + "\n");
+  for (const o of lfs) socket.write(fs.readFileSync(o.file));
+  socket.write(fs.readFileSync(pack));
+});`,
+      approval,
+      pack,
+      JSON.stringify(lfs),
+      JSON.stringify(lfsListed),
+    ]).stdout,
+  ) as { ok: boolean; error?: string };
 
 describe("T2 phase 5: offers, the root's view, and pushes", () => {
   before(() => {
@@ -251,16 +303,27 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         `^desolate push approval v2\\nrepo: acme/widgets\\nbranch: issue/12\\ncommit: ${commit}\\nonto: none\\nnonce: [0-9a-f]{32}\\n$`,
       ),
     );
+    // What the host signs: the challenge, with what desolate's reviewer says the push sends
+    // (its pack and LFS objects: shared/approval.ts).
+    const said = reviewerSays("issue/12", commit);
+    assert.equal(said.ok, true, String(said.error));
+    const signed = signedFor(challenge.message, {
+      commit,
+      squashes: null,
+      pack: said.sends!.pack,
+      lfs: said.sends!.lfs,
+    });
+    assert.deepEqual(said.sends!.lfs, [oid], "the reviewer lists the commit's LFS object");
     const own = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey;
     const forged = keyring({
       op: "approve",
-      message: challenge.message,
-      signature: sign("sha256", Buffer.from(challenge.message!), own).toString("base64"),
+      message: signed,
+      signature: sign("sha256", Buffer.from(signed), own).toString("base64"),
     });
     assert.equal(forged.ok, false);
     assert.match(forged.error!, /signature is not the host approver's/);
     assert.equal(
-      keyring({ op: "approve", message: challenge.message, signature: "" }).ok,
+      keyring({ op: "approve", message: signed, signature: "" }).ok,
       false,
       "no signature",
     );
@@ -336,40 +399,118 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const hostKey = createPrivateKey(
       fs.readFileSync(path.join(stack.home, "approver", "key"), "utf8"),
     );
-    const signature = sign("sha256", Buffer.from(challenge.message!), hostKey).toString("base64");
-    const real = keyring({ op: "approve", message: challenge.message, signature });
+    const signedBy = (text: string) =>
+      sign("sha256", Buffer.from(text), hostKey).toString("base64");
+    const real = keyring({ op: "approve", message: signed, signature: signedBy(signed) });
     assert.equal(real.ok, true, String(real.error));
     // A signature approves once: replayed, the challenge is no longer outstanding.
-    const replay = keyring({ op: "approve", message: challenge.message, signature });
+    const replay = keyring({ op: "approve", message: signed, signature: signedBy(signed) });
     assert.equal(replay.ok, false);
     assert.match(replay.error!, /not outstanding/);
     // The audit's F6, with a real approval live: the root's user, as if a bug in what it
-    // parses had given it to an attacker, hands the pusher that approval's id and ANOTHER
-    // commit's pack (the default branch's). The pusher reads none of it: it asks the forge
-    // for the approved update, and the forge, given no such commit, refuses it.
+    // parses had given it to an attacker, hands the pusher that approval's id and a pack of
+    // its own: the approved commit, and an object nothing refers to (bytes of its choosing,
+    // which would stay in the repository's storage under the write key, #165). The pusher
+    // hashes the pack as it forwards it and holds back its end: it is not the approved one,
+    // so its end never goes, and the forge takes nothing.
     const before = forgeRefs("acme/widgets");
-    const other = inRootClone("git rev-parse main").stdout.trim();
-    const swapped = stack.inRoot([
+    const extra = inRootClone(
+      `printf 'bytes the attacker chose\\n' | git hash-object -w --stdin`,
+    ).stdout.trim();
+    inRootClone(
+      `(git rev-list --objects ${commit} --not --remotes=origin | cut -d' ' -f1; echo ${extra}) | git pack-objects --stdout --delta-base-offset --quiet > /tmp/own.pack`,
+    );
+    const lfsFile = inRootClone(
+      `ls .git/lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`,
+    ).stdout.trim();
+    const ownPack = toPusher(real.id!, "/tmp/own.pack", [], said.sends!.lfs);
+    assert.equal(ownPack.ok, false);
+    assert.match(ownPack.error!, /the pack is not the one approved .*nothing was pushed/);
+    assert.deepEqual(forgeRefs("acme/widgets"), before, "no ref of the remote moved");
+    assert.equal(
+      forgeHas("acme/widgets", extra),
+      false,
+      "the object it added is nowhere in the forge's repository",
+    );
+    assert.equal(stack.forge("quarantine", "acme/widgets").trim(), "", "nor kept aside");
+    assert.equal(audit().pop()?.event, "revoked", "and the approval it tried to use is spent");
+    // An LFS object the approved commits do not point to, named in the list beside them: the
+    // list's digest is not the approved one, and nothing goes up.
+    const second = keyring({ op: "challenge", repo: "acme/widgets", ref: "issue/12", commit });
+    const secondText = signedFor(second.message, {
+      commit,
+      squashes: null,
+      pack: said.sends!.pack,
+      lfs: said.sends!.lfs,
+    });
+    const approved2 = keyring({
+      op: "approve",
+      message: secondText,
+      signature: signedBy(secondText),
+    });
+    assert.equal(approved2.ok, true, String(approved2.error));
+    const planted = inRootClone(
+      `printf 'an LFS object nothing points to\\n' > /tmp/planted && sha256sum /tmp/planted | cut -d' ' -f1`,
+    ).stdout.trim();
+    const reviewerPack = "/tmp/reviewer.pack";
+    stack.inRoot([
       "node",
       "--disable-warning=ExperimentalWarning",
       "--input-type=module",
       "-e",
-      'import { send } from "/desolate/release/root/send.ts"; console.log(JSON.stringify(await send({ owner: "acme", name: "widgets" }, process.argv[1], process.argv[2])));',
-      real.id!,
-      other,
+      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], null, process.argv[2]);`,
+      commit,
+      reviewerPack,
     ]);
+    const plantedLfs = toPusher(
+      approved2.id!,
+      reviewerPack,
+      [
+        { oid, file: `${ROOT_CLONE}/${lfsFile}` },
+        { oid: planted, file: "/tmp/planted" },
+      ],
+      [...said.sends!.lfs, planted],
+    );
+    assert.equal(plantedLfs.ok, false);
     assert.match(
-      swapped.stdout,
-      /the forge (refused the update|could not unpack)/,
-      swapped.stdout + swapped.stderr,
+      plantedLfs.error!,
+      /the LFS objects listed are not the ones approved: nothing was pushed/,
     );
-    assert.deepEqual(
-      forgeRefs("acme/widgets"),
-      before,
-      "no ref of the remote moved, and none appeared",
+    assert.equal(
+      forgeHasLfs("acme/widgets", planted),
+      false,
+      "the planted object is not on the forge",
     );
-    assert.equal(audit().pop()?.event, "revoked", "and the approval it tried to use is spent");
-    assert.equal(keyring({ op: "revoke", id: real.id }).ok, true);
+    assert.equal(forgeHasLfs("acme/widgets", oid), false, "nor the commit's own: nothing went up");
+    assert.deepEqual(forgeRefs("acme/widgets"), before);
+    // CONTROL: the reviewer's own pack and the approved LFS object, under a third approval (for
+    // another branch, so the person's push below is still the first of issue/12), land.
+    const third = keyring({ op: "challenge", repo: "acme/widgets", ref: "f6-control", commit });
+    const thirdText = signedFor(third.message, {
+      commit,
+      squashes: null,
+      pack: said.sends!.pack,
+      lfs: said.sends!.lfs,
+    });
+    const approved3 = keyring({
+      op: "approve",
+      message: thirdText,
+      signature: signedBy(thirdText),
+    });
+    assert.equal(approved3.ok, true, String(approved3.error));
+    const control = toPusher(
+      approved3.id!,
+      reviewerPack,
+      [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
+      said.sends!.lfs,
+    );
+    assert.equal(control.ok, true, String(control.error));
+    assert.equal(
+      forgeRefs("acme/widgets")["f6-control"],
+      commit,
+      "control: the approved pack lands",
+    );
+    assert.equal(forgeHasLfs("acme/widgets", oid), true, "with its LFS object");
   });
 
   it("refusals that need no person: --expect, the default branch, a terminal answer that is not the branch", () => {
@@ -489,6 +630,106 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       0,
     );
     assert.equal(forgeRefs("acme/widgets")["again"], undefined);
+  });
+
+  it("two commits, a file added and taken out again: the approval says so; squashed, the history has none of it; a replace waits for --replace", () => {
+    stack.step("a squashed push, then a replace");
+    const SQ = "/workspaces/acme/widgets/.worktrees/squash-me";
+    const made = inWs(
+      "dev/w1",
+      `cd /workspaces/acme/widgets && git fetch -q origin && git worktree add -q ${SQ} -b squash-me origin/main && cd ${SQ} && echo 'not for the remote' > notes.txt && git add notes.txt && git commit -qm 'add notes' && git rev-parse HEAD:notes.txt && git rm -q notes.txt && echo 'squashed' >> README.md && git commit -qam 'tidy up' && git rev-parse HEAD && desolate offer >/dev/null`,
+    );
+    assert.equal(made.code, 0, made.stdout + made.stderr);
+    const [notes, tip] = made.stdout.trim().split("\n") as [string, string];
+    // What the net change hides, the reviewer lists: notes.txt was added, then taken out.
+    const said = reviewerSays("squash-me", tip) as ReturnType<typeof reviewerSays> & {
+      between?: { path: string }[];
+      squash?: { commit: string; count: number; message: string };
+      files?: { path: string }[];
+    };
+    assert.equal(said.ok, true, String(said.error));
+    assert.deepEqual(
+      said.files?.map((f) => f.path),
+      ["README.md"],
+      "the net change: README alone",
+    );
+    assert.deepEqual(
+      said.between?.map((f) => f.path),
+      ["notes.txt"],
+      "and what was changed in between",
+    );
+    assert.equal(said.squash?.count, 2);
+    assert.equal(
+      said.squash?.message,
+      "add notes\n\nSquashed from 2 commits:\n- add notes\n- tidy up\n",
+    );
+    // Squashed: one commit, the tip's tree, on main; the file in between is nowhere on the forge.
+    const squashed = stack.person(
+      "Type the branch name",
+      "squash-me",
+      "push",
+      "dev",
+      "acme/widgets",
+      "squash-me",
+      "--expect",
+      tip,
+      "--squash",
+    );
+    assert.equal(squashed.code, 0, squashed.stdout);
+    assert.match(squashed.stdout, new RegExp(`squashes {4}${tip}`));
+    assert.match(
+      squashed.stdout,
+      /2 commit\(s\) squashed into one\. The workspace's squash-me keeps its own commits/,
+    );
+    const remote = forgeRefs("acme/widgets")["squash-me"];
+    assert.equal(remote, said.squash?.commit, "the remote has the reviewer's squash");
+    assert.equal(
+      inRootClone(
+        `git fetch -q origin; [ "$(git rev-parse origin/squash-me^{tree})" = "$(git rev-parse ${tip}^{tree})" ] && git rev-list --count origin/main..origin/squash-me`,
+      ).stdout.trim(),
+      "1",
+      "its tree is the tip's, one commit on main",
+    );
+    assert.equal(forgeHas("acme/widgets", notes), false, "notes.txt never reached the remote");
+    const approved = audit()
+      .filter((e) => e.event === "approved")
+      .pop() as { commit?: string; squashes?: string } | undefined;
+    assert.deepEqual([approved?.commit, approved?.squashes], [remote, tip]);
+    // The workspace's branch keeps its two commits: pushed as they are now, it would replace
+    // the remote's. That is refused unless asked for.
+    const unasked = stack.desolate("push", "dev", "acme/widgets", "squash-me", "--expect", tip);
+    assert.notEqual(unasked.code, 0);
+    assert.match(unasked.stderr, /this push REPLACES the remote's squash-me/);
+    assert.match(unasked.stderr, /--replace/);
+    assert.equal(forgeRefs("acme/widgets")["squash-me"], remote, "nothing was signed or pushed");
+    // Asked for, the prompt wants `replace <branch>`: the branch's name alone is not that.
+    const nameOnly = stack.person(
+      "Type 'replace squash-me'",
+      "squash-me",
+      "push",
+      "dev",
+      "acme/widgets",
+      "squash-me",
+      "--expect",
+      tip,
+      "--replace",
+    );
+    assert.equal(nameOnly.code, 78, nameOnly.stdout);
+    assert.match(nameOnly.stdout, /REPLACES {4}the remote's squash-me/);
+    assert.equal(forgeRefs("acme/widgets")["squash-me"], remote);
+    const replaced = stack.person(
+      "Type 'replace squash-me'",
+      "replace squash-me",
+      "push",
+      "dev",
+      "acme/widgets",
+      "squash-me",
+      "--expect",
+      tip,
+      "--replace",
+    );
+    assert.equal(replaced.code, 0, replaced.stdout);
+    assert.equal(forgeRefs("acme/widgets")["squash-me"], tip, "control: replaced, as asked");
   });
 
   it("a raw git push in the root's terminal waits for `desolate approve` on the host", async () => {
