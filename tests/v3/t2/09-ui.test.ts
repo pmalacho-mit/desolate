@@ -579,8 +579,13 @@ describe("T2 section 4.8: the root UI", () => {
     );
     assert.deepEqual(
       dom.match(/<script[^>]*>/g),
-      ['<script src="/highlight.js">', '<script src="/markdown.js">', '<script src="/ui.js">'],
-      "and the only scripts on the page are the dashboard's own (its diff colours, an issue's Markdown preview, and itself)",
+      [
+        '<script src="/page-key.js">',
+        '<script src="/highlight.js">',
+        '<script src="/markdown.js">',
+        '<script src="/ui.js">',
+      ],
+      "and the only scripts on the page are the dashboard's own (its page key's keeper, its diff colours, an issue's Markdown preview, and itself)",
     );
     assert.doesNotMatch(
       page.stderr,
