@@ -64,7 +64,7 @@ const shown = (text: string, ports?: { sshPort: number; linkPort: number }) => {
   let out = text
     // (A temporary home is often reached through a link, /var to /private/var: a sandbox
     // profile names it as it really is.)
-    .split(fs.realpathSync(home()))
+    .split(fs.realpathSync.native(home()))
     .join("<home>")
     .split(home())
     .join("<home>")

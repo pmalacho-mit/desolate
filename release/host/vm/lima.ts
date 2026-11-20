@@ -357,7 +357,9 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const relative = path.relative(home, path.resolve(share.host));
       const inHome = relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
       return {
-        at: inHome ? path.join(fs.realpathSync(home), relative) : fs.realpathSync(share.host),
+        at: inHome
+          ? path.join(fs.realpathSync.native(home), relative)
+          : fs.realpathSync.native(share.host),
         writable: share.writable,
       };
     });
