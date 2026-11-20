@@ -346,9 +346,19 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     return text === "Running" ? "running" : text === "" ? "missing" : "stopped";
   };
 
-  /** Where the Mac's people keep their files: a vz VM's host process opens nothing here but
-   *  what `opens` names. */
-  const PRIVATE = ["/Users", "/Volumes", "/System/Volumes/Data/Users"];
+  /** Where the Mac's people keep their files, and the Mac's temporary folders: a vz VM's host
+   *  process reads nothing here but what `opens` names. It writes nowhere at all but there
+   *  (and devices): a share swapped to a folder the Mac's user may write outside these, such
+   *  as /opt/homebrew/bin (Homebrew's, the user's own) or /Applications (an admin's), would
+   *  otherwise hand a VM the programs the Mac runs (measured: refused under the profile, and
+   *  mounted, writable, without it). */
+  const PRIVATE = [
+    "/Users",
+    "/Volumes",
+    "/System/Volumes/Data/Users",
+    "/private/var/folders",
+    "/private/tmp",
+  ];
   /** Under PRIVATE: files alone (`literal`), and folders with what is in them, read and read-write. */
   type Opens = { files: string[]; read: string[]; write: string[] };
   /** What a vz VM's host process may open under PRIVATE, read and read-write.
@@ -415,7 +425,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   /** A path in a sandbox profile's string. */
   const sbString = (p: string) => `"${p.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   /** The sandbox profile a vz VM's host process starts under, and keeps for its whole life
-   *  (decisions.md: measured on an M1). Files: only what `opens` names, under PRIVATE. A VM
+   *  (decisions.md: measured on an M1). Files: written only where `opens` says, and read under PRIVATE only there. A VM
    *  with no egress, also: outbound, unix sockets except the Mac's resolver; this VM's ssh
    *  forward; its link. */
   const profile = (m: Meta, may: Opens) =>
@@ -434,7 +444,9 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         : []),
       // (One operation name on both sides: a rule naming file-read-data outranks one naming
       // file-read*, whatever their order, measured.)
-      `(deny file-read* file-write* ${PRIVATE.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
+      '(deny file-write* (subpath "/"))',
+      '(allow file-write* (subpath "/dev"))',
+      `(deny file-read* ${PRIVATE.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
       "(allow file-read-metadata)",
       `(allow file-read* ${may.files.map((p) => `(literal ${sbString(p)})`).join(" ")})`,
       `(allow file-read* ${may.read.map((p) => `(subpath ${sbString(p)})`).join(" ")})`,
@@ -1132,7 +1144,8 @@ declare namespace limaBackend {
 
   /** a VM with no egress starts under a profile that lets its host process reach two loopback
    *  ports, its ssh and its link, and unix sockets other than the Mac's resolver; and open,
-   *  under /Users and /Volumes, only its own Lima directory, Lima's key and settings (each
+   *  under /Users, /Volumes and the Mac's temporary folders (and writes, anywhere), only its
+   *  own Lima directory, Lima's key and settings (each
    *  file alone), Lima's install, and its shares as they really are, a read-only one for
    *  reading: nothing else */
   export type Confined = Expect<
@@ -1158,7 +1171,7 @@ declare namespace limaBackend {
       ]
     >,
     "=",
-    '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n(deny file-read* file-write* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))\n(allow file-read-metadata)\n(allow file-read* (literal "<home>/lima") (literal "<home>/lima/_config/user") (literal "<home>/lima/_config/user.pub") (literal "<home>/lima/_config/networks.yaml") (literal "<home>/lima/_config/default.yaml") (literal "<home>/lima/_config/override.yaml") (literal "<home>/nests-bin/limactl"))\n(allow file-read* (subpath "<home>/share/lima") (subpath "<home>/libexec/lima") (subpath "<home>/mirrors/acme/web.git"))\n(allow file-read* file-write* (subpath "<home>/lima/dsl-main-cut") (subpath "<home>/domains/acme/repos"))\n'
+    '(version 1)\n(allow default)\n(deny network-outbound)\n(allow network-outbound (remote unix-socket))\n(deny network-outbound (literal "/private/var/run/mDNSResponder"))\n(deny network-outbound (literal "/var/run/mDNSResponder"))\n(allow network-outbound (remote ip "localhost:<ssh port>"))\n(allow network-outbound (remote ip "localhost:<link port>"))\n(deny file-write* (subpath "/"))\n(allow file-write* (subpath "/dev"))\n(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users") (subpath "/private/var/folders") (subpath "/private/tmp"))\n(allow file-read-metadata)\n(allow file-read* (literal "<home>/lima") (literal "<home>/lima/_config/user") (literal "<home>/lima/_config/user.pub") (literal "<home>/lima/_config/networks.yaml") (literal "<home>/lima/_config/default.yaml") (literal "<home>/lima/_config/override.yaml") (literal "<home>/nests-bin/limactl"))\n(allow file-read* (subpath "<home>/share/lima") (subpath "<home>/libexec/lima") (subpath "<home>/mirrors/acme/web.git"))\n(allow file-read* file-write* (subpath "<home>/lima/dsl-main-cut") (subpath "<home>/domains/acme/repos"))\n'
   >;
   /** a VM with open egress (the root) is confined in what it opens just the same, and nothing
    *  more: its network is its own */
@@ -1178,7 +1191,7 @@ declare namespace limaBackend {
       ]
     >,
     "=",
-    '(version 1)\n(allow default)\n(deny file-read* file-write* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users"))\n(allow file-read-metadata)\n(allow file-read* (literal "<home>/lima") (literal "<home>/lima/_config/user") (literal "<home>/lima/_config/user.pub") (literal "<home>/lima/_config/networks.yaml") (literal "<home>/lima/_config/default.yaml") (literal "<home>/lima/_config/override.yaml") (literal "<home>/nests-bin/limactl"))\n(allow file-read* (subpath "<home>/share/lima") (subpath "<home>/libexec/lima"))\n(allow file-read* file-write* (subpath "<home>/lima/dsl-main-root") (subpath "<home>/domains"))\n'
+    '(version 1)\n(allow default)\n(deny file-write* (subpath "/"))\n(allow file-write* (subpath "/dev"))\n(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/System/Volumes/Data/Users") (subpath "/private/var/folders") (subpath "/private/tmp"))\n(allow file-read-metadata)\n(allow file-read* (literal "<home>/lima") (literal "<home>/lima/_config/user") (literal "<home>/lima/_config/user.pub") (literal "<home>/lima/_config/networks.yaml") (literal "<home>/lima/_config/default.yaml") (literal "<home>/lima/_config/override.yaml") (literal "<home>/nests-bin/limactl"))\n(allow file-read* (subpath "<home>/share/lima") (subpath "<home>/libexec/lima"))\n(allow file-read* file-write* (subpath "<home>/lima/dsl-main-root") (subpath "<home>/domains"))\n'
   >;
 
   /** a VM is started only if desolate made it (its record is beside Lima's) */

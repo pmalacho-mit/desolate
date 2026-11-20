@@ -1374,9 +1374,12 @@ are left for the owner, with what would close them.
   on the M1 (Lima 2.3.0): a loop flipping a share between its folder and a link won 3 of 4
   starts, and one swap just after Lima's own checks won every time; the VM then read and
   wrote a folder of the Mac's, or read Lima's private key. Now every vz VM's host process
-  starts under a profile (`host/vm/lima.ts`, `opens`) that lets it open, under `/Users` and
-  `/Volumes`, only its own Lima directory, Lima's key and settings (each file alone), Lima's
-  install, and its shares as they really are when it starts. Apple's VM process honours the
+  starts under a profile (`host/vm/lima.ts`, `opens`) that lets it write nowhere but its own
+  Lima directory and its writable shares, and read, under `/Users`, `/Volumes` and the Mac's
+  temporary folders, only those, Lima's key and settings (each file alone), Lima's install,
+  and its read-only shares, each share named where it must be, never by following it. (Not
+  only /Users: a folder the Mac's user may write elsewhere, /opt/homebrew/bin or an admin's
+  /Applications, swapped in, would have handed a VM the programs the Mac runs.) Apple's VM process honours the
   profile of the process that configures it: a swapped share is refused ("A directory sharing
   device configuration is invalid", EPERM) and the VM does not start. T4 tries it on a real
   workspace, beside a control (the same swap, Lima unconfined, reads the Mac's folder). Not

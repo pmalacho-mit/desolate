@@ -257,19 +257,22 @@ describe(
       const vm = vmOf("a/w1");
       const repos = path.join(stack.home, "domains/a/repos");
       const kept = `${repos}.kept`;
-      // A folder of the Mac's that no VM is given: outside desolate's home, under /Users.
+      // Folders of the Mac's that no VM is given, outside desolate's home: the person's own,
+      // under /Users; and one the Mac's user may write outside it (as /opt/homebrew/bin is).
       const outside = fs.mkdtempSync(path.join(os.homedir(), ".desolate-t4-outside-"));
-      fs.writeFileSync(path.join(outside, "the-macs-own.txt"), "the Mac's own\n");
+      const writable = fs.mkdtempSync("/private/tmp/desolate-t4-outside-");
+      for (const dir of [outside, writable])
+        fs.writeFileSync(path.join(dir, "the-macs-own.txt"), "the Mac's own\n");
       const haLog = path.join(stack.home, "lima", vm, "ha.stderr.log");
       const profile = path.join(stack.home, "lima", vm, "confine.sb");
-      const swap = () => {
+      const swap = (to: string) => {
         fs.renameSync(repos, kept);
-        fs.symlinkSync(outside, repos);
+        fs.symlinkSync(to, repos);
       };
-      const swapWhenProfiled = async () => {
+      const swapWhenProfiled = async (to: string) => {
         for (const until = Date.now() + 300_000; Date.now() < until;) {
           if (fs.existsSync(profile)) {
-            swap();
+            swap(to);
             return true;
           }
           await new Promise((resolve) => setImmediate(resolve));
@@ -299,7 +302,7 @@ describe(
 
         // Control: the same VM, its share swapped, started by Lima with no profile. It mounts
         // the folder the link names, so a refusal below is the profile's.
-        swap();
+        swap(outside);
         const control = limactl("start", vm);
         assert.equal(control.status, 0, (control.stderr ?? "").slice(-1500));
         const seen = stack.inVm(vm, ["bash", "-c", "cat /workspaces/the-macs-own.txt"], {
@@ -313,46 +316,49 @@ describe(
         limactl("stop", vm);
         restore();
 
-        // desolate's own start: its check passes, then the share is swapped, and the profile
-        // refuses it (EPERM): Lima's own look, or the VM process's.
-        fs.rmSync(profile, { force: true });
-        fs.rmSync(haLog, { force: true });
-        const [refused, swapped] = await Promise.all([
-          started(path.join(REPO_ROOT, "release", "cli.sh"), ["start", "a/w1"]),
-          swapWhenProfiled(),
-        ]);
-        assert.ok(swapped, "the profile was written, and the swap made");
-        assert.notEqual(refused.code, 0, "the VM must not start on a swapped share");
-        assert.match(refused.out, /a share of it changed after desolate checked it/);
-        // (Lima's host process writes its last line as it exits: given a moment.)
-        const refusedBy =
-          /operation not permitted|directory sharing device configuration is invalid/i;
-        let ha = "";
-        for (const until = Date.now() + 15_000; Date.now() < until;) {
-          try {
-            ha = fs.readFileSync(haLog, "utf8");
-          } catch {}
-          if (refusedBy.test(`${refused.out}\n${ha}`)) break;
-          await new Promise((resolve) => setTimeout(resolve, 250));
+        for (const target of [outside, writable]) {
+          // desolate's own start: its check passes, then the share is swapped, and the profile
+          // refuses it (EPERM): Lima's own look, or the VM process's.
+          fs.rmSync(profile, { force: true });
+          fs.rmSync(haLog, { force: true });
+          const [refused, swapped] = await Promise.all([
+            started(path.join(REPO_ROOT, "release", "cli.sh"), ["start", "a/w1"]),
+            swapWhenProfiled(target),
+          ]);
+          assert.ok(swapped, "the profile was written, and the swap made");
+          assert.notEqual(refused.code, 0, "the VM must not start on a swapped share");
+          assert.match(refused.out, /a share of it changed after desolate checked it/);
+          // (Lima's host process writes its last line as it exits: given a moment.)
+          const refusedBy =
+            /operation not permitted|directory sharing device configuration is invalid/i;
+          let ha = "";
+          for (const until = Date.now() + 15_000; Date.now() < until;) {
+            try {
+              ha = fs.readFileSync(haLog, "utf8");
+            } catch {}
+            if (refusedBy.test(`${refused.out}\n${ha}`)) break;
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          assert.match(
+            `${refused.out}\n${ha}`,
+            refusedBy,
+            `refused by the profile: ${refused.out.slice(-1200)}\n${ha.split("\n").slice(-6).join("\n")}`,
+          );
+          assert.notEqual(
+            limactl("list", "--format", "{{.Status}}", vm).stdout.trim(),
+            "Running",
+            "the VM is not running",
+          );
+          assert.deepEqual(
+            fs.readdirSync(target),
+            ["the-macs-own.txt"],
+            "nothing was written there",
+          );
+          restore();
         }
-        assert.match(
-          `${refused.out}\n${ha}`,
-          refusedBy,
-          `refused by the profile: ${refused.out.slice(-1200)}\n${ha.split("\n").slice(-6).join("\n")}`,
-        );
-        assert.notEqual(
-          limactl("list", "--format", "{{.Status}}", vm).stdout.trim(),
-          "Running",
-          "the VM is not running",
-        );
-        assert.deepEqual(
-          fs.readdirSync(outside),
-          ["the-macs-own.txt"],
-          "nothing was written there",
-        );
       } finally {
         restore();
-        fs.rmSync(outside, { recursive: true, force: true });
+        for (const dir of [outside, writable]) fs.rmSync(dir, { recursive: true, force: true });
         // Put back as it was, it starts (here, so that a failure above leaves the next test a
         // running workspace).
         limactl("stop", vm);
