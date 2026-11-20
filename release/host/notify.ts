@@ -291,6 +291,13 @@ export const ntfyRequest = (
     return {
       refused: "--ntfy takes https://<server>/<topic>, a topic of letters, digits, - and _",
     };
+  // The topic is the only secret an ntfy topic has: anyone who knows it reads every message
+  // (repositories, branches, what agents say) and can publish to it. A short one is guessed.
+  if (topic.length < 20)
+    return {
+      refused:
+        "--ntfy needs a topic of 20 characters or more, hard to guess: anyone who knows it reads what is sent (desolate-$(openssl rand -hex 8))",
+    };
   return {
     endpoint: `${url.origin}/`,
     body: JSON.stringify({ topic, title: n.title, message: n.body, ...(click ? { click } : {}) }),
@@ -303,7 +310,7 @@ declare namespace ntfyRequest {
     Invoke<
       typeof ntfyRequest,
       [
-        topicUrl: "https://ntfy.sh/desolate-x7Kq2",
+        topicUrl: "https://ntfy.sh/desolate-x7Kq2b9Lm4Pz",
         n: { title: "desolate: dev/w1 asks for you"; body: "dev/w1 says: which API version?" },
         click: "https://mac.tail1234.ts.net:8443/",
       ]
@@ -311,7 +318,7 @@ declare namespace ntfyRequest {
     "=",
     {
       endpoint: "https://ntfy.sh/";
-      body: '{"topic":"desolate-x7Kq2","title":"desolate: dev/w1 asks for you","message":"dev/w1 says: which API version?","click":"https://mac.tail1234.ts.net:8443/"}';
+      body: '{"topic":"desolate-x7Kq2b9Lm4Pz","title":"desolate: dev/w1 asks for you","message":"dev/w1 says: which API version?","click":"https://mac.tail1234.ts.net:8443/"}';
     }
   >;
   /** not https, no topic, or a path that is not one topic */
@@ -328,6 +335,12 @@ declare namespace ntfyRequest {
         args: [topicUrl: "https://ntfy.sh/", n: { title: "t"; body: "b" }],
         expected: {
           refused: "--ntfy takes https://<server>/<topic>, a topic of letters, digits, - and _";
+        },
+      ],
+      [
+        args: [topicUrl: "https://ntfy.sh/desolate", n: { title: "t"; body: "b" }],
+        expected: {
+          refused: "--ntfy needs a topic of 20 characters or more, hard to guess: anyone who knows it reads what is sent (desolate-$(openssl rand -hex 8))";
         },
       ],
       [
@@ -361,6 +374,10 @@ export const notify = async (out: (line: string) => void, ntfy?: string) => {
   out(
     "desolate notify: notifications for pushes waiting, offers, agents asking for you, and pushes. Ctrl-C stops.",
   );
+  if (ntfy !== undefined)
+    out(
+      `  each is also sent to ${new URL(ntfy).origin}: its operator, and anyone who knows the topic, can read them (repositories, branches, what agents say).`,
+    );
   await followEvents(
     0,
     (line) => {
@@ -372,10 +389,12 @@ export const notify = async (out: (line: string) => void, ntfy?: string) => {
       }
       const n = notice(event);
       if (!n) return;
-      // A workspace's own words (its status), at most once a minute each: an agent flipping
-      // its colour must not teach anyone to ignore desolate's notifications.
-      if (event.source === "root" && event.type === "status") {
-        const key = `${String(event.domain)}/${String(event.workspace)}`;
+      // What a workspace makes happen (its status, its offers), at most once a minute of each
+      // kind for each: an agent flipping its colour, or offering in a loop, must not teach
+      // anyone to ignore desolate's notifications, nor use up an ntfy server's quota, so that
+      // a push waiting for you no longer reaches your phone (audit, 2026-11-20).
+      if (event.source === "root" && (event.type === "status" || event.type === "offered")) {
+        const key = `${String(event.type)} ${String(event.domain)}/${String(event.workspace)}`;
         if (Date.now() - (said.get(key) ?? 0) < 60_000) return;
         said.set(key, Date.now());
       }

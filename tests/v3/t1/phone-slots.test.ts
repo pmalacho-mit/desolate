@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { request } from "node:http";
-import { createServer as createTcp } from "node:net";
+import { connect, createServer as createTcp } from "node:net";
 import type { AddressInfo, Server } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,7 +17,8 @@ process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31599";
 const base = 42000 + Math.floor(Math.random() * 2000);
 process.env.DESOLATE_PHONE_PORT = String(base);
-const { serveSlots, slotLocalPort, cookieTag } = await import("../../../release/host/phone.ts");
+const { serveSlots, servePhone, slotLocalPort, cookieTag, phonePort } =
+  await import("../../../release/host/phone.ts");
 const { paths } = await import("../../../release/host/paths.ts");
 
 const NAME = "mac.tail1234.ts.net";
@@ -43,9 +44,24 @@ before(async () => {
         const host = /^host:\s*(\S+)/im.exec(head)?.[1] ?? "";
         const cookie = /^cookie:\s*(.*)$/im.exec(head)?.[1] ?? "";
         chosen ||= host.split(":")[0]!;
+        // An upgrade it will not switch: a 200, the connection kept (a dev server bent on a
+        // raw tunnel through the slot). One it switches: a 101, then an echo.
+        if (/^GET \/no-switch /.test(head)) {
+          socket.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n");
+          continue;
+        }
+        if (/^GET \/switch /.test(head)) {
+          socket.write(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSet-Cookie: sid=x\r\n\r\n",
+          );
+          socket.removeAllListeners("data");
+          if (buffered) socket.write(buffered, "latin1");
+          socket.on("data", (more) => socket.write(more));
+          return;
+        }
         const body = JSON.stringify({ workspace: chosen, host, cookie });
         socket.write(
-          `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nConnection: keep-alive\r\n\r\n${body}`,
+          `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${body.length}\r\nClear-Site-Data: "cookies"\r\nConnection: keep-alive\r\n\r\n${body}`,
         );
       }
     });
@@ -61,6 +77,7 @@ before(async () => {
           ? { devHost: "other-w2-bbbbbb.localhost", port }
           : null,
   );
+  servePhone(() => {});
   await new Promise((resolve) => setTimeout(resolve, 200));
 });
 after(() => {
@@ -98,7 +115,52 @@ const ask = (slot: number, cookie?: string) =>
     req.end();
   });
 
+/** A raw exchange with a local port: what was sent back within `ms`. */
+const raw = (port: number, text: string, ms = 600) =>
+  new Promise<string>((resolve) => {
+    let got = "";
+    const socket = connect(port, "127.0.0.1", () => socket.write(text));
+    socket.on("data", (chunk) => (got += chunk.toString("latin1")));
+    socket.on("error", () => resolve(got));
+    socket.on("close", () => resolve(got));
+    setTimeout(() => (socket.destroy(), resolve(got)), ms);
+  });
+const upgrade = (path: string) =>
+  `GET ${path} HTTP/1.1\r\nHost: ${NAME}:9101\r\nTailscale-User-Login: ${LOGIN}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n`;
+
 describe("T1 the phone's dev-server slots", () => {
+  it("a Referer that is not a URL is answered, and the phone's port goes on answering", async () => {
+    const bad = `GET / HTTP/1.1\r\nHost: ${NAME}:8443\r\nTailscale-User-Login: ${LOGIN}\r\nReferer: ${NAME}/x\r\nConnection: close\r\n\r\n`;
+    assert.match(await raw(phonePort(), bad), /^HTTP\/1\.1 \d{3} /);
+    // The control: it is still there to answer the next one (it once took the daemon down).
+    assert.match(await raw(phonePort(), bad), /^HTTP\/1\.1 \d{3} /);
+  });
+
+  it("an upgrade the server does not switch is refused, not tunnelled; one it switches is", async () => {
+    const refused = await raw(slotLocalPort(0), upgrade("/no-switch"));
+    assert.match(refused, /^HTTP\/1\.1 502 /);
+    const switched = await raw(slotLocalPort(0), `${upgrade("/switch")}hello`);
+    assert.match(switched, /^HTTP\/1\.1 101 /);
+    assert.doesNotMatch(switched, /set-cookie/i);
+    assert.match(switched, /hello$/);
+  });
+
+  it("no service workers, and a dev server's Clear-Site-Data never reaches the browser", async () => {
+    const sw = await raw(
+      slotLocalPort(0),
+      `GET /sw.js HTTP/1.1\r\nHost: ${NAME}:9101\r\nTailscale-User-Login: ${LOGIN}\r\nService-Worker: script\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(sw, /^HTTP\/1\.1 403 /);
+    const page = await raw(
+      slotLocalPort(0),
+      `GET / HTTP/1.1\r\nHost: ${NAME}:9101\r\nTailscale-User-Login: ${LOGIN}\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(page, /^HTTP\/1\.1 200 /);
+    // The proxy's own, for storage and cache, the first time: never the server's "cookies".
+    assert.doesNotMatch(page, /clear-site-data: "cookies"/i);
+    assert.match(page, /clear-site-data: "cache", "storage"/i);
+  });
+
   it("two workspaces on one port: each slot's requests reach its own, every time", async () => {
     for (let round = 0; round < 3; round++) {
       assert.equal((await ask(0)).workspace, "acme-w1-aaaaaa.localhost");

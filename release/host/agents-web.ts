@@ -19,7 +19,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
 import { sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
-import { readPhone, tailnetRequest } from "./phone.ts";
+import { readPhone, safely, tailnetRequest } from "./phone.ts";
 import type { Phone } from "./phone.ts";
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -130,7 +130,11 @@ const nameOf = (value: unknown) =>
   typeof value === "string" && /^[a-z0-9][a-z0-9-]{0,39}$/.test(value) ? value : undefined;
 
 /** The page's port, on 127.0.0.1 only: the phone's port plus one. */
-export const serveAgents = (log: (line: string) => void, port: number) => {
+export const serveAgents = (
+  log: (line: string) => void,
+  port: number,
+  held?: (what: string) => void,
+) => {
   const send = (res: ServerResponse, status: number, type: string, body: string | Buffer) => {
     res.writeHead(status, {
       "content-type": type,
@@ -143,108 +147,113 @@ export const serveAgents = (log: (line: string) => void, port: number) => {
     send(res, status, "text/plain; charset=utf-8", `desolate: ${message}\n`);
   const json = (res: ServerResponse, status: number, value: unknown) =>
     send(res, status, "application/json; charset=utf-8", JSON.stringify(value));
-  const server = createServer(async (req, res) => {
-    const phone = readPhone();
-    const checked = tailnetRequest(phone, req.headers);
-    if ("refused" in checked) return text(res, checked.refused.status, checked.refused.text);
-    // Only this page, or a navigation to it: the dev servers on the tailnet share its name,
-    // and so its site, and a page of theirs could otherwise make it read (the dashboard's rule).
-    const site = String(req.headers["sec-fetch-site"] ?? "");
-    if (site !== "" && site !== "same-origin" && site !== "none")
-      return text(
-        res,
-        403,
-        `a request another page started (Sec-Fetch-Site: ${site.slice(0, 40).replace(/[^\x20-\x7e]/g, "?")})`,
-      );
-    const token = agentsToken();
-    const name = cookieName(token);
-    const url = new URL(req.url ?? "/", "http://agents");
-    const given = url.searchParams.get("tkn");
-    if (req.method === "GET" && url.pathname === "/" && given !== null) {
-      if (!sameSecret(given, token))
-        return text(res, 403, "that is not this page's address; `desolate phone on` prints it");
-      res.writeHead(303, {
-        location: "/",
-        "set-cookie": `${name}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`,
-        "content-length": 0,
-        ...SECURITY,
-      });
-      return res.end();
-    }
-    const cookie = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]{48})(?:;|$)`).exec(
-      String(req.headers.cookie ?? ""),
-    )?.[1];
-    if (!cookie || !sameSecret(cookie, token))
-      return text(
-        res,
-        401,
-        "open this page at the address `desolate phone on` prints: it carries its token",
-      );
-    try {
-      const agents = await import("./agent.ts");
-      if (req.method === "GET" && STATIC[url.pathname]) {
-        const [file, type] = STATIC[url.pathname]!;
-        return send(res, 200, type, fs.readFileSync(file));
-      }
-      if (req.method === "GET" && url.pathname === "/list")
-        return json(
+  const server = createServer(
+    safely(log, "agents page", async (req, res) => {
+      const phone = readPhone();
+      const checked = tailnetRequest(phone, req.headers);
+      if ("refused" in checked) return text(res, checked.refused.status, checked.refused.text);
+      // Only this page, or a navigation to it: the dev servers on the tailnet share its name,
+      // and so its site, and a page of theirs could otherwise make it read (the dashboard's rule).
+      const site = String(req.headers["sec-fetch-site"] ?? "");
+      if (site !== "" && site !== "same-origin" && site !== "none")
+        return text(
           res,
-          200,
-          (await agents.agents()).map((a) => ({
-            workspace: a.workspace,
-            name: a.name,
-            state: a.state,
-            lastOutput: a.lastOutput,
-            command: a.command.join(" "),
-          })),
+          403,
+          `a request another page started (Sec-Fetch-Site: ${site.slice(0, 40).replace(/[^\x20-\x7e]/g, "?")})`,
         );
-      if (req.method === "GET" && url.pathname === "/output") {
-        const at = where(url.searchParams.get("at"));
-        if (!at) return text(res, 400, "which workspace? (?at=<domain>/<workspace>)");
-        const shown = await agents.output(
-          at,
-          nameOf(url.searchParams.get("name")),
-          Number(url.searchParams.get("from") ?? -1),
-        );
-        return json(res, 200, { data: shown.data.toString("base64"), next: shown.next });
+      const token = agentsToken();
+      const name = cookieName(token);
+      const url = new URL(req.url ?? "/", "http://agents");
+      const given = url.searchParams.get("tkn");
+      if (req.method === "GET" && url.pathname === "/" && given !== null) {
+        if (!sameSecret(given, token))
+          return text(res, 403, "that is not this page's address; `desolate phone on` prints it");
+        res.writeHead(303, {
+          location: "/",
+          "set-cookie": `${name}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/`,
+          "content-length": 0,
+          ...SECURITY,
+        });
+        return res.end();
       }
-      if (req.method === "POST" && url.pathname === "/say") {
-        if (!pagesOwn(req.headers, phone!))
-          return text(res, 403, "a request this page did not make");
-        let body = "";
-        for await (const chunk of req) {
-          body += chunk;
-          if (body.length > 100_000) return text(res, 413, "too much to type at once");
+      const cookie = new RegExp(`(?:^|;\\s*)${name}=([0-9a-f]{48})(?:;|$)`).exec(
+        String(req.headers.cookie ?? ""),
+      )?.[1];
+      if (!cookie || !sameSecret(cookie, token))
+        return text(
+          res,
+          401,
+          "open this page at the address `desolate phone on` prints: it carries its token",
+        );
+      try {
+        const agents = await import("./agent.ts");
+        if (req.method === "GET" && STATIC[url.pathname]) {
+          const [file, type] = STATIC[url.pathname]!;
+          return send(res, 200, type, fs.readFileSync(file));
         }
-        const asked = JSON.parse(body) as {
-          at?: unknown;
-          name?: unknown;
-          text?: unknown;
-          key?: unknown;
-        };
-        const at = where(asked.at);
-        if (!at) return text(res, 400, "which workspace?");
-        const bytes =
-          typeof asked.key === "string" && KEYS[asked.key] !== undefined
-            ? KEYS[asked.key]!
-            : typeof asked.text === "string" && asked.text !== ""
-              ? `${asked.text}\r`
-              : null;
-        if (bytes === null) return text(res, 400, "say what?");
-        await agents.say(at, nameOf(asked.name), Buffer.from(bytes));
-        log(
-          `agents page: said ${Buffer.byteLength(bytes)} byte(s) to ${nameOf(asked.name) ?? "agent"} in ${at}`,
-        );
-        return json(res, 200, { ok: true });
+        if (req.method === "GET" && url.pathname === "/list")
+          return json(
+            res,
+            200,
+            (await agents.agents()).map((a) => ({
+              workspace: a.workspace,
+              name: a.name,
+              state: a.state,
+              lastOutput: a.lastOutput,
+              command: a.command.join(" "),
+            })),
+          );
+        if (req.method === "GET" && url.pathname === "/output") {
+          const at = where(url.searchParams.get("at"));
+          if (!at) return text(res, 400, "which workspace? (?at=<domain>/<workspace>)");
+          const shown = await agents.output(
+            at,
+            nameOf(url.searchParams.get("name")),
+            Number(url.searchParams.get("from") ?? -1),
+          );
+          return json(res, 200, { data: shown.data.toString("base64"), next: shown.next });
+        }
+        if (req.method === "POST" && url.pathname === "/say") {
+          if (!pagesOwn(req.headers, phone!))
+            return text(res, 403, "a request this page did not make");
+          let body = "";
+          for await (const chunk of req) {
+            body += chunk;
+            if (body.length > 100_000) return text(res, 413, "too much to type at once");
+          }
+          const asked = JSON.parse(body) as {
+            at?: unknown;
+            name?: unknown;
+            text?: unknown;
+            key?: unknown;
+          };
+          const at = where(asked.at);
+          if (!at) return text(res, 400, "which workspace?");
+          const bytes =
+            typeof asked.key === "string" && KEYS[asked.key] !== undefined
+              ? KEYS[asked.key]!
+              : typeof asked.text === "string" && asked.text !== ""
+                ? `${asked.text}\r`
+                : null;
+          if (bytes === null) return text(res, 400, "say what?");
+          await agents.say(at, nameOf(asked.name), Buffer.from(bytes));
+          log(
+            `agents page: said ${Buffer.byteLength(bytes)} byte(s) to ${nameOf(asked.name) ?? "agent"} in ${at}`,
+          );
+          return json(res, 200, { ok: true });
+        }
+        return text(res, 404, "no such thing");
+      } catch (error) {
+        return text(res, 400, String((error as Error).message ?? error).slice(0, 300));
       }
-      return text(res, 404, "no such thing");
-    } catch (error) {
-      return text(res, 400, String((error as Error).message ?? error).slice(0, 300));
-    }
-  });
-  server.on("error", (error: NodeJS.ErrnoException) =>
-    log(`agents port ${port}: ${error.message}`),
+    }),
   );
+  // Held by another program: it would be sent the phone's cookies, this page's token among
+  // them. The daemon retires the tokens and takes the phone off the tailnet (phone.ts).
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    log(`agents port ${port}: ${error.message}`);
+    if (error.code === "EADDRINUSE") held?.(`agents port ${port}`);
+  });
   server.listen({ port, host: "127.0.0.1", exclusive: true });
   return server;
 };

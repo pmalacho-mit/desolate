@@ -46,7 +46,15 @@ import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
-import { assignSlots, phonePort, serveSlots, servePhone, slotAddress } from "./phone.ts";
+import {
+  assignSlots,
+  phoneOff,
+  phonePort,
+  readPhone,
+  serveSlots,
+  servePhone,
+  slotAddress,
+} from "./phone.ts";
 import { serveAgents } from "./agents-web.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
@@ -2733,18 +2741,29 @@ const serve = async () => {
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
   // The dashboard for your phone, over Tailscale Serve (phone.ts): on 127.0.0.1 only, and it
   // refuses everything until `desolate phone on`.
-  servePhone(log);
+  // A phone port another program holds is sent the phone's cookies (the tokens): fail closed.
+  const phoneHeld = (what: string) => {
+    log(`${what} is held by another program: the pages' tokens are retired, and the phone is off`);
+    retire();
+    void phoneOff().catch((error) => log(`phone off: ${(error as Error).message}`));
+  };
+  servePhone(log, phoneHeld);
   // Your agents, from your phone (agents-web.ts): the next port, an origin of its own.
-  serveAgents(log, phonePort() + 1);
+  serveAgents(log, phonePort() + 1, phoneHeld);
   // Dev servers on the tailnet (phone.ts): each forwarded one a slot, kept while it listens.
   let slots: (string | null)[] = [];
+  // Only the one domain `desolate phone dev <domain>` names: every slot is the same name on the
+  // tailnet, so one site, and a page of one domain's could act on another's there (phone.ts).
   const assigned = () => {
-    const wanted = [...entries.values()].flatMap((e) =>
-      [...e.listeners]
-        .filter((p) => !hostHeld.has(p))
-        .sort((x, y) => x - y)
-        .map((p) => `${e.vm} ${p}`),
-    );
+    const dev = readPhone()?.dev ?? null;
+    const wanted = [...entries.values()]
+      .filter((e) => dev !== null && e.domain === dev)
+      .flatMap((e) =>
+        [...e.listeners]
+          .filter((p) => !hostHeld.has(p))
+          .sort((x, y) => x - y)
+          .map((p) => `${e.vm} ${p}`),
+      );
     slots = assignSlots(slots, wanted);
     return slots;
   };
@@ -2752,12 +2771,18 @@ const serve = async () => {
     const slot = assigned().indexOf(`${vm} ${port}`);
     return slot >= 0 ? slotAddress(slot) : undefined;
   };
-  serveSlots(log, (slot) => {
-    const key = assigned()[slot];
-    const [vm = "", port = ""] = (key ?? "").split(" ");
-    const e = key ? entries.get(vm) : undefined;
-    return e ? { devHost: devHostname(INSTANCE, e.domain, e.workspace), port: Number(port) } : null;
-  });
+  serveSlots(
+    log,
+    (slot) => {
+      const key = assigned()[slot];
+      const [vm = "", port = ""] = (key ?? "").split(" ");
+      const e = key ? entries.get(vm) : undefined;
+      return e
+        ? { devHost: devHostname(INSTANCE, e.domain, e.workspace), port: Number(port) }
+        : null;
+    },
+    phoneHeld,
+  );
 
   const reconcile = () => {
     const wanted = new Set<number>();

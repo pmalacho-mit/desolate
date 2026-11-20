@@ -32,6 +32,7 @@ Every day: a workspace, your work in it, and its push:
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open | --link] [--json]                         the dashboard's address; --open signs your browser in to all three pages
   desolate phone [on | off]                                      the dashboard on your phone, over Tailscale
+  desolate phone dev <domain> | off                              which one domain's dev servers the phone reaches
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
   desolate offers dismiss <domain> <owner/repo> <branch>         not this one: off "Needs you" (the branch stays)
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
@@ -558,6 +559,24 @@ const main = async (argv: string[]): Promise<number> => {
       );
       return EXIT.ok;
     }
+    if (what === "dev") {
+      const domain = positionals[1];
+      if (!domain || positionals.length > 2)
+        refuse(
+          "which domain's dev servers?",
+          "desolate phone dev <domain>   (or: off)",
+          EXIT.usage,
+        );
+      const set = phone.phoneDev(domain === "off" ? null : domain);
+      if ("refused" in set) refuse(set.refused, set.fix);
+      out(
+        set.dev
+          ? `the phone reaches ${set.dev}'s dev servers now (desolate ports lists their addresses), and no other domain's.\n` +
+              "They share one name on the tailnet with each other: use it for a domain whose pages you trust, and close its tabs before choosing another."
+          : "the phone reaches no dev servers now.",
+      );
+      return EXIT.ok;
+    }
     if (what === "off") {
       await phone.phoneOff();
       out("the dashboard is off your tailnet.");
@@ -567,7 +586,7 @@ const main = async (argv: string[]): Promise<number> => {
       const on = phone.readPhone();
       out(
         on
-          ? `on: https://${on.name}:${on.httpsPort}/ for ${on.login}'s devices (desolate phone on prints it with its token)`
+          ? `on: https://${on.name}:${on.httpsPort}/ for ${on.login}'s devices (desolate phone on prints it with its token); dev servers: ${on.dev ?? "none (desolate phone dev <domain>)"}`
           : "off: desolate phone on puts the dashboard on your tailnet",
       );
       return EXIT.ok;

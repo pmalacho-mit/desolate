@@ -398,8 +398,41 @@ export const output = async (
     );
   const [start = "0", data = ""] = read.stdout.split("\n");
   const raw = Buffer.from(data, "base64");
-  return { data: terminalFilter()(raw), next: Number(start) + raw.length };
+  // Each answer ends on a whole UTF-8 sequence; a partial one at its end is read again next
+  // time. The filter is new for each answer, and the page's terminal keeps decoding across
+  // answers: a sequence split between two (C2 | 9D, the C1 form of OSC) passed both filters
+  // and reached the terminal whole (audit, 2026-11-20).
+  const whole = wholeUtf8(raw);
+  return { data: terminalFilter()(raw.subarray(0, whole)), next: Number(start) + whole };
 };
+
+/** How many of `bytes` end on a whole UTF-8 sequence: all of them, less a sequence begun at
+ *  the end and not finished there. */
+export const wholeUtf8 = (bytes: ArrayLike<number>): number => {
+  const n = bytes.length;
+  for (let back = 1; back <= Math.min(3, n); back++) {
+    const b = bytes[n - back]!;
+    if ((b & 0xc0) === 0x80) continue; // a continuation byte: look further back
+    const needs = (b & 0xe0) === 0xc0 ? 2 : (b & 0xf0) === 0xe0 ? 3 : (b & 0xf8) === 0xf0 ? 4 : 1;
+    return needs > back ? n - back : n;
+  }
+  return n;
+};
+
+declare namespace wholeUtf8 {
+  /** a lead byte at the end, or a lead and too few continuations, waits; anything whole goes */
+  export type Cases = Table<
+    typeof wholeUtf8,
+    [
+      [args: [bytes: [0x61, 0xc2, 0xc2]], expected: 2],
+      [args: [bytes: [0x61, 0xc2, 0x9d]], expected: 3],
+      [args: [bytes: [0x61, 0xe2, 0x94]], expected: 1],
+      [args: [bytes: [0x61, 0xe2, 0x94, 0x80]], expected: 4],
+      [args: [bytes: [0x61, 0x62]], expected: 2],
+      [args: [bytes: []], expected: 0],
+    ]
+  >;
+}
 
 /** Type into an agent's terminal, as `attach` would, without staying: the bytes, then let go.
  *  (A line ends with "\r", as a terminal's Enter sends it.) */
