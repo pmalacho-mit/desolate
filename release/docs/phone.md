@@ -83,7 +83,9 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   resolve inside your tailnet only. "Your devices" is every device signed in as that tailnet
   user: anyone your tailnet's admin, or your identity provider, lets sign in as you too.
 - **The same tokens.** Each page opens only with its own token, as on the Mac. The phone's
-  link is exchanged for a cookie at once, and the address bar keeps no token.
+  link is exchanged for a cookie at once, and the address bar keeps no token. The agents page's
+  token is made new each time desolate's daemon starts while the phone is on (after an
+  upgrade, a restart of the Mac): open its link again then, from `desolate phone on`.
 - **The agents page is the host's, on an origin of its own.** Typing into an agent runs
   something in its workspace. The dashboard is served by the root VM, whose ordinary user
   reads every domain's data; the agents page is served by the Mac's own daemon, the root never
@@ -134,6 +136,14 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   agents page's too) and takes the phone off the tailnet; and `desolate phone on` and
   `phone dev` refuse while any of them is another program's. Find it and stop it
   (`lsof -nP -iTCP -sTCP:LISTEN`), then `desolate bootstrap` and `desolate phone on`.
+- **While desolate's daemon is not running** (before the first command after a restart of the
+  Mac, or during an upgrade), Tailscale Serve still sends your phone's requests to those
+  ports, and any program on the Mac can take one for that time and be sent the phone's
+  cookies. The agents page's token is made new when the daemon starts, so one seen then is
+  dead after; the dashboard's is not (until `desolate bootstrap` retires it). Close the phone's
+  tabs, or `desolate phone off`, before you restart the Mac. Only pages that need more than a
+  cookie, or Serve pointed at something only desolate can hold, would close this: not built
+  yet.
 - **`desolate phone off`** takes the pages' and the dev servers' addresses off the tailnet and
   forgets which domain's dev servers it reached. It does not stop `desolate notify --ntfy`, and the phone's
   cookies stay in its browser until the tokens are made again.

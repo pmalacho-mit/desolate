@@ -2756,6 +2756,12 @@ const serve = async () => {
     retire();
     void phoneOff().catch((error) => log(`phone off: ${(error as Error).message}`));
   };
+  // The agents page types into agents: while the phone is on, its token is made new at each
+  // start of this daemon. While the daemon is down, Tailscale Serve still sends the phone's
+  // requests to its loopback ports, which any program on this Mac may take for that time;
+  // a token it saw then is dead once the daemon is back (audit, 2026-11-20). `desolate phone
+  // on` prints the new link.
+  if (readPhone()) fs.rmSync(path.join(paths.state, "agents-token"), { force: true });
   servePhone(log, phoneHeld);
   // Your agents, from your phone (agents-web.ts): the next port, an origin of its own.
   serveAgents(log, phonePort() + 1, phoneHeld);

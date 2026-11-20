@@ -327,6 +327,51 @@ declare namespace phoneRequest {
   >;
 }
 
+/** The dashboard's answer, as the phone is sent it. The root serves it, and is not trusted with
+ *  the whole tailnet name: no header that speaks for every port of it (Alt-Svc could send the
+ *  dashboard's own requests to the agents page's port; Clear-Site-Data would clear the agents
+ *  page's cookie), and only the dashboard's own cookie, made Secure (audit, 2026-11-20). */
+export const dashboardHeaders = (headers: IncomingHttpHeaders): OutgoingHttpHeaders => {
+  const kept: OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers))
+    if (
+      value !== undefined &&
+      ![
+        "alt-svc",
+        "clear-site-data",
+        "strict-transport-security",
+        "set-cookie",
+        "set-cookie2",
+      ].includes(name)
+    )
+      kept[name] = value;
+  const cookies = (headers["set-cookie"] ?? []).filter((c) => /^desolate_ui_[0-9a-f]+=/.test(c));
+  if (cookies.length) kept["set-cookie"] = secured(cookies);
+  return kept;
+};
+
+declare namespace dashboardHeaders {
+  export type Kept = Expect<
+    Invoke<
+      typeof dashboardHeaders,
+      [
+        headers: {
+          "content-type": "text/html";
+          "alt-svc": 'h2=":8444"';
+          "clear-site-data": '"cookies"';
+          "set-cookie": [
+            "desolate_ui_ab12=t; Path=/; HttpOnly",
+            "desolate_agents_cd=x",
+            "s0123456789__x=1",
+          ];
+        },
+      ]
+    >,
+    "=",
+    { "content-type": "text/html"; "set-cookie": ["desolate_ui_ab12=t; Path=/; HttpOnly; Secure"] }
+  >;
+}
+
 /** Set-Cookie headers made Secure: on the tailnet every page is HTTPS, but the root, behind
  *  this, sets the dashboard's cookie as for plain HTTP on the Mac. */
 export const secured = (values: readonly string[]): string[] =>
@@ -426,8 +471,7 @@ export const servePhone = (log: (line: string) => void, held?: (what: string) =>
         (answer) => {
           // Guarded here too: a later tick than the handler (see serveSlots).
           try {
-            const headers = { ...answer.headers };
-            if (headers["set-cookie"]) headers["set-cookie"] = secured(headers["set-cookie"]);
+            const headers = dashboardHeaders(answer.headers);
             const status = answer.statusCode ?? 502;
             res.writeHead(status >= 100 && status <= 599 ? status : 502, headers);
             answer.pipe(res);
@@ -531,6 +575,20 @@ declare namespace tailnetSelf {
 }
 
 /** `desolate phone on`: Serve publishes the phone's port at this Mac's tailnet name. */
+/** Every domain's block of addresses off the tailnet: the ones the record names and any a
+ *  failed `phone dev` or an earlier `phone on` left (Serve keeps what it was told across
+ *  restarts). Only the ports Serve has, so a few calls, not 896. */
+const offBlocks = async () => {
+  const status = await run(tailscale(), ["serve", "status", "--json"], { timeoutMs: 15_000 });
+  const ports = new Set<number>();
+  for (const match of status.stdout.matchAll(/:(9\d{3})\b/g)) {
+    const port = Number(match[1]);
+    if (port >= 9101 && port < 9101 + SLOTS * BLOCKS) ports.add(port);
+  }
+  for (const port of ports)
+    await run(tailscale(), ["serve", `--https=${port}`, "off"], { timeoutMs: 15_000 });
+};
+
 export const phoneOn = async (): Promise<Phone | { refused: string; fix: string }> => {
   const status = await run(tailscale(), ["status", "--json"], { timeoutMs: 15_000 });
   if (status.code !== 0)
@@ -561,6 +619,8 @@ export const phoneOn = async (): Promise<Phone | { refused: string; fix: string 
         fix: "turn on HTTPS for your tailnet (the admin console's DNS page), then: desolate phone on",
       };
   }
+  // A domain's addresses from before are taken off: `phone on` starts with none.
+  await offBlocks();
   const phone: Phone = { ...self, httpsPort, dev: null, block: null };
   fs.mkdirSync(paths.state, { recursive: true });
   fs.writeFileSync(STATE(), `${JSON.stringify(phone)}\n`, { mode: 0o600 });
@@ -572,15 +632,9 @@ export const phoneOff = async (): Promise<void> => {
   const phone = readPhone();
   fs.rmSync(STATE(), { force: true });
   const https = phone?.httpsPort ?? phoneHttpsPort();
-  const block = phone?.block;
-  for (const port of [
-    https,
-    https + 1,
-    ...(typeof block === "number"
-      ? Array.from({ length: SLOTS }, (_, slot) => slotHttpsPort(slot, block))
-      : []),
-  ])
+  for (const port of [https, https + 1])
     await run(tailscale(), ["serve", `--https=${port}`, "off"], { timeoutMs: 15_000 });
+  await offBlocks();
 };
 
 /** Which domain's dev servers the phone reaches (one, or none): that domain's own block of
@@ -618,11 +672,13 @@ export const phoneDev = async (
         ],
         { timeoutMs: 30_000 },
       );
-      if (serve.code !== 0)
+      if (serve.code !== 0) {
+        await offBlocks();
         return {
           refused: `tailscale serve refused: ${printable(serve.stderr.trim() || serve.stdout.trim())}`,
           fix: "desolate phone dev off; desolate phone on",
         };
+      }
     }
   fs.writeFileSync(STATE(), `${JSON.stringify(next)}\n`, { mode: 0o600 });
   return next;
@@ -1127,6 +1183,9 @@ export const serveSlots = (
     );
     // A WebSocket (Vite's hot reload): the same checks, then the bytes both ways.
     server.on("upgrade", (req, client, head) => {
+      // Node takes its own error listener off a socket it hands to 'upgrade': without one of
+      // ours, a peer that resets the connection stops the daemon (audit, 2026-11-20).
+      client.on("error", () => client.destroy());
       let d: ReturnType<typeof decide>;
       try {
         d = decide(slot, req.headers);

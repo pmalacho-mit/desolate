@@ -4,6 +4,7 @@
 // 127.0.0.1:<port>: a proxy that reused a connection sent one workspace's requests, and its
 // cookies, to another (found on real Tailscale, 2026-11-20). The forwarder here does the same.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { request } from "node:http";
 import { connect, createServer as createTcp } from "node:net";
@@ -144,6 +145,40 @@ describe("T1 the phone's dev-server slots", () => {
     assert.match(await raw(phonePort(), bad), /^HTTP\/1\.1 \d{3} /);
     // The control: it is still there to answer the next one (it once took the daemon down).
     assert.match(await raw(phonePort(), bad), /^HTTP\/1\.1 \d{3} /);
+  });
+
+  it("a refused upgrade whose connection is then reset does not stop the slots", () => {
+    // In a process of its own: the test runner absorbs an error no listener takes, and a
+    // daemon does not (one reset after a refusal once stopped it). Twenty, as one can land
+    // after the server has let go of its socket.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-reset-"));
+    fs.mkdirSync(path.join(dir, "state"));
+    fs.writeFileSync(
+      path.join(dir, "state", "phone.json"),
+      JSON.stringify({ login: LOGIN, name: NAME, httpsPort: 8443, dev: "acme", block: 0 }),
+    );
+    const script = path.join(dir, "reset.mts");
+    fs.writeFileSync(
+      script,
+      `const { serveSlots, slotLocalPort } = await import(${JSON.stringify(path.resolve(import.meta.dirname, "../../../release/host/phone.ts"))});
+const { connect } = await import("node:net");
+serveSlots(() => {}, () => ({ devHost: "a.localhost", port: 1 }));
+await new Promise((r) => setTimeout(r, 300));
+for (let i = 0; i < 20; i++) {
+  const s = connect(slotLocalPort(0), "127.0.0.1", () => s.write("GET / HTTP/1.1\\r\\nHost: ${NAME}:9101\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n"));
+  s.on("data", () => s.resetAndDestroy());
+  s.on("error", () => {});
+}
+setTimeout(() => { console.log("still answering"); process.exit(0); }, 1500);
+`,
+    );
+    const ran = spawnSync(process.execPath, ["--disable-warning=ExperimentalWarning", script], {
+      encoding: "utf8",
+      timeout: 20_000,
+      env: { ...process.env, DESOLATE_HOME: dir, DESOLATE_PHONE_PORT: String(base + 100) },
+    });
+    fs.rmSync(dir, { recursive: true, force: true });
+    assert.match(ran.stdout, /still answering/, ran.stderr.slice(0, 400));
   });
 
   it("an upgrade the server does not switch is refused, not tunnelled; one it switches is", async () => {

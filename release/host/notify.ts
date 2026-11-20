@@ -371,6 +371,8 @@ export const notify = async (out: (line: string) => void, ntfy?: string) => {
   }
   const { followEvents } = await import("./daemon.ts");
   const said = new Map<string, number>();
+  const sentAt: number[] = [];
+  let held = false;
   out(
     "desolate notify: notifications for pushes waiting, offers, agents asking for you, and pushes. Ctrl-C stops.",
   );
@@ -400,7 +402,19 @@ export const notify = async (out: (line: string) => void, ntfy?: string) => {
       }
       out(`${new Date().toLocaleTimeString()}  ${n.title}: ${n.body}`);
       show(n);
-      if (ntfy !== undefined) {
+      // At most 60 an hour to the phone, whatever sends them: a server's quota (ntfy.sh's is a
+      // few hundred a day) must be left for a push waiting for you (audit, 2026-11-20).
+      const now = Date.now();
+      while (sentAt.length && now - sentAt[0]! > 3_600_000) sentAt.shift();
+      if (ntfy !== undefined && sentAt.length >= 60) {
+        if (!held)
+          out(
+            "  (60 sent to your phone this hour: the rest are shown here only, until the hour is up)",
+          );
+        held = true;
+      } else if (ntfy !== undefined) {
+        held = false;
+        sentAt.push(now);
         const phone = readPhone();
         const sent = ntfyRequest(
           ntfy,

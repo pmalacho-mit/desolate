@@ -152,6 +152,14 @@ export const serveAgents = (
       const phone = readPhone();
       const checked = tailnetRequest(phone, req.headers);
       if ("refused" in checked) return text(res, checked.refused.status, checked.refused.text);
+      // Its own port only: the name's other ports are the dashboard's and the dev servers', and a
+      // request sent here under one of theirs (an Alt-Svc) is not this page's (audit, 2026-11-20).
+      if (
+        !String(req.headers.host ?? "")
+          .toLowerCase()
+          .endsWith(`:${checked.phone.httpsPort + 1}`)
+      )
+        return text(res, 421, "this is the agents page's port, and that request was for another");
       // Only this page, or a navigation to it: the dev servers on the tailnet share its name,
       // and so its site, and a page of theirs could otherwise make it read (the dashboard's rule).
       const site = String(req.headers["sec-fetch-site"] ?? "");
