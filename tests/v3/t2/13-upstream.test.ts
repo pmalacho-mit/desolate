@@ -36,6 +36,8 @@ const approvals = async () => {
   const port = Number(stack.env.DESOLATE_EDITOR_PORT);
   const name = "desolate-approve.localhost";
   let cookie = "";
+  /** The page key its sign-in page carries (shared/page-key.ts), sent beside the cookie. */
+  let key = "";
   const call = (
     method: string,
     url: string,
@@ -50,7 +52,11 @@ const approvals = async () => {
           port,
           method,
           path: url,
-          headers: { host: `${name}:${port}`, ...(cookie ? { cookie } : {}), ...headers },
+          headers: {
+            host: `${name}:${port}`,
+            ...(cookie ? { cookie, "x-desolate-key": key } : {}),
+            ...headers,
+          },
         },
         (res) => {
           let text = "";
@@ -65,8 +71,9 @@ const approvals = async () => {
     });
   const at = new URL(/approvals {4}(http:\S+)/.exec(stack.quiet("approve", "--web").stdout)![1]!);
   const login = await call("GET", at.pathname + at.search);
-  assert.equal(login.status, 303);
+  assert.equal(login.status, 200);
   cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+  key = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(login.body)![1]!;
   type Waiting = {
     nonce: string;
     token: string;

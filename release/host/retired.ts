@@ -1,7 +1,8 @@
 // When the pages' tokens were last retired: the daemon found [::1] on its port held by
 // another program, where browsers look first for *.localhost. A tab already open on the
-// dashboard or an editor, reloaded then, sent that program its cookie, and the cookie is the
-// token (final review, 2026-11-16). The approval page's and the git terminal's tokens are
+// dashboard or an editor, reloaded then, sent that program its cookie (final review,
+// 2026-11-16): an editor's cookie is its token; a page's, with its page key, is its whole
+// credential, since that program is then the page's own origin and can read the key. The approval page's and the git terminal's tokens are
 // removed at once and made again when next asked for. The dashboard's (which the root holds a
 // copy of) and each editor's (made once, in its VM) are not served again until they have been
 // made again: the dashboard's by `desolate bootstrap`, an editor's by bootstrap for a running
@@ -61,6 +62,63 @@ export const retire = () => {
   for (const name of ["approve-token", "git-token", "ui-token"])
     fs.rmSync(path.join(paths.state, name), { force: true });
 };
+
+/** Once, at the first bootstrap with page keys (shared/page-key.ts): the three page tokens are
+ *  made again. Before, each page's cookie was its token, so a browser that signed in then
+ *  still sends the token itself to any port of the page's name, and with the token anyone can
+ *  sign in (`?tkn=`) and be given the key (independent review, 2026-11-20). Made again, those
+ *  old cookies open nothing. Editors' tokens are not touched: their cookies are their own.
+ *  Returns whether a token was there to make again (a new stack has none). */
+export const remakeForPageKeys = (): boolean => {
+  const done = path.join(paths.state, "tokens-page-keys");
+  if (fs.existsSync(done)) return false;
+  let removed = false;
+  for (const name of ["approve-token", "git-token", "ui-token"]) {
+    const file = path.join(paths.state, name);
+    if (!fs.existsSync(file)) continue;
+    fs.rmSync(file, { force: true });
+    removed = true;
+  }
+  fs.writeFileSync(done, "the page tokens were made again for page keys\n", { mode: 0o600 });
+  return removed;
+};
+
+declare namespace remakeForPageKeys {
+  /** the three page tokens go, once; an editor's record, and anything else, stays */
+  export type Once = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "approve-token", text: "a"]>,
+      Invoke<typeof writeState, [name: "git-token", text: "g"]>,
+      Invoke<typeof writeState, [name: "ui-token", text: "u"]>,
+      Invoke<typeof writeState, [name: "host-token", text: "h"]>,
+    ],
+    [
+      Expect<Invoke<typeof remakeForPageKeys>, "=", true>,
+      Expect<Invoke<typeof stateFiles>, "=", ["host-token", "tokens-page-keys"]>,
+    ]
+  >;
+  /** a new stack: nothing to make again, and nothing said */
+  export type NewStack = Given<
+    Invoke<typeof emptyHome>,
+    [
+      Expect<Invoke<typeof remakeForPageKeys>, "=", false>,
+      Expect<Invoke<typeof stateFiles>, "=", ["tokens-page-keys"]>,
+    ]
+  >;
+  /** a second time, nothing: a token made since stays */
+  export type OnlyOnce = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "tokens-page-keys", text: "done"]>,
+      Invoke<typeof writeState, [name: "approve-token", text: "a"]>,
+    ],
+    [
+      Expect<Invoke<typeof remakeForPageKeys>, "=", false>,
+      Expect<Invoke<typeof stateFiles>, "=", ["approve-token", "tokens-page-keys"]>,
+    ]
+  >;
+}
 
 declare namespace retire {
   /** the three page tokens go, and the retiring is on record */

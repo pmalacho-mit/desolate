@@ -140,7 +140,8 @@ const pushed = (
     }, ms);
     socket.on("connect", () =>
       socket.write(
-        `GET /events HTTP/1.1\r\nHost: ${HOST}:${port}\r\nCookie: ${cookie}\r\nAccept: text/event-stream\r\n\r\n`,
+        // As an EventSource asks, which sends no header: the page's key in the address.
+        `GET /events?key=${key} HTTP/1.1\r\nHost: ${HOST}:${port}\r\nCookie: ${cookie}\r\nAccept: text/event-stream\r\n\r\n`,
       ),
     );
     socket.on("data", (chunk) => {
@@ -197,8 +198,8 @@ describe("T2 section 4.8: the root UI", () => {
     );
     assert.doesNotMatch(
       page.body,
-      /<script(?![^>]* src="\/(ui|highlight|markdown)\.js")|\son[a-z]+="|https?:\/\//i,
-      "no inline script, handler or remote address in the page: its own three scripts",
+      /<script(?![^>]* src="\/(page-key|ui|highlight|markdown)\.js")|\son[a-z]+="|https?:\/\//i,
+      "no inline script, handler or remote address in the page: its own four scripts",
     );
     for (const file of ["/ui.js", "/ui.css"])
       assert.equal((await http("GET", file)).status, 200, file);

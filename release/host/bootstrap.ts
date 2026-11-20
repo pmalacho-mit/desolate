@@ -23,6 +23,7 @@ import type { Config, ForgeConfig } from "./stack.ts";
 import type { Check } from "./vm/types.ts";
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
+import { remakeForPageKeys } from "./retired.ts";
 
 type Out = (line: string) => void;
 
@@ -357,6 +358,9 @@ export const bootstrap = async (
   if (configChanged || !wasUp) await rootctl("forge.set", { forge }, { quiet: true });
   // Every time: the pusher's copy is root's, and the host's word (stack.ts, pinForge).
   await pinForge(forge);
+  // Once, on a stack made before page keys: its page tokens made again (retired.ts says why).
+  if (remakeForPageKeys())
+    step(true, "the pages' tokens made again for page keys: sign in again, `desolate ui --open`");
   step(await installApprover(), "root: the approver's public key and the host daemon's token");
   // The host daemon carries the dashboard, and tells the root's state service what only
   // the host knows.

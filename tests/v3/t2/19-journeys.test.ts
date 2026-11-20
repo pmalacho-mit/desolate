@@ -76,7 +76,11 @@ const signedIn = async () => {
     const tab = await browser.tab(url);
     try {
       await tab.until(`document.readyState === "complete"`, "the page");
-      return await tab.evaluate<number>(`fetch(${JSON.stringify(api)}).then((r) => r.status)`);
+      // As the page's own script asks: with the key it keeps (shared/ui/page-key.js), which
+      // only the sign-in put in its storage.
+      return await tab.evaluate<number>(
+        `fetch(${JSON.stringify(api)}, { headers: window.desolateKey.headers }).then((r) => r.status)`,
+      );
     } finally {
       await tab.close();
     }

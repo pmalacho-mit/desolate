@@ -1398,9 +1398,15 @@ are left for the owner, with what would close them.
   token, so a cookie that leaks cannot sign in (`?tkn=` takes only the token) or be turned into
   the key. A sign-in answers with a page of the origin's own that keeps the key and goes on.
   T1 and T2: the cookie alone, from the page's own origin, opens nothing; with the key, it
-  does. Still open: a program that holds a page's own port while the daemon is not running is
-  that origin, and could serve a script that reads the key; and an older browser tab needs
-  `desolate ui --open` once (its cookie was the token).
+  does. The first bootstrap with page keys makes the three page tokens again
+  (`retired.ts`, `remakeForPageKeys`): before, each cookie was its token, so a browser that
+  signed in then would still send the token itself to any port, and with it anyone could sign
+  in and be given the key (independent review). Sign in again once, `desolate ui --open`.
+  Still open: a program that holds a page's own port while the daemon is not running is that
+  origin, and could serve a script that reads the key (the daemon retires the tokens when it
+  finds the port held); and a program on another port can still overwrite the page's cookie
+  (`Set-Cookie` for the same name), which signs the person out, though it cannot make one that
+  works.
 - **Secrets with no header named are substituted everywhere, the body included.** A workspace
   can then have the service itself hand the value back changed (a model asked to spell it
   backwards; an API that fetches a URL the workspace names, with the key in it), past the
