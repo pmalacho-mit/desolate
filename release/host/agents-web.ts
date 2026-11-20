@@ -19,7 +19,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
 import { sameSecret } from "../shared/gate.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
-import { readPhone, safely, tailnetRequest } from "./phone.ts";
+import { heldPort, portNotHeld, readPhone, safely, tailnetRequest } from "./phone.ts";
 import type { Phone } from "./phone.ts";
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -252,8 +252,12 @@ export const serveAgents = (
   // them. The daemon retires the tokens and takes the phone off the tailnet (phone.ts).
   server.on("error", (error: NodeJS.ErrnoException) => {
     log(`agents port ${port}: ${error.message}`);
-    if (error.code === "EADDRINUSE") held?.(`agents port ${port}`);
+    if (error.code === "EADDRINUSE") {
+      portNotHeld(`agents port ${port}`);
+      held?.(`agents port ${port}`);
+    }
   });
+  heldPort(server, port);
   server.listen({ port, host: "127.0.0.1", exclusive: true });
   return server;
 };

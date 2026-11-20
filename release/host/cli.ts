@@ -544,7 +544,19 @@ const main = async (argv: string[]): Promise<number> => {
     const { positionals } = flags(rest, {});
     const what = positionals[0] ?? "status";
     const phone = await import("./phone.ts");
+    // Serve is pointed only at ports this daemon holds: a port another program holds would be
+    // sent the phone's requests, the tokens in their cookies.
+    const ready = async () => {
+      const { phoneReady } = await import("./daemon.ts");
+      const missing = await phoneReady();
+      if (missing.length)
+        refuse(
+          `another program holds what the phone would be sent to (${missing.slice(0, 3).join(", ")})`,
+          "find it (lsof -nP -iTCP -sTCP:LISTEN), stop it, then: desolate bootstrap",
+        );
+    };
     if (what === "on") {
+      await ready();
       const on = await phone.phoneOn();
       if ("refused" in on) refuse(on.refused, on.fix);
       const { ui } = await import("./daemon.ts");
@@ -567,7 +579,8 @@ const main = async (argv: string[]): Promise<number> => {
           "desolate phone dev <domain>   (or: off)",
           EXIT.usage,
         );
-      const set = phone.phoneDev(domain === "off" ? null : domain);
+      if (domain !== "off") await ready();
+      const set = await phone.phoneDev(domain === "off" ? null : domain);
       if ("refused" in set) refuse(set.refused, set.fix);
       out(
         set.dev

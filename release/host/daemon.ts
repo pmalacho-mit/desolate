@@ -50,10 +50,12 @@ import {
   assignSlots,
   phoneOff,
   phonePort,
+  phonePortsHeld,
   readPhone,
   serveSlots,
   servePhone,
   slotAddress,
+  SLOTS,
 } from "./phone.ts";
 import { serveAgents } from "./agents-web.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
@@ -1905,6 +1907,8 @@ const listenersFrom = (ports: number[], ours: ReadonlySet<number>) =>
           port !== EDITOR.server &&
           port !== EDITOR.gate &&
           port !== editorHostPort() &&
+          // The phone's own loopback ports (phone.ts) are never a workspace's dev server's.
+          !(port >= phonePort() && port < phonePort() + 10 + SLOTS) &&
           !ours.has(port),
       )
       .slice(0, 256),
@@ -2742,7 +2746,12 @@ const serve = async () => {
   // The dashboard for your phone, over Tailscale Serve (phone.ts): on 127.0.0.1 only, and it
   // refuses everything until `desolate phone on`.
   // A phone port another program holds is sent the phone's cookies (the tokens): fail closed.
+  // Only when the phone is on: else nothing is sent there, and a program holding one of these
+  // ports must not be able to retire everyone's tokens at every start (audit, 2026-11-20). It
+  // stays refused either way (phoneReady), so `phone on` cannot point Serve at it.
   const phoneHeld = (what: string) => {
+    if (!readPhone())
+      return log(`${what} is held by another program: desolate phone on is refused`);
     log(`${what} is held by another program: the pages' tokens are retired, and the phone is off`);
     retire();
     void phoneOff().catch((error) => log(`phone off: ${(error as Error).message}`));
@@ -2777,8 +2786,13 @@ const serve = async () => {
       const key = assigned()[slot];
       const [vm = "", port = ""] = (key ?? "").split(" ");
       const e = key ? entries.get(vm) : undefined;
-      return e
-        ? { devHost: devHostname(INSTANCE, e.domain, e.workspace), port: Number(port) }
+      // Only a port this daemon's forwarder holds, on both loopback addresses: else a slot
+      // would connect to whatever program does (audit, 2026-11-20).
+      const p = Number(port);
+      const forwarded =
+        forwards.get(p)?.listening === true && forwards6.get(p)?.listening !== false;
+      return e && forwarded
+        ? { devHost: devHostname(INSTANCE, e.domain, e.workspace), port: p }
         : null;
     },
     phoneHeld,
@@ -3513,6 +3527,10 @@ const serve = async () => {
           connection.on("close", stop);
           connection.on("error", stop);
           return;
+        } else if (request.op === "phone-ready") {
+          // `desolate phone on` and `phone dev`: whether this daemon holds every port they
+          // would point Tailscale Serve at (phone.ts phonePortsHeld).
+          reply = { ok: true, ...phonePortsHeld() };
         } else if (request.op === "signin") {
           // `desolate ui --open`: the chain of sign-in codes (signin.ts), the host's pages first.
           // The dashboard's is told to the root first, as a digest: a chain whose last link
@@ -3804,6 +3822,13 @@ export const editorPort = async (): Promise<{ port: number; error: string }> => 
 /** The dashboard's address, with the token that lets a browser in (the root's state
  *  service exchanges it for a cookie). Like an editor's address, it is the person's to
  *  open, and not to paste anywhere else. */
+/** Whether this daemon holds every phone port: what is missing, if anything. */
+export const phoneReady = async (): Promise<string[]> => {
+  await ensureDaemon();
+  const reply = await ask({ op: "phone-ready" }, 15_000);
+  return Array.isArray(reply.missing) ? reply.missing.map(String) : ["the host daemon did not say"];
+};
+
 export const ui = async (): Promise<{ dashboard: string; approvals: string }> => {
   await ensureDaemon();
   let token = "";

@@ -60,12 +60,15 @@ ask you something (a permission it needs, a question), with its own words.
   desolate phone dev off          # none
   ```
 
-  Each server of that domain gets an address on the tailnet while it listens, from
-  `https://<mac>:9101` to `:9116`: `desolate ports` lists them ("on your phone"), and the
-  dashboard on the phone links to them. The server sees what it sees on the Mac (its
+  Each server of that domain gets an address on the tailnet while it listens, from its
+  domain's own block of sixteen ports (the first domain's `https://<mac>:9101` to `:9116`, the
+  next one's from `:9117`, and so on, kept for good): `desolate ports` lists them ("on your
+  phone"), and the dashboard on the phone links to them. The server sees what it sees on the Mac (its
   workspace's own name), and Vite's hot reload works through it. Sixteen at once; past that, a
   server has no phone address until one stops. One domain at a time, because on the phone
-  every dev server has the same name (below). `desolate phone on` starts with none again.
+  every dev server has the same name (below). Choosing another closes every connection still
+  open to the last one's, and takes its addresses off the tailnet. `desolate phone on` starts
+  with none again.
 
 What it cannot do: approve a push, open an editor, or open the git terminal. A push is
 approved on the Mac, outside every VM: that stays the one step nothing else can take.
@@ -92,7 +95,11 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   for a name, whatever the port, and counts every port of it as one site. On the Mac each
   workspace has a name of its own (`*.localhost`); on the phone they have one. So desolate:
   - never passes the dashboard's or the agents page's cookies to a dev server, and never lets
-    one set them, or send `Clear-Site-Data` (which would clear the whole name's cookies);
+    one set them. A dev server's answer keeps only the headers a page needs: no
+    `Clear-Site-Data` (which would clear the whole name's cookies), no `Alt-Svc` (which could
+    send its origin's requests to another port), and nothing is cached;
+  - gives each domain its own addresses, never another's: an address is an origin to the
+    browser (its storage, its service workers, what its pages may read);
   - renames each cookie a server sets for that server (its workspace and port, never the
     address it happens to have now), returns it to it only, and makes it `HttpOnly`, so no
     other dev server's page can read it. That hides it from the server's own page too: an app
@@ -104,13 +111,14 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   - pipes a WebSocket on only once the server has switched protocols.
 
   **What a proxy cannot keep apart, and why one domain at a time:** a cookie a page's own
-  script sets goes to every dev server, and any dev server's page can read it, change it, or
-  set one under another app's name. A page can also send another dev server requests with that
-  server's cookies (`SameSite` does not stop it: it is the same site), and a tab left open
-  keeps running after its address is given to another server. Within one domain, that is
-  what a domain already trusts; across domains it is not, so the phone reaches one domain's
-  dev servers at a time. Close a domain's dev-server tabs before you choose another, and open
-  a dev server whose pages you do not trust in a private tab.
+  script sets goes to every dev server of every domain the phone has reached, and any dev
+  server's page can read it, change it, or set one under another app's name. A page left open
+  can also send another domain's dev servers requests with their cookies (`SameSite` does not
+  stop it: every port is one site), though not read their answers. Within one domain, that is
+  what a domain already trusts; across domains it is not. So: one domain at a time; close a
+  domain's dev-server tabs before you choose another; open a dev server whose pages you do not
+  trust in a private tab. Only a name of its own for each domain on the tailnet (another
+  Tailscale node for each, signed in by you) would close this: not built yet.
 - **The dashboard and the agents page refuse any request another page starts,** a dev
   server's page included, and neither can be framed.
 - **What the agents page shows is drawn as a terminal draws it,** through the same filter as
@@ -122,11 +130,12 @@ approved on the Mac, outside every VM: that stays the one step nothing else can 
   pages and the sixteen dev-server addresses), as it can the dashboard's own, and can say it is
   any tailnet user there; the tokens are what open the pages, there as here. If another program
   holds one of those ports when desolate's daemon starts, Serve would send it your phone's
-  requests, cookies and all: so the daemon then retires the pages' tokens (the agents page's
-  too) and takes the phone off the tailnet. `desolate bootstrap` makes them again; then
-  `desolate phone on`.
-- **`desolate phone off`** takes all eighteen addresses off the tailnet and forgets which
-  domain's dev servers it reached. It does not stop `desolate notify --ntfy`, and the phone's
+  requests, cookies and all: so if the phone is on, the daemon retires the pages' tokens (the
+  agents page's too) and takes the phone off the tailnet; and `desolate phone on` and
+  `phone dev` refuse while any of them is another program's. Find it and stop it
+  (`lsof -nP -iTCP -sTCP:LISTEN`), then `desolate bootstrap` and `desolate phone on`.
+- **`desolate phone off`** takes the pages' and the dev servers' addresses off the tailnet and
+  forgets which domain's dev servers it reached. It does not stop `desolate notify --ntfy`, and the phone's
   cookies stay in its browser until the tokens are made again.
 - **A lost phone:** remove it in Tailscale's admin console (Machines), which stops it reaching
   the tailnet at all; then, on the Mac, `desolate phone off` and `desolate bootstrap`, which

@@ -47,6 +47,8 @@ export type Phone = {
    *  none: they all share the tailnet name, so one site, and a page of one domain's could act on
    *  another's dev servers there, or read what a script of theirs set (audit, 2026-11-20). */
   dev?: string | null;
+  /** That domain's block of tailnet ports (domainBlock): its own, for good. */
+  block?: number | null;
 };
 
 const STATE = () => path.join(paths.state, "phone.json");
@@ -73,6 +75,13 @@ export const readPhone = (): Phone | null => {
           name: p.name,
           httpsPort: p.httpsPort,
           dev: typeof p.dev === "string" && /^[a-z0-9][a-z0-9-]{0,62}$/.test(p.dev) ? p.dev : null,
+          block:
+            typeof p.block === "number" &&
+            Number.isInteger(p.block) &&
+            p.block >= 0 &&
+            p.block < BLOCKS
+              ? p.block
+              : null,
         }
       : null;
   } catch {
@@ -86,6 +95,14 @@ const hostOf = (value: string | undefined) => {
     return new URL(value.includes("://") ? value : `http://${value}`).hostname.toLowerCase();
   } catch {
     return "\0";
+  }
+};
+const portOf = (value: string | undefined) => {
+  try {
+    const url = new URL(`https://${value ?? ""}`);
+    return Number(url.port || 443);
+  } catch {
+    return -1;
   }
 };
 const printable = (text: string) => text.slice(0, 80).replace(/[^\x20-\x7e]/g, "?");
@@ -173,7 +190,9 @@ export const phoneRequest = (
   // The dashboard's own origin on the tailnet (its name and its port, over HTTPS) becomes its
   // origin on the Mac. Any other is passed on as it came, and refused there: a dev server's
   // page is on the same name at another port, and must never look like the dashboard.
-  const self = `https://${checked.phone.name.toLowerCase()}:${checked.phone.httpsPort}`;
+  // (Port 443 is left out of an origin.)
+  const port443 = checked.phone.httpsPort === 443;
+  const self = `https://${checked.phone.name.toLowerCase()}${port443 ? "" : `:${checked.phone.httpsPort}`}`;
   if (typeof headers.origin === "string" && headers.origin.toLowerCase() === self)
     passed.origin = `http://${own}`;
   const referer = typeof headers.referer === "string" ? urlOf(headers.referer) : null;
@@ -356,8 +375,30 @@ const onListenError =
   (log: (line: string) => void, what: string, held?: (what: string) => void) =>
   (error: NodeJS.ErrnoException) => {
     log(`${what}: ${error.message}`);
-    if (error.code === "EADDRINUSE") held?.(what);
+    if (error.code === "EADDRINUSE") {
+      notHeld.add(what);
+      held?.(what);
+    }
   };
+
+/** The phone's loopback ports this daemon holds, and the ones another program held when it
+ *  tried. `desolate phone on` and `phone dev` ask (phoneReady, the daemon's) and refuse unless
+ *  every port they would point Tailscale Serve at is this daemon's: once another program held
+ *  one, it stays refused until the daemon starts again and holds them all (audit, 2026-11-20). */
+const listening = new Set<number>();
+const notHeld = new Set<string>();
+export const phonePortsHeld = () => ({
+  missing: [
+    ...notHeld,
+    ...[phonePort(), phonePort() + 1, ...Array.from({ length: SLOTS }, (_, s) => slotLocalPort(s))]
+      .filter((port) => !listening.has(port))
+      .map((port) => `port ${port}`),
+  ],
+});
+/** Records a phone server's port as this daemon's once it listens (the agents page's too). */
+export const heldPort = (server: import("node:net").Server, port: number) =>
+  server.on("listening", () => listening.add(port));
+export const portNotHeld = (what: string) => notHeld.add(what);
 
 /** The phone's port, on 127.0.0.1 only (Tailscale Serve is pointed there; nothing else is
  *  told of it). Each request is decided by phoneRequest, then passed to this daemon's own
@@ -383,10 +424,20 @@ export const servePhone = (log: (line: string) => void, held?: (what: string) =>
           headers: decided.headers,
         },
         (answer) => {
-          const headers = { ...answer.headers };
-          if (headers["set-cookie"]) headers["set-cookie"] = secured(headers["set-cookie"]);
-          res.writeHead(answer.statusCode ?? 502, headers);
-          answer.pipe(res);
+          // Guarded here too: a later tick than the handler (see serveSlots).
+          try {
+            const headers = { ...answer.headers };
+            if (headers["set-cookie"]) headers["set-cookie"] = secured(headers["set-cookie"]);
+            const status = answer.statusCode ?? 502;
+            res.writeHead(status >= 100 && status <= 599 ? status : 502, headers);
+            answer.pipe(res);
+          } catch (error) {
+            log(`phone: ${String((error as Error)?.message ?? error).slice(0, 200)}`);
+            answer.destroy();
+            if (!res.headersSent)
+              res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+            res.end("desolate: the dashboard's answer could not be passed on\n");
+          }
         },
       );
       upstream.on("error", () => {
@@ -398,6 +449,7 @@ export const servePhone = (log: (line: string) => void, held?: (what: string) =>
     }),
   );
   server.on("error", onListenError(log, `phone port ${phonePort()}`, held));
+  heldPort(server, phonePort());
   server.listen({ port: phonePort(), host: "127.0.0.1", exclusive: true });
   return server;
 };
@@ -491,14 +543,10 @@ export const phoneOn = async (): Promise<Phone | { refused: string; fix: string 
     return { refused: self.refused, fix: "tailscale up, then: desolate phone on" };
   const httpsPort = phoneHttpsPort();
   // The dashboard at httpsPort, the agents page (agents-web.ts) at the next: two origins.
+  // Dev servers get addresses only with `desolate phone dev <domain>` (phoneDev).
   for (const [https, local] of [
     [httpsPort, phonePort()],
     [httpsPort + 1, phonePort() + 1],
-    // The dev servers' slots (serveSlots).
-    ...Array.from(
-      { length: SLOTS },
-      (_, slot) => [slotHttpsPort(slot), slotLocalPort(slot)] as const,
-    ),
   ] as const) {
     const serve = await run(
       tailscale(),
@@ -513,7 +561,7 @@ export const phoneOn = async (): Promise<Phone | { refused: string; fix: string 
         fix: "turn on HTTPS for your tailnet (the admin console's DNS page), then: desolate phone on",
       };
   }
-  const phone: Phone = { ...self, httpsPort };
+  const phone: Phone = { ...self, httpsPort, dev: null, block: null };
   fs.mkdirSync(paths.state, { recursive: true });
   fs.writeFileSync(STATE(), `${JSON.stringify(phone)}\n`, { mode: 0o600 });
   return phone;
@@ -524,22 +572,58 @@ export const phoneOff = async (): Promise<void> => {
   const phone = readPhone();
   fs.rmSync(STATE(), { force: true });
   const https = phone?.httpsPort ?? phoneHttpsPort();
+  const block = phone?.block;
   for (const port of [
     https,
     https + 1,
-    ...Array.from({ length: SLOTS }, (_, slot) => slotHttpsPort(slot)),
+    ...(typeof block === "number"
+      ? Array.from({ length: SLOTS }, (_, slot) => slotHttpsPort(slot, block))
+      : []),
   ])
     await run(tailscale(), ["serve", `--https=${port}`, "off"], { timeoutMs: 15_000 });
 };
 
-/** Which domain's dev servers the phone reaches (one, or none): kept with what `phone on`
- *  recorded. The daemon reads it as it deals the slots out. */
-export const phoneDev = (domain: string | null): Phone | { refused: string; fix: string } => {
+/** Which domain's dev servers the phone reaches (one, or none): that domain's own block of
+ *  tailnet ports is published, and the last one's taken off. Kept with what `phone on`
+ *  recorded; the daemon reads it as it deals the slots out. */
+export const phoneDev = async (
+  domain: string | null,
+): Promise<Phone | { refused: string; fix: string }> => {
   const phone = readPhone();
   if (!phone) return { refused: "desolate is not on the tailnet", fix: "desolate phone on" };
   if (domain !== null && !/^[a-z0-9][a-z0-9-]{0,62}$/.test(domain))
     return { refused: `'${printable(domain)}' is not a domain's name`, fix: "desolate list" };
-  const next = { ...phone, dev: domain };
+  const block = domain === null ? null : domainBlock(domain);
+  if (block !== null && typeof block !== "number") return block;
+  // The last domain's addresses off first, and the record changed, before any new one is on.
+  const before = phone.block;
+  const next: Phone = { ...phone, dev: domain, block };
+  fs.writeFileSync(STATE(), `${JSON.stringify({ ...next, dev: null, block: null })}\n`, {
+    mode: 0o600,
+  });
+  if (typeof before === "number")
+    for (let slot = 0; slot < SLOTS; slot++)
+      await run(tailscale(), ["serve", `--https=${slotHttpsPort(slot, before)}`, "off"], {
+        timeoutMs: 15_000,
+      });
+  if (typeof block === "number")
+    for (let slot = 0; slot < SLOTS; slot++) {
+      const serve = await run(
+        tailscale(),
+        [
+          "serve",
+          "--bg",
+          `--https=${slotHttpsPort(slot, block)}`,
+          `http://127.0.0.1:${slotLocalPort(slot)}`,
+        ],
+        { timeoutMs: 30_000 },
+      );
+      if (serve.code !== 0)
+        return {
+          refused: `tailscale serve refused: ${printable(serve.stderr.trim() || serve.stdout.trim())}`,
+          fix: "desolate phone dev off; desolate phone on",
+        };
+    }
   fs.writeFileSync(STATE(), `${JSON.stringify(next)}\n`, { mode: 0o600 });
   return next;
 };
@@ -565,8 +649,39 @@ export const phoneAddress = (phone: Phone, token: string) =>
 
 /** How many slots: dev servers on the tailnet at once. */
 export const SLOTS = 16;
+/** Blocks of SLOTS tailnet ports, from 9101: a domain's own, never another's (domainBlock). */
+export const BLOCKS = 56;
+const BLOCKS_FILE = () => path.join(paths.state, "phone-blocks.json");
+
+/** A domain's block of tailnet ports for its dev servers: given the first time the phone
+ *  reaches its dev servers, and kept, through phone off and on. An address is an origin to a
+ *  browser (its storage, its service workers, its cache, what its pages may read), and one
+ *  domain's must never become another's: two domains given the same ports in turn, a tab or a
+ *  cached page left from the first ran as the second's origin (audit, 2026-11-20). */
+export const domainBlock = (domain: string): number | { refused: string; fix: string } => {
+  let blocks: Record<string, number> = {};
+  try {
+    blocks = JSON.parse(fs.readFileSync(BLOCKS_FILE(), "utf8")) as Record<string, number>;
+  } catch {
+    /* none yet */
+  }
+  const given = blocks[domain];
+  if (typeof given === "number" && Number.isInteger(given) && given >= 0 && given < BLOCKS)
+    return given;
+  const taken = new Set(Object.values(blocks));
+  const free = Array.from({ length: BLOCKS }, (_, b) => b).find((b) => !taken.has(b));
+  if (free === undefined)
+    return {
+      refused: `every one of the ${BLOCKS} domains' blocks of phone addresses is given`,
+      fix: `clear this Mac's tailnet name's site data on your phone, then remove ${BLOCKS_FILE()}`,
+    };
+  blocks[domain] = free;
+  fs.mkdirSync(paths.state, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(BLOCKS_FILE(), `${JSON.stringify(blocks)}\n`, { mode: 0o600 });
+  return free;
+};
 /** A slot's port on the tailnet name. */
-export const slotHttpsPort = (slot: number) => 9101 + slot;
+export const slotHttpsPort = (slot: number, block: number) => 9101 + SLOTS * block + slot;
 /** A slot's loopback port, where Tailscale Serve sends it. */
 export const slotLocalPort = (slot: number) => phonePort() + 10 + slot;
 
@@ -836,10 +951,66 @@ declare namespace slotChanged {
   >;
 }
 
-/** Response headers a dev server may not send through a slot: its Clear-Site-Data would clear
- *  the whole name's cookies (the dashboard's and the agents page's tokens, other servers'
- *  sessions), and the proxy's own is the only one sent. */
-const DEV_DROPPED = ["clear-site-data", "set-cookie2"];
+/** The response headers a dev server's answer keeps through a slot: these, and no others.
+ *  Every port of the tailnet name is one name to the browser, so a header that speaks for the
+ *  name (Clear-Site-Data, which clears every cookie of it; Alt-Svc, which can send an origin's
+ *  requests to another port, the agents page's; Strict-Transport-Security) is not a dev
+ *  server's to send. Set-Cookie and Location are added back renamed; nothing is cached. */
+const DEV_KEPT = new Set([
+  "content-type",
+  "content-length",
+  "content-encoding",
+  "content-language",
+  "content-disposition",
+  "content-range",
+  "accept-ranges",
+  "etag",
+  "last-modified",
+  "vary",
+  "date",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "retry-after",
+  "www-authenticate",
+  "x-content-type-options",
+  "content-security-policy",
+  "access-control-allow-origin",
+  "access-control-allow-methods",
+  "access-control-allow-headers",
+  "access-control-allow-credentials",
+  "access-control-expose-headers",
+  "access-control-max-age",
+]);
+
+export const devHeaders = (headers: IncomingHttpHeaders): OutgoingHttpHeaders => {
+  const kept: OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(headers))
+    if (DEV_KEPT.has(name) && value !== undefined) kept[name] = value;
+  kept["cache-control"] = "no-store";
+  return kept;
+};
+
+declare namespace devHeaders {
+  /** what speaks for the whole name is dropped; what a page needs is kept; nothing cached */
+  export type Kept = Expect<
+    Invoke<
+      typeof devHeaders,
+      [
+        headers: {
+          "content-type": "text/html";
+          "alt-svc": 'h2=":8444"';
+          "clear-site-data": '"cookies"';
+          "strict-transport-security": "max-age=1";
+          "cache-control": "max-age=31536000, immutable";
+          "set-cookie": ["sid=1"];
+        },
+      ]
+    >,
+    "=",
+    { "content-type": "text/html"; "cache-control": "no-store" }
+  >;
+}
 
 /** What a slot reaches now: a workspace's dev hostname and its port, or nothing. */
 export type SlotTarget = { devHost: string; port: number } | null;
@@ -862,8 +1033,22 @@ export const serveSlots = (
           text: "no dev server is on this address now: `desolate ports` lists them",
         },
       };
+    const block = checked.phone.block;
+    if (typeof block !== "number" || !checked.phone.dev)
+      return {
+        refused: {
+          status: 404,
+          text: "no domain's dev servers are on the phone now: `desolate phone dev <domain>`",
+        },
+      };
     const devOrigin = `http://${to.devHost}:${to.port}`;
-    const slotOrigin = `https://${checked.phone.name}:${slotHttpsPort(slot)}`;
+    const slotOrigin = `https://${checked.phone.name}:${slotHttpsPort(slot, block)}`;
+    // Only the slot's own address: Tailscale Serve sends each of the block's ports here.
+    if (
+      hostOf(headers.host) !== checked.phone.name.toLowerCase() ||
+      portOf(headers.host) !== slotHttpsPort(slot, block)
+    )
+      return { refused: { status: 421, text: "this is not that dev server's address now" } };
     const passed: OutgoingHttpHeaders = { ...headers, host: `${to.devHost}:${to.port}` };
     if (typeof headers.origin === "string" && headers.origin === slotOrigin)
       passed.origin = devOrigin;
@@ -906,18 +1091,29 @@ export const serveSlots = (
             headers: d.headers,
           },
           (answer) => {
-            const headers = { ...answer.headers };
-            for (const name of DEV_DROPPED) delete headers[name];
-            const set = slotSetCookies(answer.headers["set-cookie"], tag);
-            if (changed) {
-              headers["clear-site-data"] = '"cache", "storage"';
+            // A later tick than the handler, so guarded here too: a dev server's answer must not
+            // take the daemon down (a status of 000 made writeHead throw; audit, 2026-11-20).
+            try {
+              const headers = devHeaders(answer.headers);
+              const set = slotSetCookies(answer.headers["set-cookie"], tag);
+              // The marker on every answer (a page's script cannot then set it first), and the
+              // address's storage cleared when it last answered for another server.
+              if (changed) headers["clear-site-data"] = '"cache", "storage"';
               set.push(`${slotMarker(slot)}=${tag}; Path=/; HttpOnly; Secure; SameSite=Strict`);
+              headers["set-cookie"] = set;
+              if (typeof answer.headers.location === "string")
+                headers.location = slotLocation(answer.headers.location, d.devOrigin, d.slotOrigin);
+              const status = answer.statusCode ?? 502;
+              res.writeHead(status >= 100 && status <= 599 ? status : 502, headers);
+            } catch (error) {
+              log(
+                `phone slot ${slot}: ${String((error as Error)?.message ?? error).slice(0, 200)}`,
+              );
+              answer.destroy();
+              if (!res.headersSent)
+                res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
+              return res.end("desolate: the dev server's answer could not be passed on\n");
             }
-            if (set.length) headers["set-cookie"] = set;
-            else delete headers["set-cookie"];
-            if (typeof headers.location === "string")
-              headers.location = slotLocation(headers.location, d.devOrigin, d.slotOrigin);
-            res.writeHead(answer.statusCode ?? 502, headers);
             answer.pipe(res);
           },
         );
@@ -966,9 +1162,16 @@ export const serveSlots = (
             return upstream.destroy();
           }
           // Its head without cookies (a 101 sets none of a page's), then the bytes both ways.
+          // Its status line and the headers a 101 needs, no others (devHeaders says why).
           const kept = answer.head
             .split("\r\n")
-            .filter((line) => !/^(set-cookie2?|clear-site-data):/i.test(line));
+            .filter(
+              (line, n) =>
+                n === 0 ||
+                /^(upgrade|connection|sec-websocket-accept|sec-websocket-protocol|sec-websocket-extensions):/i.test(
+                  line,
+                ),
+            );
           client.write(`${kept.join("\r\n")}\r\n\r\n`);
           if (got.length > answer.length) client.write(got.subarray(answer.length));
           upstream.pipe(client);
@@ -989,6 +1192,18 @@ export const serveSlots = (
       "error",
       onListenError(log, `phone slot ${slot} (port ${slotLocalPort(slot)})`, held),
     );
+    heldPort(server, slotLocalPort(slot));
+    // When the phone stops reaching a domain's dev servers, or reaches another's, every
+    // connection still open (a WebSocket, a long answer) is closed: none outlives the switch.
+    const open = new Map<import("node:net").Socket, string | null>();
+    server.on("connection", (socket) => {
+      open.set(socket, readPhone()?.dev ?? null);
+      socket.on("close", () => open.delete(socket));
+    });
+    setInterval(() => {
+      const dev = readPhone()?.dev ?? null;
+      for (const [socket, at] of open) if (at !== dev) socket.destroy();
+    }, 1000).unref();
     server.listen({ port: slotLocalPort(slot), host: "127.0.0.1", exclusive: true });
   }
 };
@@ -996,5 +1211,7 @@ export const serveSlots = (
 /** A dev server's address on the tailnet, when it has a slot and the phone is on. */
 export const slotAddress = (slot: number) => {
   const phone = readPhone();
-  return phone ? `https://${phone.name}:${slotHttpsPort(slot)}/` : undefined;
+  return phone && typeof phone.block === "number" && phone.dev
+    ? `https://${phone.name}:${slotHttpsPort(slot, phone.block)}/`
+    : undefined;
 };

@@ -17,7 +17,7 @@ process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31599";
 const base = 42000 + Math.floor(Math.random() * 2000);
 process.env.DESOLATE_PHONE_PORT = String(base);
-const { serveSlots, servePhone, slotLocalPort, cookieTag, phonePort } =
+const { serveSlots, servePhone, slotLocalPort, cookieTag, phonePort, domainBlock } =
   await import("../../../release/host/phone.ts");
 const { paths } = await import("../../../release/host/paths.ts");
 
@@ -31,7 +31,7 @@ before(async () => {
   fs.mkdirSync(paths.state, { recursive: true });
   fs.writeFileSync(
     path.join(paths.state, "phone.json"),
-    JSON.stringify({ login: LOGIN, name: NAME, httpsPort: 8443 }),
+    JSON.stringify({ login: LOGIN, name: NAME, httpsPort: 8443, dev: "acme", block: 0 }),
   );
   forwarder = createTcp((socket) => {
     let chosen = "";
@@ -48,6 +48,16 @@ before(async () => {
         // raw tunnel through the slot). One it switches: a 101, then an echo.
         if (/^GET \/no-switch /.test(head)) {
           socket.write("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n");
+          continue;
+        }
+        if (/^GET \/status000 /.test(head)) {
+          socket.write("HTTP/1.1 000 X\r\nContent-Length: 0\r\n\r\n");
+          continue;
+        }
+        if (/^GET \/headers /.test(head)) {
+          socket.write(
+            'HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Type: text/plain\r\nAlt-Svc: h2=":8444"\r\nStrict-Transport-Security: max-age=1\r\nCache-Control: max-age=31536000, immutable\r\n\r\nok',
+          );
           continue;
         }
         if (/^GET \/switch /.test(head)) {
@@ -143,6 +153,37 @@ describe("T1 the phone's dev-server slots", () => {
     assert.match(switched, /^HTTP\/1\.1 101 /);
     assert.doesNotMatch(switched, /set-cookie/i);
     assert.match(switched, /hello$/);
+  });
+
+  it("a dev server's answer with a status of 000 is a 502, and the slots go on answering", async () => {
+    const odd = await raw(
+      slotLocalPort(0),
+      `GET /status000 HTTP/1.1\r\nHost: ${NAME}:9101\r\nTailscale-User-Login: ${LOGIN}\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(odd, /^HTTP\/1\.1 502 /);
+    assert.equal((await ask(0)).workspace, "acme-w1-aaaaaa.localhost");
+  });
+
+  it("only the headers a page needs pass, nothing is cached, and only the slot's own address", async () => {
+    const page = await raw(
+      slotLocalPort(0),
+      `GET /headers HTTP/1.1\r\nHost: ${NAME}:9101\r\nTailscale-User-Login: ${LOGIN}\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(page, /^HTTP\/1\.1 200 /);
+    assert.doesNotMatch(page, /alt-svc|strict-transport-security|immutable/i);
+    assert.match(page, /cache-control: no-store/i);
+    const elsewhere = await raw(
+      slotLocalPort(0),
+      `GET / HTTP/1.1\r\nHost: ${NAME}:9102\r\nTailscale-User-Login: ${LOGIN}\r\nConnection: close\r\n\r\n`,
+    );
+    assert.match(elsewhere, /^HTTP\/1\.1 421 /);
+  });
+
+  it("each domain its own block of addresses, kept", () => {
+    const a = domainBlock("aaa");
+    const b = domainBlock("bbb");
+    assert.notEqual(a, b);
+    assert.equal(domainBlock("aaa"), a);
   });
 
   it("no service workers, and a dev server's Clear-Site-Data never reaches the browser", async () => {
