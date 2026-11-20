@@ -108,15 +108,21 @@ const toPusher = (
       "-e",
       `import * as fs from "node:fs"; import { connect } from "node:net";
 const [approval, pack, lfs, listed] = [process.argv[1], process.argv[2], JSON.parse(process.argv[3]), JSON.parse(process.argv[4])];
-const socket = connect("/run/desolate/pusher/control.sock");
-let answer = "";
-socket.on("data", (c) => { answer += c; if (answer.includes("\n")) { console.log(answer.split("\n")[0]); process.exit(0); } });
-socket.on("error", () => {});
-socket.on("connect", () => {
-  socket.write(JSON.stringify({ op: "push", approval, pack: fs.statSync(pack).size, lfs: lfs.map((o) => ({ oid: o.oid, size: fs.statSync(o.file).size })), lfsListed: listed }) + "\n");
-  for (const o of lfs) socket.write(fs.readFileSync(o.file));
-  socket.write(fs.readFileSync(pack));
-});`,
+// The pusher is one request per process: between two, it is starting (send.ts waits too).
+const attempt = (tries) => {
+  const socket = connect("/run/desolate/pusher/control.sock");
+  let answer = "";
+  let connected = false;
+  socket.on("data", (c) => { answer += c; if (answer.includes("\\n")) { console.log(answer.split("\\n")[0]); process.exit(0); } });
+  socket.on("error", (e) => { if (!connected && tries > 0) setTimeout(() => attempt(tries - 1), 500); else { console.log(JSON.stringify({ ok: false, error: "no answer: " + e.message })); process.exit(0); } });
+  socket.on("connect", () => {
+    connected = true;
+    socket.write(JSON.stringify({ op: "push", approval, pack: fs.statSync(pack).size, lfs: lfs.map((o) => ({ oid: o.oid, size: fs.statSync(o.file).size })), lfsListed: listed }) + "\\n");
+    for (const o of lfs) socket.write(fs.readFileSync(o.file));
+    socket.write(fs.readFileSync(pack));
+  });
+};
+attempt(60);`,
       approval,
       pack,
       JSON.stringify(lfs),
@@ -641,6 +647,17 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     assert.equal(made.code, 0, made.stdout + made.stderr);
     const [notes, tip] = made.stdout.trim().split("\n") as [string, string];
+    // (The reviewer is sent a branch when a push of it is prepared; here, before, as a push
+    // would send it, to read what it says.)
+    const sent = stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+      tip,
+    ]);
+    assert.equal(sent.code, 0, sent.stderr);
     // What the net change hides, the reviewer lists: notes.txt was added, then taken out.
     const said = reviewerSays("squash-me", tip) as ReturnType<typeof reviewerSays> & {
       between?: { path: string }[];
@@ -752,7 +769,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.equal(approved.code, 0, approved.stdout);
     assert.match(
       approved.stdout,
-      /repository {2}acme\/widgets\s+branch {6}raw-push\s+commit {6}[0-9a-f]{40}\s+onto {8}none: the remote has no raw-push yet\s+sends {7}\d+ commit\(s\) the remote does not have, \d+ file\(s\)(, \d+ of them LFS)?\s+\(desolate's reviewer, in the root\)/,
+      /repository {2}acme\/widgets\s+branch {6}raw-push\s+commit {6}[0-9a-f]{40}\s+onto {8}none: the remote has no raw-push yet\s+pack {8}[0-9a-f]{16} {2}\(made by desolate's reviewer: nothing else is sent\)\s+LFS {9}\d+ object\(s\), only those its commits point to\s+sends {7}\d+ commit\(s\) the remote does not have, \d+ file\(s\)(, \d+ of them LFS)?\s+\(desolate's reviewer, in the root\)/,
       "the reviewer's account, not the root's ordinary user's",
     );
     let landed = false;
