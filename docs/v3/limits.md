@@ -70,9 +70,14 @@ export const failure: (
 ```
 - `printable(value, max?, instead?)` makes foreign text safe for a terminal, as before. Its
   default bound is a safety bound (`SAFE_MOST`, against a flood), not a display width, and
-  text cut by it, or by a caller's own `max`, ends in `…`.
+  text cut by it, or by a caller's own `max`, ends in `…`. Unsafe, besides controls and
+  format characters: half of a surrogate pair, the invisible fillers (U+034F, U+115F,
+  U+1160, U+180B-U+180F, U+3164, U+FFA0) and the variation selectors that carry hidden bytes
+  (U+E0100 on, and the second of a run of U+FE00-U+FE0F; one after a character stays). A
+  value whose `String()` throws is `?`.
 - `tail(text, lines)` gives the last lines of a program's output (`text`) and how many lines
-  came before them (`before`). It does not make them safe.
+  came before them (`before`). A line ends in LF or CR LF; the line ends that end the
+  output are not lines. It does not make them safe, and its time is linear in the text.
 - `failure(output, lines, keep)` is how an error from another layer is shown: its last
   lines, made safe; and, when that is not all of it, a first line that says how much was
   left out and where the whole text is: `(412 earlier lines not shown; all of it: <path>)`.
@@ -118,7 +123,8 @@ What bounds the list is the size of the request that carries it, which has a nam
 
 ### `shared/lock.ts`: locks by liveness (R5)
 ```ts
-export type Holder = { pid: number; host: string; since: string }; // `since`: an ISO time
+// `since`: an ISO time. Pid 0, the rest empty: a lock whose holder file could not be read.
+export type Holder = { pid: number; host: string; since: string };
 export const BEAT = { pollMs: 250, beatMs: 2_000, missed: 5 };
 export const withLock: <T>(
   dir: string, // the lock's own name ("<state>/fetch.lock"): there while it is held
@@ -135,26 +141,44 @@ export const withLock: <T>(
 ```
 - `machine` (every process that takes it runs in one VM or on the Mac): the lock names its
   holder's pid and start time; it is stale only when that process is gone (no such pid, a
-  pid that is now another process, or a zombie).
+  pid that is now another process, or a zombie). Where the system will not say (a /proc
+  read that failed, a holder file that is there and could not be read just now), the
+  holder is taken for alive.
 - `dir` is there while the lock is held. Beside it, for moments, are others named after it
-  (`<dir>.new-<id>`, `.heir-<id>`, `.gone-<id>`, `.beat-<id>`): whatever sweeps the lock's
+  (`<dir>.new-<id>`, `.heir-<id>`, `.gone-<x>`, `.beat-<id>`): whatever sweeps the lock's
   folder leaves them (as `root/reviewer.ts` sweeps its home at start, by a list of names).
+  Something in the lock's place that is no lock of ours (a directory holding other files,
+  a file, a link) is nobody's: it is moved aside, and a directory holding other files is
+  left there as `<dir>.gone-<x>`, never walked to be removed (on a share another side
+  could swap a link into it). One this process may not move is refused at once, as in the
+  way. A taking whose lock, while being made, another side writes into fails, saying so.
 - `share` (a folder several VMs see, where one cannot see another's processes): the holder
   writes a heartbeat while it lives, from a thread of its own, so work that keeps the
   process busy does not stop it; the lock is stale only when the beat has stopped. The
   beat is the one number, `BEAT`: every 2 s, and stopped when a waiter has watched 10 s go
   by with no new one (by its own running clock, so a Mac that slept wakes to no stale lock).
-  A holder whose whole VM is frozen that long while others run loses its lock: what is done
-  under a share lock must be safe to do again.
+  Silence counts only while the waiter watched: one that did not look for half the window
+  (its own VM paused) watches again from then. A holder whose whole VM is frozen that long
+  while others run loses its lock: what is done under a share lock must be safe to do
+  again. A share lock keeps its takers apart; it is not proof against a side that may write
+  the folder and means harm: such a side can always remove the lock. What it cannot do is
+  make a taker write or remove a file outside the lock through a link.
 - Waiting (the default) has no timer in it (R4): it waits for as long as its caller does,
   tells `waiting` who holds the lock so the caller can say so, and stops when `signal` fires.
+  A signal that fired while the lock was being taken stops the work from beginning; once
+  begun, the work is its own to end (give it the same signal), and the lock is held until
+  it returns.
 - Not waiting (`wait: false`) refuses with who holds it and since when: an `Error` with
   `holder` on it, its message `busy`'s. On a share that takes up to one beat, since a holder
   is known to be alive only by its next one.
 - A lock whose holder is gone is taken, waiting or not, by exactly one of those who find it.
   The right to move a dead holder's lock away is itself taken exclusively, by the dead
-  holder's id, so a waiter who read the dead holder a moment late never removes the lock a
-  new holder made. It is not re-entrant.
+  holder's id. A lock is the directory it is (device and inode) naming the holder it names:
+  the one with the right moves what is in the lock's place and then looks at what it
+  moved, and puts it straight back if it is not the lock it found dead. So a waiter who
+  read the dead holder a moment late, or stopped (its VM paused) before moving it, does not
+  remove the lock a new holder made. A holder always leaves its lock, with the right or,
+  when the right cannot be made, without it. It is not re-entrant.
 
 ### `shared/settings.ts`: the registry (R6)
 ```ts
@@ -190,14 +214,19 @@ reads what `desolate settings` stored and what the host passed into each VM.
 ### `shared/run.ts`: cancel, and idle (R4)
 `run()` takes `signal` (an `AbortSignal`: the requester went away) and `idleMs` (nothing on
 stdout or stderr for this long). `timeoutMs`, a total, stays only for callers not yet moved.
-- Each ends the program by killing it, and the answer says so as the timeout's does: code
-  128, and stderr ending in `(cancelled)` or `(nothing from it for <n> ms: stopped)`. A
-  signal that has already fired runs nothing.
+- Each ends the program, and the answer says so as the timeout's does: code 128, whatever
+  the program's own exit, and stderr ending in `(cancelled)` or `(nothing from it for <n>
+  ms: stopped)`. A signal that has already fired runs nothing.
 - With `signal` or `idleMs` the program runs in a process group of its own, and the group is
-  killed whole: what the program started ends with it. Such a program has no terminal (it
-  cannot ask the person anything there, and Ctrl-C does not reach it), so `run` itself ends
-  the groups it made when its own process exits or is sent SIGINT, SIGTERM or SIGHUP.
-- With `timeoutMs` alone, nothing changes: no group, and only the program itself is killed.
+  ended whole: told to end (SIGTERM), and killed `ENDING_MS` (2 s) later, so that a program
+  that runs groups of its own ends those too. What left the group (a daemon's own session)
+  is not reached, and does not hold the answer: its pipes are let go then too. Such a
+  program has no terminal (it cannot ask the person anything there, and Ctrl-C does not
+  reach it), so `run` itself ends the groups it made when its own process is sent SIGINT,
+  SIGTERM or SIGHUP (the same way, and their answers end in `(stopped: the program that ran
+  it is ending)`) or exits (killed at once).
+- With `timeoutMs` alone: no group, and only the program itself is killed, as before; a run
+  ended so answers 128 even if the program had exited 0.
 
 ### `shared/review-account.ts`: the reviewer's account of a push (R1, R2, R4)
 The one type for what desolate's reviewer says a push would send, used by the reviewer, the
@@ -243,9 +272,13 @@ export const accountLines: (stream: AsyncIterable<Uint8Array | string>) => Async
 ```
 The stream is any number of `progress` lines and then exactly one answer (`account`, `page`,
 `diff` or `error`), which ends it. `accountLines` reads it from bytes cut into chunks
-anywhere, and always ends with one answer: a line that is not one of these, a line over
-`ACCOUNT_LINE_BYTES`, or a stream that ends before its answer (the reviewer stopped, or was
-stopped) is given as an `error` line that says which. So the reviewer writes nothing but
+anywhere, holding at most `ACCOUNT_LINE_BYTES` of a line (in one buffer), and always ends
+with one answer: a line that is not one of these (not JSON, another kind, or a kind's name
+without its shape: the counts, positions and kinds a reader relies on), a line over
+`ACCOUNT_LINE_BYTES`, a stream that ends before its answer (the reviewer stopped, or was
+stopped), or one that fails under it (a connection reset) is given as an `error` line that
+says which. What the entries of a list hold is their reader's to check and to show as text.
+`accountLine` does not write a line over the bound: it writes an `error` saying so. So the reviewer writes nothing but
 these lines on that stream: what it logs goes to stderr. A `page` holds the list asked for
 under its own name (`{ page: { files: Listed<AccountFile> } }`), and a page of a diff is the
 producer's to keep under the line's bound.
