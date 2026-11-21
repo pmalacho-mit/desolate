@@ -119,4 +119,54 @@ describe("T2 destroy and bootstrap again: nothing of yours is lost", () => {
       "the commit and the uncommitted file are both there",
     );
   });
+
+  it("an update of the root's code: every old service has ended before a new one starts", () => {
+    const SERVICES = ["rootd", "stated", "rootctl", "keyring", "pusher", "reviewer"];
+    const pids = () =>
+      stack
+        .inRoot(
+          ["bash", "-c", `cd /run/desolate && cat ${SERVICES.map((s) => `${s}.pid`).join(" ")}`],
+          {
+            root: true,
+          },
+        )
+        .stdout.split("\n")
+        .filter(Boolean);
+    /** those of `of` that are still processes: a zombie is not one (nothing reaps an orphan
+     *  in the fake backend's containers, so a killed service stays one there) */
+    const live = (of: string[]) =>
+      stack
+        .inRoot(
+          [
+            "bash",
+            "-c",
+            `ps -o pid=,stat= -p ${of.join(",")} | awk '$2 !~ /^Z/ { print $1 }'; true`,
+          ],
+          {
+            root: true,
+          },
+        )
+        .stdout.split(/\s+/)
+        .filter(Boolean);
+    const old = pids();
+    assert.equal(old.length, SERVICES.length, "control: each service has its pid file");
+    assert.deepEqual(live(old).sort(), [...old].sort(), "control: and each is running");
+    // What bootstrap finds after `git pull`: the code that runs is not the release's.
+    assert.equal(
+      stack.inRoot(["bash", "-c", "echo older >/var/lib/desolate-root/code"], { root: true }).code,
+      0,
+    );
+    const again = bootstrap(stack);
+    assert.equal(again.code, 0, again.stderr);
+    assert.deepEqual(live(old), [], "every old service ended");
+    const now = pids();
+    assert.equal(now.length, SERVICES.length);
+    assert.deepEqual(
+      now.filter((pid) => old.includes(pid)),
+      [],
+      "each was started again, as a new process",
+    );
+    const fetched = stack.desolate("fetch", "acme/widgets");
+    assert.equal(fetched.code, 0, fetched.stderr);
+  });
 });

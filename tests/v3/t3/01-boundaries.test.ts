@@ -421,12 +421,16 @@ describe(
         reached.stdout,
         /loop\.example\.test resolves to an internal address \(127\.0\.0\.1\)/,
       );
-      const log = JSON.parse(stack.quiet("net", "log", "a", "--json").stdout) as {
-        domain: string;
-        workspace: string;
-        host: string;
-        verdict: string;
-      }[];
+      const log = (
+        JSON.parse(stack.quiet("net", "log", "a", "--last", "100000", "--json").stdout) as {
+          items: {
+            domain: string;
+            workspace: string;
+            host: string;
+            verdict: string;
+          }[];
+        }
+      ).items;
       assert.ok(
         log.some(
           (e) =>

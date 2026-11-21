@@ -35,7 +35,11 @@ type Entry = {
   reason?: string;
 };
 const log = (domain?: string) =>
-  JSON.parse(stack.quiet("net", "log", ...(domain ? [domain] : []), "--json").stdout) as Entry[];
+  (
+    JSON.parse(
+      stack.quiet("net", "log", ...(domain ? [domain] : []), "--last", "100000", "--json").stdout,
+    ) as { items: Entry[] }
+  ).items;
 
 describe("T2 section 4.3: egress through the workspace's own proxy", () => {
   before(() => {
@@ -280,12 +284,16 @@ kill $pid; ip addr del 10.77.0.1/32 dev lo 2>/dev/null; ip addr del 198.18.7.7/3
 
   it("recommend: what a domain reached that is not on its list, as a command to read and run", () => {
     stack.step("what to allow");
-    const r = JSON.parse(stack.quiet("domain", "dev", "net", "recommend", "--json").stdout) as {
+    const report = JSON.parse(
+      stack.quiet("domain", "dev", "net", "recommend", "--json").stdout,
+    ) as {
       mode: string;
       listed: string[];
-      reached: { host: string; count: number }[];
-      refused: { host: string }[];
+      reached: { items: { host: string; count: number }[]; total: number };
+      refused: { items: { host: string }[]; total: number };
     };
+    const r = { ...report, reached: report.reached.items, refused: report.refused.items };
+    assert.equal(r.reached.length, report.reached.total, "every host, counted");
     const shown = stack.desolate("domain", "dev", "net", "recommend");
     assert.equal(shown.code, 0, shown.stderr);
     for (const host of [...r.reached, ...r.refused].map((entry) => entry.host)) {
@@ -294,6 +302,60 @@ kill $pid; ip addr del 10.77.0.1/32 dev lo 2>/dev/null; ip addr del 198.18.7.7/3
     }
     assert.ok(r.reached.length + r.refused.length > 0, "control: there is something to recommend");
     assert.match(shown.stdout, /Read the list before you allow it/);
+  });
+
+  it("recommend lists every host: its allow command, then enforce, keeps every one reachable", () => {
+    stack.step("what to allow, past a page");
+    // The domain two reaches 120 hosts its list does not name: more than a page.
+    const names = Array.from({ length: 120 }, (_, i) => `h${i + 1}.example.test`);
+    const added = stack.inRoot(
+      ["bash", "-c", `printf '%s ${names.join(" ")}\\n' ${forge} >> /etc/hosts`],
+      { root: true },
+    );
+    assert.equal(added.code, 0, added.stderr);
+    const reached = inWs(
+      "two/w1",
+      `for h in ${names.join(" ")}; do curl -s -m 10 -o /dev/null -w '%{http_code}\\n' http://$h/; done | sort | uniq -c`,
+    );
+    assert.match(reached.stdout, /^\s*120 200$/m, reached.stdout);
+    // A page: a hundred, the rest counted, and said before the command that it is not all.
+    const paged = stack.quiet("domain", "two", "net", "recommend");
+    assert.equal(paged.code, 0, paged.stderr);
+    assert.match(paged.stdout, /\n {2}and 2\d more hosts\n/);
+    assert.match(
+      paged.stdout,
+      /only the 100 above, of 12\d: every one, desolate domain two net recommend --all/,
+    );
+    // The control: the command on that page leaves the rest out (the old report's way to cut
+    // a host off without a word).
+    const pagedAllow = /desolate domain two net allow (.*)/.exec(paged.stdout)![1]!.split(" ");
+    assert.equal(pagedAllow.length, 100);
+    const leftOut = names.filter((name) => !pagedAllow.includes(name));
+    assert.ok(leftOut.length >= 20, `the page leaves out ${leftOut.length} of them`);
+    // --all: every host, in a command that allows every one.
+    const all = stack.quiet("domain", "two", "net", "recommend", "--all");
+    const allow = /desolate domain two net allow (.*)/.exec(all.stdout)![1]!.split(" ");
+    for (const name of names) assert.ok(allow.includes(name), `${name} is in the command`);
+    assert.doesNotMatch(all.stdout, /only the \d+ above/);
+    assert.equal(stack.quiet("domain", "two", "net", "allow", ...allow).code, 0);
+    assert.equal(stack.quiet("domain", "two", "net", "enforce").code, 0);
+    const after = inWs(
+      "two/w1",
+      `for h in ${names.join(" ")}; do curl -s -m 10 -o /dev/null -w '%{http_code}\\n' http://$h/; done | sort | uniq -c`,
+    );
+    assert.match(after.stdout, /^\s*120 200$/m, "all 120 are still reachable once enforced");
+    assert.equal(
+      curl("two/w1", `http://${leftOut[0]}/past-the-page`).stdout.trim(),
+      `upstream http host=${leftOut[0]} path=/past-the-page`,
+      "a host past the first page is reachable too",
+    );
+    assert.match(
+      curl("two/w1", "http://loop.example.test/").stdout +
+        curl("two/w1", "http://api.example.test/x").stdout,
+      /not on the domain two's allowlist/,
+      "control: enforced, a host it did not allow is refused",
+    );
+    assert.equal(stack.quiet("domain", "two", "net", "open").code, 0);
   });
 
   it("down stops every VM and the daemon and removes nothing; bootstrap and start bring it back", () => {

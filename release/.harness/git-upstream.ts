@@ -6,6 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { onTestFinished } from "./vitest.ts";
+import { lineByLine } from "../git/upstream.ts";
 import type { Places } from "../git/upstream.ts";
 
 const scratch = () => {
@@ -47,3 +48,15 @@ export const cwdIs = (repo: string) => () => repo;
 export const outsideEveryClone = (): string => {
   throw new Error("this directory is not one of your clones");
 };
+
+/** The lines lineByLine gives for a program that printed `chunks`, in that order. */
+export const linesOf = (chunks: string[]) => {
+  const lines: string[] = [];
+  const shown = lineByLine((line) => lines.push(line));
+  for (const chunk of chunks) shown.add(chunk);
+  shown.end();
+  return lines;
+};
+/** How long each line is that lineByLine gives for `text` printed `times` over, unended. */
+export const lengthsOf = (text: string, times: number, ended = false) =>
+  linesOf([`${text.repeat(times)}${ended ? "\n" : ""}`]).map((line) => line.length);

@@ -27,9 +27,12 @@ What the page and the terminal show of it, all from the reviewer: the commits, t
 change, files a commit changed and a later one changed back (which the net change does not
 show), each commit whole (who wrote it, when, its whole message, its diff), and a warning
 for anything a commit carries that is not shown (a header other than git's four, a
-signature, an encoding). Every list is counted and comes a page at a time, and every diff a
-page of bytes at a time, however large the push. The reviewer takes as long as the push needs
-(a large first push packs for minutes), and says what it is doing meanwhile. The two choices:
+signature, an encoding). Nothing is cut: every warning, every file that changes what runs
+on the forge and the squash's whole message are shown; every list is counted and comes a
+page at a time, and every diff a page of bytes at a time, however large the push. The
+reviewer takes as long as the push needs (a large first push packs for minutes); the page
+and the terminal say what it is doing meanwhile, and wait for as long as you do (Ctrl-C,
+or Refuse). The two choices:
 - **Squashed into one commit** (`desolate push ... --squash`, `desolate approve --squash`,
   or the page's second button): the reviewer's commit with the last commit's files, on what
   the branch builds on, so nothing a commit in between held reaches the remote's history.
@@ -87,7 +90,7 @@ needs none. The root keeps a record of what it pushed (`/var/lib/desolate/pushed
 across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
-every 15 minutes, for 30 days. The test is conservative: every file the branch changed is, in
+every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days. The test is conservative: every file the branch changed is, in
 the base, exactly as the branch left it (so a merge commit, a squash and a rebase all count).
 A base that has since changed one of those files again is not recognised, and the branch is
 then just not marked.
@@ -118,7 +121,8 @@ approval. (`desolate root
 shell` is still there, a shell in the root VM itself, for what only the root can do.)
 
 **Your own scripts: `desolate events`.** A JSON object per line, as things happen, until you
-stop it (`--replay <n>` first repeats the last ones the host holds). Each says where it comes
+stop it (`--replay <n>` first repeats the last ones the host holds: the last 500, or the
+setting `events.kept`, `DESOLATE_EVENTS_KEPT`). Each says where it comes
 from, which is how far to believe it:
 
 | `source` | types | believe it as |
@@ -303,6 +307,19 @@ work with no credential, private repositories included. Only the `.git` spelling
   domain's own secrets: image pulls and `apt`, `npm` or `pip` in a build need nothing of
   desolate's. Only a secret's host is answered by the domain's secrets proxy, with a
   certificate of the domain's own CA, so that it can put the secret's value in.
+- **Bodies through a secret's host.** The secrets proxy holds a request or response whole
+  up to 256 MiB (`DESOLATE_SECRETS_HELD_MIB`; a domain its own: `desolate domain <d> net
+  hold 512m`, at most 1 GiB). That is where a secret's value is put into a body. Past it, or
+  of no fixed length, a body streams at any size: a response with each value taken out as
+  it passes (a compressed one arrives decompressed, with no content-length), a request
+  watched for names. A request body past the bound that names a secret is refused, its name
+  masked and its response withheld, and `net log` says why.
+- **What it reached, and what to allow.** `desolate net log [<domain>] [--last <n>]` shows the
+  last hundred decisions unless `--last` says, and how many are kept;
+  `desolate domain <d> net recommend` counts every host the log keeps, shows a hundred, and
+  prints a `net allow` for exactly the ones it shows, saying first when that is not all of
+  them (`--all` lists every one, `--json` is for a program). Each domain's log keeps about
+  1/256 of the root VM's disk (`DESOLATE_PROXY_AUDIT_MIB`), the oldest let go first.
 - **That CA is trusted in the VM and in the devcontainer** (the VM's bundle, and
   `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
   `GIT_SSL_CAINFO` pointed at it), **not in a container building an image.** So a build step
@@ -318,14 +335,22 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
 `-offer`):
 - `git fetch` and `git pull` first ask the root to refresh the mirror from the remote (the
   request `desolate fetch` makes; the root fetches with its read key), then read from the
-  read-only mirror. If the root cannot (offline, or the domain's 30 requests a minute are
-  used up), the fetch still happens, from the mirror as it is, and says so.
+  read-only mirror. If the root cannot (offline, the remote down), the fetch still happens,
+  from the mirror as it is, and says so.
 - `git push origin <branch>` offers the branch (`desolate offer`), then reports the push as
   refused, saying it was offered and that nothing went to the remote, so that no
   `origin/<branch>` appears for a branch the remote does not have.
 - Commits carry the person's git identity from the Mac (`git config --global user.name` and
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.
+- What a workspace asks of the root (`desolate fetch`, `offer`, `spawn`, `close`,
+  `issue offer`, and the `git fetch` and `git push` above) waits for as long as the root is
+  on it, with no deadline: a first fetch of a large repository can take minutes, and a wait
+  longer than 10 s says what the root is doing. A root that is not running is said to be
+  within 10 s ("nothing has been heard from the root"), and the request is withdrawn. Fetches
+  of one repository asked while one runs are one more fetch, and never hold up an offer; each
+  domain's requests are answered in turn, beside every other domain's, so no domain's flood
+  slows another's.
 
 **The editor's settings, layer by layer** (lowest first; each overrides the ones before it):
 - **VSCodium's own defaults.** In the browser its default theme is a light one, and it saves
@@ -538,6 +563,46 @@ Mac:                 the approval page, or `desolate issue publish <id>`, shows 
   Markdown is shown as text. A link keeps its address only if it is http, https or mailto, and
   opens with no opener and no referrer. An image is drawn as a link to itself, never loaded.
   Its work is bounded: 64 KiB of unclosed emphasis is parsed in milliseconds (T1 `issues`).
+
+## Settings
+
+What depends on this Mac or on you (a VM's size, how many of something, how often) is a
+setting: declared once, in the file that reads it, with its default and why
+(`shared/settings.ts`). `desolate settings` lists every one: its value, where that came
+from, its default and its why (`--json` for a program).
+
+```bash
+desolate settings                          # each one, its value and why
+desolate settings set root.memoryMiB 4g    # stored on the Mac; it says which restart it needs
+desolate settings unset root.memoryMiB     # back to its default
+```
+
+- **Where a value comes from**, in order: the setting's environment variable, in the process
+  that reads it (a variable in your shell reaches what runs on the Mac); what `desolate
+  settings set` stored (`~/.desolate/settings.json`); its default, which for a size is worked
+  out from this Mac each time it is asked for. A value the setting does not take, from
+  either, is refused with what it takes; it never silently becomes the default.
+- **A setting read in a VM** (the root, the git VM, a workspace) is passed into that VM by the
+  host when it starts it, as a file of root's on the VM's own disk. A workspace, or the root's
+  ordinary user, cannot change what another VM or the Mac reads.
+- **When it applies:** `set` says. A VM's size when that VM starts again (`desolate down`,
+  then `desolate bootstrap`; for the git VM, `desolate git`); a workspace's default size for
+  the workspaces made from then on (one that is made keeps its own: `desolate resize`).
+
+Every setting there is (T1 checks that this table names exactly those):
+
+| setting | variable | read | default | what it changes |
+|---|---|---|---|---|
+| `workspace.cpus` | `DESOLATE_WORKSPACE_CPUS` | on the Mac | half this Mac's cores, 2 to 4 | CPUs a new workspace gets when neither `up --cpus` nor its domain's size says |
+| `workspace.memoryMiB` | `DESOLATE_WORKSPACE_MEMORY_MIB` | on the Mac | a quarter of this Mac's memory, 3 to 8 GiB | memory a new workspace gets when neither `up --memory` nor its domain's size says |
+| `workspace.diskGiB` | `DESOLATE_WORKSPACE_DISK_GIB` | on the Mac | 30 | disk a new workspace gets when neither `up --disk` nor its domain's size says |
+| `root.cpus` | `DESOLATE_ROOT_CPUS` | on the Mac | a quarter of this Mac's cores, 2 to 4 | the root VM's CPUs: it runs every domain's reviews, pushes and fetches |
+| `root.memoryMiB` | `DESOLATE_ROOT_MEMORY_MIB` | on the Mac | an eighth of this Mac's memory, 2 to 4 GiB | the root VM's memory |
+| `git.cpus` | `DESOLATE_GIT_CPUS` | on the Mac | 2 | the git VM's CPUs |
+| `git.memoryMiB` | `DESOLATE_GIT_MEMORY_MIB` | on the Mac | 1.5 GiB | the git VM's memory |
+
+The root's and the git VM's sizes are never set above what this Mac has; their disk is the
+base image's, 30 GiB.
 
 ## What works today, and what does not
 

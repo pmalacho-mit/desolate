@@ -131,6 +131,51 @@ describe("T2 phase 1: the root VM", () => {
     );
   });
 
+  it("the fetch lock is held by a live fetch, not by its age: a dead holder's is taken at once, a live one's is waited for", () => {
+    // (Not recorded: the holder's pid and time are in what is said.)
+    const lock = "/var/lib/desolate/fetch-locks/acme--widgets";
+    const holder = (pid: number) =>
+      JSON.stringify({
+        id: "f".repeat(32),
+        pid,
+        host: "root",
+        since: "2026-01-01T00:00:00.000Z",
+        start: null,
+      });
+    const leave = (pid: number) =>
+      stack.inRoot([
+        "bash",
+        "-c",
+        `mkdir -p ${lock} && printf '%s' '${holder(pid)}' > ${lock}/holder`,
+      ]);
+    // A holder that is gone (no process has this pid): taken at once, whatever its age.
+    assert.equal(leave(4_194_000).code, 0);
+    const dead = stack.quiet("fetch", REPO);
+    assert.equal(dead.code, 0, dead.stderr);
+    assert.doesNotMatch(
+      dead.stderr,
+      /waiting for another fetch/,
+      "a dead holder is not waited for",
+    );
+    // One that lives (a process in the root, which ends in a few seconds): waited for, said,
+    // and taken when it ends.
+    const sleeper = stack.inRoot(["bash", "-c", "sleep 6 >/dev/null 2>&1 </dev/null & echo $!"]);
+    const pid = Number(sleeper.stdout.trim());
+    assert.ok(pid > 1, sleeper.stdout + sleeper.stderr);
+    assert.equal(leave(pid).code, 0);
+    const started = Date.now();
+    const live = stack.quiet("fetch", REPO);
+    assert.equal(live.code, 0, live.stderr);
+    assert.match(
+      live.stderr,
+      new RegExp(
+        `waiting for another fetch of acme/widgets to finish \\(process ${pid}, since 2026-01-01T00:00:00.000Z\\)`,
+      ),
+    );
+    assert.ok(Date.now() - started > 3000, "it waited for the holder, and did not take its lock");
+    assert.equal(stack.inRoot(["test", "-e", lock]).code, 1, "and left none behind");
+  });
+
   it("the read key cannot push, and neither key works for another repository", () => {
     // Control first: the same ssh command, for what the key IS allowed, succeeds.
     const ssh = (role: string, command: string) =>
@@ -417,6 +462,67 @@ describe("T2 phase 1: the root VM", () => {
     const usage = stack.desolate("frobnicate");
     assert.equal(usage.code, 64);
     assert.match(usage.stderr, /fix: desolate help/);
+  });
+
+  it("a call to the root that keeps saying what it does is never given up; one that falls silent is (limits R4)", () => {
+    stack.step("patience: a slow root that says what it is doing, and one that says nothing");
+    // A stand-in for the root's CLI service, at its socket: it answers `repo.fetch` slowly,
+    // and hands every other request to the real service (moved aside for the test). The
+    // host may hear nothing for 3 seconds (the setting): the slow fetch takes 6, and says
+    // what it is doing each second; the silent one says nothing for ten minutes, and the
+    // call must end at the host's 3 seconds, not when the root finishes.
+    const dir = "/run/desolate/rootctl";
+    const standIn = (silent: boolean) =>
+      [
+        "IFS= read -r line",
+        `case "$line" in *'"repo.fetch"'*) ;; *) { printf '%s\\n' "$line"; cat; } | socat - UNIX-CONNECT:${dir}/rootctl.sock.real; exit ;; esac`,
+        `echo '{"accepted":true}'`,
+        silent
+          ? "sleep 600"
+          : `for i in 1 2 3 4 5 6; do sleep 1; echo "{\\"progress\\":\\"still fetching: $i of 6\\"}"; done`,
+        `echo '{"reply":{"ok":true,"result":{"branches":1,"lfsObjects":1}}}'`,
+      ].join("\n") + "\n";
+    const serve = (silent: boolean) => {
+      const put = stack.inRoot(["bash", "-c", "cat >/tmp/stand-in.sh"], { input: standIn(silent) });
+      assert.equal(put.code, 0, put.stderr);
+      const started = stack.inRoot([
+        "bash",
+        "-c",
+        `cd ${dir} && { [ -e rootctl.sock.real ] || mv rootctl.sock rootctl.sock.real; } && rm -f rootctl.sock && (setsid socat UNIX-LISTEN:rootctl.sock,fork,mode=600 EXEC:'bash /tmp/stand-in.sh' </dev/null >/dev/null 2>&1 & echo $! >/tmp/stand-in.pid) && for i in $(seq 50); do [ -S rootctl.sock ] && exit 0; sleep 0.1; done; exit 1`,
+      ]);
+      assert.equal(started.code, 0, started.stderr);
+    };
+    const unserve = () =>
+      stack.inRoot([
+        "bash",
+        "-c",
+        `kill $(cat /tmp/stand-in.pid) 2>/dev/null; pkill -f 'bash /tmp/stand-in[.]sh'; cd ${dir} && if [ -e rootctl.sock.real ]; then rm -f rootctl.sock && mv rootctl.sock.real rootctl.sock; fi`,
+      ]);
+    stack.env.DESOLATE_ROOT_SILENT_SECONDS = "3";
+    try {
+      serve(false);
+      const slow = stack.desolate("fetch", "acme/widgets");
+      unserve();
+      assert.equal(slow.code, 0, slow.stderr);
+      assert.match(slow.stderr, /still fetching: 6 of 6/);
+      assert.match(slow.stdout, /fetched acme\/widgets/);
+      serve(true);
+      const silent = stack.desolate("fetch", "acme/widgets");
+      unserve();
+      assert.notEqual(silent.code, 0);
+      assert.ok(silent.ms < 60_000, `given up after ${silent.ms} ms, not at the silence`);
+      assert.match(silent.stderr, /the root said nothing for 3 seconds while asked 'repo\.fetch'/);
+      assert.match(silent.stderr, /root\.silentSeconds/);
+    } finally {
+      delete stack.env.DESOLATE_ROOT_SILENT_SECONDS;
+      unserve();
+    }
+    // The control: the real service again, and the setting as it was; its socket is back
+    // (not only the old way, which a call would also fall back to).
+    const real = stack.desolate("fetch", "acme/widgets");
+    assert.equal(real.code, 0, real.stderr);
+    const socket = stack.inRoot(["test", "-S", `${dir}/rootctl.sock`]);
+    assert.equal(socket.code, 0, "the root's CLI service has its socket again");
   });
 
   it("the transcript reads as reviewed", () => {

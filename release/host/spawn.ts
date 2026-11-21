@@ -12,8 +12,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
 import { isSlug, workspaceVmName } from "../shared/names.ts";
-import { IDENTITY_FILE, KEY, verify } from "../shared/spawn.ts";
+import { FRESH_MS, IDENTITY_FILE, KEY, verify } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
+import { because } from "./failures.ts";
 import { INSTANCE, paths } from "./paths.ts";
 import type { Backend } from "./vm/types.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -79,7 +80,7 @@ export const giveIdentity = async (b: Backend, vm: string) => {
   );
   if (put.code !== 0)
     throw new Error(
-      `the workspace's key could not be written into it: ${put.stderr.trim().slice(-300)}`,
+      because("the workspace's key could not be written into it", "workspace-key", put.stderr),
     );
 };
 
@@ -159,7 +160,10 @@ declare namespace recordStarted {
 }
 
 /** Spawns run now, per domain: at most three at once, whatever the limit (a flood of signed
- *  requests started thirty VMs a minute: audit). Counted from the check to the end of up. */
+ *  requests started thirty VMs a minute: audit). Counted from the check to the end of up.
+ *  A hard bound (R7) on requests from a domain's workspaces, a side not trusted: what it
+ *  bounds is how fast they can make this Mac start VMs, and three at once is a pace no
+ *  person's own work needs more of (a spawn takes a minute or more). */
 const running = new Map<string, number>();
 export const MOST_AT_ONCE = 3;
 export const begin = (domain: string) => running.set(domain, (running.get(domain) ?? 0) + 1);
@@ -203,8 +207,10 @@ export const check = (
   if (why) return why;
   const value = ledger();
   if (value.used[r.mac] !== undefined) return "that request was already run";
+  // A request is remembered for as long as `verify` would still take it: FRESH_MS after it
+  // was made, with two minutes either way for the VM's clock. Twice FRESH_MS outlives that.
   for (const [mac, at] of Object.entries(value.used))
-    if (now - at > 30 * 60_000) delete value.used[mac];
+    if (now - at > 2 * FRESH_MS) delete value.used[mac];
   if (r.op === "spawn") {
     if ((running.get(r.domain) ?? 0) >= MOST_AT_ONCE)
       return `${r.domain} already has ${MOST_AT_ONCE} workspaces being started by its workspaces: ask again once one is up`;

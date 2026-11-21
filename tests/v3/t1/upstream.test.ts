@@ -279,7 +279,7 @@ describe("T1 desolate upstream: what the split must be", () => {
     const checked = verify(p, app, splitOf(p));
     assert.deepEqual(checked.core, []);
     assert.match(checked.stat, /a\.txt \| 1 \+/);
-    assert.equal(checked.commits.length, 1);
+    assert.equal(checked.commits.total, 1);
   });
 
   it("a split whose tree is not the dependency's files is refused", () => {

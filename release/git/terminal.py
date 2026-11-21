@@ -7,6 +7,18 @@
 #   python3 -I terminal.py <directory>     (-I: nothing beside this file is imported in place of a module)
 import base64, fcntl, os, pty, select, struct, sys, termios
 
+# Bounds the host holds too, each named as it is there (tests/v3/t1/git-web.test.ts checks
+# that they agree): what the host takes is all that reaches here, and these say so again.
+TERMINAL = {"cols": 1000, "rows": 500}  # shared/limits.ts TERMINAL
+INPUT_CHARS = 64 * 1024  # host/git-web.ts INPUT_CHARS: the most of one "i" line
+# A line of the protocol is at most its kind, a space, INPUT_CHARS and its newline: more is
+# not one the host sent, and is dropped up to the next newline, not held.
+LINE_MOST = INPUT_CHARS + 3
+# What was typed and the shell has not read yet (it is busy, or stopped with Ctrl-S): held up
+# to this, then said and dropped. A paste of more than this into a shell that is not reading
+# is not one anybody can see the end of anyway.
+TYPED_MOST = 4 * 1024 * 1024
+
 where = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser("~")
 pid, fd = pty.fork()
 if pid == 0:
@@ -23,7 +35,9 @@ def resize(cols, rows):
 resize(120, 32)
 os.set_blocking(fd, False)
 pending = b""
+skipping = False
 typed = b""
+dropped = 0
 stdin = sys.stdin.fileno()
 while True:
     try:
@@ -56,16 +70,31 @@ while True:
         pending += chunk
         while b"\n" in pending:
             line, pending = pending.split(b"\n", 1)
+            if skipping:
+                skipping = False
+                continue
             try:
                 kind, _, rest = line.decode("ascii").partition(" ")
-                if kind == "i" and len(typed) < 4 * 1024 * 1024:
-                    typed += base64.b64decode(rest, validate=True)
+                if kind == "i":
+                    given = base64.b64decode(rest, validate=True)
+                    if len(typed) + len(given) <= TYPED_MOST:
+                        typed += given
+                    else:
+                        dropped += len(given)
                 elif kind == "r":
                     cols, rows = (int(x) for x in rest.split())
-                    if 1 <= cols <= 1000 and 1 <= rows <= 500:
+                    if 1 <= cols <= TERMINAL["cols"] and 1 <= rows <= TERMINAL["rows"]:
                         resize(cols, rows)
             except (ValueError, UnicodeDecodeError):
                 pass
+        if len(pending) > LINE_MOST:
+            pending = b""
+            skipping = True
+        if dropped:
+            # Said where the person is looking, as it happens (through the host's terminal
+            # filter, as all of this is).
+            os.write(1, b"\r\n\x1b[2mdesolate: %d bytes you typed or pasted were not given to the shell: it was not reading, and %d MiB were waiting already.\x1b[0m\r\n" % (dropped, TYPED_MOST // (1024 * 1024)))
+            dropped = 0
 try:
     os.kill(pid, 9)
 except OSError:

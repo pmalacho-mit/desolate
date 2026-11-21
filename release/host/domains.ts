@@ -3,6 +3,10 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { andMore, PAGE } from "../shared/listed.ts";
+import type { Listed } from "../shared/listed.ts";
+import { over } from "../shared/limits.ts";
+import { printable } from "../shared/text.ts";
 import { guest, paths } from "./paths.ts";
 import { backend, changeSecrets, ensureProxyUser, revealSecret, rootctl } from "./stack.ts";
 import type {
@@ -14,6 +18,7 @@ import type {
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome } from "../.harness/home.ts";
 import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
+import type { reachedHosts, reportOf } from "../.harness/host-net.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
@@ -104,6 +109,232 @@ export const secretOps = {
 };
 export type SecretOps = typeof secretOps;
 
+type Ranked = { host: string; count: number };
+type Recommended = {
+  mode: string;
+  listed: string[];
+  reached: Listed<Ranked>;
+  refused: Listed<Ranked>;
+};
+
+/** `desolate domain <d> net recommend [--all] [--json]`: what the domain's workspaces reached
+ *  that its list does not name, and the command that allows it. The root counts every host
+ *  its log keeps; this shows a page of each list unless --all, and the command it prints
+ *  allows exactly the hosts it shows. When that is not all of them it says so before the
+ *  command: following a command for the first hundred, then enforcing, cut off the rest
+ *  (limits-triage.md). */
+export const netRecommend = async (
+  domain: string,
+  values: Record<string, unknown>,
+  out: Out,
+): Promise<void> => {
+  const r = await rootctl<Recommended>("net.recommend", { domain }, { quiet: true });
+  if (values.json === true) return out(JSON.stringify(r));
+  const every = `desolate domain ${domain} net recommend --all`;
+  const shown = (list: Listed<Ranked>): Listed<Ranked> => ({
+    ...list,
+    items: values.all === true ? list.items : list.items.slice(0, PAGE),
+  });
+  const section = (list: Listed<Ranked>, heading: string, then: string, commands: string[]) => {
+    const page = shown(list);
+    out(heading);
+    for (const entry of page.items) out(`  ${String(entry.count).padStart(5)}  ${entry.host}`);
+    const more = andMore(page, "host");
+    if (more) out(`  ${more}`);
+    out(then);
+    if (page.from > 0 || page.items.length < page.total)
+      out(
+        `  (only the ${page.items.length} above, of ${page.total}: every one, ${every}; for a program, --json)`,
+      );
+    const names = page.items.map((entry) => entry.host).join(" ");
+    out(`  desolate domain ${domain} net allow ${names}`);
+    for (const command of commands) out(`  ${command}`);
+  };
+  if (r.reached.total === 0 && r.refused.total === 0)
+    return out(
+      `${domain}: its workspaces have reached nothing that is not already listed${r.listed.length ? ` (${r.listed.length} listed)` : ""}.`,
+    );
+  if (r.reached.total)
+    section(
+      r.reached,
+      `${domain} (${r.mode}): hosts its workspaces reached that are not on its list, most used first:`,
+      "to keep reaching them once the network is enforced:",
+      [`desolate domain ${domain} net enforce`],
+    );
+  if (r.refused.total)
+    section(r.refused, "refused for not being on the list:", "to allow them:", []);
+  return out("Read the list before you allow it: a workspace chooses what it asks for.");
+};
+
+declare namespace netRecommend {
+  type Report = { domain: "acme"; values: {}; out: typeof collect };
+  /** 120 hosts: a page of a hundred, the rest counted, and an allow command for exactly those
+   *  hundred, said before it to be not all. (A command for the first hundred, then enforce,
+   *  cut off the other twenty: the control is the `--all` below.) */
+  export type Paged = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof reachedHosts, [count: 120]>,
+      Invoke<typeof netRecommend, [domain: "acme", values: {}, out: typeof collect]>,
+    ],
+    Expect<
+      Invoke<typeof reportOf, [lines: Invoke<typeof said>]>,
+      "=",
+      { listed: 100; more: "and 20 more hosts"; allows: 100; saidBefore: true }
+    >
+  >;
+  /** --all: every host, and a command that keeps every one reachable once enforced */
+  export type All = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof reachedHosts, [count: 120]>,
+      Invoke<typeof netRecommend, [domain: "acme", values: { all: true }, out: typeof collect]>,
+    ],
+    Expect<
+      Invoke<typeof reportOf, [lines: Invoke<typeof said>]>,
+      "=",
+      { listed: 120; more: null; allows: 120; saidBefore: false }
+    >
+  >;
+  /** a list that fits a page is whole, and says nothing of more */
+  export type Whole = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof reachedHosts, [count: 3]>,
+      Invoke<typeof netRecommend, [domain: "acme", values: {}, out: typeof collect]>,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "acme (open): hosts its workspaces reached that are not on its list, most used first:",
+        "      3  h1.example",
+        "      2  h2.example",
+        "      1  h3.example",
+        "to keep reaching them once the network is enforced:",
+        "  desolate domain acme net allow h1.example h2.example h3.example",
+        "  desolate domain acme net enforce",
+        "Read the list before you allow it: a workspace chooses what it asks for.",
+      ]
+    >
+  >;
+}
+
+type Entry = {
+  time: string;
+  domain: string;
+  workspace: string;
+  host: string;
+  port: number;
+  verdict: string;
+  reason?: string;
+  secrets?: string[];
+};
+
+/** `desolate net log [<domain>] [--last <n>] [--json]`: the last of what each workspace asked
+ *  to reach, and the verdict, oldest first; a hundred unless --last says, and how many the
+ *  log keeps when that is more. */
+export const netLog = async (
+  domain: string | undefined,
+  values: Record<string, unknown>,
+  out: Out,
+): Promise<void> => {
+  const last = values.last === undefined ? PAGE : Number(values.last);
+  if (!Number.isSafeInteger(last) || last < 1)
+    refuse(
+      `--last '${printable(values.last, 80)}' is not a number of entries`,
+      `desolate net log${domain ? ` ${domain}` : ""} --last 500`,
+      EXIT.usage,
+    );
+  const log = await rootctl<Listed<Entry>>("net.log", { domain, last }, { quiet: true });
+  if (values.json === true) return out(JSON.stringify(log));
+  if (log.from > 0)
+    out(
+      `the last ${log.items.length} of ${log.total} entries (more: desolate net log${domain ? ` ${domain}` : ""} --last <n>):`,
+    );
+  for (const e of log.items)
+    out(
+      `${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
+    );
+};
+
+declare namespace netLog {
+  /** --last is a number of entries, from one */
+  export type NotANumber = Table<
+    typeof refusalOf,
+    [
+      [
+        args: [
+          run: typeof netLog,
+          args: [domain: "acme", values: { last: "lots" }, out: typeof collect],
+        ],
+        expected: {
+          message: "--last 'lots' is not a number of entries";
+          fix: "desolate net log acme --last 500";
+          code: 64;
+        },
+      ],
+      [
+        args: [
+          run: typeof netLog,
+          args: [domain: undefined, values: { last: "0" }, out: typeof collect],
+        ],
+        condition: "matches",
+        expected: {
+          message: "--last '0' is not a number of entries";
+          fix: "desolate net log --last 500";
+        },
+      ],
+    ]
+  >;
+  /** the last of them, and how many the log keeps when that is more */
+  export type Last = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "net.log": {
+              items: [
+                {
+                  time: "2026-11-21T10:00:00Z";
+                  domain: "acme";
+                  workspace: "w1";
+                  host: "pypi.org";
+                  port: 443;
+                  verdict: "allowed";
+                },
+              ];
+              total: 5;
+              from: 4;
+            };
+          },
+        ]
+      >,
+      Invoke<typeof netLog, [domain: "acme", values: { last: "1" }, out: typeof collect]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof said>,
+        "=",
+        [
+          "the last 1 of 5 entries (more: desolate net log acme --last <n>):",
+          "2026-11-21T10:00:00Z  domain=acme workspace=w1  allowed  pypi.org:443",
+        ]
+      >,
+      Expect<
+        Invoke<typeof rootAsked>,
+        "matches",
+        [{ op: "net.log"; args: { domain: "acme"; last: 1 } }]
+      >,
+    ]
+  >;
+}
+
 export const domainCommand = async (
   args: string[],
   values: Record<string, unknown>,
@@ -177,7 +408,9 @@ export const domainCommand = async (
     const spawn = await import("./spawn.ts");
     if (values.max !== undefined) {
       const max = values.max === "none" ? null : Number(values.max);
-      if (max !== null && (!Number.isInteger(max) || max < 0 || max > 1000))
+      // Any whole number is a limit a person may mean (0 is none): no upper bound of its own
+      // here. (The root keeps one of its own, and says so: root/domains.ts.)
+      if (max !== null && (!Number.isSafeInteger(max) || max < 0))
         refuse(
           `--max '${String(values.max)}' is not a number of workspaces`,
           `desolate domain ${first} spawn --max 2   (0: none; none: no limit)`,
@@ -254,40 +487,8 @@ export const domainCommand = async (
   if (second === "net") {
     // desolate domain <d> net [show] | open | enforce | allow <host>... | deny <host>... | allow-internal <ip>
     const [, , action, ...rest] = args;
-    type Policy = { mode: string; hosts: string[]; internal: string[] };
-    if (action === "recommend") {
-      type Ranked = { host: string; count: number }[];
-      const r = await rootctl<{ mode: string; listed: string[]; reached: Ranked; refused: Ranked }>(
-        "net.recommend",
-        { domain: first },
-        { quiet: true },
-      );
-      if (json) return out(JSON.stringify(r));
-      const names = (list: Ranked) => list.map((entry) => entry.host).join(" ");
-      if (r.reached.length === 0 && r.refused.length === 0)
-        return out(
-          `${first}: its workspaces have reached nothing that is not already listed${r.listed.length ? ` (${r.listed.length} listed)` : ""}.`,
-        );
-      if (r.reached.length) {
-        out(
-          `${first} (${r.mode}): hosts its workspaces reached that are not on its list, most used first:`,
-        );
-        for (const entry of r.reached.slice(0, 60))
-          out(`  ${String(entry.count).padStart(5)}  ${entry.host}`);
-        out(
-          `to keep reaching them once the network is enforced:\n  desolate domain ${first} net allow ${names(r.reached.slice(0, 60))}\n  desolate domain ${first} net enforce`,
-        );
-      }
-      if (r.refused.length) {
-        out(`refused for not being on the list:`);
-        for (const entry of r.refused.slice(0, 60))
-          out(`  ${String(entry.count).padStart(5)}  ${entry.host}`);
-        out(
-          `to allow them:\n  desolate domain ${first} net allow ${names(r.refused.slice(0, 60))}`,
-        );
-      }
-      return out("Read the list before you allow it: a workspace chooses what it asks for.");
-    }
+    type Policy = { mode: string; hosts: string[]; internal: string[]; heldMiB?: number };
+    if (action === "recommend") return netRecommend(first, values, out);
     const change =
       action === "open" || action === "enforce"
         ? { mode: action }
@@ -297,11 +498,13 @@ export const domainCommand = async (
             ? { deny: rest }
             : action === "allow-internal"
               ? { internal: rest }
-              : null;
+              : action === "hold" && rest.length === 1
+                ? { held: rest[0] }
+                : null;
     if (action && action !== "show" && !change)
       refuse(
         `'net ${action}' is not understood`,
-        `desolate domain ${first} net show | open | enforce | allow <host>... | deny <host>... | allow-internal <address> | recommend`,
+        `desolate domain ${first} net show | open | enforce | allow <host>... | deny <host>... | allow-internal <address> | hold <size>|default | recommend [--all]`,
         EXIT.usage,
       );
     const policy = await rootctl<Policy>(
@@ -317,6 +520,10 @@ export const domainCommand = async (
       out(`  listed, for when it is enforced: ${policy.hosts.join(", ")}`);
     if (policy.internal.length)
       out(`  internal addresses it may reach: ${policy.internal.join(", ")}`);
+    if (policy.heldMiB !== undefined)
+      out(
+        `  its secrets proxy holds a body whole up to ${policy.heldMiB} MiB (desolate domain ${first} net hold default: the stack's)`,
+      );
     return;
   }
   if (second === "secret") {
@@ -362,7 +569,12 @@ export const domainCommand = async (
         refuse(`${file} is a symlink`, "import the file it points to, by its own path");
       const stat = fs.statSync(file, { throwIfNoEntry: false });
       if (!stat?.isFile()) refuse(`${name} is not a file`, how, EXIT.usage);
-      if (stat.size > ENV_MAX) refuse(`${name} is over 64 KiB: not a .env`, how, EXIT.usage);
+      if (stat.size > ENV_MAX)
+        refuse(
+          `${over(name, ENV_MAX, stat.size, "bytes", "a .env may be")}: not a .env`,
+          how,
+          EXIT.usage,
+        );
       const text = fs.readFileSync(file, "utf8");
       // With --print-env, stdout is the new .env alone: everything else goes to stderr.
       const say =

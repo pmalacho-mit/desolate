@@ -80,6 +80,48 @@ const forgeHasLfs = (repo: string, id: string) => {
   }
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A raw `git push` in the root's terminal, left waiting for the person as it would be, in a
+ *  session of its own; `stop` ends its process group, as a closed terminal does (SIGTERM: a
+ *  job started in the background of a shell with no job control ignores SIGINT, so Ctrl-C's
+ *  signal would not reach it here). */
+const rawPushWaiting = async (spec: string, name: string) => {
+  const log = `/tmp/${name}.log`;
+  // The pid is written by the process that becomes git: `$!` here would be the subshell of
+  // `cd ... && ...`, not the session setsid makes, and its group is not the push's.
+  inRootClone(
+    `setsid nohup sh -c 'echo $$ >${log}.pid; exec git push origin ${spec}' >${log} 2>&1 </dev/null & sleep 0.2`,
+  );
+  const said = () => inRootClone(`cat ${log}`).stdout;
+  let waiting = false;
+  for (let i = 0; i < 80 && !waiting; i++) {
+    waiting = /waiting for it for as long as this push waits/.test(said());
+    if (!waiting) await sleep(250);
+  }
+  assert.ok(waiting, said());
+  const ps = () =>
+    inRootClone(
+      `echo pid $(cat ${log}.pid); ps -eo pid,pgid,sid,stat,args | grep -v ' ps -eo' | grep -E 'git|node' ; ls -l /var/lib/desolate/approvals/ 2>&1; cat /var/lib/desolate/approvals/*.json 2>&1 | cut -c1-80`,
+    );
+  return {
+    said,
+    stop: () => {
+      const killed = inRootClone(`kill -TERM -- -$(cat ${log}.pid) 2>&1; echo kill=$?`);
+      return `${killed.stdout}${killed.stderr}`;
+    },
+    ps: () => {
+      const seen = ps();
+      return `${seen.stdout}${seen.stderr}`;
+    },
+  };
+};
+/** Waits until nothing is waiting for the person on the host (or a few seconds pass). */
+const nothingWaits = async () => {
+  for (let i = 0; i < 40; i++) {
+    if (/nothing is waiting for approval/.test(stack.quiet("approve").stdout)) return true;
+    await sleep(250);
+  }
+  return false;
+};
 /** What desolate's reviewer answers, asked as the host asks it (as root): its lines
  *  (shared/review-account.ts), progress and then the one answer. */
 const askReviewer = (request: Record<string, unknown>) =>
@@ -151,7 +193,8 @@ const attempt = (tries) => {
   const socket = connect("/run/desolate/pusher/control.sock");
   let answer = "";
   let connected = false;
-  socket.on("data", (c) => { answer += c; if (answer.includes("\\n")) { console.log(answer.split("\\n")[0]); process.exit(0); } });
+  // Lines saying how far it is come first ({"progress"}); the answer is the line after them.
+  socket.on("data", (c) => { answer += c; for (const line of answer.split("\\n").slice(0, -1)) if (!("progress" in JSON.parse(line))) { console.log(line); process.exit(0); } });
   socket.on("error", (e) => { if (!connected && tries > 0) setTimeout(() => attempt(tries - 1), 500); else { console.log(JSON.stringify({ ok: false, error: "no answer: " + e.message })); process.exit(0); } });
   socket.on("connect", () => {
     connected = true;
@@ -301,25 +344,29 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     const json = JSON.parse(
       stack.quiet("review", "dev", "acme/widgets", "issue/12", "--json").stdout,
-    ) as { commit: string; files: string[]; pushable: boolean };
+    ) as { commit: string; changes: { items: { path: string }[]; total: number } };
     assert.equal(json.commit, commit);
-    assert.deepEqual(json.files.sort(), ["README.md", "new.bin"]);
+    assert.deepEqual(json.changes.items.map((c) => c.path).sort(), ["README.md", "new.bin"]);
+    assert.equal(json.changes.total, 2);
   });
 
-  it("a push is impossible without a person: every automation path is tried, and refused", () => {
+  it("a push is impossible without a person: every automation path is tried, and refused", async () => {
     stack.step("automation tries to push");
     // 1. The CLI, driven by a script: no terminal.
     const cli = stack.desolate("push", "dev", "acme/widgets", "issue/12", "--expect", commit);
     assert.equal(cli.code, 78);
     assert.match(cli.stderr, /there is no terminal to ask on/);
     assert.match(cli.stderr, /no person confirmed the push, so nothing was pushed/);
-    // 2. Raw git in the root clone: it asks for an approval on the host, none comes, it gives up.
-    const raw = inRootClone(
-      `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/issue/12 2>&1`,
+    // 2. Raw git in the root clone: it asks for an approval on the host, and waits for as long
+    //    as it is waited for; none comes, and stopped, it takes its request with it.
+    const raw = await rawPushWaiting(`${commit}:refs/heads/issue/12`, "automation-push");
+    assert.match(raw.said(), /needs your approval, given on the host, outside every VM/);
+    const killed = raw.stop();
+    assert.ok(
+      await nothingWaits(),
+      `stopped, it is no longer waiting on the host\n${killed}\n${raw.ps()}\n${raw.said()}`,
     );
-    assert.notEqual(raw.code, 0);
-    assert.match(raw.stdout, /needs your approval, given on the host, outside every VM/);
-    assert.match(raw.stdout, /no person approved the push on the host, so nothing was pushed/);
+    assert.equal(forgeRefs("acme/widgets")["issue/12"], undefined);
     // 3. Skipping desolate's hook: straight to the remote's own address, around desolate's
     //    helper and its hook. This user has no way to a write key at all (the pusher does).
     const noVerify = inRootClone(
@@ -626,6 +673,26 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       forgeRefs("acme/widgets")["f6-control"],
       controlCommit,
       "control: the approved pack lands",
+    );
+    // Once the pusher is done with it, the approval is gone: its claim was the pusher's
+    // connection to the keyring, closed when the push ended. Handed over again (the control
+    // is the push just above, which it allowed), it allows nothing.
+    const reused = toPusher(
+      approved3.id!,
+      controlPack,
+      [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
+      saidControl.sends!.lfs,
+    );
+    assert.equal(reused.ok, false);
+    assert.match(String(reused.error), /holds no live approval/);
+    assert.ok(
+      (audit() as Record<string, unknown>[]).some(
+        (e) =>
+          e.event === "revoked" &&
+          e.approval === approved3.id &&
+          e.why === "the pusher is done with it",
+      ),
+      "the claim ended with the pusher's push",
     );
     assert.equal(forgeHasLfs("acme/widgets", oid), true, "with its LFS object");
     // CONTROL for the checks above that something is NOT on the forge: they see what is.
@@ -1258,7 +1325,9 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
     let waiting = false;
     for (let i = 0; i < 40 && !waiting; i++) {
-      waiting = /waiting up to/.test(inRootClone("cat /tmp/raw-push.log").stdout);
+      waiting = /waiting for it for as long as this push waits/.test(
+        inRootClone("cat /tmp/raw-push.log").stdout,
+      );
       if (!waiting) await sleep(250);
     }
     assert.ok(waiting, "the push is waiting for the host");
@@ -1284,15 +1353,46 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.equal(entries.pop()?.event, "revoked", "the approval did not outlive the push");
     // The default branch is pushed this way too, and waits for the person like any branch
     // (since 2026-11-18; unanswered here, so nothing goes); nothing is ever deleted.
-    const def = inRootClone(
-      `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/main 2>&1`,
+    const def = await rawPushWaiting(`${commit}:refs/heads/main`, "main-push");
+    assert.doesNotMatch(def.said(), /default branch/);
+    assert.match(def.said(), /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    // It waits for as long as its asker does, and no longer: stopped (its terminal closed),
+    // its request goes from the host's list, and the keyring will not take an answer to it,
+    // even one signed with the approver's key. (Control: while it waited, the keyring held it,
+    // refusing an answer only for its signature.)
+    const request = JSON.parse(
+      stack.inRoot(["bash", "-c", "cat /var/lib/desolate/approvals/*.json"]).stdout,
+    ) as { message: string };
+    // (What it says it sends is not what is looked at here: the challenge is.)
+    const text = signedFor(request.message, {
+      commit,
+      squashes: null,
+      pack: "e".repeat(64),
+      lfs: [],
+    });
+    assert.match(
+      String(keyring({ op: "approve", message: text, signature: "" }).error),
+      /signature is not the host approver's/,
+      "control: outstanding while its asker waits",
     );
-    assert.doesNotMatch(def.stdout, /default branch/);
-    assert.match(def.stdout, /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    const killedDef = def.stop();
+    assert.ok(
+      await nothingWaits(),
+      `stopped, it is no longer listed on the host\n${killedDef}\n${def.ps()}\n${def.said()}`,
+    );
+    const hostKey = createPrivateKey(
+      fs.readFileSync(path.join(stack.home, "approver", "key"), "utf8"),
+    );
+    const late = keyring({
+      op: "approve",
+      message: text,
+      signature: sign("sha256", Buffer.from(text), hostKey).toString("base64"),
+    });
+    assert.equal(late.ok, false);
+    assert.match(String(late.error), /not outstanding/);
     assert.notEqual(forgeRefs("acme/widgets")["main"], commit, "unapproved: not pushed");
     assert.match(
-      inRootClone("DESOLATE_APPROVAL_WAIT_MS=1500 git push origin :refs/heads/raw-push 2>&1")
-        .stdout,
+      inRootClone("git push origin :refs/heads/raw-push 2>&1").stdout,
       /deleting a branch on the remote is not something desolate does/,
     );
     assert.equal(forgeRefs("acme/widgets")["raw-push"], commit);
@@ -1346,11 +1446,15 @@ echo "=====waits"; cat /tmp/waits.lines`,
       branch: string;
       commit: string;
       onto: string | null;
-      summary: {
-        ok: boolean;
+      /** The token over the account the page was given: a click names it. */
+      shown?: string;
+      review: {
+        working?: { phase: string };
         error?: string;
-        commits?: { commit: string; subject: string }[];
-        files?: { path: string }[];
+        account?: {
+          commits: { items: { commit: string; subject: string }[]; total: number };
+          files: { items: { path: string }[]; total: number };
+        };
       };
     };
     const waitingFor = async (branch: string) => {
@@ -1360,7 +1464,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
           (p) => p.branch === branch,
         );
         // (The reviewer's account comes in the background: the page says it is coming.)
-        if (found && !(found.summary as { waiting?: boolean }).waiting) return found;
+        if (found && !found.review.working) return found;
         await sleep(250);
       }
       return null;
@@ -1370,7 +1474,12 @@ echo "=====waits"; cat /tmp/waits.lines`,
         "POST",
         `/${what}`,
         { ...asPage, origin: ORIGIN, "content-type": "application/json" },
-        JSON.stringify({ nonce: push.nonce, token: push.token, commit: push.commit }),
+        JSON.stringify({
+          nonce: push.nonce,
+          token: push.token,
+          shown: push.shown,
+          commit: push.commit,
+        }),
       );
 
     inRootClone(
@@ -1381,16 +1490,16 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.equal(push!.commit, commit);
     assert.equal(push!.onto, null, "a new branch");
     // What the reviewer says the push is: from commit ids the host gave it, and the forge.
-    assert.equal(push!.summary.ok, true, String(push!.summary.error));
+    assert.ok(push!.review.account, String(push!.review.error));
     // The commit reached the remote above (issue/12): nothing new to list, from the forge's
     // own account; the files are against the remote's default branch.
     assert.deepEqual(
-      push!.summary.commits,
+      push!.review.account!.commits.items,
       [],
       "the remote has every commit already, and the reviewer says so",
     );
     assert.ok(
-      push!.summary.files!.some((f) => f.path === "big.bin" || f.path === "README.md"),
+      push!.review.account!.files.items.some((f) => f.path === "big.bin" || f.path === "README.md"),
       "the files it changes against the default branch",
     );
     // In a real browser: the card is drawn as text, and Approve waits for a person.
@@ -1469,9 +1578,9 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
     const large = await waitingFor("web-large");
     assert.ok(large, inRootClone("cat /tmp/web-large.log").stdout);
-    assert.equal(large!.summary.ok, true, String(large!.summary.error).slice(0, 300));
+    assert.ok(large!.review.account, String(large!.review.error));
     assert.deepEqual(
-      large!.summary.commits!.map((c) => c.subject),
+      large!.review.account!.commits.items.map((c) => c.subject),
       ["a large file"],
     );
     assert.equal((await act("refuse", large!)).status, 200);
@@ -1577,7 +1686,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         },
       }),
     );
-    fs.symlinkSync("/etc/passwd", path.join(sync, "zz-evil.bundle"));
+    fs.symlinkSync("/etc/passwd", path.join(sync, "zz-link.bundle"));
     fs.writeFileSync(path.join(sync, "zy-garbage.bundle"), "this is not a bundle");
     const lied = inRootClone(
       "git fetch dev 2>&1; git for-each-ref --format='%(refname)' refs/remotes/dev refs/desolate; ls /desolate/root/acme/widgets/.git/refs/remotes/dev",
@@ -1592,12 +1701,12 @@ echo "=====waits"; cat /tmp/waits.lines`,
     // what it pointed at is never opened, and the person is told something was dropped.
     assert.match(
       lied.stdout,
-      /2 file\(s\) in dev's outbox were not plain bundle files and were dropped|was refused and dropped/,
+      /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/,
       lied.stdout,
     );
     assert.ok(
-      !fs.existsSync(path.join(sync, "zz-evil.bundle")) &&
-        fs.lstatSync(path.join(sync, "zz-evil.bundle"), { throwIfNoEntry: false }) === undefined,
+      !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
+        fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
       "the link itself is gone from the outbox",
     );
     assert.match(
@@ -1606,6 +1715,52 @@ echo "=====waits"; cat /tmp/waits.lines`,
       /^root:1\n$/,
       "and what it pointed at is as it was",
     );
+  });
+
+  it("a domain's list of branches is taken whole or refused out loud: none is cut, and none pruned on a part", () => {
+    stack.step("a domain with many branches");
+    // (The workspace's daemon is stopped, above: what is in the outbox is what this writes.)
+    const sync = path.join(stack.home, "domains/dev/outbox/sync/acme/widgets");
+    const kept = fs.readFileSync(path.join(sync, "refs.json"), "utf8");
+    const many = Object.fromEntries(Array.from({ length: 6000 }, (_, i) => [`many/b${i}`, commit]));
+    const countMany = () =>
+      Number(
+        inRootClone("git for-each-ref --format=x refs/remotes/dev/many/ | wc -l").stdout.trim(),
+      );
+    // More than the old cut of 5,000: every one arrives.
+    fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
+    const fetched = inRootClone("git fetch --prune dev 2>&1");
+    assert.equal(fetched.code, 0, fetched.stdout);
+    assert.equal(countMany(), 6000, "control: a long list, whole");
+    // Past the list's bound (4 MiB): the fetch fails, says which bound, and prunes nothing.
+    fs.writeFileSync(
+      path.join(sync, "refs.json"),
+      JSON.stringify({ refs: { "many/b0": commit }, pad: "x".repeat(4 * 1024 * 1024) }),
+    );
+    const refused = inRootClone("git fetch --prune dev 2>&1");
+    assert.notEqual(refused.code, 0, "a list that cannot be read whole fails the fetch");
+    assert.match(
+      refused.stdout,
+      /acme\/widgets's list of branches \(refs\.json\) is \d+ bytes, over the 4194304 allowed/,
+    );
+    assert.equal(countMany(), 6000, "and no branch was pruned on it");
+    // A bundle whose header (its list of refs) is past the same bound: refused as that.
+    fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
+    const line = `${commit} refs/heads/b\n`;
+    fs.writeFileSync(
+      path.join(sync, "zz-header.bundle"),
+      `# v2 git bundle\n${line.repeat(Math.ceil((4 * 1024 * 1024) / line.length))}\nPACK`,
+    );
+    const header = inRootClone("git fetch dev 2>&1");
+    assert.match(
+      header.stdout,
+      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/,
+    );
+    // Control: the list as the workspace wrote it, and the many branches it does not name
+    // are pruned, as an honest list says.
+    fs.writeFileSync(path.join(sync, "refs.json"), kept);
+    assert.equal(inRootClone("git fetch --prune dev 2>&1").code, 0);
+    assert.equal(countMany(), 0, "an honest list prunes what it does not name");
   });
 
   it("a person moves work between domains through the root: git push <domain> delivers", () => {
@@ -1807,6 +1962,51 @@ echo "=====waits"; cat /tmp/waits.lines`,
       /deleting a branch is not something a workspace does/,
     );
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");
+  });
+
+  it("an offer of more LFS objects than the old cap of 2,000 is taken whole, and reviewed whole", () => {
+    stack.step("an offer of 2,001 LFS objects");
+    // (Before, the root took the first 2,000 an offer named and then found the commits
+    // pointing at one it did not have: refused, and "offer again" refused it again. The
+    // control is the first offer here, of one object, taken the same way.)
+    const work = inWs(
+      "dev/w1",
+      `cd ${WT} && git fetch -q && git switch -q -c lfs/many origin/main && mkdir many && for i in $(seq 1 2001); do echo "object $i" > many/$i.bin; done && git add many && git commit -qm 'many LFS objects' && git rev-parse HEAD`,
+    );
+    assert.equal(work.code, 0, work.stderr);
+    const tip = work.stdout.trim().split("\n").pop()!;
+    const offered = stack.desolate(
+      "exec",
+      "dev/w1",
+      "--checkout",
+      "acme/widgets",
+      "--",
+      "desolate",
+      "offer",
+    );
+    assert.equal(offered.code, 0, offered.stdout + offered.stderr);
+    assert.match(
+      offered.stdout,
+      /offered acme\/widgets lfs\/many at [0-9a-f]{12}, with 2001 LFS object\(s\)/,
+    );
+    const offers = JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as {
+      branch: string;
+      commit: string;
+      lfs: number;
+    }[];
+    assert.deepEqual(
+      offers.filter((o) => o.branch === "lfs/many").map((o) => [o.commit, o.lfs]),
+      [[tip, 2001]],
+      "the root took it, with every object",
+    );
+    const review = JSON.parse(
+      stack.quiet("review", "dev", "acme/widgets", "lfs/many", "--json").stdout,
+    ) as { lfsObjects: number; changes: { total: number }; commits: { total: number } };
+    assert.deepEqual(
+      [review.lfsObjects, review.changes.total, review.commits.total],
+      [2001, 2001, 1],
+      "and the review counts every one",
+    );
   });
 
   it("the transcript reads as reviewed", () => {

@@ -41,7 +41,8 @@ if ! holds "$domain"; then
   desolate domain "$domain" secret copy "$SECRET" --from "$from"
 fi
 
-# 2. The workspace, as for any task (agent.sh's steps 1 and 2; its options are agent.sh's).
+# 2. The workspace, as for any task (agent.sh's steps 1 and 2; its options are agent.sh's;
+#    its name, when none is given, is name.sh's).
 name='' branch='' at=() existing=''
 while [ $# -gt 0 ]; do
   case $1 in
@@ -53,16 +54,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -z "$existing" ] || [ -n "$name" ] || usage
-if [ -z "$name" ]; then
-  base=$(printf '%s' "$task" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//')
-  if [ ${#base} -gt 30 ]; then   # at most 30 characters, in whole words where it can
-    cut=${base:0:31} whole=${cut%-*}
-    if [ "$whole" != "$cut" ] && [ ${#whole} -ge 12 ]; then base=$whole; else base=${base:0:30}; base=${base%-}; fi
-  fi
-  base=${base:-task} name=$base
-  taken=$(desolate list "$domain" --json | jq -r '.[].workspaces[].workspace')
-  for n in 2 3 4 5 6 7 8 9; do grep -qxF "$name" <<<"$taken" || break; name="${base:0:27}-$n"; done
-fi
+[ -n "$name" ] || name=$("$here/name.sh" "$domain" "$task")
 w=$domain/$name
 if [ -z "$existing" ]; then
   branch=${branch:-task/$name}

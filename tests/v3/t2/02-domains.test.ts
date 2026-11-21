@@ -7,7 +7,7 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { bootstrap, git, newStack } from "../lib/harness.ts";
+import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
@@ -380,6 +380,93 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
       /one 60/,
       "the main checkout carries on from the domain's clone",
     );
+  });
+
+  // The init lock (workspace/init.ts) is on the share: held by a beat, not by its age
+  // (shared/lock.ts, scope "share"), and waited for with no timer. The host, for its part,
+  // waits for as long as the step says it is still waiting, and no longer once it says
+  // nothing (host/workspaces.ts, QUIET_BEATS: two minutes).
+  it("an init lock is waited for while its holder lives, past the host's patience for silence; a silent step is stopped; a dead holder's lock is taken at once", async () => {
+    const LOCK = "/workspaces/.desolate/locks/acme--widgets";
+    // Another workspace of the domain holds the lock, as its own init would, for `seconds`.
+    const hold = (seconds: number) =>
+      inWs(
+        "nests-dev/taker",
+        `setsid nohup node --disable-warning=ExperimentalWarning --input-type=module -e "
+          import { withLock } from '/desolate/release/shared/lock.ts';
+          await withLock('${LOCK}', () => new Promise((r) => setTimeout(r, ${seconds * 1000})), { scope: 'share' });
+        " holds-the-init-lock >/tmp/holder.log 2>&1 </dev/null &
+        for _ in $(seq 1 100); do [ -d ${LOCK} ] && exit 0; sleep 0.1; done; cat /tmp/holder.log; exit 1`,
+      );
+    const up = (name: string) =>
+      new Promise<{ code: number; stderr: string; ms: number }>((resolve) => {
+        const began = Date.now();
+        const child = spawn(
+          path.join(REPO_ROOT, "release", "cli.sh"),
+          ["up", "nests-dev", "--name", name, "--checkout", `acme/widgets=worktree:${name}`],
+          { env: { ...stack.env, DESOLATE_PROGRESS: "1" }, stdio: ["ignore", "ignore", "pipe"] },
+        );
+        let stderr = "";
+        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.on("close", (code) => resolve({ code: code ?? 1, stderr, ms: Date.now() - began }));
+      });
+    const waitingFor =
+      /^progress: {3}waiting for \S+ to finish making its checkouts of acme\/widgets/m;
+
+    // A start that is not waiting for anyone: how long one takes here.
+    const alone = await up("alone");
+    assert.equal(alone.code, 0, alone.stderr);
+    assert.doesNotMatch(alone.stderr, waitingFor);
+
+    // A live holder for 150 s: longer than the host lets a step go silent. The start waits,
+    // saying for whom, and comes up once the lock is let go.
+    assert.equal(hold(150).code, 0, "the holder took the lock");
+    const waited = await up("waited");
+    assert.equal(waited.code, 0, waited.stderr);
+    assert.match(waited.stderr, waitingFor, "it says whom it waits for");
+    assert.match(waited.stderr, /^progress: {3}still waiting for \S+ .*\(\d+ (s|min) so far\)$/m);
+    assert.ok(waited.ms >= 140_000, `it waited for the live holder (${waited.ms} ms)`);
+
+    // A step that stops saying anything (its process stopped, as in a VM that froze) is not
+    // waited on for ever: two minutes of silence, and the start fails, saying so.
+    assert.equal(hold(600).code, 0);
+    const frozen = up("frozen");
+    // Its init is stopped as soon as it runs (it is then waiting for the lock, or about to).
+    // (The pattern's brackets: so that pkill does not match the shell that runs it.)
+    for (let i = 0; i < 600; i++) {
+      let vm = "";
+      try {
+        vm = vmOf("nests-dev/frozen");
+      } catch {
+        /* not planned yet */
+      }
+      const stopped = vm
+        ? stack.inVm(vm, ["bash", "-c", "pkill -STOP -f '[w]orkspace/init.ts'"], { root: true })
+        : { code: 1 };
+      if (stopped.code === 0) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    const silent = await frozen;
+    assert.notEqual(silent.code, 0, "a start whose step went silent fails");
+    assert.match(silent.stderr, /nothing from the workspace's VM for 2 min: stopped/);
+
+    // CONTROL for the live holder: the same holder, killed. Its beat stops, and the next
+    // start takes the lock within a few beats, not after the old two-minute age.
+    assert.equal(
+      inWs(
+        "nests-dev/taker",
+        "pkill -9 -f '[h]olds-the-init-lock'; sleep 1; ! pgrep -f '[h]olds-the-init-lock'",
+      ).code,
+      0,
+    );
+    const taken = await up("taken");
+    assert.equal(taken.code, 0, taken.stderr);
+    assert.ok(
+      taken.ms < alone.ms + 30_000,
+      `a dead holder's lock is taken at once (${taken.ms} ms; alone ${alone.ms} ms)`,
+    );
+    for (const name of ["alone", "waited", "taken"])
+      assert.equal(stack.quiet("rm", `nests-dev/${name}`).code, 0);
   });
 
   it("a domain is removed only when no workspace is left in it; the root keeps its own clone", () => {
