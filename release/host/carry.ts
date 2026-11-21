@@ -73,6 +73,8 @@ export const keepRootState = async (out: Out): Promise<boolean> => {
   fs.mkdirSync(KEPT_DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(KEPT_DIR, 0o700);
   const partial = `${KEPT}.partial`;
+  // One a `destroy` stopped halfway left (Ctrl-C, a crash) holds part of the keys: gone first.
+  fs.rmSync(partial, { force: true });
   // The archive goes from tar to the file as it comes, so it is whatever size the root's
   // state is (it once came back as one base64 string, which run() stops at 192 MiB). No
   // timer (R4): it reads the root's own disk, and the person who ran `destroy` is waiting.
@@ -219,6 +221,8 @@ const domainsOnHost = () => {
  *  has keys is the truth, and the archive is left where it is, and said. Returns whether
  *  anything was put back; the caller restarts the root's services then. */
 export const restoreRootState = async (out: Out, rootHoldsKeys: boolean): Promise<boolean> => {
+  // Part of an archive a `destroy` stopped halfway left is no copy of anything: not kept.
+  fs.rmSync(`${KEPT}.partial`, { force: true });
   if (!fs.existsSync(KEPT)) return false;
   if (rootHoldsKeys) {
     out(

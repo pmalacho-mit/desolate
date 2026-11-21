@@ -424,7 +424,8 @@ describe("T2 phase 1: the root VM", () => {
     // A stand-in for the root's CLI service, at its socket: it answers `repo.fetch` slowly,
     // and hands every other request to the real service (moved aside for the test). The
     // host may hear nothing for 3 seconds (the setting): the slow fetch takes 6, and says
-    // what it is doing each second; the silent one says nothing for 8.
+    // what it is doing each second; the silent one says nothing for ten minutes, and the
+    // call must end at the host's 3 seconds, not when the root finishes.
     const dir = "/run/desolate/rootctl";
     const standIn = (silent: boolean) =>
       [
@@ -432,7 +433,7 @@ describe("T2 phase 1: the root VM", () => {
         `case "$line" in *'"repo.fetch"'*) ;; *) { printf '%s\\n' "$line"; cat; } | socat - UNIX-CONNECT:${dir}/rootctl.sock.real; exit ;; esac`,
         `echo '{"accepted":true}'`,
         silent
-          ? "sleep 8"
+          ? "sleep 600"
           : `for i in 1 2 3 4 5 6; do sleep 1; echo "{\\"progress\\":\\"still fetching: $i of 6\\"}"; done`,
         `echo '{"reply":{"ok":true,"result":{"branches":1,"lfsObjects":1}}}'`,
       ].join("\n") + "\n";
@@ -450,7 +451,7 @@ describe("T2 phase 1: the root VM", () => {
       stack.inRoot([
         "bash",
         "-c",
-        `kill $(cat /tmp/stand-in.pid) 2>/dev/null; cd ${dir} && rm -f rootctl.sock && mv rootctl.sock.real rootctl.sock`,
+        `kill $(cat /tmp/stand-in.pid) 2>/dev/null; pkill -f 'bash /tmp/stand-in[.]sh'; cd ${dir} && rm -f rootctl.sock && mv rootctl.sock.real rootctl.sock`,
       ]);
     stack.env.DESOLATE_ROOT_SILENT_SECONDS = "3";
     try {
@@ -464,6 +465,7 @@ describe("T2 phase 1: the root VM", () => {
       const silent = stack.desolate("fetch", "acme/widgets");
       unserve();
       assert.notEqual(silent.code, 0);
+      assert.ok(silent.ms < 60_000, `given up after ${silent.ms} ms, not at the silence`);
       assert.match(silent.stderr, /the root said nothing for 3 seconds while asked 'repo\.fetch'/);
       assert.match(silent.stderr, /root\.silentSeconds/);
     } finally {

@@ -1,4 +1,5 @@
 // The stack as the host sees it: which backend, the root VM, and the CLI channel to it.
+import { spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -200,11 +201,13 @@ export const ROOT_SILENT_SECONDS = define({
 /** The calls that are not waited on in that way, by operation: each is answered by the root
  *  at once from what it already holds (no forge, no repository walked), and is made where
  *  nobody is watching it (the daemon's own looks at the root, every few seconds) or to learn
- *  whether the root answers at all (bootstrap's and doctor's probes). For these, silence
- *  for this long is the answer "the root is not answering": the daemon looks again, a probe
- *  reports it. Milliseconds. Thirty seconds is a root that is up and busy many times over
- *  (measured on the M1: 100 ms a call to the service, 240 ms the old way); the three at
- *  sixty do more than read: */
+ *  whether the root answers at all (bootstrap's and doctor's probes). For these, no answer
+ *  within this long is the answer "the root is not answering": the daemon looks again, a
+ *  probe reports it. It is a total, not a silence: the other end of the call is the root's
+ *  ordinary user, which is not trusted, and a byte now and then would keep a silence timer
+ *  from ever firing, on a call no person is there to stop. Milliseconds. Thirty seconds is a
+ *  root that is up and busy many times over (measured on the M1: 100 ms a call to the
+ *  service, 240 ms the old way); the three at sixty do more than read: */
 export const BRIEF = {
   /** is the root there, and its keyring up */
   ping: 30_000,
@@ -227,38 +230,57 @@ const span = (ms: number) =>
 
 type Asked = {
   quiet?: boolean;
+  /** Ended after this long with nothing heard: a whole line of the root's. */
   silenceMs: number;
+  /** Ended after this long in all, for a call nobody watches. */
+  totalMs?: number;
   signal?: AbortSignal;
 };
-/** Why a call was ended from this side, if it was. */
-type Stopped = "silent" | "cancelled" | "flood" | null;
+/** Why a call was ended from this side. */
+type Stopped = "silent" | "late" | "cancelled" | "flood";
 
-/** Ends `child` when nothing has been heard from it for `silenceMs`, when `signal` fires
- *  (whoever asked went away), or when a line of it grows past what `run` would keep. */
-const patience = (child: ChildProcess, asked: Asked) => {
-  let why: Stopped = null;
+/** Ends `child` when no whole line has been heard from it for `silenceMs`, when `totalMs` is
+ *  over, when `signal` fires (whoever asked went away), or when a line of it grows past what
+ *  `run` would keep; and says so to `stopped` at once, so the call ends then, whatever the
+ *  ended program leaves behind. (On Lima the program is limactl, which runs ssh: killed
+ *  alone, it leaves that ssh holding the pipes, and a call that waited for them to close
+ *  would wait for as long as a frozen root does. So what it started is killed with it, as
+ *  its children: a process group of its own would also keep the terminal's Ctrl-C from it.) */
+const patience = (child: ChildProcess, asked: Asked, stopped: (why: Stopped) => void) => {
+  let why: Stopped | null = null;
   const stop = (reason: Stopped) => {
-    why ??= reason;
+    if (why) return;
+    why = reason;
+    over();
+    if (child.pid) spawnSync("pkill", ["-KILL", "-P", String(child.pid)], { stdio: "ignore" });
     child.kill("SIGKILL");
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    stopped(reason);
   };
-  const timer = setTimeout(() => stop("silent"), asked.silenceMs);
+  const silence = setTimeout(() => stop("silent"), asked.silenceMs);
+  const total =
+    asked.totalMs === undefined ? undefined : setTimeout(() => stop("late"), asked.totalMs);
   const cancel = () => stop("cancelled");
+  const over = () => {
+    clearTimeout(silence);
+    clearTimeout(total);
+    asked.signal?.removeEventListener("abort", cancel);
+  };
   asked.signal?.addEventListener("abort", cancel, { once: true });
   if (asked.signal?.aborted) cancel();
   return {
-    heard: () => void timer.refresh(),
+    heard: () => void silence.refresh(),
     flood: () => stop("flood"),
     why: () => why,
-    over: () => {
-      clearTimeout(timer);
-      asked.signal?.removeEventListener("abort", cancel);
-    },
+    over,
   };
 };
 
 /** The refusal of a call this side ended. It may have run: what was asked for is the root's
  *  to finish or not, and nothing here can say which. */
-const gaveUp = (op: string, why: Exclude<Stopped, null>, asked: Asked): Refusal =>
+const gaveUp = (op: string, why: Stopped, asked: Asked): Refusal =>
   why === "cancelled"
     ? new Refusal(
         `'${op}' was stopped: whoever asked the root for it went away. It may have run`,
@@ -269,10 +291,15 @@ const gaveUp = (op: string, why: Exclude<Stopped, null>, asked: Asked): Refusal 
           `the root's answer to '${op}' was stopped: it is over the ${formatBytes(RUN_MAX)} this side keeps of one answer`,
           "desolate doctor",
         )
-      : new Refusal(
-          `the root said nothing for ${span(asked.silenceMs)} while asked '${op}': the call was given up. '${op}' may have run, or be running still`,
-          `desolate doctor; then look before asking again. (How long the root may be silent is the setting ${ROOT_SILENT_SECONDS.name}: ${ROOT_SILENT_SECONDS.env}=<seconds>)`,
-        );
+      : why === "late"
+        ? new Refusal(
+            `the root did not answer '${op}' within ${span(asked.totalMs!)}: the call was given up. It may have run`,
+            "desolate doctor; then look before asking again",
+          )
+        : new Refusal(
+            `the root said nothing for ${span(asked.silenceMs)} while asked '${op}': the call was given up. '${op}' may have run, or be running still`,
+            `desolate doctor; then look before asking again. (How long the root may be silent is the setting ${ROOT_SILENT_SECONDS.name}: ${ROOT_SILENT_SECONDS.env}=<seconds>)`,
+          );
 
 /** Progress from the root, shown to the person as it comes: text another wrote, made safe. */
 const show = (line: string) => process.stderr.write(`${forTerminal(line)}\n`);
@@ -289,23 +316,37 @@ const viaService = <T>(
   op: string,
   args: Record<string, unknown>,
   asked: Asked,
-): Promise<Reply<T> | Exclude<Stopped, null> | null> =>
+): Promise<Reply<T> | Stopped | null> =>
   new Promise((resolve) => {
     const child = backend().spawn(ROOT_VM, ["socat", "-", `UNIX-CONNECT:${ROOTCTL_SOCKET}`]);
-    const waiting = patience(child, asked);
     let buffer = "";
     let accepted = false;
     let settled = false;
-    const settle = (answer: Reply<T> | Exclude<Stopped, null> | null) => {
+    // (Defined before `waiting`: a signal that has already fired settles while it is made.)
+    let waiting: ReturnType<typeof patience> | undefined;
+    const settle = (answer: Reply<T> | Stopped | null) => {
       if (settled) return;
       settled = true;
-      waiting.over();
-      child.stdin!.end();
+      waiting?.over();
+      if (!child.stdin!.destroyed) child.stdin!.end();
       resolve(answer);
     };
+    waiting = patience(child, asked, settle);
+    // Taken and not answered: the operation may have run. Said, never asked again.
+    const ended = () =>
+      settle(
+        waiting!.why() ??
+          (accepted
+            ? {
+                ok: false,
+                error: `the root took '${op}' and its answer was lost: it may have run`,
+                fix: "desolate doctor; then look before asking again",
+                code: 1,
+              }
+            : null),
+      );
     child.stdout!.setEncoding("utf8");
     child.stdout!.on("data", (chunk: string) => {
-      waiting.heard();
       buffer += chunk;
       for (let end = buffer.indexOf("\n"); end >= 0; end = buffer.indexOf("\n")) {
         const line = buffer.slice(0, end);
@@ -317,33 +358,22 @@ const viaService = <T>(
             reply?: Reply<T>;
             stale?: boolean;
           };
+          waiting!.heard();
           if (message.accepted) accepted = true;
           if (typeof message.progress === "string" && !asked.quiet) show(message.progress);
           if (message.reply) settle(message.reply);
-          else if (message.stale) settle(null);
+          else if (message.stale && !accepted) settle(null);
         } catch {
           /* not a line of the service's */
         }
       }
       // (In UTF-16 units: at least that many bytes.)
-      if (buffer.length > RUN_MAX) waiting.flood();
+      if (buffer.length > RUN_MAX) waiting!.flood();
     });
     child.stderr!.on("data", () => {});
     child.stdin!.on("error", () => {});
-    child.on("error", () => settle(null));
-    child.on("close", () => {
-      const why = waiting.why();
-      if (why) settle(why);
-      // Taken and not answered: the operation may have run. Said, not asked again.
-      else if (accepted)
-        settle({
-          ok: false,
-          error: `the root took '${op}' and its answer was lost: it may have run`,
-          fix: "desolate doctor; then look before asking again",
-          code: 1,
-        });
-      else settle(null);
-    });
+    child.on("error", ended);
+    child.on("close", ended);
     child.stdin!.write(JSON.stringify({ op, args }) + "\n");
   });
 
@@ -352,12 +382,17 @@ const viaService = <T>(
 const viaExec = <T>(op: string, args: Record<string, unknown>, asked: Asked): Promise<Reply<T>> =>
   new Promise((resolve, reject) => {
     const child = backend().spawn(ROOT_VM, [...NODE, `${guest.release}/root/rootctl.ts`]);
-    const waiting = patience(child, asked);
     let stdout = "";
     let stderr = "";
     let shown = 0;
+    let settled = false;
+    const waiting = patience(child, asked, (why) => {
+      if (settled) return;
+      settled = true;
+      reject(gaveUp(op, why, asked));
+    });
     const hear = (chunk: string) => {
-      waiting.heard();
+      if (chunk.includes("\n")) waiting.heard();
       if (stdout.length + stderr.length + chunk.length > RUN_MAX) waiting.flood();
     };
     child.stdout!.setEncoding("utf8");
@@ -377,11 +412,11 @@ const viaExec = <T>(op: string, args: Record<string, unknown>, asked: Asked): Pr
     });
     child.stdin!.on("error", () => {});
     const ended = (code: number, said: string) => {
+      if (settled) return;
+      settled = true;
       waiting.over();
       if (!asked.quiet && shown < stderr.length) show(stderr.slice(shown));
       shown = stderr.length;
-      const why = waiting.why();
-      if (why) return reject(gaveUp(op, why, asked));
       try {
         resolve(JSON.parse(stdout.trim().split("\n").pop() ?? "") as Reply<T>);
       } catch {
@@ -414,8 +449,8 @@ const ask = async <T>(op: string, args: Record<string, unknown>, asked: Asked): 
  *
  *  It is waited on for as long as the root keeps saying something, and for
  *  ROOT_SILENT_SECONDS of nothing; `signal` ends it when whoever asked goes away.
- *  `timeoutMs` is for callers not yet moved (host/daemon.ts, host/git-vm.ts): that call's
- *  own silence, in place of the setting. A brief call names no number: `rootctlBrief`. */
+ *  `timeoutMs` is for callers not yet moved (host/daemon.ts, host/git-vm.ts): a total, as it
+ *  always was. A brief call names no number: `rootctlBrief`. */
 export const rootctl = <T = unknown>(
   op: string,
   args: Record<string, unknown> = {},
@@ -424,7 +459,8 @@ export const rootctl = <T = unknown>(
   ask<T>(op, args, {
     quiet: options.quiet,
     signal: options.signal,
-    silenceMs: options.timeoutMs ?? valueOf(ROOT_SILENT_SECONDS) * 1000,
+    silenceMs: valueOf(ROOT_SILENT_SECONDS) * 1000,
+    totalMs: options.timeoutMs,
   });
 
 /** A brief call (BRIEF, above, says which operations and why): nothing of its progress is
@@ -433,7 +469,13 @@ export const rootctlBrief = <T = unknown>(
   op: keyof typeof BRIEF,
   args: Record<string, unknown> = {},
   options: { signal?: AbortSignal } = {},
-): Promise<T> => ask<T>(op, args, { quiet: true, signal: options.signal, silenceMs: BRIEF[op] });
+): Promise<T> =>
+  ask<T>(op, args, {
+    quiet: true,
+    signal: options.signal,
+    silenceMs: BRIEF[op],
+    totalMs: BRIEF[op],
+  });
 
 export const ensureHome = () => {
   for (const dir of [

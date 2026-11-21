@@ -61,7 +61,14 @@ export const runStreamed = (
       : null;
     const written = file
       ? new Promise<string>((done) => {
-          file.on("error", (error) => done(`\n(${options.stdoutTo}: ${error.message})`));
+          // A file that cannot be written (no such folder, a full disk) ends the program: its
+          // output has nowhere to go, and unread it would fill the pipe and stop it forever.
+          file.on("error", (error) => {
+            child.stdout.unpipe(file);
+            child.stdout.resume();
+            child.kill("SIGKILL");
+            done(`\n(${options.stdoutTo}: ${error.message})`);
+          });
           file.on("finish", () => done(""));
         })
       : Promise.resolve("");
@@ -163,6 +170,20 @@ declare namespace runStreamed {
         "1f8b00ff6279746573"
       >,
     ]
+  >;
+  /** a file that cannot be written ends the program (and the answer says which file): it is
+   *  not waited on, its output having nowhere to go */
+  export type Unwritable = Expect<
+    Invoke<
+      typeof runStreamed,
+      [
+        command: "sh",
+        args: ["-c", "head -c 5000000 /dev/zero"],
+        options: { stdoutTo: "/desolate-no-such-dir/out.bin" },
+      ]
+    >,
+    "matches",
+    { code: 1 }
   >;
   /** a program that is not there: 127 and the reason, as run says it */
   export type Missing = Expect<
