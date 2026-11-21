@@ -635,7 +635,9 @@ declare namespace parseMemory {
 export const mebibytes = (min: number, max: number): Parse<number> =>
   taking(`a size from ${min} to ${max} MiB (as 4096, 4096m or 4g)`, (text) => {
     const value = parseMemory(text);
-    return value !== null && value >= min && value <= max ? value : null;
+    // parseMemory rounds to whole MiB, and a bound must not: "1023.6m" is not 1024.
+    const exact = parseFloat(text) * (/g/i.test(text) ? 1024 : 1);
+    return value === exact && value >= min && value <= max ? value : null;
   });
 
 declare namespace mebibytes {
@@ -644,7 +646,10 @@ declare namespace mebibytes {
     Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "4g"]>, "=", 4096>,
     Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "2048"]>, "=", 2048>,
     Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "1536m"]>, "=", 1536>,
+    Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "1.5g"]>, "=", 1536>,
     Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "512m"]>, "=", null>,
+    Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "1023.6m"]>, "=", null>,
+    Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "1.0001g"]>, "=", null>,
     Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "1t"]>, "=", null>,
     Expect<Invoke<Invoke<typeof mebibytes, [min: 1024, max: 65536]>, [text: "lots"]>, "=", null>,
   ];
