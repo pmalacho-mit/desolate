@@ -40,6 +40,8 @@ import {
   gitOk,
   gitStream,
   has,
+  named,
+  pathspec,
   SENSITIVE,
   shown,
 } from "./reviewer-git.ts";
@@ -354,10 +356,19 @@ const commitsOf = async (dir: string, ids: string[]): Promise<AccountCommit[]> =
     }));
 };
 
+/** The NUL-ended names git lists (`-z`), each as its bytes, a character a byte (latin1): a
+ *  path need not be UTF-8, and read as UTF-8 it was another (U+FFFD), which no diff found. */
+const namesOf = async (dir: string, args: string[]): Promise<string[]> => {
+  const said = await gitBytes(dir, args, "");
+  if (!said)
+    throw new Error(`git ${args[0]} could not list the files (it failed, or said over 64 MiB)`);
+  return said.toString("latin1").split("\x00").filter(Boolean);
+};
+
 // ---------------------------------------------------------------- kept accounts
 
 /** An account as the reviewer keeps it, for `page` and `diff`: the account, and the whole of
- *  each list it pages. `raw`: a file's path as git has it (its shown `path` is made safe). */
+ *  each list it pages. `raw`: a file's path as git has it, a character a byte (namesOf). */
 type Kept = {
   repo: string;
   commit: string;
@@ -539,7 +550,7 @@ const account = async (
       .split("\n")
       .filter(isCommit);
     say({ phase: "reading the files changed" });
-    const numstat = await gitOk(dir, [
+    const numstat = await namesOf(dir, [
       "diff",
       "--numstat",
       "-z",
@@ -551,12 +562,12 @@ const account = async (
     ]);
     const files: Kept["files"] = [];
     let core = 0;
-    for (const part of numstat.split("\x00").filter(Boolean)) {
+    for (const part of numstat) {
       const [added, removed, ...name] = part.split("\t");
       const raw = name.join("\t");
       files.push({
         raw,
-        path: shown(raw),
+        path: named(raw),
         added: Number(added) || 0,
         removed: Number(removed) || 0,
         ...(added === "-" ? { binary: true } : {}),
@@ -601,7 +612,7 @@ const account = async (
     // Every file any of the commits changes (a merge: what it changed against all its
     // parents), less the net change: what was changed, then put back.
     say({ phase: "reading the files changed on the way" });
-    const touched = await gitOk(dir, [
+    const touched = await namesOf(dir, [
       "log",
       "--cc",
       "--name-only",
@@ -613,11 +624,9 @@ const account = async (
       ...unknown,
     ]);
     const net = new Set(files.map((f) => f.raw));
-    const between = [
-      ...new Set(touched.split("\x00").filter((name) => name !== "" && !net.has(name))),
-    ]
+    const between = [...new Set(touched.filter((name) => !net.has(name)))]
       .sort()
-      .map((raw) => ({ path: shown(raw), ...(SENSITIVE.test(raw) ? { sensitive: true } : {}) }))
+      .map((raw) => ({ path: named(raw), ...(SENSITIVE.test(raw) ? { sensitive: true } : {}) }))
       .sort((a, b) => Number(Boolean(b.sensitive)) - Number(Boolean(a.sensitive)));
     const first = order.slice(0, PAGE);
     const result: Account = {
@@ -810,13 +819,13 @@ const diff = async (key: string, of: unknown, from: number, say: Say): Promise<A
     typeof (of as { file?: unknown }).file === "string"
   ) {
     const file = (of as { file: string }).file;
-    // By the path as the account shows it: every file that shows so (two names that differ
-    // only in what was made safe are both this one).
+    // By the path exactly as the account shows it: every file that shows so (two names that
+    // differ only in what was made safe are both this one).
     const raws = kept.files.filter((f) => f.path === file).map((f) => f.raw);
     if (raws.length === 0)
       return { error: `the push does not change a file named ${printable(file, 300)}` };
     name = `file:${file}`;
-    args = ["diff", ...DETAILED, ...range, "--", ...raws.map((raw) => `:(literal)${raw}`)];
+    args = ["diff", ...DETAILED, ...range, "--", ...raws.map(pathspec)];
   } else if (
     typeof of === "object" &&
     of !== null &&
