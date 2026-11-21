@@ -419,6 +419,62 @@ describe("T2 phase 1: the root VM", () => {
     assert.match(usage.stderr, /fix: desolate help/);
   });
 
+  it("a call to the root that keeps saying what it does is never given up; one that falls silent is (limits R4)", () => {
+    stack.step("patience: a slow root that says what it is doing, and one that says nothing");
+    // A stand-in for the root's CLI service, at its socket: it answers `repo.fetch` slowly,
+    // and hands every other request to the real service (moved aside for the test). The
+    // host may hear nothing for 3 seconds (the setting): the slow fetch takes 6, and says
+    // what it is doing each second; the silent one says nothing for 8.
+    const dir = "/run/desolate/rootctl";
+    const standIn = (silent: boolean) =>
+      [
+        "IFS= read -r line",
+        `case "$line" in *'"repo.fetch"'*) ;; *) { printf '%s\\n' "$line"; cat; } | socat - UNIX-CONNECT:${dir}/rootctl.sock.real; exit ;; esac`,
+        `echo '{"accepted":true}'`,
+        silent
+          ? "sleep 8"
+          : `for i in 1 2 3 4 5 6; do sleep 1; echo "{\\"progress\\":\\"still fetching: $i of 6\\"}"; done`,
+        `echo '{"reply":{"ok":true,"result":{"branches":1,"lfsObjects":1}}}'`,
+      ].join("\n") + "\n";
+    const serve = (silent: boolean) => {
+      const put = stack.inRoot(["bash", "-c", "cat >/tmp/stand-in.sh"], { input: standIn(silent) });
+      assert.equal(put.code, 0, put.stderr);
+      const started = stack.inRoot([
+        "bash",
+        "-c",
+        `cd ${dir} && { [ -e rootctl.sock.real ] || mv rootctl.sock rootctl.sock.real; } && rm -f rootctl.sock && (setsid socat UNIX-LISTEN:rootctl.sock,fork,mode=600 EXEC:'bash /tmp/stand-in.sh' </dev/null >/dev/null 2>&1 & echo $! >/tmp/stand-in.pid) && for i in $(seq 50); do [ -S rootctl.sock ] && exit 0; sleep 0.1; done; exit 1`,
+      ]);
+      assert.equal(started.code, 0, started.stderr);
+    };
+    const unserve = () =>
+      stack.inRoot([
+        "bash",
+        "-c",
+        `kill $(cat /tmp/stand-in.pid) 2>/dev/null; cd ${dir} && rm -f rootctl.sock && mv rootctl.sock.real rootctl.sock`,
+      ]);
+    stack.env.DESOLATE_ROOT_SILENT_SECONDS = "3";
+    try {
+      serve(false);
+      const slow = stack.desolate("fetch", "acme/widgets");
+      unserve();
+      assert.equal(slow.code, 0, slow.stderr);
+      assert.match(slow.stderr, /still fetching: 6 of 6/);
+      assert.match(slow.stdout, /fetched acme\/widgets/);
+      serve(true);
+      const silent = stack.desolate("fetch", "acme/widgets");
+      unserve();
+      assert.notEqual(silent.code, 0);
+      assert.match(silent.stderr, /the root said nothing for 3 seconds while asked 'repo\.fetch'/);
+      assert.match(silent.stderr, /root\.silentSeconds/);
+    } finally {
+      delete stack.env.DESOLATE_ROOT_SILENT_SECONDS;
+      unserve();
+    }
+    // The control: the real service again, and the setting as it was.
+    const real = stack.desolate("fetch", "acme/widgets");
+    assert.equal(real.code, 0, real.stderr);
+  });
+
   it("the transcript reads as reviewed", () => {
     stack.checkTranscript("t2-01-root");
   });
