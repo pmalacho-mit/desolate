@@ -60,7 +60,10 @@ describe("T1 the root's queue of fetches, one per repository", () => {
     assert.equal(later.behind, true, "a run is under way: the next one is after it");
     gates[2]!.open();
     const answers = await Promise.all(during.map((d) => d.result));
-    assert.ok(answers.every((a) => a === answers[0]), "the ten share one answer");
+    assert.ok(
+      answers.every((a) => a === answers[0]),
+      "the ten share one answer",
+    );
     await tick();
     await tick();
     assert.equal(started.length, 4, "the later asker's run began after it asked");
