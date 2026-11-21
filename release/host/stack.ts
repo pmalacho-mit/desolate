@@ -14,6 +14,7 @@ import { because } from "./failures.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
 import { limaBackend } from "./vm/lima.ts";
+import { vmSize } from "../shared/size.ts";
 import type { Backend, VmSpec } from "./vm/types.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
@@ -144,8 +145,7 @@ export const rootSpec = (): VmSpec => ({
     { host: paths.domains, guest: guest.domains, writable: true },
   ],
   sockets: [],
-  cpus: 2,
-  memoryMiB: 2048,
+  ...vmSize("root"), // its CPUs and memory: settings (shared/size.ts), from this Mac
   diskGiB: 30, // (the base's: a clone's disk cannot be smaller; 20 was never applied)
   labels: { title: "root" },
 });

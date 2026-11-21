@@ -550,6 +550,46 @@ Mac:                 the approval page, or `desolate issue publish <id>`, shows 
   opens with no opener and no referrer. An image is drawn as a link to itself, never loaded.
   Its work is bounded: 64 KiB of unclosed emphasis is parsed in milliseconds (T1 `issues`).
 
+## Settings
+
+What depends on this Mac or on you (a VM's size, how many of something, how often) is a
+setting: declared once, in the file that reads it, with its default and why
+(`shared/settings.ts`). `desolate settings` lists every one: its value, where that came
+from, its default and its why (`--json` for a program).
+
+```bash
+desolate settings                          # each one, its value and why
+desolate settings set root.memoryMiB 4g    # stored on the Mac; it says which restart it needs
+desolate settings unset root.memoryMiB     # back to its default
+```
+
+- **Where a value comes from**, in order: the setting's environment variable, in the process
+  that reads it (a variable in your shell reaches what runs on the Mac); what `desolate
+  settings set` stored (`~/.desolate/settings.json`); its default, which for a size is worked
+  out from this Mac each time it is asked for. A value the setting does not take, from
+  either, is refused with what it takes; it never silently becomes the default.
+- **A setting read in a VM** (the root, the git VM, a workspace) is passed into that VM by the
+  host when it starts it, as a file of root's on the VM's own disk. A workspace, or the root's
+  ordinary user, cannot change what another VM or the Mac reads.
+- **When it applies:** `set` says. A VM's size when that VM starts again (`desolate down`,
+  then `desolate bootstrap`; for the git VM, `desolate git`); a workspace's default size for
+  the workspaces made from then on (one that is made keeps its own: `desolate resize`).
+
+Every setting there is (T1 checks that this table names exactly those):
+
+| setting | variable | read | default | what it changes |
+|---|---|---|---|---|
+| `workspace.cpus` | `DESOLATE_WORKSPACE_CPUS` | on the Mac | half this Mac's cores, 2 to 4 | CPUs a new workspace gets when neither `up --cpus` nor its domain's size says |
+| `workspace.memoryMiB` | `DESOLATE_WORKSPACE_MEMORY_MIB` | on the Mac | a quarter of this Mac's memory, 3 to 8 GiB | memory a new workspace gets when neither `up --memory` nor its domain's size says |
+| `workspace.diskGiB` | `DESOLATE_WORKSPACE_DISK_GIB` | on the Mac | 30 | disk a new workspace gets when neither `up --disk` nor its domain's size says |
+| `root.cpus` | `DESOLATE_ROOT_CPUS` | on the Mac | a quarter of this Mac's cores, 2 to 4 | the root VM's CPUs: it runs every domain's reviews, pushes and fetches |
+| `root.memoryMiB` | `DESOLATE_ROOT_MEMORY_MIB` | on the Mac | an eighth of this Mac's memory, 2 to 4 GiB | the root VM's memory |
+| `git.cpus` | `DESOLATE_GIT_CPUS` | on the Mac | 2 | the git VM's CPUs |
+| `git.memoryMiB` | `DESOLATE_GIT_MEMORY_MIB` | on the Mac | 1.5 GiB | the git VM's memory |
+
+The root's and the git VM's sizes are never set above what this Mac has; their disk is the
+base image's, 30 GiB.
+
 ## What works today, and what does not
 
 "T1" is static and unit: the type check, node's tests, and the in-source tests beside the
