@@ -20,14 +20,13 @@ export const CREATE = { repos: 20, title: 80 } as const;
 const TITLE = new RegExp(`^[\\x20-\\x7e]{1,${CREATE.title}}$`);
 /** How long one argument of a host action may be, in characters (code points). R7: the
  *  root's ordinary user writes them, and the host parses them; one that is not text, or is
- *  longer, refuses the action (never left out of it). A spawn's command is the JSON of what
- *  shared/spawn.ts's LIMIT bounds: each character at JSON's longest escape (`\u0001`, six)
- *  and each word's quotes and comma, so that every command a workspace may sign can be
- *  carried. Its checkouts are 16 of `<owner/repo>=worktree:<branch>` (ASCII, at most 411
+ *  longer, refuses the action (never left out of it). A spawn's command is JSON, which
+ *  shared/spawn.ts's LIMIT.json bounds before it is signed, so every command a workspace
+ *  may sign is carried. Its checkouts are 16 of `<owner/repo>=worktree:<branch>` (ASCII, at most 411
  *  each), as JSON. Create's repos are 20 names of at most 201, comma-separated. Every other
  *  argument is a name, a size or a title. */
 export const ARGUMENT = {
-  command: SPAWN.total * 6 + SPAWN.words * 3 + 2,
+  command: SPAWN.json,
   checkouts: 8_000,
   repos: CREATE.repos * 202,
   other: 200,

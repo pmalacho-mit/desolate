@@ -776,20 +776,31 @@ export const keepApart = (rows: PlanRow[], others: string[] = []): PlanRow[] => 
   const out = rows.map((r) => ({ ...r }));
   const secretRows = out.filter((r) => r.kind === "secret");
   const overlap = (a: string, b: string) => a !== b && (a.includes(b) || b.includes(a));
-  for (const row of secretRows) {
+  // The shortest first: a name that moves for a longer one is then never inside one that
+  // moves after it. (Until 2026-11-21, MY_API_TOKEN, MY_API_TOKEN_2 and API_TOKEN, in that
+  // order, numbered MY-API-TOKEN for ever, and the host's daemon with it: review of #187.)
+  for (const row of [...secretRows].sort((a, b) => a.name!.length - b.name!.length)) {
     const base = row.name!;
-    const rest = () => [...others, ...secretRows.filter((r) => r !== row).map((r) => r.name!)];
+    const rows = () => secretRows.filter((r) => r !== row).map((r) => r.name!);
+    const rest = () => [...others, ...rows()];
     // Only the contained one moves: a name that contains another keeps its own.
     const contained = (name: string) => rest().some((o) => o !== name && o.includes(name));
-    const clashes = (name: string) => rest().some((o) => overlap(o, name));
+    // (Another row's own name is a clash too; a secret the domain has, of the same name, is
+    // this one imported again.)
+    const clashes = (name: string) => rest().some((o) => overlap(o, name)) || rows().includes(name);
     if (!contained(base)) continue;
     // The number goes inside the name's bound: a name at its longest is cut to make room
     // (until 2026-11-21 it went past it, and the root refused the name: review of #187).
     const numbered = (n: number) =>
       `${base.slice(0, SECRET_NAME.most - String(n).length - 1).replace(/-+$/, "")}-${n}`;
-    let n = 1;
-    while (clashes(numbered(n))) n++;
-    row.name = numbered(n);
+    // A number ends what can be ended by one. One that cannot be (the name holds a secret
+    // the domain already has, which no number takes out of it) keeps its name, as a name
+    // that contains another always has.
+    for (let n = 1; n < 100; n++)
+      if (!clashes(numbered(n))) {
+        row.name = numbered(n);
+        break;
+      }
   }
   return out;
 };
@@ -834,6 +845,35 @@ declare namespace keepApart {
     >,
     "matches",
     [{ name: "API-KEY-SECRET-1" }]
+  >;
+  /** three that hold one another, in any order: each kept apart, and it ends (until
+   *  2026-11-21 this order never did) */
+  export type Nested = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [
+          Row<"MY_API_TOKEN", "MY-API-TOKEN">,
+          Row<"MY_API_TOKEN_2", "MY-API-TOKEN-2">,
+          Row<"API_TOKEN", "API-TOKEN">,
+        ],
+      ]
+    >,
+    "matches",
+    [{ name: "MY-API-TOKEN-3" }, { name: "MY-API-TOKEN-2" }, { name: "API-TOKEN-1" }]
+  >;
+  /** one that holds a secret the domain has, which no number takes out: it ends, and keeps
+   *  its name */
+  export type HoldsAnOther = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [Row<"MY_API_TOKEN", "MY-API-TOKEN">, Row<"MY_API_TOKEN_2", "MY-API-TOKEN-2">],
+        others: ["API-TOKEN"],
+      ]
+    >,
+    "matches",
+    [{ name: "MY-API-TOKEN" }, { name: "MY-API-TOKEN-2" }]
   >;
   /** a name at its longest is cut to make room for its number: never past 64, which the
    *  root would refuse */

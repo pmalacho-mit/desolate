@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { actionRefusal, ARGUMENT, CREATE, hostArgv } from "../../../release/shared/actions.ts";
-import { commandOf, LIMIT as SPAWN } from "../../../release/shared/spawn.ts";
+import { commandOf, commandRefusal, LIMIT as SPAWN } from "../../../release/shared/spawn.ts";
 import { parse as parseJsonc } from "../../../release/shared/jsonc.ts";
 import { extensionsOf, forwardsOf, overrideOf } from "../../../release/workspace/devcontainer.ts";
 
@@ -96,13 +96,20 @@ describe("T1 the dashboard's requests to the host", () => {
       ).length,
       20,
     );
-    // Every command a workspace may sign fits the argument that carries it, as JSON, at its
-    // longest: each character escaped (six), in as many words as it may have.
-    const worst = Array.from({ length: SPAWN.words }, (_, i) =>
-      "\u0001".repeat(i < 4 ? SPAWN.word : 0),
+    // Every command a workspace may sign fits the argument that carries it, as JSON: one that
+    // would not is refused before it is signed (until 2026-11-21, four words of control
+    // characters were signed, left out by hostArgv, and the spawn run with no command).
+    const worst = Array.from({ length: 4 }, () => "\u0001".repeat(SPAWN.word));
+    assert.equal(commandOf(worst), null);
+    assert.equal(
+      commandRefusal(worst),
+      "the command's JSON is 393229 characters, over the 200000 allowed",
     );
-    assert.equal(commandOf(worst), worst);
-    assert.ok(JSON.stringify(worst).length <= ARGUMENT.command, `${JSON.stringify(worst).length}`);
+    // The control: at the bound exactly, a command, and carried.
+    const two = Array.from({ length: 2 }, () => "\u0001".repeat(SPAWN.word));
+    const fits = [...two, "x".repeat(ARGUMENT.command - JSON.stringify(two).length - 3)];
+    assert.equal(JSON.stringify(fits).length, ARGUMENT.command);
+    assert.equal(commandOf(fits), fits);
     // The control: a title that is one is passed on, as the person typed it.
     assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "the web app" }), [
       "domain",

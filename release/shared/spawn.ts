@@ -39,7 +39,18 @@ const SKEW_MS = 120_000;
  *  arguments hold, far past any agent's prompt, and far under the system's own argument
  *  limit (1 MiB on macOS). `checkouts`: the `--checkout`s, each a repository the workspace
  *  is given. Choices, generous ones; actions.ts's argument bounds are sized to hold them. */
-export const LIMIT = { words: 64, word: 16_384, total: 65_536, checkouts: 16 } as const;
+export const LIMIT = {
+  words: 64,
+  word: 16_384,
+  total: 65_536,
+  checkouts: 16,
+  /** The command as it is carried, JSON, in characters: what one host action's argument
+   *  holds (actions.ts's ARGUMENT.command), and what every request waiting for the host is
+   *  handed over with. A command of plain text is far under it; one of control characters,
+   *  which JSON writes six characters each, is refused here, before it is signed, rather
+   *  than signed and then not carried (the independent review of #187). */
+  json: 200_000,
+} as const;
 
 /** Why a spawn's command is not one desolate will carry (R3: the bound, and by how much), or
  *  null when it is: for `desolate spawn` to say before it signs, so the agent is told which
@@ -56,7 +67,9 @@ export const commandRefusal = (value: unknown): string | null => {
     if (n > LIMIT.word) return over(`word ${i + 1} of the command`, LIMIT.word, n, "characters");
     total += n;
   }
-  return total > LIMIT.total ? over("the command", LIMIT.total, total, "characters") : null;
+  if (total > LIMIT.total) return over("the command", LIMIT.total, total, "characters");
+  const json = JSON.stringify(value).length;
+  return json > LIMIT.json ? over("the command's JSON", LIMIT.json, json, "characters") : null;
 };
 
 declare namespace commandRefusal {
