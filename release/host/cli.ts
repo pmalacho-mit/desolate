@@ -1,6 +1,6 @@
 // The desolate command, on the host. It drives everything, holds no key, and runs no git on
 // desolate's repositories (P4).
-import { forTerminal, printable } from "../shared/text.ts";
+import { forTerminal } from "../shared/text.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -65,10 +65,10 @@ Your repositories and domains:
   desolate domain <slug> spawn [--max <n>|none]                  limit the workspaces its workspaces start (none: no limit, the default; 0: off)
   desolate domain <slug> stats [--json]                          its workspaces, who started each, its limit, this Mac
   desolate domain <slug> env [--from <owner/repo>]               whose devcontainer.json its workspaces run
-  desolate domain <slug> net [open | enforce | allow <host>... | deny <host>...]
+  desolate domain <slug> net [open | enforce | allow <host>... | deny <host>... | hold <size>]
                                                                  the domain's network rules, at its proxies
-  desolate net log [<domain>] [--json]                           what each workspace asked to reach, and the verdict
-  desolate domain <domain> net recommend                         what it reached that is not on its list
+  desolate net log [<domain>] [--last <n>] [--json]              what each workspace asked to reach, and the verdict
+  desolate domain <domain> net recommend [--all]                 what it reached that is not on its list
   desolate domain <domain> secret set <NAME> --hosts <h>[,...] [--headers <h>[,...]] | copy <NAME> --from <d> | list | off | on [--ttl 30m] | rm | show
                                                                  a secret: the value on stdin, the name in workspaces
   desolate domain <domain> secret import <.env> [--dry-run] [--print-env | --in-place] [--choose KEY=secret:<host>[@<header>] | KEY=value]
@@ -373,32 +373,16 @@ const main = async (argv: string[]): Promise<number> => {
       "print-env": { type: "boolean" },
       "in-place": { type: "boolean" },
       choose: { type: "string", multiple: true },
+      all: { type: "boolean" },
     });
     const { domainCommand } = await import("./domains.ts");
     await domainCommand(positionals, values, out);
     return EXIT.ok;
   }
   if (verb === "net" && rest[0] === "log") {
-    const { values, positionals } = flags(rest.slice(1), {});
-    const { rootctl } = await import("./stack.ts");
-    const entries = await rootctl<
-      {
-        time: string;
-        domain: string;
-        workspace: string;
-        host: string;
-        port: number;
-        verdict: string;
-        reason?: string;
-        secrets?: string[];
-      }[]
-    >("net.log", { domain: positionals[0] }, { quiet: true });
-    if (values.json === true) out(JSON.stringify(entries));
-    else
-      for (const e of entries)
-        out(
-          `${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
-        );
+    const { values, positionals } = flags(rest.slice(1), { last: { type: "string" } });
+    const { netLog } = await import("./domains.ts");
+    await netLog(positionals[0], values, out);
     return EXIT.ok;
   }
   if (verb === "up") {

@@ -234,6 +234,7 @@ export const FEATURES: Feature[] = [
       "release/root/proxy/proxy.ts",
       "release/root/proxy/manage.ts",
       "release/root/proxy/as-proxy.ts",
+      "release/root/proxy/audit.ts",
       "release/root/proxy-user.sh",
       "release/root/wall.sh",
       "release/shared/link.ts",
