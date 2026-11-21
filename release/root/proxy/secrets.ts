@@ -53,14 +53,16 @@ const DIR = `${ROOT.state}/proxy`;
 /** The most of one request or response the add-on holds whole, to put a secret in it or take
  *  one out: past it a body streams (secrets_addon.py), and a request body past it that names
  *  a secret is refused. A body held is in the root VM's memory, and a workspace chooses its
- *  size: the bound is on what one connection may make the root hold. A domain may set its
- *  own (`desolate domain <d> net hold <size>`, in its policy). */
+ *  size: the bound is on what one request may make the root hold, and is at most half the
+ *  root VM's 2 GiB (a held body is in memory two or three times while it is changed). It is
+ *  per request: several at once each hold their own. A domain may set its own (`desolate
+ *  domain <d> net hold <size>`, in its policy). */
 export const HELD_MIB = define({
   name: "secrets.heldMiB",
   env: "DESOLATE_SECRETS_HELD_MIB",
   side: "root",
   default: 256,
-  parse: mebibytes(1, 2048),
+  parse: mebibytes(1, 1024),
   why: "How much of one request or response a domain's secrets proxy holds in the root VM's memory to put a secret in or take one out; past it a body streams, and a request past it that names a secret is refused. A domain may set its own: desolate domain <d> net hold <size>.",
 });
 const MITMDUMP = "/opt/desolate/proxy-venv/bin/mitmdump";

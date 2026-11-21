@@ -54,4 +54,35 @@ assert not refused and VALUE.encode() in out
 # a body that names nothing streams whole, at any bound
 out, refused, _ = watch([b"q" * 100, b"r" * 100], 10, True, lambda n: "hold")
 assert not refused and out == b"q" * 100 + b"r" * 100
+# An empty chunk in the middle of a body of fixed length (an empty HTTP/2 DATA frame) is not
+# its end: a value cut there is still taken out whole.
+s = a.Scrub([(VALUE, NAME)], "", len(body))
+out = b"".join(b"".join(s(p)) for p in (body[:60], b"", body[60:], b""))
+assert out == want, out
+# control: without a fixed length the empty chunk is taken for the end, and the cut value goes
+s = a.Scrub([(VALUE, NAME)], "", None)
+out = b"".join(b"".join(s(p)) for p in (body[:60], b"", body[60:], b""))
+assert out != want
+# the same for a request body: an empty chunk does not end what is held
+out, refused, put = [], [], []
+w = a.Watch([NAME], lambda n: "hold", lambda d, n: d.replace(NAME.encode(), VALUE.encode()),
+            lambda r, n: refused.append(r), 1000, True, "acme", size=len(named))
+out = b"".join(b"".join(w(c)) for c in (named[:40], b"", named[40:], b""))
+assert not refused and out == named.replace(NAME.encode(), VALUE.encode()), out
+
+# A body that undoes to more than the bound is refused, not undone: a few KiB of gzip of zeros
+# stand for many MiB.
+bomb = gzip.compress(b"\0" * (64 * 1024 * 1024))
+assert len(bomb) < 128 * 1024
+try:
+    a.decoded(bomb, "gzip", 8 * 1024 * 1024)
+    raise AssertionError("a body undone past the bound was undone")
+except ValueError as error:
+    assert "over the 8 MiB" in str(error), error
+assert len(a.decoded(bomb, "gzip", 64 * 1024 * 1024)) == 64 * 1024 * 1024, "control: under it, whole"
+s = a.Scrub([(VALUE, NAME)], "gzip", None, 8 * 1024 * 1024)
+assert s(bomb) == [] and s.failed, "streamed, it is withheld"
+# deflate without its zlib header (what some servers send) is undone too
+raw = zlib.compressobj(wbits=-15)
+assert a.decoded(raw.compress(body) + raw.flush(), "deflate", 1 << 20) == body
 print("ok")

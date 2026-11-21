@@ -226,7 +226,7 @@ declare namespace setPolicy {
         >,
         "=",
         {
-          message: "'lots' is not a size from 1 to 2048 MiB (as 4096, 4096m or 4g)";
+          message: "'lots' is not a size from 1 to 1024 MiB (as 4096, 4096m or 4g)";
           fix: "desolate domain acme net hold 512m | default";
           code: 1;
         }

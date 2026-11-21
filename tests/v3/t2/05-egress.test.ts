@@ -330,7 +330,8 @@ kill $pid; ip addr del 10.77.0.1/32 dev lo 2>/dev/null; ip addr del 198.18.7.7/3
     // a host off without a word).
     const pagedAllow = /desolate domain two net allow (.*)/.exec(paged.stdout)![1]!.split(" ");
     assert.equal(pagedAllow.length, 100);
-    assert.ok(!pagedAllow.includes("h120.example.test"));
+    const leftOut = names.filter((name) => !pagedAllow.includes(name));
+    assert.ok(leftOut.length >= 20, `the page leaves out ${leftOut.length} of them`);
     // --all: every host, in a command that allows every one.
     const all = stack.quiet("domain", "two", "net", "recommend", "--all");
     const allow = /desolate domain two net allow (.*)/.exec(all.stdout)![1]!.split(" ");
@@ -343,6 +344,11 @@ kill $pid; ip addr del 10.77.0.1/32 dev lo 2>/dev/null; ip addr del 198.18.7.7/3
       `for h in ${names.join(" ")}; do curl -s -m 10 -o /dev/null -w '%{http_code}\\n' http://$h/; done | sort | uniq -c`,
     );
     assert.match(after.stdout, /^\s*120 200$/m, "all 120 are still reachable once enforced");
+    assert.equal(
+      curl("two/w1", `http://${leftOut[0]}/past-the-page`).stdout.trim(),
+      `upstream http host=${leftOut[0]} path=/past-the-page`,
+      "a host past the first page is reachable too",
+    );
     assert.match(
       curl("two/w1", "http://loop.example.test/").stdout +
         curl("two/w1", "http://api.example.test/x").stdout,

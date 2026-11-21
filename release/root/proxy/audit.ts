@@ -98,17 +98,20 @@ export const auditWriter = (dir: string, budget: number) => {
     const series = auditFiles(dir).filter((name) => name.startsWith(AUDIT.prefix));
     return series.length ? numberOf(series[series.length - 1]!) : 0;
   };
-  /** Begins `n` if nobody has (an exclusive create), and lets go what is past the budget. */
-  const begin = (n: number) => {
+  /** Begins `n` if nobody has (an exclusive create), and lets go what is past the budget.
+   *  False when it is not there to move to (it could not be made): the writer stays. */
+  const begin = (n: number): boolean => {
     try {
       fs.closeSync(fs.openSync(path.join(dir, numbered(n)), "wx"));
-    } catch {
-      /* another writer began it first: it is there */
+    } catch (error) {
+      // EEXIST: another writer began it first, and it is there.
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
     }
     for (const name of auditFiles(dir)) {
       const older = name.startsWith(AUDIT.prefix) ? numberOf(name) : 0;
       if (older <= n - AUDIT.files) fs.rmSync(path.join(dir, name), { force: true });
     }
+    return true;
   };
   return (entry: Record<string, unknown>) => {
     try {
@@ -116,7 +119,8 @@ export const auditWriter = (dir: string, budget: number) => {
       for (let attempt = 0; attempt < 2; attempt++) {
         if (current === 0) {
           current = newest();
-          if (current === 0) begin((current = 1));
+          if (current === 0 && begin(1)) current = 1;
+          if (current === 0) return;
         }
         let fd: number;
         try {
@@ -132,7 +136,7 @@ export const auditWriter = (dir: string, budget: number) => {
         }
         try {
           fs.writeSync(fd, line);
-          if (fs.fstatSync(fd).size > share) begin(++current);
+          if (fs.fstatSync(fd).size > share && begin(current + 1)) current++;
         } finally {
           fs.closeSync(fd);
         }

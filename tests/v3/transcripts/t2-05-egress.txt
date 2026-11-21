@@ -85,6 +85,8 @@ to allow them:
 Read the list before you allow it: a workspace chooses what it asks for.
 [exit 0]
 
+## what to allow, past a page
+
 ## down, and back
 
 $ desolate down

@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 import { SLUG } from "../../../release/shared/names.ts";
 import { AUDIT, auditFiles, auditLines } from "../../../release/root/proxy/audit.ts";
+import { ASKED } from "../../../release/root/proxy/proxy.ts";
 import { PLACEHOLDER } from "../../../release/root/proxy/secret-store.ts";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -40,6 +41,11 @@ describe("the secrets add-on repeats the TypeScript's bounds", () => {
       [AUDIT.prefix, AUDIT.suffix, AUDIT.files],
     );
     assert.equal(compiled("AUDIT_FILE"), `${AUDIT.prefix}([1-9][0-9]{0,15})\\${AUDIT.suffix}`);
+  });
+  it("a name and a reason in the audit log are cut where proxy.ts's are", () => {
+    const match = /^NAME_CHARS, REASON_CHARS = (\d+), (\d+)$/m.exec(ADDON);
+    assert.ok(match, "secrets_addon.py has no NAME_CHARS, REASON_CHARS");
+    assert.deepEqual([Number(match[1]), Number(match[2])], [ASKED.nameChars, ASKED.reasonChars]);
   });
   it("a check above would notice a rule that differs (the control)", () => {
     assert.notEqual(bare(/^[a-z0-9-]{1,80}$/), bare(SLUG));
