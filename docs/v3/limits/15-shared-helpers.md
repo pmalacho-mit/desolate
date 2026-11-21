@@ -17,7 +17,7 @@ contracts), `release/shared/ui/` and the secrets page. The questions and rules a
 | shared/events.ts:198, :211 | status `printable(..., 200)`, issue title `printable(..., 256)` | keep | `NAMES.status` and issues.ts's `LIMIT.title`, the source bounds, named and not copied. |
 | shared/stats.ts:39-67 | `p(text, max = 120)`, and domain 40, title 80, repo 100 and the rest, each cut for width | 1, removed | Names are bounded where they are made. Fitting a line to the screen is the terminal's job. |
 | shared/issues.ts:15 | `LIMIT`: title 256, body 65,536, label 50, labels 20, waiting 50, counted in UTF-16 units while AGENTS.md said "64 KiB" | 4, hard (R7, R8) | Counted in characters (code points), as GitHub counts them. AGENTS.md and reference.md now say 65,536 characters. A title or body over its bound is refused with `over()`: "the title is 257 characters, over the 256 GitHub takes". Labels 20 and waiting 50 remain choices. |
-| shared/envfile.ts:775 (`keepApart`) | numbering a name to keep it apart: no bound on the number or the length | better code | Shorter names are numbered first, and another row's identical name counts as a clash. At most 99 numbers are tried, and the number stays within 64 characters. Before, `MY_API_TOKEN`, `MY_API_TOKEN_2`, `API_TOKEN`, in that order, looped forever in the host's daemon, and a 63-character name grew to 65. |
+| shared/envfile.ts:775 (`keepApart`) | numbering a name to keep it apart: no bound on the number or the length | better code | Shorter names are numbered first, and another row's identical name counts as a clash. At most 99 numbers are tried. Passes repeat while any name moved. The number stays within 64 characters. New `apartRefusal()` names a pair no number can separate, so the import can refuse before it sets anything; host/env-import.ts, which belongs to ticket 11, should call it. Before, `MY_API_TOKEN`, `MY_API_TOKEN_2`, `API_TOKEN`, in that order, looped forever in the host's daemon, and a 63-character name grew to 65. |
 | shared/envfile.ts:318 | secret name cut silently to 64 characters, so two long keys could become one name | 4, hard, plus a hash | A key too long for a name is cut, and the cut ends in `-<8 hex of sha256(key)>`, as `domainNameFor` does. `SECRET_NAME` (8 to 64) and `SECRET_NAME_RULE` are exported. |
 | host/approve-ui/secrets.js:147 | `file.size > 65536`, a copy of host/env-import.ts's `ENV_MAX` | 4, hard; the copy is named | `const ENV_MAX = 65536`, and the message gives the size and the bound. T1 (`tests/v3/t1/secrets-page.test.ts`) checks it equals `ENV_MAX`. |
 | host/approve-ui/secrets.html:24 | name `pattern`, a third copy of the root's rule | 4, hard; the copy is checked | T1 checks the pattern against `SECRET_NAME_RULE` on ten names, checks that the hint states the numbers, and checks that root/proxy/secret-store.ts and secrets_addon.py hold the same rule. |
@@ -62,13 +62,13 @@ contracts), `release/shared/ui/` and the secrets page. The questions and rules a
   all 12 bytes, exit 0. The new one stops it, exit 128.
 
 ## The independent reviews
-Two fresh reviewers, each given the threat model and the code but not my conclusions, read
-the change. The second read the fixes for the first's findings. Fixed, each with a test:
+Three fresh reviewers, each given the threat model and the code but not my conclusions, read
+the change. The second read the fixes for the first's findings, and the third read the fixes for the second's. Fixed, each with a test:
 - `run()`'s chunk-list memory.
 - The synchronous spawn throw, and the `stdoutTo` descriptor it leaked.
 - `hostArgv` leaving out arguments it should refuse.
 - A command signed and then not carried.
-- `keepApart`'s endless loop, and its 65-character names.
+- `keepApart`'s endless loop, its 65-character names, and its one pass.
 
 Not fixed here, with the reasons:
 - **Batched `merge-base` refuses a proposal that reverts `.github/` to an older remote state**
