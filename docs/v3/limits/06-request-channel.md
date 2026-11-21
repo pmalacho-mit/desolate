@@ -55,6 +55,17 @@ domain's requests, as the old loop did, and hands each on:
   is refused ("this domain has 50 fetches waiting already: ask again once one is answered").
   A domain's fetches run at most one per repository it has, a number the person chose.
 
+- **A root clone is worked in by one domain at a time** (`inClone`, a queue per repository):
+  before, the one loop kept every import and offer apart; with lanes, two domains that share
+  a repository would meet on its clone's ref locks. In order, so a domain waits there for at
+  most the one piece of another's work ahead of it.
+- **A request's name used again** while the request of that name is still held is dropped,
+  unanswered: `MOST_HELD` counts what is held by name, and a name written again each pass
+  would otherwise be held again each pass (found by the review below).
+- **Replies are swept once a minute** for a domain, not each pass: a domain that floods its
+  outbox has as many replies, and looking at each, every pass, was its cost on every domain's
+  loop.
+
 Fifty is what the root held of one domain before (the drain's pass), each request up to
 outbox.ts's 1 MiB of JSON: so no domain has more of the root's memory than it could before.
 What a domain's requests ask is checked exactly as before (`answer`, `handle`, `signed`,
@@ -80,6 +91,26 @@ What a domain's requests ask is checked exactly as before (`answer`, `handle`, `
 | `workspace/sync.ts:174` | `Number(size) < 400` | R3 | `LFS_POINTER_BYTES` (1024, git-lfs's own cutoff) |
 | `workspace/sync.ts:340` | `done.slice(-500)`, the record of deliveries imported | 1 | no cut: an id is remembered only while its delivery is still in the inbox, so the record is never longer than the inbox's list (at 500 an older delivery was imported again, moving `root/<branch>` back) |
 
+## What a review found, and what is left
+A reviewer with no part in the change read the diff for holes (as with #169). Fixed here: a
+request name used again got around `MOST_HELD`; two domains' lanes in one root clone; the
+sweep's cost each pass; a waiting message that named a cause the workspace cannot know.
+Left, and why:
+- **An offer's LFS objects are copied on rootd's main thread** (`outbox.ts` `takeLfs`, through
+  `copyOut`'s `readSync` loop, up to 5 GiB an object): while it copies, no domain's requests are
+  taken. The beat goes on (its thread is its own), so every waiter keeps waiting and none is
+  told the root is gone, but one domain's large offer does delay the others for as long as the
+  copy takes. The fix is in `outbox.ts` (an asynchronous copy), which is ticket 5's.
+- **Fetches have no pace.** A domain that fetches in a loop has its repository fetched back to
+  back: every asker is answered by a fetch that began after it asked (a `git fetch` gets what
+  the remote has now), and askers at once share one. Another domain fetching the same
+  repository waits for at most the run under way and the next.
+- **A root rolled back** to code from before the beat leaves the last `rootd.beat` behind: a new
+  workspace then takes that root for stopped after 10 s, instead of waiting 2 minutes. Rolling
+  back the root without the workspaces is not something desolate does.
+- `docs/v3/decisions.md:714` still says "30 requests a minute" (that file is not this ticket's
+  to edit).
+
 ## Tests
 - In-source (`workspace/sync.ts`): `watchBeat` (a beat that moves, one that has stopped, a
   watcher that was paused, the first look) and `verdict` (answered; waits however long, saying
@@ -102,3 +133,12 @@ What a domain's requests ask is checked exactly as before (`answer`, `handle`, `
   - rootd stopped (`kill -STOP`): an offer says "nothing has been heard from the root for
     10 s" within 30 s, and its request is gone from the outbox; the same offer once rootd runs
     again is answered (the control).
+
+## Measured (T2, the fake backend, in a test workspace on the M1; and T4)
+- T2 `24-requests` on `319b449`: 3 of 3. The four-minute fetch and its thirty: 277 s; the
+  flood beside its control: 101 s; the stopped root: 12 s.
+- The whole of T2 on `45fc6ac`: 166 of 167, `24-requests` included (374 s). The one failure is
+  `06-editor`'s real-browser check, which fails the same way on tickets 08's and 12's
+  branches.
+- T4 on `45fc6ac`: 24 of 24 (an offer over a real share, and a spawn and close from a real VM,
+  both through this channel).
