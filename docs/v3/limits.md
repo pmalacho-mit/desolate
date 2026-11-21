@@ -1,10 +1,11 @@
 # Limits: the rules, and the contracts between the layers
 
-The triage of 2026-11-20 ([limits-triage.md](limits-triage.md)) found 483 hard-coded limits in
-`release/`. Most were not decisions. They were a layer bounding something it had not designed:
-a list cut where it should page, a timer where the person should be asked, a number copied
-into five files. This file is what replaces them: the questions each limit is put to, the
-rules that follow, and the small shared modules every layer keeps its end of.
+The triage of 2026-11-20 found 483 hard-coded limits in `release/` (what was done about them
+is in [decisions.md](decisions.md), "The limits effort"). Most were not decisions. They were
+a layer bounding something it had not designed: a list cut where it should page, a timer
+where the person should be asked, a number copied into five files. This file is what
+replaces them: the questions each limit is put to, the rules that follow, and the small
+shared modules every layer keeps its end of.
 
 ## The four questions, in order
 
@@ -237,8 +238,7 @@ stdout or stderr for this long). `timeoutMs`, a total, stays only for callers no
 
 ### `shared/review-account.ts`: the reviewer's account of a push (R1, R2, R4)
 The one type for what desolate's reviewer says a push would send, used by the reviewer, the
-host's approval page and terminal. Today it is written twice (`root/reviewer.ts`,
-`host/approve-web.ts`) and cut in both.
+host's approval page and terminal.
 ```ts
 /** One line of the reviewer's answer stream (`review-ask`): progress, then the one answer. */
 export type AccountLine =
@@ -292,9 +292,3 @@ producer's to keep under the line's bound.
 `account` runs for as long as its requester holds the connection, saying what it is doing;
 there is no deadline inside it. A diff is asked for by file or by commit, and comes in pages
 of bytes, counted as bytes.
-
-## Who owns what
-The tickets (tracked in the issue this file is linked from) split `release/` so that no two
-change the same lines. Where two meet (the reviewer and the approval page, the workspace and
-the root, the pusher and the keyring), they meet at one of the contracts above, and each
-ticket names the end it keeps.
