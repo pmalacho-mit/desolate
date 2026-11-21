@@ -193,7 +193,7 @@ ran `desolate push` on a pseudo-terminal (the tests' `person.py` is exactly that
    (`release/host/approver.ts`);
 3. the keyring files the approval only if the signature verifies against the approver's
    public key, which the host installed as root at `/etc/desolate/approver.pub`, and only
-   for a challenge it issued, once, within two minutes.
+   for a challenge it issued, once, while it is outstanding (see "The limits effort").
 
 Nothing in the root VM holds the private key, so nothing in it can approve: there is no
 sudo rule and no confirmation program there any more. `desolate push` does the three steps
@@ -238,10 +238,10 @@ commit goes where.
   accepts `ecdsa-sha2-nistp256` deploy keys), served to the root's ssh by an agent on the
   host, so every push signature is a Touch ID. Not done; it changes the keyring's shape.
 - An approval names a commit, but ssh authentication cannot be bound to what is then sent.
-  While an approval is live (it is revoked when its push ends; at most two minutes, eight
-  signatures), a process in the root VM that pushes straight to the remote with
-  `--no-verify` could send another commit to that repository. The pre-push hook refuses
-  that for everything that does not skip hooks.
+  While an approval is live (two minutes at most to be claimed; then as long as its push,
+  which revokes it; eight signatures), a process in the root VM that pushes straight to the
+  remote with `--no-verify` could send another commit to that repository. The pre-push hook
+  refuses that for everything that does not skip hooks.
 - No prompt appears by itself: an approval is always started by the person, from the host
   (`desolate push`, `desolate approve`). A process in the root VM can leave a request; it
   cannot make a dialog appear.
@@ -258,7 +258,7 @@ smaller:
 
 - **the dashboard**: what needs them, and for an offer the commits, the files, the
   warnings, and the diff;
-- **a diff that is text**: `git diff --no-ext-diff --no-textconv`, capped at 1 MiB, put on
+- **a diff that is text**: `git diff --no-ext-diff --no-textconv`, in pages of 256 KiB, put on
   the page as text nodes (`release/root/ui/dashboard.js`, `diffView`) and on the terminal
   by `desolate review <domain> <repo> <branch> --diff` with control characters replaced.
   Nothing in it is parsed as markup, and it is shown only if it is of the commit the Push
@@ -291,16 +291,16 @@ descriptor, to a directory only the root can write (`/var/lib/desolate/incoming`
 name the root made, and git reads the copy. One at a time: copy, check, fetch, delete, so
 the root's own disk holds one bundle of a domain's at once.
 
-**3. Every object is checked before any enters a root clone.** The copy's pack is indexed
-with `git index-pack --strict` into a throwaway object directory that borrows the clone's
-objects (`refusedBy` in `release/root/git-remote-desolate.ts`); only a bundle that passes
-is fetched. Only a v2 bundle is looked at (what a workspace's git writes; v3 exists to
-carry a filter that leaves objects out, or another hash), and a check that runs longer
-than eight minutes is a refusal. `--strict` is git's fsck with its errors fatal: a tree with `.git` in it (in
-any case, or in a form macOS or Windows would fold to it), a `.gitmodules` that is a
-symlink or names an option or a climbing path, a malformed object. *The hole this closed:*
-`fetch.fsckObjects` does not apply to a fetch from a bundle on the image's git (2.43): a
-tree containing `.git` was imported and offered.
+**3. Every object is checked before any enters a root clone.** The copy's pack is indexed with
+`git index-pack --strict` into a throwaway object directory that borrows the clone's objects
+(`refusedBy` in `release/root/git-remote-desolate.ts`); only a bundle that passes is fetched.
+Only a v2 bundle is looked at (what a workspace's git writes; v3 exists to carry a filter that
+leaves objects out, or another hash), and a check that runs longer than a minute plus a second
+for each MiB of the bundle (`checkMs`) is a refusal. `--strict` is git's fsck with its errors
+fatal: a tree with `.git` in it (in any case, or in a form macOS or Windows would fold to it),
+a `.gitmodules` that is a symlink or names an option or a climbing path, a malformed object.
+*The hole this closed:* `fetch.fsckObjects` does not apply to a fetch from a bundle on the
+image's git (2.43): a tree containing `.git` was imported and offered.
 
 A domain's bundle carries all its branches, so one branch with such an object gets the
 whole bundle refused. That is deliberate (a bundle is taken whole or not at all), and it
@@ -467,7 +467,7 @@ reached from one domain read every domain's secrets. Now:
 
 The independent audit's F6: the root's ordinary user parses everything a domain sends (git on
 agent-written packs, outbox JSON, the dashboard's state) and it also pushed, with the write
-agent open to it for the two minutes and eight signatures an approval lasts. A bug in any of
+agent open to it for as long as an approval lasts, eight signatures. A bug in any of
 those parsers could push another branch of that repository, or another commit, in the window.
 
 - **A user of its own.** `desolate-pusher` (root/pusher.ts) is the only user that can enter
@@ -502,8 +502,9 @@ those parsers could push another branch of that repository, or another commit, i
 - **One push per process, one push per approval.** The pusher exits after each push, and
   root's supervisor kills every process of its user before starting the next, which empties
   the user's home first. Asking the keyring what an approval names claims it: only a claimed
-  approval lets the write key sign, a claim lasts as long as a push may take (so LFS objects
-  first do not run the two minutes out), and an approval is claimed once.
+  approval lets the write key sign, a claim lasts while the pusher's connection to the
+  keyring does (the root's user must hand the push over by `handOverBy`), and an approval
+  is claimed once.
 - **It says what it knows.** Once the ref update is asked for, the forge may take it as soon
   as the pack is whole; a failure after that (the root's user stops sending, say) is
   reported as "may have reached the remote", with the forge's report used if it came, and
@@ -517,7 +518,7 @@ those parsers could push another branch of that repository, or another commit, i
   choosing: the terminal prompt shows both ids, and whether the commit builds on `onto` comes
   from that user's own review there; the approval page shows the reviewer's account instead
   (step 2). Revoking an approval is open to it too, which only cancels. The pusher reads one
-  JSON line it is sent (at most 1 MiB, node's parser), and nothing else.
+  JSON line it is sent (at most 4 MiB, node's parser), and nothing else.
 
 ## One click to approve, on a page the host serves (decided on the Mac; tested on T1 and T2)
 
@@ -675,13 +676,13 @@ it can be believed:
   and the docs say to act only on `pusher` and `host` events when it matters. A name it
   reports (repository, branch, commit, domain) is one desolate would make, or `null`, so a
   script can pass it on as an argument (no valid one starts with `-`).
-- **Bounded.** A listener that stops reading is let go with a `lagged` line rather than
-  piling lines up in the daemon (which also serves the approval page); the state is looked
-  at no more than four times a second and at most 16 MiB of it, and one change yields at
-  most 200 events. The pusher's log is read by bytes, by file identity and size, and only
-  while someone listens. (Its review found `--replay 0` replaying everything, unbounded
-  buffering, an offset that could drift and re-announce old pushes, and the unvalidated
-  names; all fixed.)
+- **Bounded.** A listener that stops reading is let go with a `lagged` line rather than piling
+  lines up in the daemon (which also serves the approval page); the state is looked at no more
+  than four times a second and at most 16 MiB of it, and one change yields at most 200 events
+  per domain, then one `events-dropped` saying how many more. The pusher's log is read by
+  bytes, by file identity and size, and only while someone listens. (Its review found
+  `--replay 0` replaying everything, unbounded buffering, an offset that could drift and
+  re-announce old pushes, and the unvalidated names; all fixed.)
 
 ## What a checkout has checked out, live: the Mac's file events (decided on the Mac; tested on T1, measured on the M1)
 
@@ -711,16 +712,17 @@ imports a repository's branches when the domain's list of them changes (by the f
 only), at most one import every 3 s per repository, by the same path a review takes
 (`fetchDomain`: git-remote-desolate, every object checked). Two imports at once in a clone
 can meet on a ref's lock; the later one tries again. This is not a new way in: a domain
-could already make the root import as often as it offers (30 requests a minute).
+could already make the root import as often as it offers (in its own lane: see "The limits
+effort").
 
 The dashboard lists every branch per domain (the domain's own list, read as data: names
-desolate would carry, at most 200 a repository), shows which workspace has it checked out,
-and reviews any of them; each checkout has a Diff button for the branch it is on. A review is
-against `origin/<default>` (what a push would send) or the domain's own `<default>`
-(`--against domain`: what the agents built beyond their own main). `desolate branches` is the
-same list on the host. Pushing from the dashboard stays with offered branches, at the commit
-reviewed: an offer is how a branch's new LFS objects reach the root. Anything else is pushed
-from the git terminal, where it is one `git push`.
+desolate would carry; 200 in each snapshot, those checked out first, and the total), shows
+which workspace has it checked out, and reviews any of them; each checkout has a Diff button
+for the branch it is on. A review is against `origin/<default>` (what a push would send) or
+the domain's own `<default>` (`--against domain`: what the agents built beyond their own
+main). `desolate branches` is the same list on the host. Pushing from the dashboard stays with
+offered branches, at the commit reviewed: an offer is how a branch's new LFS objects reach the
+root. Anything else is pushed from the git terminal, where it is one `git push`.
 
 ## In a workspace, `desolate status`; in the git VM, `desolate fetch` and a remote per domain (decided on the Mac; tested on T2)
 
@@ -961,12 +963,13 @@ Measured on a fresh stack with two repositories and a devcontainer:
 ## Agents without tmux, and the factories (decided on the Mac; tested on T2, run on the M1)
 
 **`desolate agent`** keeps a command running in a workspace (`workspace/agent-holder.py`: a
-pty, a 2 MiB replay buffer, a log, a socket in the VM user's own 0700 directory) and attaches
+pty, a log that keeps the newest, a socket in the VM user's own 0700 directory) and attaches
 the person's own terminal to it on request. v2 ran Claude in tmux, whose mouse mode gave
 either scrolling or copy-and-paste, never both; here the terminal draws the stream itself, so
 both are the terminal's own, and the replay puts recent output in its scrollback. Ctrl-]
 detaches. `stop` interrupts the agent through its own terminal, twice (a signal to `docker
-exec`'s client never reaches into the container), and kills the client 3 s later.
+exec`'s client never reaches into the container), and kills only when asked (`--kill`, or
+"y" at its question).
 
 **What an agent prints, on the way to the Mac's terminal**, is filtered
 (`shared/terminal-filter.ts`, for `agent attach` and for `exec` to a terminal): text, C0
@@ -1470,9 +1473,9 @@ are left for the owner, with what would close them.
     digest, never reaching the check it named; an in-source test of an undescribed push could
     not fail. Each now has a test with its control.
   - **The root's resources.** Every summary recompresses a push twice, and the root's user
-    could have the page ask again and again: now one summary at a time, each kept ten minutes
-    by the push and the remote's branches, git's pack memory and threads bounded, and a
-    summary that runs past 95 s killed whole, git and all.
+    could have the page ask again and again: now one account at a time, each kept by the push
+    and the remote's branches (an hour since last asked), git's pack memory and threads
+    bounded, and the work ended whole, git and all, when its asker goes.
   - **After a squash.** The command printed to carry on came from the root's ordinary user,
     which could print any: now the host prints it, from the text it signed. A plain rebase
     made copies of what a merge brought in: now `--rebase-merges`.
@@ -1498,3 +1501,199 @@ are left for the owner, with what would close them.
   worker left by a compromised one could serve the next workspace of the same name); a slot's
   or editor's page in a popup over the approval page could take a click; wildcard secret hosts
   accept public suffixes (`*.github.io`).
+
+## The limits effort: timers became liveness, cut lists became pages (decided on the Mac, 2026-11-21; tested on T1, T2 and T4)
+
+A triage of 2026-11-20 found 483 hard-coded limits in `release/`. Most were not decisions:
+a layer bounding something it had not designed (a list cut where it should page, a timer
+where the person is waiting anyway, one number copied into five files), and often the cut
+fed a count, so the stack stated numbers it had not counted ("All 200 commits"). The rules
+each limit was put to (four questions, R1 to R9) and the shared contracts that replaced
+them are [limits.md](limits.md). The contracts and fifteen tickets (#171, #173 to #187)
+landed together as #196 (`422ef78`); the triage (`docs/v3/limits-triage.md`) and each
+ticket's row-by-row table (`docs/v3/limits/NN-*.md`) are in that commit, and were deleted
+after it. What the review of the merged result left is #206 to #213. Each ticket had a
+fresh-context review that tried to break it; what they found is below with what it changed.
+
+**The reviewer's account and the approval page** (#173, #174).
+- **No deadline.** `review-ask` ran under `timeout 95`, inside the page's 90 s and the host's
+  120 s, around git timeouts of 2 to 30 minutes that could never fire: a large first push
+  could never be approved. Now the account is a stream (`shared/review-account.ts`):
+  progress lines, again every 5 s while nothing changes, then one answer. A write to an
+  asker that has gone fails, and the reviewer's process group is ended; that is how the
+  reviewer knows it is still wanted. Accounts are made one at a time, in a queue (a lock held
+  by a live process), and kept an hour since last asked, the newest 64.
+- **Counted, never cut.** Commits, files and the files the net change hides are `Listed`,
+  forge-sensitive files first; a diff is pages of bytes (1 MiB), of the net change, one file,
+  or one commit whole. The terminal and the page show every warning, every file that changes
+  what runs on the forge, and the whole squash message (it is signed). `root/reviewer.ts`
+  (1,446 lines, five jobs) is four modules of one job each.
+- **Hard bounds kept, against the root's ordinary user:** a review bundle is refused only when
+  twice its size is more than the reviewer's disk has free (a repository over 2 GiB can now be
+  reviewed: the forge's push size bounds the pack, not the history); at most 10,000 refs in a
+  bundle (`git fetch` matches each refspec against every ref); the first 200 commits at the
+  boundary of what is new are tried (`EDGES`: each is two walks under the one lock, and the
+  root's user shapes the boundary); a squash is not offered when a name is over 80 or an email
+  over 254 (RFC 5321). Pack threads, window, big-file threshold and the kept packs' disk are
+  settings (`reviewer.*`), from the root VM's size. On the host, `ASKING_MOST` (4 questions at
+  once) and `LISTED_MOST` (32 pushes with an account): each listed push was a process in the
+  root and on the Mac.
+- **Signed only as shown.** `/approve` signs only with the token over the account the host
+  holds now (`shownToken`): a push that leaves the list and comes back with another account
+  signs nothing for the one the page drew.
+- **Found by its review, older than the effort:** a review bundle's objects were never checked
+  (a fetch from a bundle ignores `fetch.fsckObjects` before git 2.46; a commit with a NUL in its
+  message passed). `submit` now runs intake's `bundleRefusal` first.
+
+**What an approval lives by** (#175). A clock is kept only where it stops a named attack.
+- A raw push's challenge lives while its asker holds its connection to the keyring: when the
+  process ends, however it ends, the kernel closes it and the keyring drops the challenge.
+  Nothing has to notice a silence. Held a day, it gains the root's user a line on the approval
+  page, which it could already have by asking every two minutes; at most 32 are outstanding,
+  and a 33rd drops the oldest, telling its asker. `desolate push`'s challenge, which nobody
+  holds, keeps 120 s.
+- An approval must be claimed within 120 s (`APPROVAL.lifeMs`), on purpose: the root's user is
+  the asker, and without the clock could keep a push it told the person had failed, and land
+  it a day later; the host has no way to take an approval back. Once claimed it lives while
+  the pusher's connection does, and the root's user must hand the push over within
+  `handOverBy(bytes)`: the two minutes again, plus the bytes at 10 MiB/s (a 2 GiB pack: 5 min
+  25 s). The review found the first version let a byte every 59 s keep a claim for days.
+- Eight signatures: one for receive-pack, one for each `git-lfs-authenticate`. Uploads to the
+  forge have no total, only `IDLE_MS` (60 s) while bytes are left; the forge's report after
+  the pack keeps 30 minutes. The push lock is held by a live process, not for 5 minutes.
+- **Proposed, not done:** a withdrawal of an approval, signed by the host (the root's user
+  carries the request, so it could withhold an unsigned one). With it, neither the two
+  minutes nor `handOverBy` would protect anything.
+- **Measured** (git-lfs 3.3.0): its progress file gets a line per 32 KiB sent, so nothing
+  written to it for 60 s is nothing sent for 60 s. With `lfs.activitytimeout=5`, git-lfs gave
+  up on a stalled upload by itself only after 84 s, retrying; the pusher's bound is the one
+  that says what happened.
+
+**The dashboard's review** (#176). `rev-list --count`, then a page with `--skip`; every count
+shown is the total, and a commit picked from any page is checked by git against the range. A
+diff is pages of 256 KiB or 3,000 lines (what draws quickly), or one file's alone. Nothing in
+it has a timer: closing the page stops git. The fetch a review starts runs to its end, since
+killed mid-write it leaves ref locks in a clone every domain shares. An offer's LFS objects
+are all taken (a silent cut at 2,000 had made a larger offer impossible), bounded by the
+request's own 1 MiB. Left: the dashboard's review and the reviewer's account are still two
+(the dashboard's runs in `stated`, the reviewer's as its own user); `review()` could answer
+an `Account` and the dashboard read the same lines the approval page does.
+
+**The root's mirrors and out-boxes** (#177). A domain is not trusted: every bound on what the
+root reads from an out-box stays hard, named once, refused with `over()`, the bound and the
+size. A mirror's fetch has no total, only `FORGE_IDLE_MS` (5 minutes of silence; `--progress`
+makes git speak every second while bytes come), and ends when its asker goes. `refs.json` has
+one reader (`refsOf`), one bound (4 MiB, over 16,000 branches at the longest name), and
+answers it whole or refused: before, a silent cut at 5,000 refs led `git fetch --prune` to
+prune every branch past it. The bundle check scales with the bundle (`checkMs`: a minute,
+and a second a MiB). `suede changed` lists every dependency and file (it had checked every
+file against every dependency, hours on a large commit). The review found a remote helper
+outliving its fetch (one per fetch, stacked), a `refs.json` that was a dangling link read as
+"nothing synced" (and so pruned), and doctor reading a timed-out `sudo -n true` as a pass.
+**Measured** on the M1: `git index-pack --strict` of a 201 MB bundle's pack, 10.5 s
+(19 MiB/s), so `checkMs` refuses only a bundle made to be slow.
+
+**The request channel** (#178). A request is taken, then waited on with no deadline. Before,
+every request gave up at two minutes ("Is it running?"), whether the root had never seen it
+or was half-way through a large fetch, and a domain had 30 requests a minute in all, so a few
+agents fetching in a loop had its offers refused.
+- rootd writes `rootd.beat` from a thread of its own every 2 s, and `replies/<id>.taken`
+  (`{ boot, doing }`) when it takes a request. The workspace waits while the beat moves, says
+  what the root is doing after 10 s, and gives up only on 10 s of no beat (lock.ts's `BEAT`),
+  saying whether the root had taken it. Either side on older code gets the old 2 minutes.
+- The rate is gone. One domain is kept from slowing another by structure: the loop never
+  waits on a request's work; each domain has a lane (one at a time, in order); fetches are
+  coalesced per repository (one runs, one waits, every asker answered by a fetch that began
+  after it asked); a root clone is worked in by one domain at a time. What is left hard is
+  `MOST_HELD`, 50 requests a domain, which is what the root held of one domain before.
+- **Measured** (T2 `24-requests`): a fetch held four minutes at the forge and thirty more
+  asked meanwhile all succeeded with at most 4 upload-packs; another domain's offer during a
+  flood of 20 slow ones took no longer than with no flood (the control). Left: fetches have no
+  pace (a domain fetching in a loop fetches back to back), and a root rolled back to before
+  the beat leaves a stale beat behind.
+
+**Agents** (#179). The log stopped at 64 MiB keeping the oldest, so `agent log` showed stale
+output for ever. It is now segments named by offset (none renamed), the oldest dropped past
+`agent.logMiB` (a twentieth of the VM's disk unless set), the drop said by every read from the
+start; an attach replays 2 MiB from the log, more than a terminal keeps (Terminal.app and
+iTerm2 keep 10,000 lines). `stop` no longer kills 3 s after Ctrl-C: it asks, or `--kill`.
+**Measured** (T1): 2.7 MB of `seq` under a 1 MiB most kept eight segments from a whole line,
+the drop said, beside a control under its most.
+
+**Bringing a workspace up** (#180). The host owns patience and sets no total: the VM's two
+long steps say what they do when they begin and every 10 s, and the host stops one only
+after two minutes of silence (a frozen VM, a lost ssh). Inside, idle bounds and `signal` (git
+with `--progress`, 10 minutes; `devcontainer up`, an hour). The init lock is a share lock in
+`/workspaces/.desolate/locks`, which an agent of the domain can write: safe, since what that
+side can do with it, it can already do to the domain's `.git`. What the VM sends stays
+bounded as a side not trusted: its bytes (`RUN_MAX`), its silence, what is kept of an error
+(one file per workspace and step, overwritten: the daemon looks every 30 s), what is shown a
+beat. The review found the first three as holes.
+
+**The host's forwarding** (#181). The forwarder's decisions moved, unchanged, into
+`host/forward.ts` (`daemon.ts`: 3,700 lines to 2,400). A link's connections are a setting,
+`link.connections`: past it they wait their turn, then are refused with a 503 and the
+setting's name (the 65th used to be destroyed in silence). The pages' port held a silent
+client 400 ms, which failed a browser's preconnected socket; it is now 60 s, among the 512
+silent sockets. A pusher log line over 1 MiB no longer stops every later push's event.
+**Measured** on the M1: one carried connection is a `limactl shell` of its own, 83 MB and
+2 MB for its ssh; so the default is an eighth of the Mac's memory at 85 MiB each (16 to 256),
+and the top is the root's sshd `MaxSessions`, 1000. Left: multiplexing a link into one
+session, which would remove the setting, needs a demultiplexer beside the root's proxy.
+
+**The egress proxy** (#182). `net recommend` showed 60 hosts and printed a `net allow` for
+those 60; following it, then `net enforce`, cut off the rest. Every host is now counted, and
+the command allows exactly what is shown (`--all` for every one). The audit log is a series
+(`audit-<n>.log`): every writer appends to the newest, the first to find it over its share
+starts the next by an exclusive create, nobody renames (two processes rotating one file had
+overwritten each other's), within `proxy.auditMiB`. A body through a secret's host is no
+longer refused past 256 MiB (the 2026-11-20 audit's fix): it is held whole up to
+`secrets.heldMiB` or the domain's `net hold`, and past that streamed, values taken out of a
+response as it passes and a request naming one past the bound refused. The review found a
+decompression bomb (nothing is now undone past the hold bound, held or streamed).
+**Measured** against mitmproxy 11.0.2 by length, chunked, gzip, HTTP/2 and HTTP/1.0, each
+beside the control without the proxy. Left: the bound is per request, not per domain; a
+streamed request is decided by its head, so a value in its head reaches its own host before
+a later name in its body refuses it; a streamed compressed response arrives decompressed.
+
+**The host's calls to the root** (#183). A rootctl call is given up only after a silence,
+`root.silentSeconds` (900, so nothing the old 15-minute total let finish is cut), and only a
+whole line counts as hearing from the root: the review found that any byte would let the
+root's user hold the daemon's calls open for ever. The calls nobody watches keep a total, by
+operation (`BRIEF`), for the same reason. Every cut of another layer's output is
+`because()`: the last ten lines and, when that is not all, the path of the whole under
+`~/.desolate/logs/failures/`. Provisioning and the root-state carry have no timer: they say
+each step, or stream to a file.
+
+**The git VM** (#184). Its out-box is one exchange (`shared/git-out-box.ts`) whose bounds are
+checked by both ends before any work, and every refusal is answered at once: a request over
+the old 64 KiB had been removed unanswered, its push waiting 20 minutes, and the 2,000-object
+count behind it could never be reached. A push waits for as long as its helper runs, and
+Ctrl-C withdraws it until it is handed to the root. A shell whose tab closed is not ended: the
+page offers it back. The review found two out-box names (a directory called `<id>.gone` or
+`<id>.json`) that stopped the host's daemon, and every page with it.
+
+**Settings** (#185). `desolate settings` stores the person's choices in
+`~/.desolate/settings.json`; a setting read in a VM is written by the host, as root, to that
+VM's own disk, and each side reads only its own store (the review found that code of the Mac's
+running in a VM would otherwise read a store that VM's user writes). A value a setting does
+not take is refused, never the default. The root VM is now sized from the Mac (a quarter of
+its cores, 2 to 4; an eighth of its memory, 2 to 4 GiB) where it was 2 and 2 GiB on any Mac.
+
+**Scripts and recipes** (#186). `recipes/issues.sh` read 100 issues, and took the 101st for
+closed: measured against 120, the old recipe stopped three agents it should not have; it now
+pages, and a list it could not read to its end does nothing. A root service that keeps
+failing is restarted with backoff, 1 s doubling to 60 s (about 60 log lines an hour, not
+1,800). An image without the editor is made only when asked (`DESOLATE_IMAGE_EDITOR=none`).
+The shell copies of the slug rule are checked against `isSlug` on 3,000 names in three
+locales: macOS's bash 3.2 takes `[a-z]` to match `é` under a UTF-8 locale, so they spell the
+letters out.
+
+**The shared helpers** (#187). A sorted `packed-refs` is searched by halving, so 5,000
+branches (350 KiB, past the old 256 KiB, where no branch showed a commit) cost a few reads.
+`run()` counts bytes, decodes once, and keeps one doubling buffer (a list of chunks had held
+141 bytes per byte written a byte at a time). An action argument that is too long is refused,
+never left out (a domain had been made without its title). `keepApart` no longer loops for
+ever on `MY_API_TOKEN`, `MY_API_TOKEN_2`, `API_TOKEN`. Left: two keys can still make one
+secret name against secrets the domain already has (`DB` and `DB_SECRET`); fixing it renames
+existing secrets on re-import.
