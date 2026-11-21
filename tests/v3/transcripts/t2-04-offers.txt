@@ -149,7 +149,28 @@ desolate: this push needs your confirmation.
   sends       2 commit(s) the remote does not have, squashed into one, 1 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (squash-me) to push, or anything else to refuse: squash-me
-pushed acme/widgets squash-me at <commit>: 2 commit(s) squashed into one. The workspace's squash-me keeps its own commits: reset it to origin/squash-me before working on, or its next push replaces the remote's.
+pushed acme/widgets squash-me at <commit>: 2 commit(s) squashed into one.
+The workspace's squash-me still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace (what you committed since is kept, on top):
+  git fetch && git rebase --autostash --onto origin/squash-me <commit> squash-me
+[exit 0]
+
+$ desolate push dev acme/widgets squash-me --expect <commit>
+desolate: this push REPLACES the remote's squash-me, which is the squash of <id>, a commit of this branch, pushed before. Nothing was signed
+  fix: to build on the squash, run `git fetch && git rebase --autostash --onto origin/squash-me <commit> squash-me` in the workspace, then push again. To replace it instead: desolate push dev acme/widgets squash-me --expect <commit> --replace
+[exit 1]
+
+$ desolate push dev acme/widgets squash-me --expect <commit>    # at a terminal; the person types: squash-me
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      squash-me
+  commit      <commit>
+  onto        <commit>  (the remote's squash-me now: it moves from this to the commit, or not at all)
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
+  sends       1 commit(s) the remote does not have, 1 file(s)
+              (desolate's reviewer, in the root)
+Type the branch name (squash-me) to push, or anything else to refuse: squash-me
+pushed acme/widgets squash-me at <commit> (2 commit(s)).
 [exit 0]
 
 $ desolate push dev acme/widgets squash-me --expect <commit>
@@ -166,7 +187,7 @@ desolate: this push needs your confirmation.
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         0 object(s), only those its commits point to
   REPLACES    the remote's squash-me: it does not build on it, and the commits only the remote has are dropped
-  sends       2 commit(s) the remote does not have, 0 file(s); 2 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
+  sends       2 commit(s) the remote does not have, 1 file(s); 1 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
               (desolate's reviewer, in the root)
 Type 'replace squash-me' to replace it, or anything else to refuse: squash-me
 desolate: not confirmed
@@ -183,7 +204,7 @@ desolate: this push needs your confirmation.
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         0 object(s), only those its commits point to
   REPLACES    the remote's squash-me: it does not build on it, and the commits only the remote has are dropped
-  sends       2 commit(s) the remote does not have, 0 file(s); 2 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
+  sends       2 commit(s) the remote does not have, 1 file(s); 1 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
               (desolate's reviewer, in the root)
 Type 'replace squash-me' to replace it, or anything else to refuse: replace squash-me
 pushed acme/widgets squash-me at <commit> (2 commit(s)).

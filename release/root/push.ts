@@ -18,7 +18,8 @@ import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
 import { ask } from "./keyring-client.ts";
-import { KEYRING, ROOT } from "./layout.ts";
+import { git } from "./git.ts";
+import { clonePath, KEYRING, ROOT } from "./layout.ts";
 import { offersOf, review, withdraw } from "./offers.ts";
 import type { Review } from "./offers.ts";
 import { afterPush } from "./pushed.ts";
@@ -511,9 +512,24 @@ const main = async () => {
   withdraw(domain, r.repo, branch);
   // What the remote now has, the mirror has: origin/* in every clone follows.
   await repos.fetch(repo).catch(() => {});
+  // How many were squashed: those the remote's branch did not have (r.commits counts from the
+  // default branch, more when part of the branch was pushed before).
+  const squashedCount =
+    signed.squashes && signed.onto
+      ? Number(
+          (
+            await git(clonePath(repo), [
+              "rev-list",
+              "--count",
+              signed.squashes,
+              `^${signed.onto}`,
+            ]).catch(() => ({ stdout: "" }))
+          ).stdout.trim(),
+        ) || null
+      : r.commits.length;
   process.stdout.write(
     signed.squashes
-      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${r.commits.length} commit(s) squashed into one${signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : ""}.\nThe workspace's ${branch} still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace (what you committed since is kept, on top):\n  ${catchUp(branch, signed.squashes)}\n`
+      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${squashedCount ? `${squashedCount} commit(s)` : "its commits"} squashed into one${signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : ""}.\nThe workspace's ${branch} still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace (what you committed since is kept, on top):\n  ${catchUp(branch, signed.squashes)}\n`
       : `pushed ${r.repo} ${branch} at ${r.commit} (${r.commits.length} commit(s)${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s) first` : ""}).\n`,
   );
   if (link)
