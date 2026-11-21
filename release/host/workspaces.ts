@@ -278,16 +278,51 @@ declare namespace sizeFlags {
   ];
 }
 
+/** The most of a VM's error text the host keeps, in characters: the end of it, where a
+ *  program says why it failed. Its bound is against the VM, which may send up to RUN_MAX:
+ *  a file is written for each failure a person sees, and for the daemon's look at a running
+ *  workspace every thirty seconds (one file for each workspace and step, overwritten, so
+ *  they do not pile up). A megabyte is thousands of lines: more than anyone reads of one. */
+const KEPT_CHARS = 1024 * 1024;
+
+const BLANK = "\n\r\t ";
+/** A VM's error text as the host keeps and shows it: its last KEPT_CHARS, from a line's
+ *  start, with what was left out said in its first line; its runs of empty lines made one,
+ *  and its ends trimmed. Each step is linear in the text (the VM chooses it; shared/text.ts's
+ *  tail() is not, on a long run of newlines). */
+export const vmText = (output: string): string => {
+  const cut = output.length > KEPT_CHARS;
+  const at = cut ? output.indexOf("\n", output.length - KEPT_CHARS) : -1;
+  let text = cut ? output.slice(at < 0 ? output.length - KEPT_CHARS : at + 1) : output;
+  const left = output.length - text.length;
+  text = text.replace(/\n(?:[ \t\r]*\n)+/g, "\n\n");
+  let [start, end] = [0, text.length];
+  while (end > 0 && BLANK.includes(text[end - 1]!)) end--;
+  while (start < end && BLANK.includes(text[start]!)) start++;
+  text = text.slice(start, end);
+  return cut ? `(its first ${left} characters are not kept)\n${text}` : text;
+};
+
+declare namespace vmText {
+  export type Cases = Table<
+    typeof vmText,
+    [
+      /** what a program says, as it said it */
+      [args: [output: "fatal: bad object\n"], expected: "fatal: bad object"],
+      /** runs of empty lines are one, and the ends are trimmed */
+      [args: [output: "\n\na\n\n\n\n  \nb\n\n"], expected: "a\n\nb"],
+    ]
+  >;
+}
+
 /** How an error a workspace's VM gave is shown (docs/v3/limits.md, R1): its last `lines`
  *  lines, made safe, and, when that is not all of it, how much was left out and where the
- *  whole of it is kept: under the host's logs, a file for each, the person's alone. */
+ *  whole of it is kept (vmText's whole): under the host's logs, one file for each workspace
+ *  and step, the person's alone. */
 const fromVm = (plan: WorkspacePlan, what: string, output: string, lines: number) =>
-  failure(output.trim(), lines, (whole) => {
+  failure(vmText(output), lines, (whole) => {
     fs.mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
-    const file = path.join(
-      paths.logs,
-      `${plan.domain}--${plan.workspace}-${what}-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`,
-    );
+    const file = path.join(paths.logs, `${plan.domain}--${plan.workspace}-${what}.txt`);
     fs.writeFileSync(file, whole, { mode: 0o600 });
     return file;
   });
@@ -305,8 +340,32 @@ const QUIET_BEATS = 12;
  *  step on a line of its own, and its "still ..." in place), or nobody (a script: only the
  *  answer, as before). */
 type Shown = (line: string | null) => void;
+/** The most of what a step says that is shown, in lines for each beat and characters for
+ *  each line: a step says a line when it begins and one each beat, so this is room for many,
+ *  and a VM that floods its stderr is not passed on whole to the dashboard, which every
+ *  domain shares. What is not shown is counted, and said. */
+const SHOWN = { lines: 20, chars: 500 };
+
 /** (`null`: the step ended, and a line in place is cleared.) */
 const watcher = (): Shown => {
+  const show = rawWatcher();
+  let [window, inWindow, passed] = [0, 0, 0];
+  return (line) => {
+    if (line === null) {
+      if (passed) show(`(${passed} more lines from the workspace's VM were not shown)`);
+      [inWindow, passed] = [0, 0];
+      return show(null);
+    }
+    const now = Math.floor(Date.now() / BEAT_MS);
+    if (now !== window) {
+      if (passed) show(`(${passed} more lines from the workspace's VM were not shown)`);
+      [window, inWindow, passed] = [now, 0, 0];
+    }
+    if (++inWindow > SHOWN.lines) return void passed++;
+    show(printable(line, SHOWN.chars));
+  };
+};
+const rawWatcher = (): Shown => {
   if (process.env.DESOLATE_PROGRESS)
     return (line) =>
       void (line !== null && process.stderr.write(`progress:   ${printable(line)}\n`));
@@ -334,9 +393,26 @@ const stepInVm = (plan: WorkspacePlan, argv: string[], shown: Shown) =>
     // Every byte it sent counts toward the bound, the "still ..." lines and a line that
     // never ends too: they are held, or were.
     let received = 0;
+    let settled = false;
+    const settle = (result: RunResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(quiet);
+      shown(null);
+      resolve(result);
+    };
     const end = (why: string) => {
-      ended ||= why;
+      if (ended) return;
+      ended = why;
       child.kill("SIGTERM");
+      // A program that does not end (or a child of it that holds the pipes on) is not
+      // waited for: a few seconds, then killed, and the answer given without it.
+      setTimeout(() => {
+        child.kill("SIGKILL");
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        settle({ code: 128, stdout, stderr: `${stderr}${partial}${ended}` });
+      }, 5000).unref();
     };
     const quietMs = QUIET_BEATS * BEAT_MS;
     const quiet = setTimeout(
@@ -349,6 +425,8 @@ const stepInVm = (plan: WorkspacePlan, argv: string[], shown: Shown) =>
       if ((received += Buffer.byteLength(chunk)) > RUN_MAX)
         return end(`\n(more than ${RUN_MAX} bytes from the workspace's VM: stopped)`);
       if (into === "stdout") return void (stdout += chunk);
+      // (Only a chunk with a newline in it is split: a line that never ends costs no more.)
+      if (!chunk.includes("\n")) return void (partial += chunk);
       const lines = (partial + chunk).split("\n");
       partial = lines.pop()!;
       for (const line of lines) {
@@ -360,14 +438,10 @@ const stepInVm = (plan: WorkspacePlan, argv: string[], shown: Shown) =>
     child.stdout!.setEncoding("utf8").on("data", (chunk: string) => take(chunk, "stdout"));
     child.stderr!.setEncoding("utf8").on("data", (chunk: string) => take(chunk, "stderr"));
     child.on("error", (error) => {
-      clearTimeout(quiet);
-      shown(null);
-      resolve({ code: 127, stdout, stderr: `${stderr}${partial}${error.message}` });
+      settle({ code: 127, stdout, stderr: `${stderr}${partial}${error.message}` });
     });
     child.on("close", (code) => {
-      clearTimeout(quiet);
-      shown(null);
-      resolve({
+      settle({
         code: ended ? 128 : (code ?? 128),
         stdout,
         stderr: `${stderr}${partial}${ended}`,

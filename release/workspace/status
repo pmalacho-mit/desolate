@@ -91,9 +91,10 @@ case "${1:-}" in
     n=$(wc -c < "$tmp" | tr -d ' ')
     if [ "$n" -gt "$NOTE_MAX" ]; then
       # Cut between characters, never inside one (a character's last bytes, when the cut
-      # fell among them, go with its first), and marked: it ends in "…" (3 bytes).
+      # fell among them, go with its first), and marked: it ends in "…" and a newline (4
+      # bytes), after the newline some seds add to a last line that had none (1).
       lead=$(printf '\300-\377'); cont=$(printf '\200-\277')
-      { head -c "$((NOTE_MAX - 3))" "$tmp" | sed "\$s/[$lead][$cont]*\$//"; printf '\342\200\246\n'; } > "$tmp.cut"
+      { head -c "$((NOTE_MAX - 5))" "$tmp" | sed "\$s/[$lead][$cont]*\$//"; printf '\342\200\246\n'; } > "$tmp.cut"
       mv -f "$tmp.cut" "$tmp"
       echo "desolate-status: the note is $n bytes, over the $NOTE_MAX allowed; it was cut, and ends in …" >&2
     fi

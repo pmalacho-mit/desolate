@@ -54,7 +54,7 @@ describe("T1 workspace scripts: the status script counts what it says", () => {
 
   it("a longer note is cut between characters, within the bound, and ends in the mark", () => {
     // An odd number of bytes before the cut: it would fall inside a two-byte character.
-    for (const text of ["é".repeat(9000), `a${"é".repeat(9000)}`]) {
+    for (const text of ["é".repeat(9000), `a${"é".repeat(9000)}`, "a".repeat(20000)]) {
       const result = status(["note"], text);
       assert.match(result.stderr, /the note is \d+ bytes, over the 16384 allowed; it was cut/);
       const bytes = fs.readFileSync(note);

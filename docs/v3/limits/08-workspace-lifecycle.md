@@ -40,11 +40,33 @@ change).
   of the devcontainer line (500 on the host after 300 and 160/240 in the VM), the image cut at
   120 then 80, the user at 40, and the `-600`/`-800`/`-300`/`-200` tails are deleted.
 
+## Bounds against the VM, which stay hard
+
+What a VM sends the host is written by a side that is not trusted. Taking away its totals
+did not take away these (a fresh-context review of this change found the first three as
+holes, and they are fixed here):
+- **Bytes:** every byte a step sends counts toward `RUN_MAX`, its "still ..." lines and a line
+  that never ends too; past it the step is stopped, said.
+- **Silence:** two minutes with no line, and the step is stopped: SIGTERM, then after five
+  seconds SIGKILL and the answer without it (a child holding the pipes is not waited for).
+- **What is kept of an error:** `vmText`, the last `KEPT_CHARS` (1 Mi characters), runs of
+  empty lines made one, in one file for each workspace and step, overwritten: the daemon looks
+  at each running workspace every 30 s, and a file each time would fill the Mac's disk.
+  Each step of it is linear (shared/text.ts's `tail()` is quadratic on a long run of
+  newlines, which a VM chooses: said to the foundation).
+- **What is shown:** at most `SHOWN.lines` (20) lines of a step each beat, each cut at 500
+  characters with the mark; the rest counted and said. The dashboard's progress is the
+  daemon's, which every domain shares.
+- **Text:** every line through `printable` before a terminal or a page.
+- **No total.** A start the project keeps saying something in (a `postCreateCommand` that
+  prints a byte a minute for ever) runs until the person stops it: that is R4. It holds that
+  start only: its domain's room and its own VM, which it could hold by running anyway.
+
 ## Each row
 
 | where (triage) | what it was | answer | what it is now |
 |---|---|---|---|
-| host/workspaces.ts:317, 331, 357, 378, 1155 | `.slice(-N)` of the VM's error output | removed | `failure()` through `fromVm`: the last 10 lines (services, checkouts), 2 (devcontainer, editor) or 3 (the would-be-lost look), how many came before, and the whole text kept under `~/.desolate/logs/` |
+| host/workspaces.ts:317, 331, 357, 378, 1155 | `.slice(-N)` of the VM's error output | removed | `failure()` through `fromVm`: the last 10 lines (services, checkouts), 2 (devcontainer, editor) or 3 (the would-be-lost look), how many came before, and the text (`vmText`) kept in `~/.desolate/logs/<domain>--<workspace>-<step>.txt` |
 | host/workspaces.ts:184-196 | `DESOLATE_WORKSPACE_*` size overrides | kept hard | unchanged: the bounds are `shared/size.ts`'s facts. Moving them into the settings registry is the settings ticket's (a second `define` of one name throws at load) |
 | host/workspaces.ts:326 | init: `timeoutMs: 900_000` | removed (R4) | no total: `stepInVm`, stopped only after two minutes with no line |
 | host/workspaces.ts:352 | devcontainer: `timeoutMs: 3_700_000` | removed (R4) | as above |
