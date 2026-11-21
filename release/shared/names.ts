@@ -2,6 +2,8 @@
 // validated once, here, and nothing downstream re-interprets it (move-to-vms.md section 2;
 // v2's `owner/repo` as `owner__repo` needed a whole rule set, so v3 never encodes one).
 import { createHash } from "node:crypto";
+import { NAMES, over } from "./limits.ts";
+import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Expect,
@@ -11,8 +13,10 @@ import type {
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { setEnv } from "../.harness/env.ts";
+import type { branchOf } from "../.harness/shared-names.ts";
 
-export const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
+/** A domain's or a workspace's name: limits.ts's NAMES.slug says how long and why. */
+export const SLUG = new RegExp(`^[a-z0-9][a-z0-9-]{0,${NAMES.slug - 1}}$`);
 /** GitHub's own rules, narrowed: no leading dot or dash, no "..", no ".git" suffix. */
 const REPO_PART = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
 
@@ -26,6 +30,58 @@ export const isSlug = (value: unknown): value is string =>
   value.split("--").length <= 2 &&
   !value.startsWith("xn--") &&
   !/-{3}/.test(value);
+
+/** How many characters (code points: R8) a text is; `length` counts UTF-16 units, and an
+ *  emoji is two of those. */
+export const characters = (text: string): number => {
+  let n = 0;
+  for (const _ of text) n++;
+  return n;
+};
+
+declare namespace characters {
+  /** code points, not UTF-16 units */
+  export type Counts = Table<
+    typeof characters,
+    [
+      [args: [text: "abc"], expected: 3],
+      [args: [text: "Caf\u00e9"], expected: 4],
+      [args: [text: "\u{1F600}x"], expected: 2],
+      [args: [text: ""], expected: 0],
+    ]
+  >;
+}
+
+/** Why `value` is not a slug (R3: the rule, and the bound with the value when that is what
+ *  it missed), or null when it is one. `what` names it: "domain", "workspace". For a caller
+ *  to refuse with, in place of its own copy of the rule. */
+export const slugRefusal = (value: unknown, what: string): string | null => {
+  if (isSlug(value)) return null;
+  const rule = `a ${what} name is a slug: lowercase letters, digits and single dashes, at most ${NAMES.slug}, starting with a letter or digit`;
+  if (typeof value !== "string") return rule;
+  const n = characters(value);
+  return n > NAMES.slug
+    ? `${over(`the ${what} name`, NAMES.slug, n, "characters")}: ${rule}`
+    : rule;
+};
+
+declare namespace slugRefusal {
+  /** the rule, and the bound by its number when that is what was missed */
+  export type Says = Table<
+    typeof slugRefusal,
+    [
+      [args: [value: "acme", what: "domain"], expected: null],
+      [
+        args: [value: "Acme", what: "domain"],
+        expected: "a domain name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit",
+      ],
+      [
+        args: [value: "abcdefghij-abcdefghij-abcdefghij-abcdefghij", what: "workspace"],
+        expected: "the workspace name is 43 characters, over the 40 allowed: a workspace name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit",
+      ],
+    ]
+  >;
+}
 
 export type Repo = { owner: string; name: string };
 
@@ -109,8 +165,8 @@ export const domainNameFor = (repo: Repo): string => {
       .replace(/^-+|-+$/g, "") || "x";
   let name = `${part(repo.owner)}--${part(repo.name)}`;
   if (name.startsWith("xn--")) name = `gh-${name}`;
-  if (name.length > 40)
-    name = `${name.slice(0, 33).replace(/-+$/, "")}-${hex(repoId(repo).toLowerCase(), 6)}`;
+  if (name.length > NAMES.slug)
+    name = `${name.slice(0, NAMES.slug - 7).replace(/-+$/, "")}-${hex(repoId(repo).toLowerCase(), 6)}`;
   return name;
 };
 
@@ -153,7 +209,7 @@ declare namespace domainNameFor {
 export const isBranch = (value: unknown): value is string =>
   typeof value === "string" &&
   value.length > 0 &&
-  value.length <= 200 &&
+  value.length <= NAMES.branch &&
   /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) &&
   !value.includes("..") &&
   !value.includes("//") &&
@@ -161,6 +217,38 @@ export const isBranch = (value: unknown): value is string =>
   !value.endsWith(".lock") &&
   !value.endsWith(".") &&
   !value.includes("@{");
+
+/** Why `value` is not a branch desolate carries (R3: the bound and the value, when that is
+ *  what it missed), or null when it is one. Shown text: made printable, and cut (said). */
+export const branchRefusal = (value: unknown): string | null => {
+  if (isBranch(value)) return null;
+  const shown = `'${printable(value, 300)}'`;
+  if (typeof value === "string" && characters(value) > NAMES.branch)
+    return `${shown} is not a branch desolate will carry: ${over("it", NAMES.branch, characters(value), "characters")}`;
+  return `${shown} is not a branch desolate will carry`;
+};
+
+declare namespace branchRefusal {
+  /** what callers said before, and the bound by its number when that is what was missed */
+  export type Says = Table<
+    typeof branchRefusal,
+    [
+      [args: [value: "feature/x"], expected: null],
+      [
+        args: [value: "--upload-pack=x"],
+        expected: "'--upload-pack=x' is not a branch desolate will carry",
+      ],
+      /** the control: at the bound, a branch */
+      [args: [value: Invoke<typeof branchOf, [length: 200]>], expected: null],
+    ]
+  >;
+  /** one past it: the bound, by its number */
+  export type Long = Expect<
+    Invoke<typeof branchRefusal, [value: Invoke<typeof branchOf, [length: 201]>]>,
+    "includes",
+    "is not a branch desolate will carry: it is 201 characters, over the 200 allowed"
+  >;
+}
 
 declare namespace isBranch {
   /** a branch an agent may name and the root may carry: safe as an argv word and in a refspec */

@@ -448,13 +448,9 @@ describe("T2 section 4.8: the root UI", () => {
       ["constructor", {}],
     ] as [string, Record<string, string>][]) {
       const refused = await action(kind, args);
-      // An option-like title is dropped, not passed on: the domain is made without one.
-      if (kind === "domain.create")
-        assert.deepEqual(
-          [refused.status, (JSON.parse(refused.body) as { command: string }).command],
-          [202, "desolate domain create ok"],
-        );
-      else assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
+      // An option-like title is refused, as the rest are: never passed on, and never dropped
+      // from a domain made without the title the person typed (shared/actions.ts).
+      assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
     }
     assert.equal(
       ws(await state(), "web/one")?.host?.status,

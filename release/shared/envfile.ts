@@ -14,6 +14,7 @@
 // URL in the same file; a table of known keys by name; the name's ending. What none of these
 // can tell is asked, or left a value. Values are read here and never shown: a plan names keys,
 // hosts and reasons only.
+import { createHash } from "node:crypto";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -306,16 +307,27 @@ const NOT_SECRET =
   /(_ID|_URL|_URI|_ENDPOINT|_HOST|_HOSTNAME|_PORT|_REGION|_BUCKET|_ALGORITHM|_MINUTES|_SECONDS|_HOURS|_DAYS|_TTL|_TIMEOUT|_ENV|_MODE|_LEVEL|_DEBUG|_CHANNEL|_TENANT|_ORG|_PROJECT|_MODEL|_VERSION|_NAME|_EMAIL|_PATH|_DIR|_FILE|_ORIGIN|_DOMAIN|_BASE|_SCOPE|_SCOPES|PUBLIC_KEY|_PUBLISHABLE_KEY)$|^(NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_)|_EXPIRE/;
 const SECRETISH = /(SECRET|TOKEN|API_?KEY|_KEY|PASSWORD|PASSPHRASE|CREDENTIALS?)$|_SECRET_/;
 
+/** How long a secret's name may be, in characters (ASCII), and how short: the root's rule
+ *  (root/proxy/secret-store.ts, secrets_addon.py; the secrets page's pattern says it too). */
+export const SECRET_NAME = { least: 8, most: 64 } as const;
+/** A secret's name, whole: a capital letter first, then capitals, digits, `_` and `-`. */
+export const SECRET_NAME_RULE = /^[A-Z][A-Z0-9_-]{7,63}$/;
+
 /** A secret's name, from its key: `OPENAI_API_KEY` is `OPENAI-API-KEY`. Dashes, so the
  *  workspace's .env holds something that is not the variable's own name; at least 8
- *  characters, as the root takes names. */
+ *  characters, as the root takes names. A key too long for a name is cut, and the cut ends
+ *  in a hash of the whole key, so two long keys that begin alike are two names (as
+ *  names.ts's domainNameFor keeps two repositories apart). */
 export const secretName = (key: string): string => {
   const dashed = key
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const named = /^[A-Z]/.test(dashed) ? dashed : `KEY-${dashed}`;
-  return (named.length < 8 ? `${named}-SECRET` : named).slice(0, 64);
+  if (named.length < SECRET_NAME.least) return `${named}-SECRET`;
+  if (named.length <= SECRET_NAME.most) return named;
+  const hash = createHash("sha256").update(key).digest("hex").slice(0, 8).toUpperCase();
+  return `${named.slice(0, SECRET_NAME.most - hash.length - 1).replace(/-+$/, "")}-${hash}`;
 };
 
 declare namespace secretName {
@@ -326,6 +338,22 @@ declare namespace secretName {
       [args: [key: "SLACK_TOKEN"], expected: "SLACK-TOKEN"],
       [args: [key: "API_KEY"], expected: "API-KEY-SECRET"],
       [args: [key: "_2FA_TOKEN"], expected: "KEY-2FA-TOKEN"],
+    ]
+  >;
+  /** a key too long for a name: cut, and the cut ends in a hash of the whole key, so two
+   *  that begin alike are two secrets (until 2026-11-21 both were the first 64 characters,
+   *  and one secret's value stood for the other's) */
+  export type Long = Table<
+    typeof secretName,
+    [
+      [
+        args: [key: "A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_ONE_API_KEY"],
+        expected: "A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-1E86EE3E",
+      ],
+      [
+        args: [key: "A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_TWO_API_KEY"],
+        expected: "A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-8C2DDEC6",
+      ],
     ]
   >;
 }
