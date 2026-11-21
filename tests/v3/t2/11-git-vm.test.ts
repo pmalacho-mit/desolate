@@ -568,16 +568,16 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const terminal = client("desolate-git.localhost", port);
     await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
     const first = async (body: Record<string, string>) => {
-      // (Six shells at most, each ending half a minute after its last reader: this suite's
-      // earlier ones, and these, wait their turn as a person closing a tab would.)
-      let opened = await terminal.post("/session", body);
-      for (let i = 0; i < 20 && opened.status === 429; i++) {
-        await sleep(3000);
-        opened = await terminal.post("/session", body);
-      }
+      const opened = await terminal.post("/session", body);
       assert.equal(opened.status, 200, opened.body);
       const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
       const stream = await terminal.get(`/session/${id}/stream?token=${token}`, 1500);
+      // (Done with it, as a person is: a shell whose tab closes stays open, for the tab to
+      // come back to.)
+      await terminal.post(`/session/${id}/input`, {
+        token,
+        data: Buffer.from("exit\n").toString("base64"),
+      });
       return stream.body
         .split("\n")
         .filter((line) => line.startsWith("data: "))
@@ -609,6 +609,39 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       await first({ repo: "acme/widgets", domain: "--all", branch: "from-git" }),
       /desolate: /,
     );
+  });
+
+  it("a shell survives its tab closing: past the half minute that ended it, the page is offered it back, as it was", async () => {
+    const terminal = client("desolate-git.localhost", Number(stack.env.DESOLATE_EDITOR_PORT));
+    await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
+    const opened = await terminal.post("/session", { repo: "acme/widgets" });
+    assert.equal(opened.status, 200, opened.body);
+    const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
+    const type = (text: string) =>
+      terminal.post(`/session/${id}/input`, { token, data: Buffer.from(text).toString("base64") });
+    const read = async (ms: number) =>
+      (await terminal.get(`/session/${id}/stream?token=${token}`, ms)).body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => Buffer.from(line.slice(6), "base64").toString())
+        .join("");
+    assert.equal((await type("KEPT=$((6*7)); cd /git/acme/widgets/.git\n")).status, 200);
+    await read(1500);
+    // The tab has closed. The host ended such a shell 30 s after, looking every 5 s.
+    await sleep(40_000);
+    const listed = await terminal.get("/sessions");
+    assert.equal(listed.status, 200, listed.body);
+    const left = (JSON.parse(listed.body) as { left: { id: string; token: string }[] }).left;
+    assert.ok(
+      left.some((s) => s.id === id && s.token === token),
+      `the page is offered it back: ${listed.body}`,
+    );
+    assert.equal((await type('echo "kept-$KEPT in $PWD"\n')).status, 200, "it still takes input");
+    let said = "";
+    for (let i = 0; i < 20 && !/kept-42 in \/git\/acme\/widgets\/\.git/.test(said); i++)
+      said = await read(700);
+    assert.match(said, /kept-42 in \/git\/acme\/widgets\/\.git/, said.slice(-800));
+    await type("exit\n");
   });
 
   it("an offered branch's new LFS file checks out in the git VM, from the root's store, whole", async () => {
