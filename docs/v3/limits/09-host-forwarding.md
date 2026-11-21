@@ -25,10 +25,17 @@ change); `host/daemon.ts` was 3,700 lines, and is 2,400 now.
   workspace is not trusted with the Mac's disk); `desolate ports --json` has a note per
   workspace with the count and the last time, and the host's facts carry the same note
   (`notes`) for the dashboard, whose showing it is ticket 4's.
-  The same gate is on the link's unix socket (qemu, the fake backend), which had none. On vz,
-  connections still proving the link's token are nobody's yet: at most as many are in their
-  handshake at once, and past that one is closed, since it is not known to be the
-  workspace's to tell.
+  The same gate is on the link's unix socket (qemu, the fake backend), which had none. A
+  refused connection is read and dropped, and destroyed after `REFUSED_MS` (5 s), at most
+  `link.connections` answered at once: a workspace holding its refused connections open
+  holds nothing of the Mac's. On vz, connections still proving the link's token are nobody's
+  yet: at most `PROVING_MOST` (1024, a socket each) are in their handshake at once, and when
+  full the one at it longest is closed with no word (it was the newest, at 64: another
+  user's program holding 64 silent ones kept the workspace off its link).
+- **The daemon does not end for one connection.** Its log, written from inside every
+  connection's handlers, cannot throw (disk full, no descriptor); a VM connection that
+  cannot be spawned (no descriptor) is one that closes (`dial`), where it threw and ended
+  the daemon with every workspace's link. Both found by fresh reviews of this change.
 - **R4, the pages' port waits as any HTTP server does.** A client silent for 400 ms there was
   closed: a browser's preconnected socket, used a moment later, failed the page it was opened
   for. No protocol there is one whose server speaks first, so it is held as on every
