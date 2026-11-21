@@ -137,6 +137,24 @@ declare namespace readToken {
 }
 
 const hostToken = () => readToken(TOKEN_FILE);
+/** The branches a snapshot carries for one domain: at most BRANCHES_SHOWN, those checked out
+ *  in a workspace first, with how many the domain has in all. */
+export const BRANCHES_SHOWN = 200;
+export const snapshotBranches = <B extends { repo: string; branch: string }, L>(
+  all: B[],
+  checkedOut: Set<string>,
+  landed: (b: B) => L,
+): { branches: (B & { landed: L })[]; branchesTotal: number } => {
+  const first = all.filter((b) => checkedOut.has(`${b.repo}\n${b.branch}`));
+  const rest = all.filter((b) => !checkedOut.has(`${b.repo}\n${b.branch}`));
+  return {
+    branches: [...first, ...rest]
+      .slice(0, Math.max(BRANCHES_SHOWN, first.length))
+      .map((b) => ({ ...b, landed: landed(b) })),
+    branchesTotal: all.length,
+  };
+};
+
 /** The person's browser's credential for the dashboard. The host made it and installed it
  *  as root; `desolate ui` prints the dashboard's address with it. The name and the origin
  *  checks keep other web pages out; they do not keep out another program on the machine,
@@ -571,10 +589,17 @@ const snapshot = () => {
         const repo = parseRepo(r);
         return repo !== null && domainNameFor(repo) === d.slug;
       }) ?? null,
-    branches: branchesOf(d.slug, d.repos).map((b) => ({
-      ...b,
-      landed: landedFor(pushed, b.repo, b.branch, b.commit),
-    })),
+    // A page of them, and how many there are (R2): the snapshot is sent whole to every open
+    // dashboard on each change, and a domain's own list may name tens of thousands (R7: it
+    // is the domain's to write). Those a workspace has checked out first, so each row's own
+    // branch is among them; `desolate branches <domain>` lists every one.
+    ...snapshotBranches(
+      branchesOf(d.slug, d.repos),
+      new Set(
+        domains.workspaces(d.slug).flatMap((w) => w.checkouts.map((c) => `${c.repo}\n${c.branch}`)),
+      ),
+      (b) => landedFor(pushed, b.repo, b.branch, b.commit),
+    ),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
     // The domain's environment, while it is built for its first workspace: shown as that,

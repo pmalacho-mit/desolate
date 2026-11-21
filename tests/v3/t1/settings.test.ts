@@ -207,7 +207,6 @@ const COMPUTED_READS = new Set([
   "shared/settings.ts",
   "host/settings.ts",
   "root/proxy/manage.ts",
-  "host/workspaces.ts",
   // Passes the reviewer's own settings, and nothing else of root's environment, on to the
   // reviewer's process (limits 01): each name is a registered setting's variable.
   "root/review-ask.ts",

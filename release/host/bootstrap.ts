@@ -132,6 +132,9 @@ declare namespace parseForge {
 }
 
 const startRootServices = async () => {
+  // The root's settings, as the person stored them on the Mac, before what reads them starts.
+  const { passInward } = await import("./settings.ts");
+  await passInward(ROOT_VM, "root");
   const uid = process.getuid!();
   const result = await backend().exec(
     ROOT_VM,
@@ -257,7 +260,12 @@ export const bootstrap = async (
   step(info.status === "missing", `root VM ${ROOT_VM} created`);
   if (info.status !== "running") {
     if (info.status === "suspended") await b.resume(ROOT_VM);
-    else await b.start(ROOT_VM);
+    else {
+      // Its size, as its settings say now (`desolate settings set root.memoryMiB`).
+      const { sizeBeforeStart } = await import("./settings.ts");
+      await sizeBeforeStart(ROOT_VM, "root");
+      await b.start(ROOT_VM);
+    }
   }
   step(info.status !== "running", "root VM running");
 

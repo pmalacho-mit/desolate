@@ -900,7 +900,7 @@ const branchList = (d) => {
   const where = (b) => d.workspaces.filter((w) => w.checkouts.some((c) => c.repo === b.repo && c.head && c.head.branch === b.branch)).map((w) => w.workspace);
   const open = branchesOpen.has(d.slug);
   return el("details", { class: "branches", open, "data-branches": d.slug },
-    el("summary", { onclick: (event) => { event.preventDefault(); if (open) branchesOpen.delete(d.slug); else branchesOpen.add(d.slug); render(); } }, `Branches (${list.length})`),
+    el("summary", { onclick: (event) => { event.preventDefault(); if (open) branchesOpen.delete(d.slug); else branchesOpen.add(d.slug); render(); } }, `Branches (${d.branchesTotal > list.length ? `${list.length} of ${d.branchesTotal}` : list.length})`),
     el("ul", { class: "rows" }, list.map((b) => el("li", { "data-branch": `${b.repo}/${b.branch}` },
       el("span", { class: `dot ${offered(b) ? "blue" : "hollow"}`, title: offered(b) ? "offered" : "not offered" }),
       el("div", { class: "what" },
@@ -908,7 +908,8 @@ const branchList = (d) => {
           offered(b) ? pill("offered", "blue", "a workspace offered it for you to review and push") : null,
           b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null),
         el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? [" · checked out in ", where(b).map((w) => named("workspace", w))] : "")),
-      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))));
+      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))),
+    d.branchesTotal > list.length ? el("div", { class: "sub" }, `and ${d.branchesTotal - list.length} more branches: \`desolate branches ${d.slug}\` lists every one`) : null);
 };
 const branchesOpen = new Set();
 

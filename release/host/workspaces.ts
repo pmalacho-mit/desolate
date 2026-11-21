@@ -20,13 +20,12 @@ import { readHead } from "../shared/status.ts";
 import {
   capToMac,
   checkSize,
-  defaultsFor,
   describe as describeSize,
   describeParts,
-  LIMITS,
   merge,
   parseDisk,
   parseMemory,
+  workspaceDefaults,
 } from "../shared/size.ts";
 import type { ProjectSize, Size } from "../shared/size.ts";
 import { RUN_MAX } from "../shared/run.ts";
@@ -170,35 +169,10 @@ declare namespace specOf {
   >;
 }
 
-const sized = (name: string, fallback: number, min: number, max: number) => {
-  const value = process.env[name];
-  if (value === undefined || value === "") return fallback;
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < min || number > max)
-    refuse(`${name} is '${value}'`, `a whole number from ${min} to ${max}`);
-  return number;
-};
-
-/** The stack's defaults: from this Mac (its cores and memory), worked out each time and
- *  stored nowhere; DESOLATE_WORKSPACE_CPUS, _MEMORY_MIB and _DISK_GIB override them. */
-export const stackDefaults = (): Size => {
-  const mac = defaultsFor(os.cpus().length, Math.floor(os.totalmem() / 1024 / 1024));
-  return {
-    cpus: sized("DESOLATE_WORKSPACE_CPUS", mac.cpus, LIMITS.cpus[0], LIMITS.cpus[1]),
-    memoryMiB: sized(
-      "DESOLATE_WORKSPACE_MEMORY_MIB",
-      mac.memoryMiB,
-      LIMITS.memoryMiB[0],
-      LIMITS.memoryMiB[1],
-    ),
-    diskGiB: sized(
-      "DESOLATE_WORKSPACE_DISK_GIB",
-      mac.diskGiB,
-      LIMITS.diskGiB[0],
-      LIMITS.diskGiB[1],
-    ),
-  };
-};
+/** The stack's defaults: the settings workspace.cpus, .memoryMiB and .diskGiB (shared/size.ts),
+ *  each from this Mac (its cores and memory, worked out each time) unless the person set it
+ *  (`desolate settings set`, or DESOLATE_WORKSPACE_CPUS, _MEMORY_MIB and _DISK_GIB). */
+export const stackDefaults = (): Size => workspaceDefaults();
 declare namespace stackDefaults {
   type Overrides = [
     Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_CPUS", value: "3"]>,
@@ -210,13 +184,13 @@ declare namespace stackDefaults {
     Overrides,
     Expect<Invoke<typeof stackDefaults>, "=", { cpus: 3; memoryMiB: 6144; diskGiB: 40 }>
   >;
-  /** within the limits a workspace may have, as whole numbers */
+  /** within the limits a workspace may have, as whole numbers: a typo is refused, never
+   *  taken for the default */
   export type Refuses = Given<
     Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_CPUS", value: "1.5"]>,
-    Expect<
-      Invoke<typeof refusalOf, [run: typeof stackDefaults, args: []]>,
-      "=",
-      { message: "DESOLATE_WORKSPACE_CPUS is '1.5'"; fix: "a whole number from 1 to 64"; code: 1 }
+    Throws<
+      Invoke<typeof stackDefaults>,
+      "DESOLATE_WORKSPACE_CPUS must be a whole number from 1 to 64, not '1.5'"
     >
   >;
 }
@@ -473,6 +447,8 @@ export const startServices = async (plan: WorkspacePlan) => {
   step("its proxy");
   await connectWorkspace({ ...plan, proxy: proxy.socket });
   step("its link");
+  // Its settings, as the person stored them on the Mac, before what reads them starts.
+  await (await import("./settings.ts")).passInward(plan.vm, "workspace");
   // start.sh (and its docker step, below) start the VM's own services: a few seconds, and
   // five minutes is the bound on a VM that is not answering (they say nothing as they go).
   const services = await b.exec(
