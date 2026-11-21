@@ -106,7 +106,7 @@ import type {
   wire,
 } from "../.harness/host-daemon.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
-import type { firstOf, stillRunning, vmRunning } from "../.harness/host-web.ts";
+import type { firstOf, spawnedAs, stillRunning, vmRunning } from "../.harness/host-web.ts";
 import type { all } from "../.harness/shared-review-account.ts";
 import type { abortedIn } from "../.harness/shared-run.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
@@ -431,23 +431,42 @@ declare namespace reviewerSummary {
         ]
       >,
     ],
-    Expect<
-      Invoke<
-        typeof all,
+    [
+      Expect<
+        Invoke<
+          typeof all,
+          [
+            lines: Invoke<
+              typeof reviewerSummary,
+              [request: { op: "page"; key: "k"; list: "commits"; from: 0 }]
+            >,
+          ]
+        >,
+        "=",
         [
-          lines: Invoke<
-            typeof reviewerSummary,
-            [request: { op: "page"; key: "k"; list: "commits"; from: 0 }]
-          >,
+          { progress: { phase: "waiting for another push's account" } },
+          { progress: { phase: "packing"; done: 1200; of: 8000 } },
+          { page: { commits: { items: []; total: 0; from: 0 } } },
         ]
       >,
-      "=",
-      [
-        { progress: { phase: "waiting for another push's account" } },
-        { progress: { phase: "packing"; done: 1200; of: 8000 } },
-        { page: { commits: { items: []; total: 0; from: 0 } } },
-      ]
-    >
+      /** asked as root in the root VM, the request on its input alone: nothing of it in the
+       *  program's words or its environment */
+      Expect<
+        Invoke<typeof spawnedAs>,
+        "=",
+        [
+          {
+            vm: "dsl-main-root";
+            argv: [
+              "node",
+              "--disable-warning=ExperimentalWarning",
+              "/desolate/release/root/review-ask.ts",
+            ];
+            options: { root: true };
+          },
+        ]
+      >,
+    ]
   >;
   /** whoever asked went away: the reviewer's program is ended, and nothing more is given,
    *  no answer and no error. (The control: left alone, the same program is still running.) */

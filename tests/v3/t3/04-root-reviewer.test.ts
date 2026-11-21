@@ -1,8 +1,9 @@
 // T3 (qemu) and T4 (vz, on a Mac: DESOLATE_TIER=T4). The host asks desolate's reviewer as
 // root in the root VM (host/vm/lima.ts `spawn`, host/daemon.ts `reviewerAsked`), and a
 // question nobody waits for any more must end there: the person's Ctrl-C at the terminal,
-// a page that let go of its question. Each is tried beside a control asked the same at the
-// same moment and still waited for, which is still running when the other has ended.
+// a CLI killed alone, a page that let go of its question. Each is tried beside a control
+// asked the same at the same moment and still waited for, which is still running when the
+// other has ended; and once all have ended, none of the reviewer's git is left.
 //
 // What keeps the reviewer working is real work, made here: a file of 3.2 million short
 // lines that a push changes. Its diff takes a minute or more (measured on the M1: 1.6
@@ -45,17 +46,24 @@ const inClone = (script: string) =>
     "-c",
     `export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig; cd ${CLONE} && ${script}`,
   ]);
-/** How many questions to the reviewer are being answered in the root, as root counts them:
- *  review-ask.ts (root's, one a question) and the reviewer's own node for it (runuser, its
- *  parent, is not counted). */
-const asking = () => {
-  const count = (pattern: string) =>
-    Number(stack.inRoot(["pgrep", "-fc", pattern], { root: true }).stdout.trim() || "0");
-  return {
-    asks: count("root/review-ask[.]ts"),
-    reviewers: count("^node .*reviewer[.]ts (account|summary)$"),
-  };
+/** A count (pgrep's `-c`): 0 when nothing matched, and a failure when it did not run, so a
+ *  root that could not be asked never reads as one with nothing left. */
+const counted = (result: { code: number; stdout: string; stderr: string }) => {
+  assert.ok(
+    (result.code === 0 || result.code === 1) && /^\d+$/.test(result.stdout.trim()),
+    `pgrep did not answer: ${result.code} ${result.stdout} ${result.stderr}`,
+  );
+  return Number(result.stdout.trim());
 };
+const inRootCount = (args: string[]) => counted(stack.inRoot(["pgrep", ...args], { root: true }));
+/** How many questions to the reviewer are being answered in the root: review-ask.ts (root's,
+ *  one a question) and the reviewer's own node for it (runuser, its parent, is not counted). */
+const asking = () => ({
+  asks: inRootCount(["-fc", "root/review-ask[.]ts"]),
+  reviewers: inRootCount(["-fc", "^node .*reviewer[.]ts (account|summary)$"]),
+});
+/** The git the reviewer runs (its work), none left once no question is answered. */
+const reviewersGit = () => inRootCount(["-c", "-u", "desolate-reviewer", "git"]);
 const until = async (what: string, done: () => boolean, ms: number) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(500)) if (done()) return;
   assert.fail(`${what}: not within ${ms / 1000} s (${JSON.stringify(asking())})`);
@@ -65,10 +73,14 @@ const rawPush = (branch: string) =>
   inClone(
     `setsid nohup git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1 </dev/null & sleep 0.2`,
   );
+/** The pushes waiting for approval, as the root's own files list them. */
 const waitingPushes = () =>
-  Number(
-    stack.inRoot(["bash", "-c", "ls /var/lib/desolate/approvals | grep -c '[.]json$'"]).stdout ||
-      "0",
+  counted(
+    stack.inRoot([
+      "bash",
+      "-c",
+      "set -o pipefail; ls /var/lib/desolate/approvals | { grep -c '[.]json$' || true; }",
+    ]),
   );
 
 describe(
@@ -102,7 +114,7 @@ describe(
       assert.match(made.stdout, /made/, made.stderr);
       rawPush("slow-net");
       await until("the push waits for its approval", () => waitingPushes() === 1, 120_000);
-      // Two people at two terminals, `desolate approve`, each asking the reviewer for its
+      // Three people at three terminals, `desolate approve`, each asking the reviewer for its
       // account: each a question of its own in the root.
       const terminal = () =>
         spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["approve"], {
@@ -111,15 +123,19 @@ describe(
           stdio: "ignore",
         });
       const stopped = terminal();
+      const killed = terminal();
       const control = terminal();
       try {
-        await until("both questions are being answered", () => asking().asks === 2, 60_000);
+        await until("the three questions are being answered", () => asking().asks === 3, 60_000);
         await sleep(3_000);
-        assert.deepEqual(asking(), { asks: 2, reviewers: 2 }, "both still at work");
+        assert.deepEqual(asking(), { asks: 3, reviewers: 3 }, "all three still at work");
         // Ctrl-C: SIGINT to the terminal's foreground process group.
         process.kill(-stopped.pid!, "SIGINT");
+        await until("Ctrl-C's question ends in the root", () => asking().asks === 2, ENDS_MS);
+        // A CLI killed alone (cli.sh execs node): its ssh is left, and ends at its next write.
+        process.kill(killed.pid!, "SIGKILL");
         await until(
-          "the stopped terminal's question ends in the root",
+          "the killed CLI's question ends in the root",
           () => asking().asks === 1,
           ENDS_MS,
         );
@@ -130,7 +146,7 @@ describe(
           "CONTROL: the terminal still waiting is still answered",
         );
       } finally {
-        for (const child of [stopped, control])
+        for (const child of [stopped, killed, control])
           try {
             process.kill(-child.pid!, "SIGINT");
           } catch {
@@ -143,6 +159,7 @@ describe(
         ENDS_MS,
       );
       assert.deepEqual(asking(), { asks: 0, reviewers: 0 });
+      assert.equal(reviewersGit(), 0, "and none of the reviewer's git is left");
       // The push is withdrawn where it was asked: it leaves the list.
       inClone("pkill -f 'git push origin HEAD:refs/heads/slow-ne[t]' || true");
       await until("the withdrawn push leaves the list", () => waitingPushes() === 0, 30_000);
