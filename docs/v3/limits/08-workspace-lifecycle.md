@@ -21,7 +21,9 @@ change).
   each), a person at a terminal (each step on a line, its "still ..." rewritten in place), or
   nobody (a script, which sees the answer as before; T2's transcripts do not move).
 - **R5, the init lock by liveness.** `withLock(..., { scope: "share" })` from
-  `shared/lock.ts`. A first checkout that takes twenty minutes holds it for twenty minutes,
+  `shared/lock.ts`. It is in `/workspaces/.desolate/locks`, which an agent in any workspace of
+  the domain can write; `init.ts` says why that is safe (what such a side can do with it, it
+  can already do to the domain's `.git`, and nothing reaches past the domain). A first checkout that takes twenty minutes holds it for twenty minutes,
   and a workspace that died in its init leaves it to the next in a few beats. The wait says
   whom it waits for, every beat, and has no timer.
 - **R1, cut once, at the display, with a mark.** The devcontainer's status, image name, user
@@ -52,8 +54,8 @@ holes, and they are fixed here):
 - **What is kept of an error:** `vmText`, the last `KEPT_CHARS` (1 Mi characters), runs of
   empty lines made one, in one file for each workspace and step, overwritten: the daemon looks
   at each running workspace every 30 s, and a file each time would fill the Mac's disk.
-  Each step of it is linear (shared/text.ts's `tail()` is quadratic on a long run of
-  newlines, which a VM chooses: said to the foundation).
+  Each step of it is linear in the text, which the VM chooses (the review also found
+  `tail()`'s quadratic regex; the foundation has since fixed it).
 - **What is shown:** at most `SHOWN.lines` (20) lines of a step each beat, each cut at 500
   characters with the mark; the rest counted and said. The dashboard's progress is the
   daemon's, which every domain shares.

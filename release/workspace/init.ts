@@ -81,6 +81,13 @@ const longGit = (what: string, dir: string | null, args: string[]) =>
  *  init leaves it to the next, in ten seconds. Waiting for it has no timer: the host's
  *  person is told who holds it, and waits or does not. What is done under it is safe to do
  *  again: each step looks first at what is there. */
+// (shared/lock.ts asks why a share lock is safe where an agent can write: /workspaces is the
+// domain's share, and anything in any of its workspaces can write this folder. What such a
+// side can do with it, it can do already: remove the lock and run git in the domain's .git
+// at the same time as another (it can write that .git itself), or swap a link in, so that an
+// init in another workspace of the domain writes a file named `holder` in, or unlinks one
+// named `holder` or `beat` from, a folder that workspace's user may write. Nothing reaches
+// past the domain, whose workspaces are one project's, and the lock is not a boundary.)
 const LOCKS = "/workspaces/.desolate/locks";
 const oneAtATime = <T>(key: string, repo: string, body: () => Promise<T>): Promise<T> => {
   fs.mkdirSync(LOCKS, { recursive: true });

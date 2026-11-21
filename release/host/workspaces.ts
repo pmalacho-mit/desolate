@@ -288,8 +288,7 @@ const KEPT_CHARS = 1024 * 1024;
 const BLANK = "\n\r\t ";
 /** A VM's error text as the host keeps and shows it: its last KEPT_CHARS, from a line's
  *  start, with what was left out said in its first line; its runs of empty lines made one,
- *  and its ends trimmed. Each step is linear in the text (the VM chooses it; shared/text.ts's
- *  tail() is not, on a long run of newlines). */
+ *  and its ends trimmed. Each step is linear in the text, which the VM chooses. */
 export const vmText = (output: string): string => {
   const cut = output.length > KEPT_CHARS;
   const at = cut ? output.indexOf("\n", output.length - KEPT_CHARS) : -1;
