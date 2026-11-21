@@ -35,10 +35,13 @@ const openApproval = () => {
  *  same word can be several). A domain or a workspace named with `at` ("<domain>" or
  *  "<domain>/<workspace>") is also a way to it: a click goes to its card or its row. */
 const named = (kind, value, title, at) => el("span", { class: `named ${kind}`, title: title || `the ${kind}`, "data-goto": at ? `${kind}:${at}` : null, role: at ? "link" : null, tabindex: at ? "0" : null },
-  el("span", { class: "kind" }, kind), el("span", { class: "value mono" }, value));
+  el("span", { class: "kind" }, kind), el("span", { class: "value mono", title: String(value) }, value));
 const commitRef = (commit, title) => named("commit", short(commit), title || `the commit ${commit}`);
 /** Go to a domain's card or a workspace's row: shown first (unfolded, not filtered away),
  *  then scrolled to, and marked for a moment. */
+/** A domain's or a workspace's name, as typed: the root's own rule (shared/names.ts), its
+ *  length from the root (shared/limits.ts NAMES.slug), so the page holds no copy of it. */
+const slugPattern = () => `[a-z0-9][a-z0-9-]{0,${state.bounds.slug - 1}}`;
 const goTo = (where) => {
   const kind = where.slice(0, where.indexOf(":"));
   const at = where.slice(where.indexOf(":") + 1);
@@ -103,6 +106,8 @@ let activityFilter = "";
 
 const act = async (key, kind, args) => {
   busy.add(key);
+  // (The last action's error goes with the next action: it is about that one.)
+  notice = "";
   render();
   try {
     const response = await fetch("/action", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1", ...window.desolateKey.headers }, body: JSON.stringify({ kind, args }) });
@@ -113,8 +118,10 @@ const act = async (key, kind, args) => {
     setTimeout(() => { busy.delete(key); render(); }, 1500);
   }
 };
+/** An action's error: kept until the person dismisses it or asks for the next action (it
+ *  went after 8 s, and a person who looked away never read it). */
 let notice = "";
-const alertLine = (text) => { notice = text; render(); setTimeout(() => { notice = ""; render(); }, 8000); };
+const alertLine = (text) => { notice = text; render(); };
 const button = (label, key, kind, args, quiet = false) =>
   el("button", { class: quiet ? "quiet" : "", disabled: busy.has(key), "data-action": kind, onclick: () => act(key, kind, args) }, busy.has(key) ? `${label}...` : label);
 
@@ -257,20 +264,13 @@ const sideBySide = (text, tokens) => el("div", { class: "sbs", "data-diff": "" }
 // The diff's element, kept across redraws: the dashboard redraws on every change of state (a
 // workspace's status, an action's progress), and a long diff drawn again each time cost up to
 // half a second, and threw away where the person had scrolled to. Drawn again only when the
-// diff, the layout, or how much of it is shown changes. At first at most DIFF_LINES of it.
-const DIFF_LINES = 3000;
-let shownDiff = null; // { diff, layout, all, tokens, node }
+// diff, the layout, or how much of it the root has sent changes. The root sends it in pages
+// (root/offers.ts DIFF_PAGE: as much as draws quickly), so this draws all it has.
+let shownDiff = null; // { diff, layout, pages, tokens, node }
 const diffElement = (diff) => {
-  const all = Boolean(diff.all);
-  if (shownDiff && shownDiff.diff === diff && shownDiff.layout === layout && shownDiff.all === all && shownDiff.tokens === diff.tokens) return shownDiff.node;
-  const lines = diff.text.split("\n");
-  const cut = !all && lines.length > DIFF_LINES;
-  const text = cut ? lines.slice(0, DIFF_LINES).join("\n") : diff.text;
-  const node = el("div", { class: "diff-box" },
-    layout === "sides" ? sideBySide(text, diff.tokens) : diffView(text, diff.tokens),
-    cut ? el("div", { class: "sub" }, `The first ${DIFF_LINES.toLocaleString()} of ${lines.length.toLocaleString()} lines. `,
-      el("button", { class: "quiet small", onclick: () => { diff.all = true; render(); } }, "Show the rest")) : null);
-  shownDiff = { diff, layout, all, tokens: diff.tokens, node };
+  if (shownDiff && shownDiff.diff === diff && shownDiff.layout === layout && shownDiff.pages === diff.pages && shownDiff.tokens === diff.tokens) return shownDiff.node;
+  const node = el("div", { class: "diff-box" }, layout === "sides" ? sideBySide(diff.text, diff.tokens) : diffView(diff.text, diff.tokens));
+  shownDiff = { diff, layout, pages: diff.pages, tokens: diff.tokens, node };
   return node;
 };
 let layout = (() => {
@@ -291,53 +291,147 @@ const setLayout = (value) => {
 };
 
 const query = (target, against) => `domain=${encodeURIComponent(target.domain)}&repo=${encodeURIComponent(target.repo)}&branch=${encodeURIComponent(target.branch)}&against=${encodeURIComponent(against)}`;
-/** The diff of the review, or of the commits picked in it (commitList): asked of the root, the
- *  last asked winning (a run of quick clicks shows the last one's). */
-let diffAsked = 0;
-const loadDiff = async () => {
-  const { offer, against } = reviewing;
-  const asked = ++diffAsked;
-  const commits = reviewing.review && reviewing.review.commits;
-  const pick = reviewing.pick && commits ? `&from=${commits[reviewing.pick.hi].commit}&to=${commits[reviewing.pick.lo].commit}` : "";
-  reviewing.diff = { loading: true, previous: reviewing.diff && reviewing.diff.pick ? reviewing.diff.pick : null };
-  render();
-  let answer;
-  try {
-    const response = await fetch(`/diff?${query(offer, against)}${reviewing.whitespace === "ignore" ? "&whitespace=ignore" : ""}${pick}`, { headers: window.desolateKey.headers });
-    answer = await response.json();
-    if (!response.ok) answer = { error: answer.error || `HTTP ${response.status}` };
-  } catch (error) {
-    answer = { error: String(error) };
+/** What the review asks the root for after its first answer: the next page of a list, the
+ *  files of the commits picked, the diff a page at a time. Each request ends when the review
+ *  closes (the root then stops git: nothing there has a timer, R4). The root says which
+ *  commit it read: one that is not the reviewed one means the branch moved. */
+const askReview = async (r, what, params) => {
+  const extra = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join("");
+  const response = await fetch(`/${what}?${query(r.offer, r.against)}${extra}`, { headers: window.desolateKey.headers, signal: r.gone.signal });
+  const answer = await response.json();
+  if (!response.ok) throw new Error(answer.error || `HTTP ${response.status}`);
+  if (answer.commit !== r.review.commit) {
+    r.moved = true;
+    throw new Error("The branch moved while you were reading. Close this and review it again.");
   }
-  if (asked !== diffAsked || !reviewing) return;
-  reviewing.diff = answer;
+  return answer;
+};
+/** The commits picked, by their ids (a run: the oldest, then the newest), or none. */
+const pickParams = (r) => (r.pick ? { pickFrom: r.commits.items[r.pick.hi].commit, pickTo: r.commits.items[r.pick.lo].commit } : {});
+const closeReview = () => {
+  if (reviewing && reviewing.gone) reviewing.gone.abort();
+  reviewing = null;
   render();
-  // Then its colours, when the worker has them (or never: the diff stays plain).
-  const diff = reviewing && reviewing.diff;
-  if (diff && typeof diff.text === "string" && typeof DesolateHighlight !== "undefined")
-    DesolateHighlight.tokensFor(diff.text).then((tokens) => {
-      if (reviewing && reviewing.diff === diff && tokens.some(Boolean)) {
-        diff.tokens = tokens;
-        render();
-      }
-    });
+};
+/** The next page of the commits, or of the files, added to what is shown ("Show more"). */
+const showMore = async (list) => {
+  const r = reviewing;
+  const have = list === "commits" ? r.commits : r.files;
+  if (!have || have.asking) return;
+  have.asking = true;
+  have.error = null;
+  render();
+  try {
+    const answer = await askReview(r, "review/more", { list, from: have.items.length, ...(list === "files" ? pickParams(r) : {}) });
+    const page = list === "commits" ? answer.commits : answer.changes;
+    have.items = have.items.concat(page.items);
+    have.total = page.total;
+  } catch (error) {
+    have.error = error.message || String(error);
+  }
+  have.asking = false;
+  if (reviewing === r) render();
+};
+/** The files the commits picked change (the whole review's, when none are): asked of the
+ *  root, the last asked winning. Meanwhile the list shows the files it showed. */
+let filesAsked = 0;
+const loadFiles = async () => {
+  const r = reviewing;
+  const asked = ++filesAsked;
+  if (!r.pick) {
+    r.files = r.review.changes;
+    return;
+  }
+  r.files = { loading: true, previous: r.files && r.files.loading ? r.files.previous : r.files };
+  let files;
+  try {
+    files = (await askReview(r, "review/more", { list: "files", ...pickParams(r) })).changes;
+  } catch (error) {
+    files = { error: error.message || String(error) };
+  }
+  if (asked !== filesAsked || reviewing !== r) return;
+  r.files = files;
+  render();
+};
+/** Colours for the diff's text, when the worker has them (or never: the diff stays plain). */
+const colour = (r, diff) => {
+  if (typeof diff.text !== "string" || typeof DesolateHighlight === "undefined") return;
+  const pages = diff.pages;
+  DesolateHighlight.tokensFor(diff.text).then((tokens) => {
+    if (reviewing === r && r.diff === diff && diff.pages === pages && tokens.some(Boolean)) {
+      diff.tokens = tokens;
+      render();
+    }
+  });
+};
+/** The diff of the review, or of the commits picked in it (commitList), or of one file of it
+ *  (`file`: a change from the list), its first page: asked of the root, the last asked
+ *  winning (a run of quick clicks shows the last one's). Making it takes what it takes: the
+ *  page says it is at it, and closing the review stops it. */
+let diffAsked = 0;
+const loadDiff = async (file = null) => {
+  const r = reviewing;
+  const asked = ++diffAsked;
+  const params = { ...pickParams(r), whitespace: r.whitespace === "ignore" ? "ignore" : null, file: file ? file.path : null, was: file ? file.was : null };
+  r.diff = { loading: true };
+  render();
+  let diff;
+  try {
+    diff = { ...(await askReview(r, "diff", params)), params, pages: 1 };
+  } catch (error) {
+    diff = { error: error.message || String(error) };
+  }
+  if (asked !== diffAsked || reviewing !== r) return;
+  r.diff = diff;
+  render();
+  colour(r, diff);
+};
+/** The diff's next page, after what is shown. */
+const moreDiff = async () => {
+  const r = reviewing;
+  const diff = r.diff;
+  if (!diff || diff.asking || diff.next === null) return;
+  diff.asking = true;
+  diff.more = null;
+  render();
+  try {
+    const page = await askReview(r, "diff", { ...diff.params, at: diff.next });
+    diff.text += page.text;
+    diff.next = page.next;
+    diff.total = page.total;
+    diff.pages += 1;
+  } catch (error) {
+    diff.more = error.message || String(error);
+  }
+  diff.asking = false;
+  if (reviewing === r && r.diff === diff) {
+    render();
+    colour(r, diff);
+  }
 };
 
 /** Review any branch a domain has (offered or not), against the remote's default branch
  *  ("origin") or the domain's own copy of it ("domain"). The target names only a domain, a
  *  repository and a branch: what is shown is read in the root. */
 const openReview = async (offer, against = "origin") => {
+  if (reviewing && reviewing.gone) reviewing.gone.abort();
   const fetchedAt = ((state && state.repos.find((r) => r.repo === offer.repo)) || {}).fetchedAt || null;
-  reviewing = { offer, against, fetchedAt, loading: true };
+  const gone = new AbortController();
+  reviewing = { offer, against, fetchedAt, gone, loading: true };
   render();
+  let review;
   try {
-    const response = await fetch(`/review?${query(offer, against)}`, { headers: window.desolateKey.headers });
-    reviewing = { offer, against, fetchedAt, review: await response.json() };
+    const response = await fetch(`/review?${query(offer, against)}`, { headers: window.desolateKey.headers, signal: gone.signal });
+    review = await response.json();
   } catch (error) {
-    reviewing = { offer, against, fetchedAt, review: { error: String(error) } };
+    review = { error: String(error) };
   }
+  if (!reviewing || reviewing.gone !== gone) return;
+  // Its lists as the first page came: more is added to these copies as it is asked for.
+  reviewing = review.error ? { offer, against, fetchedAt, gone, review }
+    : { offer, against, fetchedAt, gone, review, commits: { ...review.commits, items: [...review.commits.items] }, files: review.changes };
   render();
-  if (reviewing && reviewing.review && !reviewing.review.error) loadDiff();
+  if (!review.error) loadDiff();
 };
 
 // ------------------------------------------------------------------ issues
@@ -359,7 +453,7 @@ const labelsOf = (value) => value.split(",").map((label) => label.trim()).filter
 /** Built once when it opens, so what you type is never redrawn away; `syncIssue` keeps its
  *  status in step with the state. */
 const openIssue = (issue) => {
-  const title = el("input", { name: "title", value: issue.title, maxlength: "256", "aria-label": "title", class: "wide" });
+  const title = el("input", { name: "title", value: issue.title, maxlength: String(state.bounds.issueTitle), "aria-label": "title", class: "wide" });
   const labels = el("input", { name: "labels", value: issue.labels.join(", "), "aria-label": "labels, separated by commas", class: "wide", placeholder: "labels, separated by commas" });
   const body = el("textarea", { name: "body", rows: "16", "aria-label": "body (Markdown)", class: "wide mono" });
   body.value = issue.body;
@@ -479,73 +573,108 @@ const statView = (stat) => {
   ];
 };
 
-/** The files a review changes: how (added, modified, deleted), and how many lines, with a
- *  filter; a file's name goes to its place in the diff (which is drawn whole first, if the
- *  file is past what is shown). Paths are a branch's data: text, never markup. */
-let filesFilter = "";
-const jumpTo = (path) => {
-  const find = () => [...document.querySelectorAll("#review [data-file]")].find((n) => n.dataset.file === path);
-  let at = find();
-  if (!at && reviewing && reviewing.diff && !reviewing.diff.all) {
-    reviewing.diff.all = true;
-    render();
-    at = find();
-  }
-  if (at) at.scrollIntoView({ block: "start", behavior: "smooth" });
+/** "and 37 more commits": what a list shown leaves unsaid (shared/listed.ts andMore). */
+const andMore = (list, noun, nouns = `${noun}s`) => {
+  const more = list.total - list.items.length;
+  return more > 0 ? `and ${more.toLocaleString()} more ${more === 1 ? noun : nouns}` : null;
 };
-const filesChanged = (review) => {
-  // The picked commits' files once the root has them (meanwhile, the last pick's, not a flash
-  // of the whole review's).
-  const d = reviewing && reviewing.pick && reviewing.diff;
-  const picked = d ? (d.pick || (d.loading && d.previous) || null)?.changes || null : null;
-  const changes = picked || review.changes || review.files.map((path) => ({ path, status: "changed", added: null, removed: null }));
-  if (!changes.length) return null;
+/** The rest of a list, for the asking: what is left, and a button for the next page. */
+const moreOf = (list, which, noun) => list.items.length < list.total
+  ? el("div", { class: "sub more", [`data-${which}-more`]: "" }, andMore(list, noun), " ",
+      el("button", { class: "quiet small", type: "button", disabled: Boolean(list.asking), onclick: () => showMore(which) }, list.asking ? "Reading..." : "Show more"),
+      list.error ? el("span", { class: "warn" }, ` ${list.error}`) : null)
+  : list.error ? el("div", { class: "warn" }, list.error) : null;
+
+/** The files a review changes: how (added, modified, deleted, renamed), and how many lines,
+ *  with a filter; a file's name goes to its place in the diff (or, when the diff shown does
+ *  not reach it, to its diff alone). Paths are a branch's data: text, never markup. */
+let filesFilter = "";
+const jumpTo = (change) => {
+  const find = () => [...document.querySelectorAll("#review [data-file]")].find((n) => n.dataset.file === change.path || (change.was !== undefined && n.dataset.file === change.was));
+  const at = find();
+  if (at) at.scrollIntoView({ block: "start", behavior: "smooth" });
+  else loadDiff(change);
+};
+const filesChanged = () => {
+  const r = reviewing;
+  // The picked commits' files once the root has them (meanwhile, the last ones shown, not a
+  // flash of the whole review's).
+  const files = r.files && r.files.loading ? r.files.previous : r.files;
+  if (!files) return null;
+  if (files.error) return el("div", { class: "warn" }, files.error);
+  if (!files.total) return null;
+  const changes = files.items;
   const shown = changes.filter((c) => !filesFilter || c.path.toLowerCase().includes(filesFilter.toLowerCase()));
-  const colour = { added: "green", deleted: "red", modified: "blue", changed: "" };
+  const colour = { added: "green", deleted: "red", modified: "blue", renamed: "blue", changed: "" };
+  const one = r.pick && r.pick.lo === r.pick.hi;
   return el("details", { class: "files-changed", open: true, "data-files-changed": "" },
-    el("summary", {}, picked ? `Files ${reviewing.pick.lo === reviewing.pick.hi ? "this commit changes" : "these commits change"} (${changes.length} of ${(review.changes || review.files).length})` : `Files changed (${changes.length})`),
-    changes.length > 6 ? el("input", { class: "filter", placeholder: "filter files", "aria-label": "filter the files changed", value: filesFilter, oninput: (event) => { filesFilter = event.target.value; render(); const box = document.querySelector("#review .files-changed .filter"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); } } }) : null,
+    el("summary", {}, r.pick ? `Files ${one ? "this commit changes" : "these commits change"} (${files.total.toLocaleString()} of ${r.review.changes.total.toLocaleString()})` : `Files changed (${files.total.toLocaleString()})`),
+    files.total > 6 ? el("input", { class: "filter", placeholder: "filter files", "aria-label": "filter the files changed", value: filesFilter, oninput: (event) => { filesFilter = event.target.value; render(); const box = document.querySelector("#review .files-changed .filter"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); } } }) : null,
     el("ul", { class: "files" }, shown.map((c) => el("li", { "data-change": c.path },
-      pill(c.status, colour[c.status] || "", `${c.status} in this branch`),
-      el("button", { class: "link mono", type: "button", title: "go to it in the diff", onclick: () => jumpTo(c.path) }, c.path),
+      pill(c.status, colour[c.status] || "", c.was !== undefined ? `renamed in this branch, from ${c.was}` : `${c.status} in this branch`),
+      el("button", { class: "link mono", type: "button", title: c.was !== undefined ? `${c.was} → ${c.path}: go to it in the diff` : "go to it in the diff", onclick: () => jumpTo(c) }, c.path),
       c.added === null ? el("span", { class: "sub" }, "binary") : el("span", { class: "counts" }, el("span", { class: "plus" }, `+${c.added}`), " ", el("span", { class: "minus" }, `−${c.removed}`))))),
-    shown.length < changes.length ? el("div", { class: "sub" }, `${changes.length - shown.length} more do not match`) : null);
+    shown.length < changes.length ? el("div", { class: "sub" }, `${changes.length - shown.length} of the ${changes.length.toLocaleString()} listed do not match`) : null,
+    moreOf(files, "files", "file"));
 };
 /** A review's commits, newest first, each one a button: a click shows that commit's changes
  *  alone, a shift-click a run of them (from the one clicked before), and a click on the one
- *  shown alone, or "Show all", the whole review again. Push always sends the whole branch. */
+ *  shown alone, or "Show all", the whole review again. Push always sends the whole branch.
+ *  Every one is listed as the person asks for more: what is counted is all of them. */
 const pickCommit = (i, extend) => {
   const p = reviewing.pick;
   if (extend && p) reviewing.pick = { anchor: p.anchor, lo: Math.min(p.anchor, i), hi: Math.max(p.anchor, i) };
   else if (p && p.lo === i && p.hi === i) reviewing.pick = null;
   else reviewing.pick = { anchor: i, lo: i, hi: i };
+  loadFiles();
   loadDiff();
 };
-const commitList = (review) => {
-  const commits = review.commits.slice(0, 40);
-  const p = reviewing.pick;
-  const total = review.commits.length;
+const commitList = () => {
+  const { commits, pick: p } = reviewing;
+  const total = commits.total.toLocaleString();
   const picked = p ? p.hi - p.lo + 1 : 0;
   return el("div", { class: `commits${p ? " picking" : ""}`, "data-commits": "" },
     el("div", { class: "commits-head" },
       p ? [el("strong", {}, picked === 1 ? "One commit's changes" : `${picked} commits' changes`), el("span", { class: "sub" }, `of ${total}. Push still sends all ${total}.`),
-        el("button", { class: "quiet small", type: "button", "data-pick-all": "", onclick: () => { reviewing.pick = null; loadDiff(); } }, `Show all ${total}`)]
-        : [el("strong", {}, total === 1 ? "One commit" : `All ${total} commits, combined`), el("span", { class: "sub" }, total > 1 ? "Click one to see its changes alone; shift-click for a run of them." : "")]),
-    el("ol", { class: "commit-list" }, commits.map((c, i) => {
+        el("button", { class: "quiet small", type: "button", "data-pick-all": "", onclick: () => { reviewing.pick = null; loadFiles(); loadDiff(); } }, `Show all ${total}`)]
+        : [el("strong", {}, commits.total === 1 ? "One commit" : `All ${total} commits, combined`), el("span", { class: "sub" }, commits.total > 1 ? "Click one to see its changes alone; shift-click for a run of them." : "")]),
+    el("ol", { class: "commit-list" }, commits.items.map((c, i) => {
       const on = Boolean(p && i >= p.lo && i <= p.hi);
-      return el("li", {}, el("button", { type: "button", class: `commit-pick${on ? " on" : ""}`, "data-pick": c.commit, "aria-pressed": String(on), title: "Its changes alone (shift-click: a run of commits)",
+      return el("li", {}, el("button", { type: "button", class: `commit-pick${on ? " on" : ""}`, "data-pick": c.commit, "aria-pressed": String(on), title: `${c.subject}\n\nIts changes alone (shift-click: a run of commits)`,
         onmousedown: (event) => { if (event.shiftKey) event.preventDefault(); },
         onclick: (event) => pickCommit(i, event.shiftKey) },
         el("span", { class: "hash mono" }, short(c.commit)), el("span", { class: "subject" }, c.subject)));
     })),
-    review.commits.length > commits.length ? el("div", { class: "sub" }, `and ${review.commits.length - commits.length} more`) : null);
+    moreOf(commits, "commits", "commit"));
+};
+/** The diff shown, its first page and as many more as the person asked for, and how much of
+ *  it that is. Shown only if it is of the commit the Push button names (the root says which
+ *  commit each page is of). */
+const diffPart = (diff, review) => {
+  if (!diff) return null;
+  if (diff.loading) return el("div", { class: "sub", "data-diff-making": "" }, "making the diff... (git is at it in the root: a large one takes a while, and Close stops it)");
+  if (diff.error) return el("div", { class: "warn" }, diff.error);
+  if (diff.commit !== review.commit) return null;
+  const file = diff.params && diff.params.file;
+  return [
+    el("div", { class: "toolbar" },
+      el("button", { class: "quiet small", "data-whitespace": "", onclick: () => { reviewing.whitespace = reviewing.whitespace === "ignore" ? "show" : "ignore"; loadDiff(file ? { path: file, was: diff.params.was } : null); } }, reviewing.whitespace === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes"),
+      el("button", { class: "quiet small", "data-layout": "", onclick: () => setLayout(layout === "sides" ? "unified" : "sides") }, layout === "sides" ? "Unified" : "Side by side"),
+      file ? [el("span", { class: "sub", "data-diff-file": file }, "The diff of one file: ", el("span", { class: "mono" }, file)),
+        el("button", { class: "quiet small", type: "button", "data-diff-all": "", onclick: () => loadDiff() }, "Every file's diff")] : null),
+    diff.total === 0 ? el("div", { class: "sub" }, "No changes to show.") : diffElement(diff),
+    diff.next !== null ? el("div", { class: "sub more", "data-diff-more": "" },
+      `${Math.floor((100 * diff.next) / diff.total)}% of ${file ? "this file's" : "the"} diff is shown. `,
+      el("button", { class: "quiet small", type: "button", disabled: Boolean(diff.asking), onclick: moreDiff }, diff.asking ? "Reading..." : "Show more"),
+      diff.more ? el("span", { class: "warn" }, ` ${diff.more}`) : null) : null,
+  ];
 };
 const reviewPanel = () => {
   if (!reviewing) return null;
   const { offer, review, loading } = reviewing;
-  const close = el("button", { class: "quiet", onclick: () => { reviewing = null; render(); } }, "Close");
+  const close = el("button", { class: "quiet", onclick: closeReview }, "Close");
   const header = (...title) => el("div", { class: "review-head" }, el("div", { class: "title-row" }, el("div", { class: "title" }, ...title), close));
-  if (loading) return el("div", { class: "card" }, header(el("h3", {}, `Reviewing ${offer.repo} ${offer.branch}`)), el("div", { class: "sub" }, "reading what a push would send..."));
+  if (loading) return el("div", { class: "card" }, header(el("h3", {}, `Reviewing ${offer.repo} ${offer.branch}`)), el("div", { class: "sub" }, "reading what a push would send... (git is at it in the root: it takes as long as the branch needs, and Close stops it)"));
   if (review.error) return el("div", { class: "card" }, header(el("h3", {}, `${offer.repo} ${offer.branch}`)), el("div", { class: "warn" }, review.error));
   const key = `push:${offer.domain}:${offer.repo}:${offer.branch}`;
   // Pushing from here is for what the agent offered, at the commit reviewed: an offer is how
@@ -572,23 +701,15 @@ const reviewPanel = () => {
       review.isDefault && reviewing.against === "origin" ? null
         : el("button", { class: "quiet small", "data-against": other, onclick: () => openReview(offer, other) }, other === "domain" ? `Compare with ${offer.domain}'s ${def}` : `Compare with the remote's ${def}`)),
     el("div", { class: "stat" },
-      pill(`${review.commits.length} commit${review.commits.length === 1 ? "" : "s"}`, review.commits.length ? "blue" : "", reviewing.against === "domain" ? "beyond the domain's default branch" : "what a push would send"),
+      pill(`${review.commits.total.toLocaleString()} commit${review.commits.total === 1 ? "" : "s"}`, review.commits.total ? "blue" : "", reviewing.against === "domain" ? "beyond the domain's default branch" : "what a push would send"),
       ...statView(review.stat),
       review.lfsObjects ? pill(`${review.lfsObjects} LFS object(s)`, "accent", "large files a push would send with it") : null,
       reviewing.against === "domain" ? el("span", { class: "sub" }, `(a push would send ${review.pushCommits}, counted against the remote)`) : null),
     review.warnings.length ? el("div", { class: "warnbox" }, review.warnings.map((w) => el("div", {}, pill("warning", "orange"), ` a push of this branch ${w}`))) : null,
-    commitList(review),
-    filesChanged(review),
-    reviewing.diff && reviewing.diff.loading ? el("div", { class: "sub" }, "reading the diff...") : null,
-    reviewing.diff && reviewing.diff.error ? el("div", { class: "warn" }, reviewing.diff.error) : null,
-    // The diff is shown only if it is of the commit the Push button names.
-    reviewing.diff && reviewing.diff.text !== undefined && reviewing.diff.commit === review.commit ? [
-      el("div", { class: "toolbar" },
-        el("button", { class: "quiet small", "data-whitespace": "", onclick: () => { reviewing.whitespace = reviewing.whitespace === "ignore" ? "show" : "ignore"; loadDiff(); } }, reviewing.whitespace === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes"),
-        el("button", { class: "quiet small", "data-layout": "", onclick: () => setLayout(layout === "sides" ? "unified" : "sides") }, layout === "sides" ? "Unified" : "Side by side")),
-      diffElement(reviewing.diff),
-      reviewing.diff.truncated ? el("div", { class: "warn" }, "The diff is longer than is shown here. Read the rest with git, in `desolate root shell`, before you push.") : null] : null,
-    reviewing.diff && reviewing.diff.commit && reviewing.diff.commit !== review.commit ? el("div", { class: "warn" }, "The branch moved while you were reading. Close this and review it again.") : null,
+    commitList(),
+    filesChanged(),
+    reviewing.moved ? el("div", { class: "warn", "data-moved": "" }, "The branch moved while you were reading. Close this and review it again.") : null,
+    diffPart(reviewing.diff, review),
     el("div", { class: "sub" }, "To see whole files, open the branch in a workspace's editor. The diff here is the one to trust: it is made in the root, by git alone."),
     el("div", { class: "buttons" }, !review.pushable ? el("span", { class: "sub" }, "Not pushable: cloned --no-push, so there is no write key for it.")
       : reviewing.against === "domain" ? el("span", { class: "sub" }, `A push would send ${review.pushCommits} commit(s), counted against origin: compare with origin to push.`)
@@ -673,18 +794,26 @@ const askedMore = (w) => {
 const resizing = new Map();
 const openResize = (d, w) => {
   const key = `${d.slug}/${w.workspace}`;
-  const now = w.size || { cpus: 2, memoryMiB: 4096, diskGiB: 30 };
+  // What it has; when that is not known, what a workspace gets here when nothing says
+  // (shared/size.ts defaultsFor, for this Mac: the root works it out once the host has said
+  // what the Mac has). Bounded by shared/size.ts's limits and by this Mac (capToMac): a tester
+  // set 86 GiB on a 64 GiB Mac, and nothing said no until it would not start.
+  const bounds = state.bounds.size;
+  const now = w.size || bounds.defaults || { cpus: bounds.limits.cpus[0], memoryMiB: bounds.limits.memoryMiB[0], diskGiB: bounds.limits.diskGiB[0] };
+  const most = bounds.most || { cpus: bounds.limits.cpus[1], memoryMiB: bounds.limits.memoryMiB[1] };
   const ask = (w.asks && w.asks.size) || {};
   const number = (name, value, min, max, label) => el("label", { class: "field" }, label,
-    el("input", { type: "number", name, value: String(value), min: String(min), max: String(max), step: "1", required: true, "aria-label": label }));
-  const cpus = number("cpus", now.cpus, 1, 64, "CPUs");
-  const memory = number("memory", Math.round(now.memoryMiB / 1024), 1, 256, "Memory (GiB)");
-  const disk = number("disk", now.diskGiB, now.diskGiB, 2048, `Disk (GiB, ${now.diskGiB} or more: a disk only grows)`);
+    el("input", { type: "number", name, value: String(Math.min(value, max)), min: String(min), max: String(max), step: "1", required: true, "aria-label": label }));
+  const mostGiB = Math.floor(most.memoryMiB / 1024);
+  const here = bounds.most ? " here" : "";
+  const cpus = number("cpus", now.cpus, bounds.limits.cpus[0], most.cpus, `CPUs (at most ${most.cpus}${here})`);
+  const memory = number("memory", Math.round(now.memoryMiB / 1024), Math.ceil(bounds.limits.memoryMiB[0] / 1024), mostGiB, `Memory (GiB, at most ${mostGiB}${here})`);
+  const disk = number("disk", now.diskGiB, now.diskGiB, bounds.limits.diskGiB[1], `Disk (GiB, ${now.diskGiB} or more: a disk only grows)`);
   const input = (label) => label.querySelector("input");
   const useAsked = Object.keys(askedMore(w)).length
     ? el("button", { class: "quiet small", type: "button", "data-resize-asked": "", onclick: () => {
-        if (ask.cpus !== undefined) input(cpus).value = String(ask.cpus);
-        if (ask.memoryMiB !== undefined) input(memory).value = String(Math.ceil(ask.memoryMiB / 1024));
+        if (ask.cpus !== undefined) input(cpus).value = String(Math.min(ask.cpus, most.cpus));
+        if (ask.memoryMiB !== undefined) input(memory).value = String(Math.min(Math.ceil(ask.memoryMiB / 1024), mostGiB));
         if (ask.diskGiB !== undefined) input(disk).value = String(Math.max(ask.diskGiB, now.diskGiB));
       } }, `Use what the project asks (${sizeParts(ask)})`)
     : null;
@@ -743,7 +872,7 @@ const workspaceRow = (d, w) => {
         w.startedBy
           ? pill(w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`, w.outlived ? "orange" : "", w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)`, { "data-started-by": w.startedBy })
           : pill("started by you", "", "you started it: from here, or desolate up", { "data-started-by": "" })),
-      making && w.making ? el("div", { class: "line sub", "data-making-step": "" }, redact(w.making)) : null,
+      making && w.making ? el("div", { class: "line sub", "data-making-step": "", title: redact(w.making) }, redact(w.making)) : null,
       w.checkouts.map((c) => el("div", { class: "checkout", "data-checkout": c.repo }, checkoutLine(d, w, c),
         landedOf(d, c) ? pill(`merged into ${landedOf(d, c)}`, "green", "its branch, at this commit, is merged on the remote", { "data-merged": landedOf(d, c) }) : null,
         c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)
@@ -845,7 +974,7 @@ const domainCard = (d) => {
       (state.issues || []).filter((i) => i.domain === d.slug && i.state === "published").map((i, n) => [n ? ", " : "", i.url && /^https:\/\/github\.com\//.test(i.url) ? el("a", { href: i.url, target: "_blank", rel: "noopener noreferrer" }, i.title) : i.title])) : null,
     branchList(d),
     d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); } },
-      el("input", { name: "name", placeholder: "name (optional)", pattern: "[a-z0-9][a-z0-9-]{0,39}", "aria-label": "workspace name" }),
+      el("input", { name: "name", placeholder: "name (optional)", pattern: slugPattern(), "aria-label": "workspace name" }),
       el("button", { class: firstOne ? "quiet" : "", disabled: busy.has(key), title: "A workspace of its own: a VM with the repositories. The first takes each one's default branch (brought up to the remote's when it has nothing of its own); each after it, a branch named after it" }, busy.has(key) ? "Starting..." : "New workspace")) : null,
     // Adding a repository is set apart from making a workspace: it changes the domain.
     d.home ? [el("hr", { class: "split" }), el("div", { class: "inline sub", "data-home-note": "" }, "This is ", el("span", { class: "mono" }, d.home), "'s home domain: it holds that repository alone. ",
@@ -858,7 +987,10 @@ const domainCard = (d) => {
 // Built once when it opens, so what is typed is never redrawn away.
 let newDomain = null; // { element }
 const openNewDomain = (repos = []) => {
-  const slug = el("input", { name: "slug", required: true, pattern: "[a-z0-9][a-z0-9-]{0,39}", placeholder: "name: lower-case letters, digits, dashes", "aria-label": "the new domain's name", class: "wide" });
+  const slug = el("input", { name: "slug", required: true, pattern: slugPattern(), placeholder: "name: lower-case letters, digits, dashes", "aria-label": "the new domain's name", class: "wide" });
+  // (What the dashboard may ask the host for: shared/actions.ts takes a title of 80 plain
+  // characters, and the root refuses a longer one in words rather than make the domain
+  // without it.)
   const title = el("input", { name: "title", maxlength: "80", placeholder: "title (optional)", "aria-label": "its title", class: "wide" });
   const boxes = state.repos.map((r) => el("label", { class: "choice" }, el("input", { type: "checkbox", value: r.repo, checked: repos.includes(r.repo) }), el("span", { class: "mono" }, r.repo)));
   const status = el("div", { class: "sub" });
@@ -892,8 +1024,19 @@ const firstRun = () => {
       el("li", {}, "Start a workspace: a VM with the project's devcontainer and an editor in it, ", el("code", {}, `desolate up ${firstDomain ? firstDomain.slug : "<owner>--<repo>"}`), hasBoth ? " (or New workspace on its card below)" : "", ". Open its editor, work, commit; ", el("code", {}, "git push"), " there offers your branch, and it comes back here for you to review and push.")));
 };
 
+/** The chip that says how things stand: an action's error, until dismissed; the root lost
+ *  (the event stream has failed a few times in a row); or whether the host is connected. */
+const drawHost = () => {
+  const host = document.getElementById("host");
+  const lostRoot = lost >= STREAM.sayAfter;
+  host.className = `chip ${notice || lostRoot || (state && !state.hostConnected) ? "bad" : ""}`;
+  if (notice) host.replaceChildren(el("span", { "data-notice": "" }, notice), " ", el("button", { class: "quiet small", type: "button", "data-dismiss": "", title: "Dismiss this", onclick: () => { notice = ""; render(); } }, "Dismiss"));
+  else host.textContent = lostRoot ? `lost the root's dashboard service: trying again (${lost} tries so far). What is shown is as it last was.`
+    : !state ? "connecting to the root..."
+      : state.hostConnected ? "host connected" : "host not connected: VM states are as last known; run `desolate bootstrap` on the host";
+};
 const render = () => {
-  if (!state) return;
+  if (!state) return drawHost();
   const stack = document.getElementById("stack");
   stack.textContent = state.stack ? (state.stack.isolated ? `${state.stack.backend} VMs` : "NOT ISOLATED: fake backend") : "stack: unknown";
   stack.className = `chip ${state.stack && !state.stack.isolated ? "bad" : ""}`;
@@ -901,14 +1044,15 @@ const render = () => {
   const defaults = document.getElementById("editor-defaults");
   defaults.hidden = !(state.stack && state.stack.approveHostname);
   if (!defaults.hidden) defaults.href = `http://${state.stack.approveHostname}:${state.stack.editorPort}/editor-defaults`;
-  const host = document.getElementById("host");
-  host.textContent = notice || (state.hostConnected ? "host connected" : "host not connected: VM states are as last known; run `desolate bootstrap` on the host");
-  host.className = `chip ${notice || !state.hostConnected ? "bad" : ""}`;
+  drawHost();
   const needs = needsYou();
   document.getElementById("needs").hidden = needs.length === 0;
   document.getElementById("needs-list").replaceChildren(...needs);
   // (Where the diff was scrolled to, kept: its element is the same one, moved.)
   const scrolled = shownDiff && shownDiff.node.isConnected ? [...shownDiff.node.querySelectorAll("[data-diff]")].map((n) => [n, n.scrollTop, n.scrollLeft]) : [];
+  // (And where the review's lists were scrolled to: they are drawn again, and grow as the
+  // person asks for more.)
+  const lists = ["#review ol.commit-list", "#review ul.files"].map((at) => [at, document.querySelector(at)?.scrollTop || 0]);
   const issue = syncIssue();
   document.getElementById("issue").hidden = !issue;
   if (issue && document.getElementById("issue").firstChild !== issue) document.getElementById("issue").replaceChildren(issue);
@@ -919,6 +1063,7 @@ const render = () => {
   if (panel) body.replaceChildren(panel);
   else body.replaceChildren();
   for (const [node, top, left] of scrolled) if (node.isConnected) { node.scrollTop = top; node.scrollLeft = left; }
+  for (const [at, top] of lists) { const node = document.querySelector(at); if (node) node.scrollTop = top; }
   const first = firstRun();
   document.getElementById("first-run").hidden = !first;
   document.getElementById("first-run").replaceChildren(...(first ? [first] : []));
@@ -951,6 +1096,7 @@ const render = () => {
     el("div", { class: "what" }, el("div", { class: "name" }, el("span", { class: "mono" }, redact(a.command)),
       a.state === "queued" ? pill("queued", "blue pulse", "waiting for the host to take it") : a.state === "running" ? pill("running", "blue pulse", "the host is running it") : a.state === "done" ? pill("done", "green") : pill(`failed${a.code !== undefined ? ` (exit ${a.code})` : ""}`, "red", "what it said is below"),
       a.at ? el("span", { class: "sub" }, ago(a.at)) : null),
+      a.earlier ? el("div", { class: "sub", "data-action-earlier": "" }, `${a.earlier.toLocaleString()} earlier line${a.earlier === 1 ? "" : "s"} not shown`, a.log ? ["; all of it: ", el("span", { class: "mono" }, a.log), " in the root VM (desolate root shell)"] : "") : null,
       a.lines.length ? el("pre", { class: "mono" }, a.lines.map(redact).join("\n")) : null),
     el("div", { class: "buttons" }, typeof a.link === "string" && a.link.startsWith("https://github.com/")
       ? el("a", { class: "button", href: a.link, target: "_blank", rel: "noopener noreferrer", "data-pull-request": "" }, "Open pull request") : null))));
@@ -974,10 +1120,24 @@ const arrived = (now) => {
   const offer = state.offers.find((o) => o.domain === asked.get("domain") && o.repo === asked.get("repo") && o.branch === asked.get("branch"));
   if (offer) { pending = false; openReview(offer); }
 };
+/** The event stream, tried again when it fails: at once nearly (a root restarting is back in
+ *  a second or two), then a little later each time, to half a minute; after a few failures in
+ *  a row the page says the root is lost, and that it is trying (it tried every 1.5 s, saying
+ *  nothing, and drew what it last had as if it were now). */
+const STREAM = { firstMs: 1500, mostMs: 30_000, sayAfter: 3 };
+let lost = 0;
 const listen = () => {
   const events = new EventSource(`/events?${window.desolateKey.query}`);
-  events.onmessage = (event) => arrived(JSON.parse(event.data));
-  events.onerror = () => { events.close(); setTimeout(listen, 1500); };
+  events.onmessage = (event) => {
+    lost = 0;
+    arrived(JSON.parse(event.data));
+  };
+  events.onerror = () => {
+    events.close();
+    lost += 1;
+    if (lost >= STREAM.sayAfter) drawHost();
+    setTimeout(listen, Math.min(STREAM.mostMs, STREAM.firstMs * 2 ** (lost - 1)));
+  };
 };
 // The page's own controls, made once: folding a section, the filters, a new domain, and the
 // review's width.
@@ -1012,7 +1172,7 @@ document.getElementById("new-domain-open").addEventListener("click", () => (newD
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", up);
   });
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && reviewing) { reviewing = null; render(); } });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && reviewing) closeReview(); });
 })();
 
 // `?once`: the state as it is now, drawn once, with no stream left open. For a screenshot

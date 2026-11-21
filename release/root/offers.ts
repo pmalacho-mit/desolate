@@ -942,7 +942,7 @@ export const pickOf = (from: unknown, to: unknown): { from: string; to: string }
   for (const end of [from, to])
     if (typeof end !== "string" || !/^[0-9a-f]{40}$/.test(end))
       refuse(
-        `'${printable(end, 40)}' is not one of this review's commits`,
+        `'${printable(String(end), 40)}' is not one of this review's commits`,
         "pick commits from the review's list",
       );
   return { from: from as string, to: to as string };

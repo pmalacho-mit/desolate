@@ -7,6 +7,9 @@
 //   3. the root hands the signature to its keyring, which lets the write key sign for
 //      that one push.
 // Nothing in a VM can do step 2, so nothing in a VM can push.
+import { andMore } from "../shared/listed.ts";
+import type { Listed } from "../shared/listed.ts";
+import type { DiffPage } from "../shared/review-account.ts";
 import { printable, printableLines } from "../shared/text.ts";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { editorHostPort, isCommit, parseRepo, repoId, ROOT_HOSTNAME } from "../shared/names.ts";
@@ -38,17 +41,21 @@ type Offer = {
   at: string;
   base?: string;
 };
+/** The root's review of a branch (root/offers.ts `review`): its lists are a page and the true
+ *  total (shared/listed.ts), so every number printed is one the root counted. */
 type Review = {
   repo: string;
   branch: string;
   commit: string;
   pushable: boolean;
   isDefault: boolean;
-  commits: { commit: string; subject: string }[];
-  files: string[];
+  commits: Listed<{ commit: string; subject: string }>;
+  changes: Listed<{ path: string; was?: string }>;
   stat: string;
   lfsObjects: number;
   warnings: string[];
+  againstLabel?: string;
+  pushCommits: number;
 };
 
 /** Text from a repository (a branch name, a commit subject) is shown as text: control
@@ -231,6 +238,10 @@ export const branches = async (domain: string | undefined, out: Out, json: boole
     );
 };
 
+/** What `desolate review` lists of a branch before it says how many more there are: a
+ *  screenful, not a cut (the count is the root's, and the dashboard lists them all). */
+const REVIEW_SHOWS = { commits: 30, files: 40 };
+
 export const review = async (
   args: string[],
   out: Out,
@@ -245,38 +256,56 @@ export const review = async (
       "desolate review <domain> <owner/repo> <branch> [--against origin|domain]   (see `desolate branches` and `desolate offers`)",
       EXIT.usage,
     );
-  const r = await rootctl<Review & { againstLabel?: string; pushCommits?: number }>(
-    "review",
-    { domain, repo, branch, against },
-    { quiet: true },
-  );
+  const r = await rootctl<Review>("review", { domain, repo, branch, against }, { quiet: true });
   if (json) return out(JSON.stringify(r));
   out(`${r.repo}  ${plain(r.branch)}  at ${r.commit}, against ${r.againstLabel ?? "origin"}`);
   out(
     against === "domain"
-      ? `beyond ${r.againstLabel ?? "the domain's default branch"}: ${r.commits.length} commit(s), ${r.stat || "no file changes"}. A push would send ${r.pushCommits} commit(s) (against origin).`
-      : `a push would send ${r.commits.length} commit(s): ${r.stat || "no file changes"}${r.lfsObjects ? `, and ${r.lfsObjects} LFS object(s) first` : ""}`,
+      ? `beyond ${r.againstLabel ?? "the domain's default branch"}: ${r.commits.total} commit(s), ${r.stat || "no file changes"}. A push would send ${r.pushCommits} commit(s) (against origin).`
+      : `a push would send ${r.pushCommits} commit(s): ${r.stat || "no file changes"}${r.lfsObjects ? `, and ${r.lfsObjects} LFS object(s) first` : ""}`,
   );
-  for (const c of r.commits.slice(0, 30))
-    out(`  ${c.commit.slice(0, 12)}  ${plain(c.subject).slice(0, 100)}`);
-  if (r.commits.length > 30) out(`  ... and ${r.commits.length - 30} more`);
-  for (const file of r.files.slice(0, 40)) out(`  ${plain(file)}`);
-  if (r.files.length > 40) out(`  ... and ${r.files.length - 40} more files`);
+  // The first of each list, as a terminal reads at a glance, and how many more there are (the
+  // root's count): every one is in the dashboard's review, and in git.
+  const rest = "(every one: in the dashboard, or with git in `desolate root shell`)";
+  const commits = { ...r.commits, items: r.commits.items.slice(0, REVIEW_SHOWS.commits) };
+  for (const c of commits.items) out(`  ${c.commit.slice(0, 12)}  ${plain(c.subject)}`);
+  const moreCommits = andMore(commits, "commit");
+  if (moreCommits) out(`  ... ${moreCommits} ${rest}`);
+  const files = { ...r.changes, items: r.changes.items.slice(0, REVIEW_SHOWS.files) };
+  for (const c of files.items)
+    out(`  ${c.was === undefined ? plain(c.path) : `${plain(c.was)} -> ${plain(c.path)}`}`);
+  const moreFiles = andMore(files, "file");
+  if (moreFiles) out(`  ... ${moreFiles} ${rest}`);
   for (const warning of r.warnings) out(`  WARNING: ${warning}`);
   if (diff) {
     // The diff is the content's own text, made in the root by git alone. Shown as text:
-    // anything that could repaint a terminal is replaced.
-    const d = await rootctl<{ text: string; truncated: boolean }>(
-      "review.diff",
-      { domain, repo, branch, against },
-      { quiet: true },
-    );
+    // anything that could repaint a terminal is replaced. It comes a page at a time, each
+    // printed as it comes (a line a page cut is printed whole, with the next page), so none
+    // of it is held here, however long it is.
     out("");
-    out(printableLines(d.text).trimEnd());
-    if (d.truncated)
-      out(
-        "... the diff is longer than is shown here. The whole of it: desolate root shell, then git diff.",
+    let at: number | null = 0;
+    let carried = "";
+    while (at !== null) {
+      const d: DiffPage = await rootctl<DiffPage>(
+        "review.diff",
+        { domain, repo, branch, against, at },
+        { quiet: true },
       );
+      // A root that gives the first page again, asked for a later one, does not page: what it
+      // gave is all that is printed, and the rest is said.
+      if (d.from !== at) {
+        if (carried) out(printableLines(carried));
+        out(
+          `... ${Math.floor((100 * at) / d.total)}% of the diff is shown here. The rest: desolate root shell, then git diff (or the dashboard's review).`,
+        );
+        break;
+      }
+      const text: string = carried + d.text;
+      const end: number = d.next === null ? text.length : text.lastIndexOf("\n") + 1;
+      if (end > 0) out(printableLines(text.slice(0, end)).replace(/\n$/, ""));
+      carried = text.slice(end);
+      at = d.next;
+    }
   } else {
     out(
       `read the diff: desolate review ${domain} ${r.repo} ${plain(r.branch)} --diff${against === "domain" ? " --against domain" : ""}`,
@@ -310,13 +339,18 @@ declare namespace review {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
               isDefault: false;
-              commits: [
-                {
-                  commit: "0123456789abcdef0123456789abcdef01234567";
-                  subject: "Fix the login loop\u001b[2J";
-                },
-              ];
-              files: ["src/login.ts"];
+              commits: {
+                items: [
+                  {
+                    commit: "0123456789abcdef0123456789abcdef01234567";
+                    subject: "Fix the login loop\u001b[2J";
+                  },
+                ];
+                total: 1;
+                from: 0;
+              };
+              changes: { items: [{ path: "src/login.ts" }]; total: 1; from: 0 };
+              pushCommits: 1;
               stat: "1 file changed, 3 insertions(+)";
               lfsObjects: 0;
               warnings: [];
@@ -359,13 +393,18 @@ declare namespace review {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
               isDefault: true;
-              commits: [
-                {
-                  commit: "0123456789abcdef0123456789abcdef01234567";
-                  subject: "Fix the login loop\u001b[2J";
-                },
-              ];
-              files: ["src/login.ts"];
+              commits: {
+                items: [
+                  {
+                    commit: "0123456789abcdef0123456789abcdef01234567";
+                    subject: "Fix the login loop\u001b[2J";
+                  },
+                ];
+                total: 1;
+                from: 0;
+              };
+              changes: { items: [{ path: "src/login.ts" }]; total: 1; from: 0 };
+              pushCommits: 1;
               stat: "1 file changed, 3 insertions(+)";
               lfsObjects: 0;
               warnings: [];
@@ -394,13 +433,18 @@ declare namespace review {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: false;
               isDefault: false;
-              commits: [
-                {
-                  commit: "0123456789abcdef0123456789abcdef01234567";
-                  subject: "Fix the login loop\u001b[2J";
-                },
-              ];
-              files: ["src/login.ts"];
+              commits: {
+                items: [
+                  {
+                    commit: "0123456789abcdef0123456789abcdef01234567";
+                    subject: "Fix the login loop\u001b[2J";
+                  },
+                ];
+                total: 1;
+                from: 0;
+              };
+              changes: { items: [{ path: "src/login.ts" }]; total: 1; from: 0 };
+              pushCommits: 1;
               stat: "1 file changed, 3 insertions(+)";
               lfsObjects: 0;
               warnings: [];
@@ -417,6 +461,100 @@ declare namespace review {
       Invoke<typeof said>,
       "includes",
       "acme/web is not pushable (cloned --no-push): there is no write key for it."
+    >
+  >;
+  /** every number is the root's count, not the length of what it sent: a branch of 250
+   *  commits and 1,200 files says so, lists the first, and says how many more */
+  export type Counted = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            review: {
+              repo: "acme/web";
+              branch: "big";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+              pushable: true;
+              isDefault: false;
+              commits: {
+                items: [
+                  { commit: "0123456789abcdef0123456789abcdef01234567"; subject: "the last" },
+                ];
+                total: 250;
+                from: 0;
+              };
+              changes: { items: [{ path: "b.ts"; was: "a.ts" }]; total: 1200; from: 0 };
+              pushCommits: 250;
+              stat: "1200 files changed";
+              lfsObjects: 0;
+              warnings: [];
+            };
+          },
+        ]
+      >,
+      Invoke<typeof review, [args: ["acme", "acme/web", "big"], out: typeof collect, json: false]>,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "acme/web  big  at 0123456789abcdef0123456789abcdef01234567, against origin",
+        "a push would send 250 commit(s): 1200 files changed",
+        "  0123456789ab  the last",
+        "  ... and 249 more commits (every one: in the dashboard, or with git in `desolate root shell`)",
+        "  a.ts -> b.ts",
+        "  ... and 1199 more files (every one: in the dashboard, or with git in `desolate root shell`)",
+        "read the diff: desolate review acme acme/web big --diff",
+        "  or in the dashboard: http://desolate.localhost:31581/?review&domain=acme&repo=acme%2Fweb&branch=big",
+        "  or with git, in `desolate root shell`",
+        "to push exactly this: desolate push acme acme/web big --expect 0123456789abcdef0123456789abcdef01234567",
+      ]
+    >
+  >;
+  /** the diff is asked for a page at a time; a root that answers a later page with the first
+   *  again does not page, and what was not printed is said, never repeated */
+  export type DiffPages = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            review: {
+              repo: "acme/web";
+              branch: "fix/login";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+              pushable: true;
+              isDefault: false;
+              commits: { items: []; total: 0; from: 0 };
+              changes: { items: []; total: 0; from: 0 };
+              pushCommits: 0;
+              stat: "";
+              lfsObjects: 0;
+              warnings: [];
+            };
+            "review.diff": { text: "+a\u001b[2J\n"; from: 0; next: 6; total: 12 };
+          },
+        ]
+      >,
+      Invoke<
+        typeof review,
+        [args: ["acme", "acme/web", "fix/login", "--diff"], out: typeof collect, json: false]
+      >,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "acme/web  fix/login  at 0123456789abcdef0123456789abcdef01234567, against origin",
+        "a push would send 0 commit(s): no file changes",
+        "",
+        "+a?[2J",
+        "... 50% of the diff is shown here. The rest: desolate root shell, then git diff (or the dashboard's review).",
+        "to push exactly this: desolate push acme acme/web fix/login --expect 0123456789abcdef0123456789abcdef01234567",
+      ]
     >
   >;
   /** all three names, or a usage error before the root is asked */
