@@ -166,9 +166,8 @@ const serve = () => {
   const leaveWhenDone = () => {
     if (leaving && answering === 0) setTimeout(() => process.exit(0), 100);
   };
-  // Half-open: the host's side ends its request with EOF, and a socket that closed itself on
-  // that (node's default) lost the answer of every operation slower than the EOF (found on
-  // the M1: doctor's answer never came).
+  // Half-open, so that an end of input does not end the connection before its answer (node's
+  // default: found on the M1, doctor's answer never came).
   const server = createServer({ allowHalfOpen: true }, (connection) => {
     connection.on("error", (error) => {
       process.stderr.write(`rootctl serve: a connection failed: ${error.message}\n`);
@@ -198,9 +197,13 @@ const serve = () => {
       // Taken: from here the host never asks again the old way (an operation must not run twice).
       connection.write(JSON.stringify({ accepted: true }) + "\n");
       // Whoever asked is waiting on this connection, and how long it waits is its own (R4):
-      // when it goes, what was asked for is ended (an operation that takes the signal).
+      // when it goes, what was asked for is ended (an operation that takes the signal). The
+      // host holds its input open until the answer (host/stack.ts), so its end is the asker
+      // gone: on a half-open socket that is 'end', and 'close' only once this side writes.
       const asker = new AbortController();
-      connection.on("close", () => asker.abort(new Error("whoever asked went away")));
+      const gone = () => asker.abort(new Error("whoever asked went away"));
+      connection.on("end", gone);
+      connection.on("close", gone);
       answering++;
       try {
         const reply = await answer(
