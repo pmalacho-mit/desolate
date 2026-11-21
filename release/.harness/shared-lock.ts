@@ -205,3 +205,72 @@ export const contended = async (
   }
   return { entered, overlapped: most > 1 };
 };
+
+/** On a share, a waiter frozen at the worst moment. A share lock is left by a dead holder
+ *  (its beat stopped). The first waiter takes the right to move it away, and finds it still
+ *  the dead holder's; then its whole process stops (`freezeMs`, as a VM paused) just before
+ *  it moves it. A second waiter, meanwhile, takes the first's right for dead (nothing beats
+ *  in a right), clears the dead lock and takes the lock. The first wakes and moves what is
+ *  in the lock's place. Answers, in order, who was inside and when; and what is left beside
+ *  the lock. (Paced so that `missed` beats are 400 ms.) */
+export const frozenHeir = async (
+  dir: string,
+  freezeMs: number,
+): Promise<{ order: string[]; left: string[] }> => {
+  leftWithABeat(dir, false);
+  const log = `${dir}.log`;
+  const dead = "fedcba9876543210fedcba9876543210";
+  const taker = (name: string, freeze: boolean) =>
+    spawn(
+      process.execPath,
+      [
+        ...NODE,
+        `import { createRequire, syncBuiltinESMExports } from "node:module";
+         const fs = createRequire(import.meta.url)("node:fs");
+         const [dir, log, name, freeze, freezeMs, holdMs] = process.argv.slice(1);
+         if (freeze === "1") {
+           const rename = fs.renameSync;
+           let once = true;
+           fs.renameSync = (from, to, ...rest) => {
+             if (once && from === dir && to.includes(".gone-")) {
+               once = false;
+               Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(freezeMs));
+             }
+             return rename(from, to, ...rest);
+           };
+           syncBuiltinESMExports();
+         }
+         const { withLock } = await import(${JSON.stringify(LOCK_TS)});
+         await withLock(dir, async () => {
+           fs.appendFileSync(log, name + " in\\n");
+           await new Promise((resolve) => setTimeout(resolve, Number(holdMs)));
+           fs.appendFileSync(log, name + " out\\n");
+         }, { scope: "share" }, { pollMs: 10, beatMs: 40, missed: 10 });`,
+        dir,
+        log,
+        name,
+        freeze ? "1" : "0",
+        String(freezeMs),
+        String(freezeMs + 1000),
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  const ended = (child: ReturnType<typeof spawn>) =>
+    new Promise<void>((resolve, reject) => {
+      let stderr = "";
+      child.stderr!.on("data", (chunk) => (stderr += chunk));
+      child.on("close", (status) =>
+        status === 0 ? resolve() : reject(new Error(`a taker failed (${status}): ${stderr}`)),
+      );
+    });
+  const first = taker("first", true);
+  const firstEnded = ended(first);
+  for (let waited = 0; !fs.existsSync(`${dir}.heir-${dead}`); waited += 5) {
+    if (waited > 10_000) throw new Error("the first waiter never took the right");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  await Promise.all([firstEnded, ended(taker("second", false))]);
+  const order = fs.readFileSync(log, "utf8").trim().split("\n");
+  fs.rmSync(log);
+  return { order, left: fs.readdirSync(path.dirname(dir)).sort() };
+};
