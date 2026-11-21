@@ -6,8 +6,11 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
+import { LFS_POINTER_BYTES } from "../shared/limits.ts";
+import { BEAT } from "../shared/lock.ts";
 import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
-import { run } from "../shared/run.ts";
+import { run, sleep } from "../shared/run.ts";
+import { failure, printable } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Expect,
@@ -23,10 +26,12 @@ export const INBOX = "/desolate/inbox";
 const clone = (repo: string) => `/workspaces/${repo}`;
 const syncDir = (repo: string) => path.join(OUTBOX, "sync", repo);
 
+// No timer (R4): this is git on the domain's own clone, in its own VM, with no remote peer to
+// wait on (a bundle is a local file both ways), and a first bundle of a large repository takes
+// as long as it takes. Whoever waits (`desolate offer`, a person) is the one to stop it.
 const git = async (repo: string, args: string[], input?: string) => {
   const result = await run("git", ["-C", clone(repo), ...args], {
     input,
-    timeoutMs: 300_000,
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   });
   return { ok: result.code === 0, out: result.stdout.trim(), err: result.stderr.trim() };
@@ -104,16 +109,11 @@ declare namespace branches {
 }
 
 /** Write the domain's branches of one repository to the outbox: an incremental bundle, less
- *  what the mirror has and what the root has said it holds, and the list of refs. */
+ *  what the mirror has, and the list of refs. */
 export const syncRepo = async (repo: string): Promise<{ branches: number; bundled: boolean }> => {
   const dir = syncDir(repo);
   fs.mkdirSync(dir, { recursive: true });
   const refs = await branches(repo);
-  const haves = readJson<string[]>(path.join(INBOX, "haves", `${repo}.json`), []).filter(isCommit);
-  // Only haves this clone actually has can be named as exclusions.
-  const known: string[] = [];
-  for (const commit of haves.slice(0, 500))
-    if ((await git(repo, ["cat-file", "-e", `${commit}^{commit}`])).ok) known.push(commit);
   const names = Object.keys(refs);
   let bundled = false;
   if (names.length > 0) {
@@ -126,7 +126,6 @@ export const syncRepo = async (repo: string): Promise<{ branches: number; bundle
       ...names.map((name) => `refs/heads/${name}`),
       "--not",
       "--remotes=origin",
-      ...known,
     ]);
     if (made.ok) {
       fs.renameSync(`${file}.tmp`, file);
@@ -134,7 +133,7 @@ export const syncRepo = async (repo: string): Promise<{ branches: number; bundle
     } else {
       fs.rmSync(`${file}.tmp`, { force: true });
       if (!/empty bundle/i.test(made.err))
-        throw new Error(`could not bundle ${repo}: ${made.err.slice(-300)}`);
+        throw new Error(`could not bundle ${repo}: ${failure(made.err, 5, () => null)}`);
     }
   }
   writeJson(path.join(dir, "refs.json"), { refs, at: new Date().toISOString() });
@@ -171,7 +170,7 @@ export const stageLfs = async (
   const small = sizes.out
     .split("\n")
     .map((line) => line.split(" "))
-    .filter(([, type, size]) => type === "blob" && Number(size) < 400)
+    .filter(([, type, size]) => type === "blob" && Number(size) < LFS_POINTER_BYTES)
     .map(([id]) => id!);
   const staged: { oid: string; size: number }[] = [];
   const mirror = `/desolate/mirrors/${repo}.git/lfs/objects`;
@@ -293,7 +292,8 @@ declare namespace stageLfs {
  *  never over a branch of the domain's own. */
 export const importDeliveries = async (repo: string): Promise<string[]> => {
   const dir = path.join(INBOX, "deliveries", repo);
-  const done = readJson<string[]>(path.join(clone(repo), ".git", "desolate-delivered.json"), []);
+  const record = readJson<unknown>(path.join(clone(repo), ".git", "desolate-delivered.json"), []);
+  const done = Array.isArray(record) ? record.filter((id) => typeof id === "string") : [];
   const imported: string[] = [];
   let names: string[] = [];
   try {
@@ -304,9 +304,14 @@ export const importDeliveries = async (repo: string): Promise<string[]> => {
   } catch {
     return [];
   }
+  // What was imported is remembered only while the root still has it in the inbox: so the
+  // record is never longer than the inbox's own list, and needs no cut (one at 500 would
+  // import an older delivery again, moving root/<branch> back).
+  const present = new Set(names.map((name) => name.slice(0, -5)));
+  const kept = done.filter((id) => present.has(id));
   for (const name of names) {
     const id = name.slice(0, -5);
-    if (done.includes(id)) continue;
+    if (kept.includes(id)) continue;
     const meta = readJson<{ branch?: string; commit?: string; bundle?: boolean } | null>(
       path.join(dir, name),
       null,
@@ -334,32 +339,479 @@ export const importDeliveries = async (repo: string): Promise<string[]> => {
       (await git(repo, ["update-ref", `refs/remotes/root/${meta.branch}`, meta.commit])).ok
     )
       imported.push(meta.branch);
-    done.push(id);
+    kept.push(id);
   }
-  if (imported.length > 0 || names.length > 0)
-    writeJson(path.join(clone(repo), ".git", "desolate-delivered.json"), done.slice(-500));
+  if (imported.length > 0 || kept.length !== done.length)
+    writeJson(path.join(clone(repo), ".git", "desolate-delivered.json"), kept);
   return imported;
 };
 
-/** The request channel (section 6.4): a fixed vocabulary, written to the outbox; the root
- *  answers in the inbox, which the domain cannot write. */
+// THE REQUEST CHANNEL (section 6.4): a fixed vocabulary, written to the outbox as
+// `requests/<id>.json`; the root answers in the inbox, which the domain cannot write. Between
+// the two, the root says it is there, and what it is doing (rootd.ts writes them):
+//
+//   inbox/rootd.beat           `<boot> <count>`: rewritten every BEAT.beatMs, by a thread of
+//                              rootd's own, for as long as it runs, whatever its work is
+//   inbox/replies/<id>.taken   `{ boot, doing }`: the root took this request and is on it
+//   inbox/replies/<id>.json    the answer
+//
+// So the wait has no deadline (R4). It lasts while the root is alive and on the request, which
+// can be minutes (the first fetch of a large repository, a push's offer of a large branch), and
+// ends when whoever asked stops waiting. What else ends it is the root being gone, said as
+// such: its beat stopped (BEAT's 10 s of nothing: the root is on the same Mac, and a thread
+// that does nothing but write a small file is never that late), before it took the request
+// or after; or a beat from another start of rootd than the one that took it.
+//
+// Both ends change apart. A root from before the beat (its VM not restarted since) writes none:
+// the wait is then the old one, 2 minutes, in the old words. A workspace from before (its VM
+// not restarted) reads only the reply, which is where it always was, and waits its old 2 min.
+
+const BEAT_FILE = path.join(INBOX, "rootd.beat");
+/** How long a request waits on a root that writes no beat: one from before the beat, as it
+ *  always waited. */
+const LEGACY_MS = 120_000;
+/** How often a waiter looks: three small reads. */
+const POLL_MS = 150;
+/** How often a long wait says again what the root is doing, when that has not changed. */
+const RETELL_MS = 60_000;
+
+/** What a waiter remembers of the root's beat: the last one read, and when (by its own
+ *  clock) that changed and it last looked. */
+export type Watched = { beat: string; changed: number; looked: number };
+
+/** Has the root's beat stopped? Read as lock.ts reads a share lock's (BEAT): it has when the
+ *  waiter has watched `missed` beats' time go by with no new one, by its own clock, which runs
+ *  while it watches; so the VMs' clocks need not agree. A waiter that did not look for half
+ *  that time (its own VM paused, the Mac asleep) watches again from then: a root paused with
+ *  it is given the whole window once both run. */
+export const watchBeat = (
+  seen: Watched | null,
+  beat: string,
+  now: number,
+  pace: { beatMs: number; missed: number } = BEAT,
+): { seen: Watched; stopped: boolean } => {
+  const window = pace.beatMs * pace.missed;
+  if (!seen || beat !== seen.beat || now - seen.looked > window / 2)
+    return { seen: { beat, changed: now, looked: now }, stopped: false };
+  return { seen: { ...seen, looked: now }, stopped: now - seen.changed >= window };
+};
+
+declare namespace watchBeat {
+  /** a beat that moves is a root that is there; one that has not moved for 10 s, watched all
+   *  the while, is a root that is gone */
+  export type Beats = [
+    Expect<
+      Invoke<
+        typeof watchBeat,
+        [seen: { beat: "b0 4"; changed: 0; looked: 9000 }, beat: "b0 5", now: 9150]
+      >,
+      "=",
+      { seen: { beat: "b0 5"; changed: 9150; looked: 9150 }; stopped: false }
+    >,
+    Expect<
+      Invoke<
+        typeof watchBeat,
+        [seen: { beat: "b0 4"; changed: 0; looked: 9000 }, beat: "b0 4", now: 9150]
+      >,
+      "=",
+      { seen: { beat: "b0 4"; changed: 0; looked: 9150 }; stopped: false }
+    >,
+    Expect<
+      Invoke<
+        typeof watchBeat,
+        [seen: { beat: "b0 4"; changed: 0; looked: 9900 }, beat: "b0 4", now: 10000]
+      >,
+      "=",
+      { seen: { beat: "b0 4"; changed: 0; looked: 10000 }; stopped: true }
+    >,
+  ];
+  /** silence counts only while it was watched: a waiter that did not look for 6 s (its VM
+   *  paused) starts watching again, and does not take the root for gone */
+  export type PausedWatcher = Expect<
+    Invoke<
+      typeof watchBeat,
+      [seen: { beat: "b0 4"; changed: 0; looked: 4000 }, beat: "b0 4", now: 10000]
+    >,
+    "=",
+    { seen: { beat: "b0 4"; changed: 10000; looked: 10000 }; stopped: false }
+  >;
+  /** the first look starts the watch */
+  export type First = Expect<
+    Invoke<typeof watchBeat, [seen: null, beat: "b0 4", now: 500]>,
+    "=",
+    { seen: { beat: "b0 4"; changed: 500; looked: 500 }; stopped: false }
+  >;
+}
+
+/** What a waiter has seen of its request at one look. */
+export type Look = {
+  reply: Record<string, unknown> | null;
+  /** The request is still in the outbox: the root has not taken it. */
+  asked: boolean;
+  taken: { boot?: unknown; doing?: unknown } | null;
+  /** The beat's text; null while there has never been one (a root from before the beat). */
+  beat: string | null;
+  /** The beat has stopped, as watchBeat says. */
+  stopped: boolean;
+  /** How long it has waited, and how long the request has been neither in the outbox nor
+   *  taken (between the two, for a moment, as the root takes it). */
+  waited: number;
+  lost: number;
+};
+
+/** What a waiter does after a look: wait on (and what the root is doing, to say so in a long
+ *  wait); withdraw the request and answer, if it is still there to withdraw (else the root
+ *  took it at the last moment, and the wait goes on); or answer. */
+export type Verdict =
+  { wait: string } | { withdraw: Record<string, unknown> } | { answer: Record<string, unknown> };
+
+export const verdict = (look: Look, window = BEAT.beatMs * BEAT.missed): Verdict => {
+  if (look.reply) return { answer: look.reply };
+  if (look.beat === null)
+    return look.waited < LEGACY_MS
+      ? { wait: "waiting for the root to answer" }
+      : {
+          answer: {
+            ok: false,
+            error: "the root did not answer. Is it running? On the host: desolate doctor",
+          },
+        };
+  const quiet = `${window / 1000} s`;
+  if (look.stopped)
+    return look.asked
+      ? {
+          withdraw: {
+            ok: false,
+            error: `nothing has been heard from the root for ${quiet}: it is not running, or its VM is stopped (the request was withdrawn)`,
+            fix: "on the host: desolate doctor",
+          },
+        }
+      : {
+          answer: {
+            ok: false,
+            error: `the root took it, then nothing was heard from it for ${quiet}: it stopped, or its VM did, and whether it was done is not known`,
+            fix: "on the host: desolate doctor; then ask again",
+          },
+        };
+  if (look.asked)
+    return {
+      wait: "the root has not taken it yet: it is answering this domain's earlier requests",
+    };
+  const boot = look.beat.split(" ")[0];
+  if (look.taken ? look.taken.boot !== boot : look.lost >= window)
+    return {
+      answer: {
+        ok: false,
+        error:
+          "the root restarted while it was working on it, and whether it was done is not known",
+        fix: "ask again",
+      },
+    };
+  return {
+    wait: typeof look.taken?.doing === "string" ? look.taken.doing : "the root has taken it",
+  };
+};
+
+declare namespace verdict {
+  /** the answer, whenever it is there */
+  export type Answered = Expect<
+    Invoke<
+      typeof verdict,
+      [
+        look: {
+          reply: { ok: true };
+          asked: false;
+          taken: null;
+          beat: "b0 9";
+          stopped: true;
+          waited: 600000;
+          lost: 0;
+        },
+      ]
+    >,
+    "=",
+    { answer: { ok: true } }
+  >;
+  /** a root that is there and on it is waited on, however long it takes, and says what it is
+   *  doing; one that has not taken it yet is waited on too */
+  export type Waits = [
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: false;
+            taken: { boot: "b0"; doing: "fetching acme/app with the read key" };
+            beat: "b0 120";
+            stopped: false;
+            waited: 240000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      { wait: "fetching acme/app with the read key" }
+    >,
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            beat: "b0 7";
+            stopped: false;
+            waited: 30000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      { wait: "the root has not taken it yet: it is answering this domain's earlier requests" }
+    >,
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: false;
+            taken: null;
+            beat: "b0 7";
+            stopped: false;
+            waited: 400;
+            lost: 150;
+          },
+        ]
+      >,
+      "=",
+      { wait: "the root has taken it" }
+    >,
+  ];
+  /** a root that is gone is said to be, in 10 s: before it took the request (which is then
+   *  withdrawn, so it is not done later unasked), or after */
+  export type Gone = [
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            beat: "b0 7";
+            stopped: true;
+            waited: 10000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      {
+        withdraw: {
+          ok: false;
+          error: "nothing has been heard from the root for 10 s: it is not running, or its VM is stopped (the request was withdrawn)";
+          fix: "on the host: desolate doctor";
+        };
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: false;
+            taken: { boot: "b0"; doing: "fetching acme/app with the read key" };
+            beat: "b0 7";
+            stopped: true;
+            waited: 90000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      {
+        answer: {
+          ok: false;
+          error: "the root took it, then nothing was heard from it for 10 s: it stopped, or its VM did, and whether it was done is not known";
+          fix: "on the host: desolate doctor; then ask again";
+        };
+      }
+    >,
+  ];
+  /** a root that started again has no memory of what the one before took: said, not waited
+   *  on forever (its beat is another start's, or the request is neither waiting nor taken) */
+  export type Restarted = [
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: false;
+            taken: { boot: "b0"; doing: "x" };
+            beat: "b1 2";
+            stopped: false;
+            waited: 30000;
+            lost: 0;
+          },
+        ]
+      >,
+      "matches",
+      {
+        answer: {
+          error: "the root restarted while it was working on it, and whether it was done is not known";
+        };
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: false;
+            taken: null;
+            beat: "b1 9";
+            stopped: false;
+            waited: 30000;
+            lost: 10000;
+          },
+        ]
+      >,
+      "matches",
+      {
+        answer: {
+          error: "the root restarted while it was working on it, and whether it was done is not known";
+        };
+      }
+    >,
+  ];
+  /** a root from before the beat: the old wait, two minutes, in the old words */
+  export type OldRoot = [
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            beat: null;
+            stopped: false;
+            waited: 119000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      { wait: "waiting for the root to answer" }
+    >,
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            beat: null;
+            stopped: false;
+            waited: 120000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      {
+        answer: {
+          ok: false;
+          error: "the root did not answer. Is it running? On the host: desolate doctor";
+        };
+      }
+    >,
+  ];
+}
+
+/** The beat's text, or null when there is no beat file (or none could be read just now). */
+const readBeat = (): string | null => {
+  try {
+    return fs.readFileSync(BEAT_FILE, "utf8").trim();
+  } catch {
+    return null;
+  }
+};
+
+/** Ask the root, and wait for its answer for as long as it is there and on it (see above).
+ *  A wait longer than the beat's window says, on stderr, what the root is doing; one that
+ *  is answered sooner says nothing. */
 export const request = async (
   body: Record<string, unknown>,
-  timeoutMs = 120_000,
+  tell: (line: string) => void = (line) => process.stderr.write(`desolate: ${line}\n`),
 ): Promise<Record<string, unknown>> => {
   const id = `${Date.now().toString(36)}-${createHash("sha256").update(`${process.pid}${Math.random()}`).digest("hex").slice(0, 10)}`;
   const dir = path.join(OUTBOX, "requests");
   fs.mkdirSync(dir, { recursive: true });
-  writeJson(path.join(dir, `${id}.json`), body);
-  const reply = path.join(INBOX, "replies", `${id}.json`);
-  for (const deadline = Date.now() + timeoutMs; Date.now() < deadline;) {
-    const value = readJson<Record<string, unknown> | null>(reply, null);
-    if (value) return value;
-    await new Promise((resolve) => setTimeout(resolve, 150));
+  const asked = path.join(dir, `${id}.json`);
+  writeJson(asked, body);
+  const replies = path.join(INBOX, "replies");
+  const window = BEAT.beatMs * BEAT.missed;
+  const started = performance.now();
+  // Once a beat has been read, a beat file that cannot be read is the same beat: one that
+  // does not move.
+  let heard: string | null = null;
+  let seen: Watched | null = null;
+  let lostSince: number | null = null;
+  let said = "";
+  let saidAt = 0;
+  for (; ; await sleep(POLL_MS)) {
+    const now = performance.now();
+    // In this order: the root takes the request, then writes `.taken`, then the reply, then
+    // removes `.taken`; a look between two of those reads at worst nothing for a moment.
+    const reply = readJson<Record<string, unknown> | null>(path.join(replies, `${id}.json`), null);
+    const waiting = fs.existsSync(asked);
+    const taken = readJson<{ boot?: unknown; doing?: unknown } | null>(
+      path.join(replies, `${id}.taken`),
+      null,
+    );
+    heard = readBeat() ?? heard;
+    const watched: ReturnType<typeof watchBeat> | null =
+      heard === null ? null : watchBeat(seen, heard, now);
+    seen = watched?.seen ?? null;
+    lostSince = reply || waiting || taken ? null : (lostSince ?? now);
+    const next = verdict(
+      {
+        reply,
+        asked: waiting,
+        taken,
+        beat: heard,
+        stopped: watched?.stopped ?? false,
+        waited: now - started,
+        lost: now - (lostSince ?? now),
+      },
+      window,
+    );
+    if ("answer" in next) {
+      fs.rmSync(asked, { force: true });
+      return next.answer;
+    }
+    if ("withdraw" in next) {
+      try {
+        fs.rmSync(asked);
+        return next.withdraw;
+      } catch (error) {
+        // Gone already: the root took it at the last moment, and the wait goes on.
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") return next.withdraw;
+        continue;
+      }
+    }
+    if (now - started >= window && (next.wait !== said || now - saidAt >= RETELL_MS)) {
+      tell(`${printable(next.wait)} (${Math.round((now - started) / 1000)} s so far)`);
+      said = next.wait;
+      saidAt = now;
+    }
   }
-  fs.rmSync(path.join(dir, `${id}.json`), { force: true });
-  return {
-    ok: false,
-    error: "the root did not answer. Is it running? On the host: desolate doctor",
-  };
 };
