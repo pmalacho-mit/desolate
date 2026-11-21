@@ -732,14 +732,19 @@ const squashOf = async (
     shown(text ?? "", max)
       .replace(/[<>\n]/g, "?")
       .trim();
+  // A committer git cannot read (a line continuing it, which fsck lets by: the review of the
+  // fixes) is the author's: the squash is what leaves such a commit's extra lines behind, so
+  // it is offered all the same, and shows whom it names.
+  const DATE = /^[0-9]{1,12} [+-][0-9]{4}$/;
+  const readable = named(cnRaw, 80) !== "" && DATE.test(cd ?? "");
   const [an, ae, cn, ce] = [
     named(anRaw, 80),
     named(aeRaw, 120),
-    named(cnRaw, 80),
-    named(ceRaw, 120),
+    named(readable ? cnRaw : anRaw, 80),
+    named(readable ? ceRaw : aeRaw, 120),
   ];
-  if (!/^[0-9]{1,12} [+-][0-9]{4}$/.test(ad ?? "") || !/^[0-9]{1,12} [+-][0-9]{4}$/.test(cd ?? ""))
-    return null;
+  const committedAt = readable ? cd : ad;
+  if (!DATE.test(ad ?? "") || !DATE.test(committedAt ?? "")) return null;
   const made = await gitIn(
     dir,
     [
@@ -758,7 +763,7 @@ const squashOf = async (
         GIT_AUTHOR_DATE: ad!,
         GIT_COMMITTER_NAME: cn,
         GIT_COMMITTER_EMAIL: ce,
-        GIT_COMMITTER_DATE: cd!,
+        GIT_COMMITTER_DATE: committedAt!,
       },
     },
   );

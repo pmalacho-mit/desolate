@@ -687,7 +687,7 @@ echo "$c1 $c2 $c3 $c4"`);
     const saidChain = reviewerSays("chain", c4) as ReturnType<typeof reviewerSays> & {
       warnings?: string[];
       between?: { path: string }[];
-      squash?: { message: string; count: number };
+      squash?: { message: string; count: number; committer: string };
       eachDiff?: string;
     };
     assert.equal(saidChain.ok, true, String(saidChain.error));
@@ -719,7 +719,10 @@ echo "$c1 $c2 $c3 $c4"`);
       !inBetween.includes("key.env") && !inBetween.includes("README.md"),
       `the file with a newline in its name is one file, not two: ${inBetween}`,
     );
+    // Offered though git cannot read the last commit's committer (the line continuing it): the
+    // squash names the author for both, and leaves the extra lines behind.
     assert.equal(saidChain.squash?.count, 4);
+    assert.equal(saidChain.squash?.committer, "chain <chain@example.invalid>");
     assert.equal(
       saidChain.squash?.message,
       "(no message)\n\nSquashed from 4 commits:\n- (no message)\n- put back\n- with headers\n- hidden\n",
