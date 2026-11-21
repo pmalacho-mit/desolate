@@ -2,7 +2,8 @@
 // desolate hands the devcontainer CLI looks like (workspace/devcontainer.ts): pure functions.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { hostArgv } from "../../../release/shared/actions.ts";
+import { actionRefusal, ARGUMENT, CREATE, hostArgv } from "../../../release/shared/actions.ts";
+import { commandOf, commandRefusal, LIMIT as SPAWN } from "../../../release/shared/spawn.ts";
 import { parse as parseJsonc } from "../../../release/shared/jsonc.ts";
 import { extensionsOf, forwardsOf, overrideOf } from "../../../release/workspace/devcontainer.ts";
 
@@ -65,16 +66,57 @@ describe("T1 the dashboard's requests to the host", () => {
       null,
       "an argument that is not a string is no argument",
     );
-    // A title that looks like an option, or carries a control character, is dropped: the domain is made without it.
-    assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "--help" }), [
+    // A title that looks like an option, or carries a control character, is refused: never
+    // passed on, and never dropped from a domain made without the title the person typed.
+    assert.equal(hostArgv("domain.create", { domain: "dev", title: "--help" }), null);
+    assert.equal(hostArgv("domain.create", { domain: "dev", title: "a\x1b[2Jb" }), null);
+    // Past an argument's bound, or not text: refused, and said, never left out (until
+    // 2026-11-21 a title of 201 characters made the domain without it, and 15 long names in
+    // `repos` made it with no repositories: the independent review of #187).
+    const long = { domain: "dev", title: "t".repeat(201) };
+    assert.equal(hostArgv("domain.create", long), null);
+    assert.equal(
+      actionRefusal("domain.create", long),
+      "its title is 201 characters, over the 200 allowed",
+    );
+    assert.equal(hostArgv("domain.create", { domain: "dev", title: ["--help"] }), null);
+    assert.equal(
+      actionRefusal("domain.create", { domain: "dev", title: 123 }),
+      "its title is not text",
+    );
+    assert.equal(hostArgv("workspace.up", { domain: "dev", workspace: "w".repeat(201) }), null);
+    // The control: 20 repositories of the longest names, as many as one Create takes, are taken.
+    const repos = Array.from(
+      { length: CREATE.repos },
+      (_, i) => `${"o".repeat(98)}${String(i).padStart(2, "0")}/${"r".repeat(100)}`,
+    );
+    assert.equal(
+      hostArgv("domain.create", { domain: "dev", repos: repos.join(",") })?.filter(
+        (w) => w === "--repo",
+      ).length,
+      20,
+    );
+    // Every command a workspace may sign fits the argument that carries it, as JSON: one that
+    // would not is refused before it is signed (until 2026-11-21, four words of control
+    // characters were signed, left out by hostArgv, and the spawn run with no command).
+    const worst = Array.from({ length: 4 }, () => "\u0001".repeat(SPAWN.word));
+    assert.equal(commandOf(worst), null);
+    assert.equal(
+      commandRefusal(worst),
+      "the command's JSON is 393229 characters, over the 200000 allowed",
+    );
+    // The control: at the bound exactly, a command, and carried.
+    const two = Array.from({ length: 2 }, () => "\u0001".repeat(SPAWN.word));
+    const fits = [...two, "x".repeat(ARGUMENT.command - JSON.stringify(two).length - 3)];
+    assert.equal(JSON.stringify(fits).length, ARGUMENT.command);
+    assert.equal(commandOf(fits), fits);
+    // The control: a title that is one is passed on, as the person typed it.
+    assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "the web app" }), [
       "domain",
       "create",
       "dev",
-    ]);
-    assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "a\x1b[2Jb" }), [
-      "domain",
-      "create",
-      "dev",
+      "--title",
+      "the web app",
     ]);
   });
 });

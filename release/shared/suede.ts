@@ -247,17 +247,23 @@ const githubOf = async (git: Git, commit: string) => {
     : null;
 };
 
+/** How many of the remote's tips one `git merge-base` is given: a command line's worth (each
+ *  is 41 bytes, and 512 of them are 21 KiB, far under any system's argument limit). Not a
+ *  bound on the tips: they are all asked about, this many at a time. */
+const TIPS_AT_ONCE = 512;
+
 /** The root's rule for a push of a `downstream/...` branch, however it was asked for: the
  *  commit's `.github/` is exactly that of a commit the remote already has (one of `tips`) and
- *  that it builds on (a merge base). Returns why not, or null. */
+ *  that it builds on (a merge base). Every tip is searched: git finds the commits nearest
+ *  `commit` that it shares with any of them. Returns why not, or null. */
 export const downstreamRefusal = async (
   git: Git,
   commit: string,
   tips: string[],
 ): Promise<string | null> => {
   const bases = new Set<string>();
-  for (const tip of tips.slice(0, 200)) {
-    const found = await git(["merge-base", "--all", commit, tip]);
+  for (let at = 0; at < tips.length; at += TIPS_AT_ONCE) {
+    const found = await git(["merge-base", "--all", commit, ...tips.slice(at, at + TIPS_AT_ONCE)]);
     if (found.code === 0)
       for (const id of found.stdout.split("\n")) if (isCommit(id.trim())) bases.add(id.trim());
   }

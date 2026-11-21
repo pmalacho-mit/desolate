@@ -8,10 +8,17 @@
 // its Markdown preview is built as elements, never parsed as HTML: shared/ui/markdown.js); on
 // the Mac each field is one argv element of `gh`, never a line a shell reads.
 import { createHash } from "node:crypto";
-import { parseRepo } from "./names.ts";
+import { over } from "./limits.ts";
+import { printable } from "./text.ts";
+import { characters, parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { bodied, titled } from "../.harness/shared-issues.ts";
 
+/** What an offered issue may hold (R7: an agent writes it; R8: characters are code points).
+ *  `title` 256, `body` 65,536 and `label` 50 characters are GitHub's own limits, which it
+ *  counts as characters, so a draft kept here is one GitHub takes. `labels` 20 a draft and
+ *  `waiting` 50 a domain are choices: what a person reads through on the dashboard. */
 export const LIMIT = { title: 256, body: 65_536, labels: 20, label: 50, waiting: 50 } as const;
 export const ID = /^[0-9a-z]{6,12}-[0-9a-f]{8}$/;
 
@@ -29,32 +36,38 @@ export const draftOf = (value: unknown): Draft | { error: string } => {
   const v = (typeof value === "object" && value !== null ? value : {}) as Record<string, unknown>;
   if (!parseRepo(v.repo)) return { error: "an issue names its repository as <owner>/<repo>" };
   const title = typeof v.title === "string" ? v.title.trim() : "";
-  if (!title || title.length > LIMIT.title)
-    return { error: `an issue needs a title, of at most ${LIMIT.title} characters` };
+  // (Characters are code points, as LIMIT counts them: an emoji is one, as on GitHub.)
+  if (!title) return { error: `an issue needs a title, of at most ${LIMIT.title} characters` };
+  if (characters(title) > LIMIT.title)
+    return {
+      error: over("the title", LIMIT.title, characters(title), "characters", "GitHub takes"),
+    };
   if (HIDDEN.test(title)) return { error: "the title holds a control or invisible character" };
   const body =
     typeof v.body === "string" ? v.body.replace(/\r\n?/g, "\n") : v.body === undefined ? "" : null;
-  if (body === null || body.length > LIMIT.body)
-    return { error: `the body is text, of at most ${LIMIT.body} characters` };
+  if (body === null) return { error: `the body is text, of at most ${LIMIT.body} characters` };
+  if (characters(body) > LIMIT.body)
+    return { error: over("the body", LIMIT.body, characters(body), "characters", "GitHub takes") };
   if (HIDDEN_IN_BODY.test(body))
     return {
       error: "the body holds a control or invisible character (newlines and tabs are fine)",
     };
   const raw = v.labels === undefined ? [] : v.labels;
-  if (!Array.isArray(raw) || raw.length > LIMIT.labels)
-    return { error: `labels are a list, of at most ${LIMIT.labels}` };
+  if (!Array.isArray(raw)) return { error: `labels are a list, of at most ${LIMIT.labels}` };
+  if (raw.length > LIMIT.labels)
+    return { error: over("the issue", LIMIT.labels, raw.length, "labels", "one draft carries") };
   const labels: string[] = [];
   for (const label of raw) {
     // No comma: gh reads one as a separator, and the label would become two.
     if (
       typeof label !== "string" ||
       !label.trim() ||
-      label.length > LIMIT.label ||
+      characters(label) > LIMIT.label ||
       HIDDEN.test(label) ||
       label.includes(",")
     )
       return {
-        error: `'${String(label).slice(0, 60)}' is not a label desolate carries (at most ${LIMIT.label} characters, no comma)`,
+        error: `'${printable(label, 60)}' is not a label desolate carries (at most ${LIMIT.label} characters, no comma)`,
       };
     if (!labels.includes(label.trim())) labels.push(label.trim());
   }
@@ -127,6 +140,29 @@ declare namespace draftOf {
         expected: { error: "the body is text, of at most 65536 characters" },
       ],
     ]
+  >;
+  /** characters are counted as GitHub counts them: 256 emoji are a title (512 UTF-16 units),
+   *  and one more is not (the control) */
+  export type TitleInCharacters = Expect<
+    Invoke<typeof draftOf, [value: Invoke<typeof titled, [text: "\u{1f600}", count: 256]>]>,
+    "matches",
+    { repo: "acme/app"; labels: [] }
+  >;
+  export type TitleOver = Expect<
+    Invoke<typeof draftOf, [value: Invoke<typeof titled, [text: "\u{1f600}", count: 257]>]>,
+    "=",
+    { error: "the title is 257 characters, over the 256 GitHub takes" }
+  >;
+  /** a body of 65,536 characters outside the basic plane is taken; one more is not */
+  export type BodyInCharacters = Expect<
+    Invoke<typeof draftOf, [value: Invoke<typeof bodied, [text: "\u{1f600}", count: 65536]>]>,
+    "matches",
+    { repo: "acme/app"; title: "x" }
+  >;
+  export type BodyOver = Expect<
+    Invoke<typeof draftOf, [value: Invoke<typeof bodied, [text: "\u{1f600}", count: 65537]>]>,
+    "=",
+    { error: "the body is 65537 characters, over the 65536 GitHub takes" }
   >;
   /** labels are a list of names gh takes as given: not one string, not a blank one */
   export type Labels = Table<

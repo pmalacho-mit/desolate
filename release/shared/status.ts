@@ -2,9 +2,10 @@
 // clone's git directory, written from inside a workspace by /desolate/status. The host and
 // the root both read those files AS DATA and never run git there (P4). What they say is
 // shown, never acted on.
-import { printable, printableLines } from "./text.ts";
+import { CUT, printable, printableLines } from "./text.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { NAMES } from "./limits.ts";
 import { isBranch, isCommit } from "./names.ts";
 import type { WorkspacePlan } from "./plan.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -22,8 +23,8 @@ import type {
 export type Status = { color: string; message: string; updated: string };
 export const COLORS = ["gray", "blue", "green", "yellow", "orange", "red"];
 
-/** The first `most` bytes of a plain file under `base`, or null. `base` is not the
- *  workspace's to change; everything below it is (it is the domain's clone). So:
+/** A plain file under `base`, opened for reading, or null. `base` is not the workspace's to
+ *  change; everything below it is (it is the domain's clone). So:
  *
  *    - the file is opened without following a link at its own name, and what is checked
  *      (a regular file, its size) is checked on the open descriptor, not on the name;
@@ -35,13 +36,9 @@ export const COLORS = ["gray", "blue", "green", "yellow", "orange", "red"];
  *
  *  What is read is shown and never acted on, so the worst a domain can do with the gap that
  *  is left on macOS (a link swapped in and out within one read) is put text from a file
- *  the person can already read in front of that same person. */
-export const readPlain = (
-  base: string,
-  file: string,
-  most: number,
-  refuseLarger: boolean,
-): string | null => {
+ *  the person can already read in front of that same person. Whoever is given the
+ *  descriptor closes it. */
+const openUnder = (base: string, file: string): { fd: number; stat: fs.Stats } | null => {
   let fd: number | null = null;
   try {
     const wanted = path.join(fs.realpathSync(base), path.relative(base, file));
@@ -50,7 +47,7 @@ export const readPlain = (
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     );
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || (refuseLarger && stat.size > most)) return null;
+    if (!stat.isFile()) return null;
     if (process.platform === "linux") {
       if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== wanted) return null;
     } else {
@@ -58,12 +55,34 @@ export const readPlain = (
       if (fs.realpathSync(file) !== wanted || named.dev !== stat.dev || named.ino !== stat.ino)
         return null;
     }
-    const buffer = Buffer.alloc(Math.min(stat.size, most));
-    return buffer.subarray(0, fs.readSync(fd, buffer, 0, buffer.length, 0)).toString("utf8");
+    const opened = { fd, stat };
+    fd = null;
+    return opened;
   } catch {
     return null;
   } finally {
     if (fd !== null) fs.closeSync(fd);
+  }
+};
+
+/** The first `most` bytes of a plain file under `base` (as openUnder opens one), or null.
+ *  `refuseLarger`: a file of more than `most` bytes is not read at all. */
+export const readPlain = (
+  base: string,
+  file: string,
+  most: number,
+  refuseLarger: boolean,
+): string | null => {
+  const opened = openUnder(base, file);
+  if (!opened) return null;
+  try {
+    if (refuseLarger && opened.stat.size > most) return null;
+    const buffer = Buffer.alloc(Math.min(opened.stat.size, most));
+    return buffer.subarray(0, fs.readSync(opened.fd, buffer, 0, buffer.length, 0)).toString("utf8");
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(opened.fd);
   }
 };
 
@@ -201,17 +220,26 @@ declare namespace readPlain {
   >;
 }
 
+/** The most a status file may be, in bytes: a larger one is not a status, and is not read.
+ *  What an honest writer makes is far under it: a message of NAMES.status characters, each
+ *  written as JSON's longest escape (twelve bytes for a character outside the basic plane),
+ *  is 2,400 bytes, beside a colour and a time. A workspace writes the file, and the root
+ *  reads every checkout's each second: the bound is on what it will read for each. */
+export const STATUS_FILE_BYTES = 8 * 1024;
+
 /** A status file is written by a workspace, which may be hostile: a known colour, one line
- *  of printable text, a bounded size. */
+ *  of printable text of at most NAMES.status characters (a longer one is cut, and ends in
+ *  the mark), a bounded size. */
 export const readStatus = (base: string, file: string): Status | null => {
   try {
-    const text = readPlain(base, file, 8192, true);
+    const text = readPlain(base, file, STATUS_FILE_BYTES, true);
     if (text === null) return null;
     const data = JSON.parse(text) as Partial<Status>;
     if (!COLORS.includes(String(data.color))) return null;
     return {
       color: String(data.color),
-      message: printable(data.message, 200, " "),
+      message: printable(data.message, NAMES.status, " "),
+      // A time, as `date -u +%FT%TZ` writes one (20 characters): what is longer is not one.
       updated: String(data.updated ?? "").slice(0, 40),
     };
   } catch {
@@ -287,8 +315,24 @@ declare namespace readStatus {
   >;
 }
 
-export const readNote = (base: string, file: string): string =>
-  printableLines(readPlain(base, file, 16384, false) ?? "", " ").trimEnd();
+/** A checkout's note: Markdown a workspace wrote, its lines kept and made printable. At most
+ *  NAMES.noteBytes of it are read (the writer, /desolate/status, cuts a longer one itself and
+ *  says so). A file that is longer all the same is shown cut, and the cut is said: it ends
+ *  in the mark, on a line of its own, and never in half a character. */
+export const readNote = (base: string, file: string): string => {
+  const opened = openUnder(base, file);
+  if (!opened) return "";
+  try {
+    const buffer = Buffer.alloc(Math.min(opened.stat.size, NAMES.noteBytes));
+    const read = buffer.subarray(0, fs.readSync(opened.fd, buffer, 0, buffer.length, 0));
+    const text = printableLines(read.toString("utf8"), " ").trimEnd();
+    return opened.stat.size > NAMES.noteBytes ? `${text.replace(/\ufffd+$/, "")}\n${CUT}` : text;
+  } catch {
+    return "";
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+};
 
 declare namespace readNote {
   /** Markdown, lines kept; what a terminal or a page would act on, blanked; none: "" */
@@ -358,36 +402,125 @@ declare namespace statusDir {
  *  branch names when its ref is a loose file or in packed-refs, or the detached commit. */
 export type Head = { branch: string | null; commit: string | null };
 const COMMIT_LINE = /^([0-9a-f]{40})\n$/;
-/** A clone's packed-refs, at most 256 KiB (a domain's file: a larger one is not read), and
- *  read again only when it changed (its identity, size and time): the state service looks
- *  at every checkout every second, and an agent could make this file large. */
-const PACKED_MOST = 256 * 1024;
-const packedCache = new Map<string, { key: string; text: string }>();
-const packedRefs = (reposDir: string, file: string): string => {
-  let key = "";
-  try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.size > PACKED_MOST) return "";
-    key = `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
-  } catch {
-    return "";
+/** Where git keeps the refs it has packed: one file, a line for each ref (`<commit>
+ *  refs/heads/<branch>`), which grows with the repository: 5,000 branches are about
+ *  350 KiB. It is a domain's file, so an agent can make it any size, and the state service
+ *  looks at every checkout each second: so the one ref wanted is looked up, and the file is
+ *  never read whole. No size is too large, and none costs more than a few reads.
+ *
+ *  git writes the file sorted by ref name, and says so in its first line since 2.15 (2017):
+ *  such a file is searched by halving, as git itself reads it. One that does not say so (an
+ *  older git's, another program's) is read through from its start, line by line, up to
+ *  PACKED_UNSORTED_MOST. */
+const NEWLINE = 0x0a;
+/** What one read takes: room for the end of the line a search landed in, the whole line
+ *  after it and that ref's peeled line (`^<commit>`), each at its longest. A line is a
+ *  commit, a space, a ref's name and a newline, and a ref's name is a path under `.git`
+ *  while it is loose, so no longer than a path may be (4,096 bytes on Linux): 16 KiB holds
+ *  three such lines. A longer line is not one git wrote, and no commit is read from it. */
+const PACKED_LOOK = 16 * 1024;
+/** The most of a packed-refs that does not say it is sorted which is read through for one
+ *  ref (R7: the file is a workspace's, and the reader is the root's state service, which
+ *  every domain shares). 256 KiB is about 4,000 branches, and was the bound on every
+ *  packed-refs before 2026-11-20; it is kept for the only files that still need one. Past
+ *  it the branch is shown without its commit. */
+const PACKED_UNSORTED_MOST = 256 * 1024;
+
+/** The commit a line of packed-refs gives `ref`, if it is that ref's line. Also how the
+ *  line's ref sorts against it (git's order: by byte), or null for a line that names no ref
+ *  (the header, a peeled line, anything else). */
+const packedLine = (line: Buffer, ref: Buffer): { order: number; commit: string } | null =>
+  line.length > 41 && line[40] === 0x20 && line[0] !== 0x23 /* # */ && line[0] !== 0x5e /* ^ */
+    ? {
+        order: Buffer.compare(line.subarray(41), ref),
+        commit: line.subarray(0, 40).toString("latin1"),
+      }
+    : null;
+
+/** The commit an open packed-refs of `size` bytes has for `ref`, or null. */
+const packedCommit = (fd: number, size: number, ref: Buffer): string | null => {
+  const block = Buffer.alloc(PACKED_LOOK);
+  const read = (at: number) => block.subarray(0, fs.readSync(fd, block, 0, block.length, at));
+  const header = read(0);
+  const sorted = /^# pack-refs with:.* sorted(?: |$)/.test(
+    header.subarray(0, Math.max(0, header.indexOf(NEWLINE))).toString("latin1"),
+  );
+  if (!sorted && size > PACKED_UNSORTED_MOST) return null;
+  // The ref's line, if there is one, starts in [low, high), and `low` is where a line starts.
+  let low = 0;
+  let high = size;
+  // Sorted: halve that range until one read holds every line that starts in it.
+  while (sorted && high - low > PACKED_LOOK / 2) {
+    const middle = low + Math.floor((high - low) / 2);
+    // Read from the byte before the middle, so that the first newline seen ends the line the
+    // middle is in (or the one before it): what follows is the first line that starts at or
+    // after the middle.
+    const seen = read(middle - 1);
+    let start = seen.indexOf(NEWLINE) + 1;
+    let before: number | null = null;
+    while (start > 0 && middle - 1 + start < high) {
+      const end = seen.indexOf(NEWLINE, start);
+      if (end < 0) break;
+      const found = packedLine(seen.subarray(start, end), ref);
+      start = end + 1;
+      if (!found) continue;
+      if (found.order === 0) return isCommit(found.commit) ? found.commit : null;
+      if (found.order < 0) before = middle - 1 + start;
+      break;
+    }
+    // That line sorts before the ref: the ref's is after it. Otherwise (it sorts after, or
+    // no ref's line starts from the middle on) the ref's starts before the middle.
+    if (before === null) high = middle;
+    else low = before;
   }
-  const known = packedCache.get(file);
-  if (known && known.key === key) return known.text;
-  const text = readPlain(reposDir, file, PACKED_MOST, true) ?? "";
-  if (packedCache.size > 500) packedCache.clear();
-  packedCache.set(file, { key, text });
-  return text;
+  // Every line that starts in what is left, read in order.
+  while (low < high) {
+    const seen = read(low);
+    let start = 0;
+    for (;;) {
+      const end = seen.indexOf(NEWLINE, start);
+      if (end < 0 || low + start >= high) break;
+      const found = packedLine(seen.subarray(start, end), ref);
+      if (found?.order === 0) return isCommit(found.commit) ? found.commit : null;
+      start = end + 1;
+    }
+    // No whole line in a read: a line longer than git writes, or a last line with no end.
+    if (start === 0) return null;
+    low += start;
+  }
+  return null;
+};
+
+/** What was found is remembered until the file changes (its identity, size and time), so
+ *  that a look each second is one `lstat`. */
+const packedCache = new Map<string, { key: string; commit: string | null }>();
+const packedRef = (reposDir: string, file: string, branch: string): string | null => {
+  const keyOf = (stat: fs.Stats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  const name = `${file}\0${branch}`;
+  try {
+    const known = packedCache.get(name);
+    if (known && known.key === keyOf(fs.lstatSync(file))) return known.commit;
+  } catch {
+    return null;
+  }
+  const opened = openUnder(reposDir, file);
+  if (!opened) return null;
+  try {
+    const commit = packedCommit(opened.fd, opened.stat.size, Buffer.from(`refs/heads/${branch}`));
+    // A bound on the cache, not on what is read: past it, everything is looked up again.
+    if (packedCache.size > 500) packedCache.clear();
+    packedCache.set(name, { key: keyOf(opened.stat), commit });
+    return commit;
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(opened.fd);
+  }
 };
 const refCommit = (reposDir: string, common: string, branch: string): string | null => {
   const loose = readPlain(reposDir, path.join(common, "refs", "heads", branch), 128, true);
   if (loose !== null) return COMMIT_LINE.exec(loose)?.[1] ?? null;
-  const packed = packedRefs(reposDir, path.join(common, "packed-refs"));
-  for (const line of packed.split("\n")) {
-    const [commit, ref] = line.split(" ");
-    if (ref === `refs/heads/${branch}` && isCommit(commit)) return commit;
-  }
-  return null;
+  return packedRef(reposDir, path.join(common, "packed-refs"), branch);
 };
 export const readHead = (
   reposDir: string,

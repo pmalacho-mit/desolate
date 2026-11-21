@@ -22,6 +22,10 @@ const DesolateMarkdown = (() => {
 
   // ---------------------------------------------------------------- inline
   const DEEPEST = 8;
+  /** How far an autolink is looked for: past a common browser's URL limit (about 2,000),
+   *  so scanning costs little whatever the text. A bare address longer than this is left as
+   *  text, never linked cut (it would go somewhere else). */
+  const LINK_MOST = 2100;
   /** The first value in a sorted list above `from`, or -1. */
   const above = (list, from) => {
     let lo = 0, hi = list.length;
@@ -131,7 +135,7 @@ const DesolateMarkdown = (() => {
       }
       // <https://...> and a bare https://... (GitHub's autolinks)
       if (c === "<") {
-        const m = /^<((?:https?:\/\/|mailto:)[^\s<>]+)>/i.exec(source.slice(i, i + 2100));
+        const m = /^<((?:https?:\/\/|mailto:)[^\s<>]+)>/i.exec(source.slice(i, i + LINK_MOST));
         if (m) {
           flush();
           out.push(link(m[1], [text(m[1])]));
@@ -140,8 +144,9 @@ const DesolateMarkdown = (() => {
         }
       }
       if ((c === "h" || c === "H") && /[\s(*_~]/.test(before)) {
-        const m = /^https?:\/\/[^\s<]*[^\s<.,:;"')\]!?*_~]/i.exec(source.slice(i, i + 2100));
-        if (m) {
+        const m = /^https?:\/\/[^\s<]*[^\s<.,:;"')\]!?*_~]/i.exec(source.slice(i, i + LINK_MOST));
+        // (One that runs on past the window was cut by it: not a link.)
+        if (m && /^[^\s<]*/.exec(source.slice(i, i + LINK_MOST + 1))[0].length <= LINK_MOST) {
           flush();
           out.push(link(m[0], [text(m[0])]));
           i += m[0].length;

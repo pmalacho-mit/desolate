@@ -6,6 +6,7 @@
 // trusted (the forge, a VM), `idleMs`: ended when nothing has arrived for that long, however
 // long it has run. `timeoutMs`, a total, is for the callers not yet moved to those.
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Configure,
@@ -22,6 +23,7 @@ import type {
   nestedLeftRunning,
   outlivesItsRunner,
 } from "../.harness/shared-run.ts";
+import type { toFile } from "../.harness/shared-run-output.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = {
@@ -40,8 +42,15 @@ export type RunOptions = {
   idleMs?: number;
   /** Echo the child's stderr to ours as it arrives (progress for a person). */
   inheritStderr?: boolean;
-  /** The most of each stream kept (default 192 MiB): past it, the program is stopped. */
+  /** The most of each stream kept, in bytes (default RUN_MAX): past it, the program is
+   *  stopped. A caller whose program runs in a VM (whose output is not trusted) and that
+   *  needs a line or a page of it should pass far less. */
   maxBytes?: number;
+  /** stdout goes to this file (made, or emptied), whole, and is not kept: the answer's
+   *  stdout is "". For output larger than is worth holding (an archive, a log), and, as
+   *  "/dev/null", for a caller that needs only the exit code. stderr is kept as ever. (With
+   *  `idleMs`, stderr alone is then watched.) */
+  stdoutTo?: string;
 };
 
 /** What run() keeps of a program's output, at most, on each stream. Many of the programs run
@@ -127,6 +136,34 @@ const toGroup = (group: number, how: NodeJS.Signals): boolean => {
   }
 };
 
+/** What is kept of one stream: its bytes, in one buffer that doubles as it fills and never
+ *  past `most`, made text once at the end. Bytes, so that a bound in bytes counts bytes
+ *  (R8), and a character whose bytes two writes split is one character, not two broken ones.
+ *  One buffer, so that a program writing a byte at a time costs a byte for each, not an
+ *  object for each (a list of chunks held 141 bytes for every byte kept: the independent
+ *  review of #187). */
+const kept = (most: number) => {
+  let buffer = Buffer.alloc(0);
+  let size = 0;
+  return {
+    /** false, and nothing kept, when the chunk would take it past `most` */
+    add: (chunk: Buffer): boolean => {
+      if (size + chunk.length > most) return false;
+      if (size + chunk.length > buffer.length) {
+        const grown = Buffer.allocUnsafe(
+          Math.min(most, Math.max(size + chunk.length, buffer.length * 2, 4096)),
+        );
+        buffer.copy(grown, 0, 0, size);
+        buffer = grown;
+      }
+      chunk.copy(buffer, size);
+      size += chunk.length;
+      return true;
+    },
+    text: () => buffer.toString("utf8", 0, size),
+  };
+};
+
 export const run = (
   command: string,
   args: string[],
@@ -137,15 +174,34 @@ export const run = (
     if (signal?.aborted) return resolve({ code: 128, stdout: "", stderr: CANCELLED });
     const grouped = signal !== undefined || options.idleMs !== undefined;
     if (grouped) guard();
-    const child = spawn(command, args, {
-      env: options.env ?? process.env,
-      cwd: options.cwd,
-      stdio: ["pipe", "pipe", options.inheritStderr ? "inherit" : "pipe"],
-      detached: grouped,
-    });
+    let file: number | undefined;
+    if (options.stdoutTo !== undefined)
+      try {
+        file = fs.openSync(options.stdoutTo, "w");
+      } catch (error) {
+        return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
+      }
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        env: options.env ?? process.env,
+        cwd: options.cwd,
+        stdio: ["pipe", file ?? "pipe", options.inheritStderr ? "inherit" : "pipe"],
+        detached: grouped,
+      });
+    } catch (error) {
+      // (An argument node will not pass, as one holding a NUL: said as a program not run.)
+      return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
+    } finally {
+      // The child has its own copy of the file's descriptor now, or there is no child.
+      if (file !== undefined) fs.closeSync(file);
+    }
     const group = grouped ? child.pid : undefined;
-    let stdout = "";
-    let stderr = "";
+    const max = options.maxBytes ?? RUN_MAX;
+    const out = kept(max);
+    const err = kept(max);
+    let told = "";
+    const text = () => ({ stdout: out.text(), stderr: err.text() + told });
     let timer: NodeJS.Timeout | undefined;
     let idle: NodeJS.Timeout | undefined;
     // Ended by us, once, for one reason, which the answer's stderr ends with; and then never
@@ -155,7 +211,7 @@ export const run = (
     const said = (why: string) => {
       if (ended) return false;
       ended = true;
-      stderr += why;
+      told += why;
       return true;
     };
     let closed = false;
@@ -185,31 +241,26 @@ export const run = (
       if (group) groups.delete(group);
       signal?.removeEventListener("abort", cancel);
     };
-    const max = options.maxBytes ?? RUN_MAX;
     let over = false;
     const tooMuch = () => {
       over = true;
       end(`\n(more than ${max} bytes of output: stopped)`);
     };
-    child.stdout!.on("data", (chunk) => {
+    const keep = (into: ReturnType<typeof kept>) => (chunk: Buffer) => {
       idle?.refresh();
       if (over) return;
-      if (stdout.length + chunk.length > max) return tooMuch();
-      stdout += chunk;
-    });
-    child.stderr?.on("data", (chunk) => {
-      idle?.refresh();
-      if (over) return;
-      if (stderr.length + chunk.length > max) return tooMuch();
-      stderr += chunk;
-    });
+      if (!into.add(chunk)) return tooMuch();
+    };
+    child.stdout?.on("data", keep(out));
+    child.stderr?.on("data", keep(err));
     child.on("error", (error) => {
       done();
+      const { stdout, stderr } = text();
       resolve({ code: 127, stdout, stderr: stderr + String(error.message) });
     });
     child.on("close", (code, killed) => {
       done();
-      resolve({ code: ended ? 128 : (code ?? (killed ? 128 : 1)), stdout, stderr });
+      resolve({ code: ended ? 128 : (code ?? (killed ? 128 : 1)), ...text() });
     });
     if (options.timeoutMs)
       timer = setTimeout(
@@ -256,6 +307,57 @@ declare namespace run {
     Invoke<typeof run, [command: "yes", args: [], options: { maxBytes: 100000 }]>,
     "matches",
     { code: 128; stderr: "\n(more than 100000 bytes of output: stopped)" }
+  >;
+  /** the bound is in bytes, as it says: here 4 characters of 3 bytes each, in two writes,
+   *  are 12 bytes, over 10 (until 2026-11-21 the kept text's UTF-16 length, 3, was added to
+   *  the second write's 3 bytes, and all 12 were kept) */
+  export type TooMuchCountsBytes = Expect<
+    Invoke<
+      typeof run,
+      [
+        command: "sh",
+        args: ["-c", "printf '\u20ac\u20ac\u20ac'; sleep 0.2; printf '\u20ac'"],
+        options: { maxBytes: 10 },
+      ]
+    >,
+    "matches",
+    { code: 128; stderr: "\n(more than 10 bytes of output: stopped)" }
+  >;
+  /** a character whose bytes arrive in two writes is one character, not two broken ones */
+  export type SplitCharacter = Expect<
+    Invoke<
+      typeof run,
+      [command: "sh", args: ["-c", "printf '\\342'; sleep 0.2; printf '\\202\\254'"]]
+    >,
+    "=",
+    { code: 0; stdout: "\u20ac"; stderr: "" }
+  >;
+  /** stdout sent to a file goes there whole, and is not kept; stderr is kept as ever */
+  export type ToAFile = Expect<
+    Invoke<typeof toFile, [script: "echo kept-in-the-file; echo err >&2; exit 2"]>,
+    "=",
+    { code: 2; stdout: ""; stderr: "err\n"; file: "kept-in-the-file\n"; open: "as before" }
+  >;
+  /** an argument node will not pass (a NUL): an answer, a program not run, and the file's
+   *  descriptor closed, never a throw */
+  export type NotPassed = Expect<
+    Invoke<typeof toFile, [script: "echo hi", also: ["a\u0000b"]]>,
+    "matches",
+    { code: 127; stdout: ""; file: ""; open: "as before" }
+  >;
+  /** to /dev/null: only the exit code is wanted, and no output is held, however much (the
+   *  control, TooMuch: the same program kept is stopped at its bound) */
+  export type Discarded = Expect<
+    Invoke<
+      typeof run,
+      [
+        command: "sh",
+        args: ["-c", "head -c 300000 /dev/zero; exit 4"],
+        options: { stdoutTo: "/dev/null"; maxBytes: 100000 },
+      ]
+    >,
+    "=",
+    { code: 4; stdout: ""; stderr: "" }
   >;
   /** past its time it is killed, and says so: 128 (a signal), never a success */
   export type Timeout = Expect<

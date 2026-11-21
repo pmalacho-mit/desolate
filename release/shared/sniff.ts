@@ -15,6 +15,10 @@ export type Sniffed =
   /** Not decidable yet: read more (up to `LIMIT`) and ask again. */
   | { kind: "more" };
 
+/** The most read of a connection before what it asks for is decided (R7: whoever connects,
+ *  a browser or anything else on the network, writes it). 16 KiB is a TLS record's largest
+ *  body (2^14 bytes), which holds a ClientHello and its server name, and node's own limit
+ *  for HTTP headers: past it a client is not one that names a host. */
 export const LIMIT = 16 * 1024;
 
 const HTTP_START = /^[A-Z]{1,16} \S+ HTTP\/1\.[01]\r?\n/;

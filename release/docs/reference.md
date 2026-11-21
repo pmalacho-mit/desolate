@@ -129,7 +129,7 @@ from, which is how far to believe it:
 |---|---|---|
 | `pusher` | `pushed`, `push-failed`, `push-uncertain` | the remote's own answer: `pushed` means the branch is at that commit |
 | `host` | `approved`, `refused`, `workspace-up`, `workspace-down`, `git-push-handed`, `git-delivery-handed` | the host's own doing |
-| `root` | `offered`, `offer-gone`, `bundle-refused`, `status`, `head` (a checkout switched branch or its branch moved), `approval-waiting`, `workspace-made`, `workspace-state`, `workspace-removed`, `issue-offered`, `issue-published`, `issue-rejected` | an agent's word, relayed: safe to print, not to trust |
+| `root` | `offered`, `offer-gone`, `bundle-refused`, `status`, `head` (a checkout switched branch or its branch moved), `approval-waiting`, `workspace-made`, `workspace-state`, `workspace-removed`, `issue-offered`, `issue-published`, `issue-rejected`, `events-dropped` (one change of a domain made more than 200 events: `dropped` says how many were not sent, so look at the state itself) | an agent's word, relayed: safe to print, not to trust |
 
 For example, a pull request for every branch pushed (the `gh` here is yours, on the Mac; no
 VM has it):
@@ -554,7 +554,7 @@ Mac:                 the approval page, or `desolate issue publish <id>`, shows 
                        gh issue create --repo <r> --title=<t> --body-file <f> --label=<l>...
 ```
 
-- **Checked before kept:** a title of at most 256 characters and a body of at most 64 KiB,
+- **Checked before kept:** a title of at most 256 characters and a body of at most 65,536 characters (GitHub's own limits),
   with no control, bidirectional or invisible characters (newlines and tabs in the body
   are fine); at most 20 labels, each at most 50 characters with no comma (gh would read
   it as two). At most 50 waiting per domain.
