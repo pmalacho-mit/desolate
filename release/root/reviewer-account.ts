@@ -8,7 +8,7 @@
 // doing as it does it, and a request that waits for another says so. Its lists are counted
 // and paged (R2): the account holds the first page of each and the true total, and `page`
 // gives the rest; `diff` gives any diff of the push, a page of bytes at a time (R1, R8).
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { squashedFrom } from "../shared/approval.ts";
@@ -57,8 +57,8 @@ const remoteOf = async (repo: Repo, dir: string) => {
   // file from under a summary in flight, and its ls-remote was refused (T2, 2026-11-20).
   const identities = path.join(REVIEWER.home, "identities");
   fs.mkdirSync(identities, { recursive: true, mode: 0o700 });
-  const identity = path.join(identities, `read-${process.pid}-${Date.now()}.pub`);
-  fs.writeFileSync(identity, `${String(reply.pubkey).trim()}\n`, { mode: 0o600 });
+  const identity = path.join(identities, `read-${randomBytes(6).toString("hex")}.pub`);
+  fs.writeFileSync(identity, `${String(reply.pubkey).trim()}\n`, { mode: 0o600, flag: "wx" });
   try {
     const f = JSON.parse(fs.readFileSync(PINNED_FORGE.config, "utf8")) as {
       ssh: { user: string; host: string; port: number };
@@ -293,6 +293,10 @@ const headerWarnings = async (dir: string, order: string[], say: Say): Promise<s
       // A header and its continuation lines (a signature's), with their size.
       const extra: { name: string; bytes: number; value: string }[] = [];
       if (!fixed) extra.push({ name: "malformed headers", bytes: head.length, value: "" });
+      // A NUL in a commit: git shows its message only up to it, and what follows rides along
+      // unseen. (submit refuses such an object; this says so should one be here all the same.)
+      if (body.includes("\0"))
+        extra.push({ name: "a NUL, past which git shows nothing", bytes: body.length, value: "" });
       let current: (typeof extra)[number] | null = null;
       for (const line of (fixed ? head.slice(fixed.length) : "").split("\n").slice(0, -1)) {
         if (line.startsWith(" ") && current) current.bytes += line.length + 1;
@@ -426,6 +430,9 @@ export const livePacks = (): Set<string> => {
  *  Held by its process (shared/lock.ts): one whose requester went away is ended, and leaves
  *  the lock to the next at once. */
 const LOCK = path.join(REVIEWER.home, "summary.lock");
+/** How many of the commits where a new branch leaves the remote's history are tried for the
+ *  closest (below). */
+const EDGES = 200;
 
 const account = async (
   repo: Repo,
@@ -512,7 +519,14 @@ const account = async (
         .filter((line) => line.startsWith("-"))
         .map((line) => line.slice(1))
         .filter(isCommit);
-      for (const at of edge) {
+      // Each edge is two walks of the history, and the root's user shapes the edge (a merge of
+      // ten thousand old commits is ten thousand edges): the first 200 are tried, and the
+      // account says when there were more, as the comparison may then not be the closest.
+      if (edge.length > EDGES)
+        warnings.push(
+          `the branch leaves the remote's history at ${edge.length} commits: it is compared with the closest of the first ${EDGES}`,
+        );
+      for (const at of edge.slice(0, EDGES)) {
         const count = await newSince(at);
         if (!best || count < best.count) best = { at, count };
       }
@@ -862,6 +876,22 @@ export const answer = async (request: unknown, say: Say): Promise<AccountLine> =
 // account above: its lists' first pages, the net diff's first page, and the first page of
 // the first commits' own diffs.
 
+/** As much of a diff as the host before the stream took (256 KiB), and whether there was
+ *  more: git is ended there. (Its JSON is at most 1.5 MiB, at six bytes a byte.) */
+const OLD_DIFF_BYTES = 256 * 1024;
+const firstOf = async (dir: string, args: string[]) => {
+  const held: Buffer[] = [];
+  let size = 0;
+  const code = await gitStream(dir, args, (chunk) => {
+    held.push(chunk);
+    size += chunk.length;
+    return size <= OLD_DIFF_BYTES;
+  });
+  if (code !== null && code !== 0) return null;
+  const page = cutPage(Buffer.concat(held), 0, code === null ? Infinity : size, OLD_DIFF_BYTES);
+  return { text: page.text, cut: page.next !== null };
+};
+
 /** The one answer the host before the stream reads (its last line). */
 export const oldAnswer = async (
   request: Record<string, unknown>,
@@ -873,11 +903,12 @@ export const oldAnswer = async (
   const a = line.account;
   const kept = keptOf(a.key);
   if (!kept) return { ok: false, error: GONE };
-  const net = await diff(a.key, "net", 0, say);
   const dir = ensureRepo(parseRepo(kept.repo)!);
+  const range = [kept.base ?? EMPTY_TREE, kept.commit];
+  const net = await firstOf(dir, ["diff", ...DETAILED, ...range, "--"]);
   const firsts = kept.order.slice(0, PAGE);
-  const each = firsts.length ? await pageOf(dir, eachArgs(firsts), 0, undefined, say) : null;
-  const eachCut = each !== null && (each.next !== null || kept.order.length > firsts.length);
+  const each = firsts.length ? await firstOf(dir, eachArgs(firsts)) : null;
+  const eachCut = each !== null && (each.cut || kept.order.length > firsts.length);
   return {
     ok: true,
     ...(a.warnings.length ? { warnings: a.warnings } : {}),
@@ -890,7 +921,7 @@ export const oldAnswer = async (
     fastForward: a.fastForward,
     ...(a.squashedFrom ? { squashedFrom: a.squashedFrom } : {}),
     lfs: a.sends.lfs.length,
-    ...("diff" in net ? { diff: net.diff.text, diffCut: net.diff.next !== null } : {}),
+    ...(net ? { diff: net.text, diffCut: net.cut } : {}),
     sends: a.sends,
     ...(a.squash ? { squash: a.squash } : {}),
     between: a.between.items,

@@ -115,14 +115,22 @@ export const submitForReview = async (repo: Repo, commit: string): Promise<strin
     try {
       await git(clone, ["update-ref", ref, commit]);
       const bundle = path.join(work, "review.bundle");
-      // The clone's view of the remote's branches, those the reviewer takes (BUNDLE_REF): one
-      // it does not is left out, and the account says some branches were not sent, rather
-      // than the whole push going without one. On stdin: a remote of many branches is many.
+      // The clone's view of the remote's branches that the reviewer lacks, of those it takes
+      // (BUNDLE_REF): one it does not take is left out, and the account says some branches
+      // were not sent, rather than the whole push going without one. On stdin: a remote of
+      // many branches is many.
+      const holds = new Set(have);
       const remotes = (
-        await git(clone, ["for-each-ref", "--format=%(refname)", "refs/remotes/origin"])
+        await git(clone, [
+          "for-each-ref",
+          "--format=%(objectname) %(refname)",
+          "refs/remotes/origin",
+        ])
       ).stdout
         .split("\n")
-        .filter((name) => BUNDLE_REF.test(name));
+        .map((line) => line.split(" ") as [string, string])
+        .filter(([id, name]) => !holds.has(id) && BUNDLE_REF.test(name ?? ""))
+        .map(([, name]) => name);
       // No deadline (R4): the first bundle of a repository is its whole history, and the
       // push it is for waits for it.
       const made = await git(clone, ["bundle", "create", "--quiet", bundle, "--stdin"], {

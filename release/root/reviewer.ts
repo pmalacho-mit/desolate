@@ -36,11 +36,12 @@ import * as fs from "node:fs";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
-import { formatBytes } from "../shared/limits.ts";
+import { formatBytes, over } from "../shared/limits.ts";
 import { isCommit, parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { accountLine } from "../shared/review-account.ts";
 import { printable } from "../shared/text.ts";
+import { bundleRefusal } from "./intake.ts";
 import { REVIEWER } from "./layout.ts";
 import { answer, livePacks, oldAnswer } from "./reviewer-account.ts";
 import { BUNDLE_REF, ensureRepo, gitOk, log, repoDir } from "./reviewer-git.ts";
@@ -53,6 +54,12 @@ const LIMIT = {
   /** A bundle's bytes come from the root's user, which is not trusted to send them at all:
    *  one that sends nothing for a minute is not waited for. */
   idleMs: 60_000,
+  /** The refs one bundle may name: the review ref and the clone's view of the remote's
+   *  branches. Each is a refspec git fetch matches against every ref of the bundle (one by
+   *  one: twice as many refs is four times the work, on the root VM's few cores), and a
+   *  bundle's header is the root's user's to write. Ten thousand branches is a remote far
+   *  past any a person keeps; review-client.ts sends only those the reviewer lacks. */
+  refs: 10_000,
 } as const;
 
 const tips = async (repo: Repo) => {
@@ -105,14 +112,10 @@ const receive = (socket: Socket, first: Buffer, count: number, file: string): Pr
     socket.resume();
   });
 
-/** The disk free under the reviewer's home, in bytes (null when it cannot be read). */
+/** The disk free under the reviewer's home, in bytes. */
 const free = () => {
-  try {
-    const disk = fs.statfsSync(REVIEWER.home);
-    return disk.bavail * disk.bsize;
-  } catch {
-    return null;
-  }
+  const disk = fs.statfsSync(REVIEWER.home);
+  return disk.bavail * disk.bsize;
 };
 
 const submit = async (socket: Socket, repo: Repo, size: number, rest: Buffer) => {
@@ -122,7 +125,7 @@ const submit = async (socket: Socket, repo: Repo, size: number, rest: Buffer) =>
   // twice its size (the root's user sends it, and is not trusted to send a sensible one). Not
   // the forge's push size: the first bundle of a repository is its whole history.
   const room = free();
-  if (room !== null && size * 2 > room)
+  if (size * 2 > room)
     return {
       ok: false,
       error: `the bundle is ${formatBytes(size)}, and the reviewer's disk has ${formatBytes(room)} free: it needs twice the bundle's size`,
@@ -141,8 +144,19 @@ const submit = async (socket: Socket, repo: Repo, size: number, rest: Buffer) =>
         ok: false,
         error: `a review bundle carries the clone's review ref and its origin/* refs, and nothing else${odd ? `: not ${printable(odd[1] ?? odd[0], 300)}` : ""}`,
       };
-    // Every object arrives checked (root's git settings: fsckObjects), and is the reviewer's
-    // only under a ref named by its own id.
+    if (heads.length > LIMIT.refs)
+      return {
+        ok: false,
+        error: over("the bundle's list of refs", LIMIT.refs, heads.length, "refs"),
+      };
+    // Every object is checked before any of it is taken (git's own fsck, strictly): a fetch
+    // from a bundle checks nothing before git 2.46, whatever fetch.fsckObjects says
+    // (intake.ts), and an object fsck refuses (a commit message with a NUL in it, which git
+    // shows only up to the NUL) would ride in the pack a person approves unseen (the
+    // independent review of limits 01). Then it is the reviewer's only under a ref named by
+    // its own id.
+    const refused = await bundleRefusal(file, dir);
+    if (refused) return { ok: false, error: `the bundle's objects are refused: ${refused}` };
     // One ref per commit: two refs at one commit (origin/HEAD and origin/main, say) would
     // both be refs/seen/<that commit>, and git refuses to fetch two into one.
     const once = [...new Map(heads.map(([id, ref]) => [id, ref])).entries()];
@@ -259,6 +273,7 @@ const SAYING_MS = 5_000;
 /** The request, as root wrote it on stdin: its first line (review-ask.ts writes one line, the
  *  host before it wrote a JSON object and ended), at most LIMIT.header. */
 const request = async (): Promise<unknown> => {
+  process.stdin.setEncoding("utf8");
   let text = "";
   for await (const chunk of process.stdin) {
     text += chunk;

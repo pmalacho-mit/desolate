@@ -73,6 +73,7 @@ declare namespace answerOf {
  *  and no newline). A request is a few names: past 64 KiB it is not one. */
 const REQUEST_BYTES = 64 * 1024;
 const requested = async (): Promise<string> => {
+  process.stdin.setEncoding("utf8");
   let text = "";
   for await (const chunk of process.stdin) {
     text += chunk;
@@ -170,9 +171,10 @@ const main = async () => {
   // the last line), then the one answer.
   let partial = "";
   let last = "";
+  child.stdout.setEncoding("utf8");
   for await (const chunk of child.stdout) {
     if (stopping) return;
-    const lines = (partial + (chunk as Buffer).toString()).split("\n");
+    const lines = (partial + (chunk as string)).split("\n");
     partial = lines.pop()!;
     for (const line of lines)
       if (line.startsWith('{"progress":')) await write(`${line}\n`);

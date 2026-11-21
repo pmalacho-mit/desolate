@@ -2,6 +2,7 @@
 // objects the root's user sent, and how it shows what those objects say. Every module of
 // the reviewer runs git through here, and only here.
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { NAMES } from "../shared/limits.ts";
@@ -163,7 +164,9 @@ export const gitOk = async (
   const result = await gitIn(dir, args, options);
   if (result.code !== 0) {
     const said = (result.stderr || result.stdout).trim();
-    log(`git ${args[0]} failed:\n${said}`);
+    // (Its end: what git says last is why. A bounded log: the root's user can make git fail
+    // at will, and the log is root's.)
+    log(`git ${args[0]} failed:\n${said.slice(-16 * 1024)}`);
     throw new Error(`git ${args[0]} failed: ${shown(said.split("\n").slice(-2).join(" | "), 300)}`);
   }
   return result.stdout;
@@ -254,8 +257,8 @@ export const has = async (dir: string, id: string) =>
  *  (Each its own temporary name: two summaries at once once both wrote "<file>.part", and
  *  one rename found it gone.) */
 export const atomically = (file: string, text: string) => {
-  const part = `${file}.${Math.random().toString(16).slice(2)}${process.pid}.part`;
-  fs.writeFileSync(part, text, { mode: 0o600 });
+  const part = `${file}.${randomBytes(8).toString("hex")}.part`;
+  fs.writeFileSync(part, text, { mode: 0o600, flag: "wx" });
   fs.renameSync(part, file);
 };
 

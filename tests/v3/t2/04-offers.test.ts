@@ -787,10 +787,7 @@ echo "$c1 $c2 $c3 $c4"`);
 base=$(git rev-parse origin/main)
 c=$base
 for i in $(seq 1 104); do c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$base^{tree}" -p "$c" -m "commit $i"); done
-t=$( { git ls-tree "$base"; for i in $(seq -w 1 120); do printf '100644 blob %s	f-%s.txt
-' "$(printf 'file %s
-' "$i" | git hash-object -w --stdin)" "$i"; done; printf '100644 blob %s	big.txt
-' "$(seq 1 200000 | git hash-object -w --stdin)"; } | git mktree )
+t=$( { git ls-tree "$base"; for i in $(seq -w 1 120); do printf '100644 blob %s\tf-%s.txt\n' "$(printf 'file %s\n' "$i" | git hash-object -w --stdin)" "$i"; done; printf '100644 blob %s\tbig.txt\n' "$(seq 1 200000 | git hash-object -w --stdin)"; } | git mktree )
 c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$t" -p "$c" -m "commit 105")
 echo "$c"`);
     assert.equal(made.code, 0, made.stderr);
@@ -848,6 +845,26 @@ echo "$c"`);
     assert.equal(at, total, "the pages are the whole diff");
     const all = pages.map((p) => p.diff!.text).join("");
     assert.ok(all.includes("+file 007") && all.includes("+file 008") && all.includes("+200000\n"));
+    // A commit git shows only in part (a NUL in its message, past which git log prints
+    // nothing) is refused before the reviewer takes any of it: what follows the NUL would ride
+    // in the pack unseen. (CONTROL: the commits above, sent the same way, were taken.)
+    const hidden = inRootClone(
+      String.raw`printf 'tree %s\nparent %s\nauthor a <a@example.invalid> 1700000000 +0000\ncommitter a <a@example.invalid> 1700000000 +0000\n\nvisible\n\0hidden payload\n' "$(git rev-parse origin/main^{tree})" "$(git rev-parse origin/main)" | git hash-object -t commit --literally -w --stdin`,
+    );
+    assert.equal(hidden.code, 0, hidden.stderr);
+    const refused = stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); console.log(why ?? "taken");`,
+      hidden.stdout.trim(),
+    ]);
+    assert.match(
+      refused.stdout,
+      /^the bundle's objects are refused: .*nul/im,
+      refused.stdout + refused.stderr,
+    );
   });
 
   it("the reviewer's account takes as long as it takes, says so, waits its turn, and ends when its asker goes", () => {
@@ -879,21 +896,22 @@ chmod 755 /usr/local/bin/git
 mkdir -p /tmp/slowpack && chmod 777 /tmp/slowpack && touch /tmp/slowpack/once
 ask() { node --disable-warning=ExperimentalWarning /desolate/release/root/review-ask.ts; }
 count() { pgrep -u desolate-reviewer -fc "$1" || true; }
-# Its asker goes away while it packs: read until it says so, then stop reading.
-printf '%s
-' "$1" | ask | grep -m1 -q '"packing the push"'
+# Its asker goes away while it packs: read until it says so, then stop reading. (In the
+# background: a pipeline is waited for until review-ask, last, has ended.)
+rm -f /tmp/gone
+{ printf '%s\n' "$1" | ask | { grep -m1 -q '"packing the push"'; touch /tmp/gone; }; } &
+until [ -e /tmp/gone ]; do sleep 0.2; done
 sleep 1
 echo "during $(count 'sleep 100') $(count 'reviewer.ts account')"
 sleep 12
 echo "after $(count 'sleep 100') $(count 'reviewer.ts account')"
+wait
 # Asked again and read to the end; and another account asked for meanwhile, which waits.
 touch /tmp/slowpack/once
 start=$(date +%s)
-printf '%s
-' "$1" | ask > /tmp/slow.lines &
+printf '%s\n' "$1" | ask > /tmp/slow.lines &
 sleep 3
-printf '%s
-' "$2" | ask > /tmp/waits.lines
+printf '%s\n' "$2" | ask > /tmp/waits.lines
 wait
 echo "took $(( $(date +%s) - start ))"
 echo "=====slow"; cat /tmp/slow.lines

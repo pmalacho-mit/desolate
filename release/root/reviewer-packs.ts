@@ -12,8 +12,9 @@ import * as path from "node:path";
 import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
 import type { Repo } from "../shared/names.ts";
 import type { Sends } from "../shared/review-account.ts";
+import { startOf } from "../shared/lock.ts";
 import { define, mebibytes, valueOf, whole } from "../shared/settings.ts";
-import { atomically, env, gitBytes, gitOk, hardened, POINTER } from "./reviewer-git.ts";
+import { atomically, env, gitBytes, gitOk, hardened, POINTER, shown } from "./reviewer-git.ts";
 import { REVIEWER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -147,12 +148,20 @@ export const prepare = async (
   try {
     const last = JSON.parse(fs.readFileSync(record, "utf8")) as { pack?: unknown; at?: unknown };
     const kept = typeof last.pack === "string" ? storedPack(repo, last.pack) : null;
-    if (kept && Number.isFinite(last.at) && Date.now() - (last.at as number) < PACKS.freshMs)
+    if (kept && Number.isFinite(last.at) && Date.now() - (last.at as number) < PACKS.freshMs) {
+      touchPack(repo, kept.sends.pack);
       return kept.sends;
+    }
   } catch {
     /* none yet */
   }
-  const temporary = path.join(where, `incoming-${randomBytes(8).toString("hex")}`);
+  // Named for its maker, as `incoming-<pid>-<start>-<random>`: it is pruned when that process
+  // is gone, never for its age (a large push counts its objects for an hour before git writes
+  // a byte of it).
+  const temporary = path.join(
+    where,
+    `incoming-${process.pid}-${startOf(process.pid) ?? "0"}-${randomBytes(8).toString("hex")}`,
+  );
   const out = fs.openSync(temporary, "w", 0o600);
   const hash = createHash("sha256");
   let size = 0;
@@ -190,7 +199,7 @@ export const prepare = async (
     let last = { phase: "", at: 0 };
     child.stderr.on("data", (chunk: Buffer) => {
       const parts = (partial + chunk.toString()).split(/[\r\n]/);
-      partial = parts.pop() ?? "";
+      partial = (parts.pop() ?? "").slice(-4000);
       for (const part of parts) {
         const progress = packProgress(part);
         if (!progress) {
@@ -223,7 +232,9 @@ export const prepare = async (
   }
   if (packed.code !== 0) {
     fs.rmSync(temporary, { force: true });
-    throw new Error(`cannot pack the push: ${packed.said.trim().split("\n").slice(-1)[0] ?? ""}`);
+    throw new Error(
+      `cannot pack the push: ${shown(packed.said.trim().split("\n").slice(-1)[0] ?? "", 300)}`,
+    );
   }
   say({ phase: "listing the push's LFS objects" });
   const sends: Sends = { pack: hash.digest("hex"), size, lfs: await pointersIn(dir, tip, known) };
@@ -278,7 +289,7 @@ export const prunePacks = (live: Set<string>) => {
       return [];
     }
   };
-  const all: { file: string; at: number; size: number }[] = [];
+  const all: { file: string; at: number; size: number; making?: boolean }[] = [];
   for (const owner of dirs(root))
     for (const name of dirs(path.join(root, owner.name))) {
       const where = path.join(root, owner.name, name.name);
@@ -287,6 +298,13 @@ export const prunePacks = (live: Set<string>) => {
         // (One an account renames as this looks is gone: nothing to do.)
         const stat = fs.statSync(file, { throwIfNoEntry: false });
         if (!stat) continue;
+        if (entry.startsWith("incoming-")) {
+          // A pack being made: its maker's, until that process is gone.
+          const [, pid, start] = entry.split("-");
+          if (startOf(Number(pid)) !== start) fs.rmSync(file, { force: true });
+          else all.push({ file, at: stat.mtimeMs, size: stat.size, making: true });
+          continue;
+        }
         if (Date.now() - stat.mtimeMs > PACKS.keptMs) fs.rmSync(file, { force: true });
         else if (entry.endsWith(".pack")) all.push({ file, at: stat.mtimeMs, size: stat.size });
       }
@@ -295,7 +313,7 @@ export const prunePacks = (live: Set<string>) => {
   const most = valueOf(KEPT_PACKS) * MiB;
   for (const pack of all.sort((a, b) => a.at - b.at)) {
     if (total <= most) break;
-    if (live.has(path.basename(pack.file, ".pack"))) continue;
+    if (pack.making || live.has(path.basename(pack.file, ".pack"))) continue;
     fs.rmSync(pack.file, { force: true });
     fs.rmSync(pack.file.replace(/\.pack$/, ".json"), { force: true });
     total -= pack.size;
