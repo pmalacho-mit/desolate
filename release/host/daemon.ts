@@ -13,7 +13,7 @@
 // THE LINK. Each workspace's only way out is one stream to its own proxy in the root. The
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
-import { formatBytes } from "../shared/limits.ts";
+import { formatBytes, over } from "../shared/limits.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { printable } from "../shared/text.ts";
 import { spawn } from "node:child_process";
@@ -218,6 +218,13 @@ const SERVER_FIRST_MS = 400;
  *  that has waited longest goes, not the newest: a program of another user's opening silent
  *  sockets could otherwise lock the person out (decisions.md, the audit of 2026-11-16). */
 const SILENT_MOST = 512;
+
+/** The most of one answer from the root's state service this host reads: a hard bound
+ *  against the root's user, whose service parses what domains send (decisions.md, "the
+ *  root's user's service is bounded"). The whole state is one answer (/host/state), and it
+ *  grows with domains, offers and issues, so how near it is is said (`desolate doctor`,
+ *  stateRoom): a state past it stops `desolate events` and the dashboard's actions. */
+const STATE_ANSWER_BYTES = 16 * 1024 * 1024;
 
 /** What one connection a link carries costs this Mac: a session into the root VM, which on
  *  Lima is a `limactl shell` of its own (83 MB, and 2 MB for its ssh: measured on the M1,
@@ -599,10 +606,27 @@ const memoryGiven = (
       if (running.has(w.vm)) given += Number(w.size?.memoryMiB ?? defaultMiB()) || 0;
   return given;
 };
+/** How much of this Mac's memory running workspaces may be given, for a workspace's own
+ *  request for another (a spawn). A person may knowingly give more than the Mac has. */
+const SPAWN_ROOM = define({
+  name: "spawn.memoryPercent",
+  env: "DESOLATE_SPAWN_MEMORY_PERCENT",
+  side: "host",
+  default: 85,
+  parse: whole(10, 400),
+  why: "How much of this Mac's memory, in percent, the running workspaces may be given before a workspace's own request for another (a spawn) is refused; over 100 gives more than the Mac has, which macOS then pages to disk.",
+});
+
 /** Why one more workspace would not fit on this Mac, or null: what is given and coming within
- *  85% of the Mac's memory. */
-const roomVerdict = (given: number, coming: number, next: number, mac: number) =>
-  given + coming > mac * 0.85
+ *  `percent` of the Mac's memory (the setting spawn.memoryPercent, 85 unless set). */
+const roomVerdict = (
+  given: number,
+  coming: number,
+  next: number,
+  mac: number,
+  percent = valueOf(SPAWN_ROOM),
+) =>
+  given + coming > (mac * percent) / 100
     ? `this Mac has no room for another workspace: ${Math.round(given / 1024)} GiB of its ${Math.round(mac / 1024)} GiB are given to running workspaces, and one more needs ${Math.round(next / 1024)} GiB (close one first, or ask the person)`
     : null;
 
@@ -631,7 +655,7 @@ declare namespace memoryGiven {
 }
 
 declare namespace roomVerdict {
-  /** what is given and coming, within 85% of the Mac's memory; past it, said in GiB */
+  /** what is given and coming, within 85% of the Mac's memory unless the person sets another share; past it, said in GiB */
   export type Room = Table<
     typeof roomVerdict,
     [
@@ -641,6 +665,8 @@ declare namespace roomVerdict {
         args: [given: 28672, coming: 8192, next: 8192, mac: 40960],
         expected: "this Mac has no room for another workspace: 28 GiB of its 40 GiB are given to running workspaces, and one more needs 8 GiB (close one first, or ask the person)",
       ],
+      /** a person who gives more than the Mac has, knowingly */
+      [args: [given: 28672, coming: 8192, next: 8192, mac: 40960, percent: 150], expected: null],
     ]
   >;
 }
@@ -1448,6 +1474,9 @@ const serve = async () => {
   // knows, nudges it when a share changed, and collects the dashboard's requests, which it
   // runs as desolate's own CLI, from the fixed list in shared/actions.ts.
   const TOKEN_FILE = path.join(paths.state, "host-token");
+  /** The largest answer the state service has given (the whole state, for /host/state), in
+   *  bytes: for doctor, to say how near STATE_ANSWER_BYTES it is. */
+  let stateLargest = 0;
   // Connections to the state service, opened ahead of need. Opening one costs what the VM
   // layer's exec costs (an ssh session; tens to hundreds of milliseconds), and the
   // dashboard's budget for showing state is 300 ms: so a few are kept ready, each used
@@ -1517,13 +1546,20 @@ const serve = async () => {
       // end drops the answer).
       const complete = () => {
         const answer = stateAnswer(data);
+        if (answer && !(answer instanceof Error))
+          stateLargest = Math.max(stateLargest, Buffer.byteLength(answer.body));
         if (answer) settle(answer);
       };
       stream.on("data", (chunk: Buffer) => {
         data = Buffer.concat([data, chunk]);
-        // What the root's user's service says is bounded: it parses what domains send.
-        if (data.length > 16 * 1024 * 1024)
-          return settle(new Error("the root's state service said too much"));
+        if (data.length > STATE_ANSWER_BYTES) {
+          stateLargest = Math.max(stateLargest, data.length);
+          return settle(
+            new Error(
+              `${over("the root's state service's answer", STATE_ANSWER_BYTES, data.length, "bytes", "this host reads of one")} (desolate doctor says how near the state is to it)`,
+            ),
+          );
+        }
         complete();
       });
       stream.on("error", (error) => settle(error));
@@ -1656,7 +1692,7 @@ const serve = async () => {
 
   /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
    *  running workspaces, with the new one's (its domain's size, else the stack's), within
-   *  85% of this Mac's (no fixed number of workspaces, but not past what the Mac has). */
+   *  most of this Mac's (spawn.memoryPercent) (no fixed number of workspaces, but not past what the Mac has). */
   const roomFor = async (domain: string): Promise<string | null> => {
     try {
       const { stackDefaults } = await import("./workspaces.ts");
@@ -1893,7 +1929,11 @@ const serve = async () => {
         } else if (request.op === "editor") {
           // Whether this daemon holds its port, on both loopback addresses: cheap, for the
           // check before an address with a token in it is printed.
-          reply = { ok: true, editor: { port: editorHostPort(), error: editorError } };
+          reply = {
+            ok: true,
+            editor: { port: editorHostPort(), error: editorError },
+            state: { largest: stateLargest, most: STATE_ANSWER_BYTES },
+          };
         } else if (request.op === "ports") {
           await Promise.all([...entries.values()].map(sync));
           reconcile();
@@ -2213,6 +2253,39 @@ declare namespace editorPortError {
     Invoke<typeof daemonAnswering, [reply: { ok: false; error: "unknown request" }]>,
     Expect<Invoke<typeof editorPortError>, "=", null>
   >;
+}
+
+/** How near the root's state is to what this host reads of it (STATE_ANSWER_BYTES): the
+ *  largest answer the running daemon has had, and the bound, in bytes; null when no daemon
+ *  answers, or an older one that does not say. For `desolate doctor`. */
+export const stateRoom = async (): Promise<{ largest: number; most: number } | null> => {
+  if (!(await alive())) return null;
+  const reply = await ask({ op: "editor" }, 10_000).catch(() => null);
+  const state = reply?.state as { largest?: unknown; most?: unknown } | undefined;
+  return reply?.ok === true &&
+    Number.isSafeInteger(state?.largest) &&
+    Number.isSafeInteger(state?.most)
+    ? { largest: state!.largest as number, most: state!.most as number }
+    : null;
+};
+
+declare namespace stateRoom {
+  /** asked without starting a daemon: none running is null */
+  export type NoDaemon = Expect<Invoke<typeof stateRoom>, "=", null>;
+  /** what the daemon said, or null from one that does not say */
+  export type Said = [
+    Given<
+      Invoke<
+        typeof daemonAnswering,
+        [reply: { ok: true; state: { largest: 2202009; most: 16777216 } }]
+      >,
+      Expect<Invoke<typeof stateRoom>, "=", { largest: 2202009; most: 16777216 }>
+    >,
+    Given<
+      Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+      Expect<Invoke<typeof stateRoom>, "=", null>
+    >,
+  ];
 }
 
 export const ports = async (): Promise<PortView[]> => {
