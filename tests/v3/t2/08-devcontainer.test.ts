@@ -150,11 +150,15 @@ describe("T2 section 4.2: the project's devcontainer, inside the workspace's VM"
     assert.match(up.stdout, /^ {2}editor {7}http:/m, "the editor is there all the same, in the VM");
     const there = exec("app/w1", "cat /etc/desolate-test-image 2>/dev/null || echo in-the-vm; pwd");
     assert.equal(there.stdout, "in-the-vm\n/workspaces/acme/app\n", "exec runs in the VM itself");
-    const refused = JSON.parse(stack.quiet("net", "log", "app", "--json").stdout) as {
-      host: string;
-      verdict: string;
-      workspace: string;
-    }[];
+    const refused = (
+      JSON.parse(stack.quiet("net", "log", "app", "--last", "100000", "--json").stdout) as {
+        items: {
+          host: string;
+          verdict: string;
+          workspace: string;
+        }[];
+      }
+    ).items;
     assert.ok(
       refused.some(
         (e) => e.host === "registry.invalid" && e.verdict === "refused" && e.workspace === "w1",
@@ -231,12 +235,16 @@ describe("T2 section 4.2: the project's devcontainer, inside the workspace's VM"
       `docker run --rm ${IMAGE} curl -sS -m 20 http://api.example.test/from-a-bridge 2>&1`,
     );
     assert.equal(bridged.stdout.trim(), "upstream http host=api.example.test path=/from-a-bridge");
-    const log = JSON.parse(stack.quiet("net", "log", "app", "--json").stdout) as {
-      host: string;
-      verdict: string;
-      workspace: string;
-      domain: string;
-    }[];
+    const log = (
+      JSON.parse(stack.quiet("net", "log", "app", "--last", "100000", "--json").stdout) as {
+        items: {
+          host: string;
+          verdict: string;
+          workspace: string;
+          domain: string;
+        }[];
+      }
+    ).items;
     assert.equal(
       log.filter(
         (e) =>
