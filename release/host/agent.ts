@@ -19,8 +19,6 @@
 // is root: made safe before it reaches a terminal. A holder started before this file (its log
 // one file, cut at 64 MiB) is still talked to: the socket's protocol is the same, and every
 // command here runs the holder's file anew (workspace/agent-holder.py says how).
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { formatBytes, NAMES } from "../shared/limits.ts";
 import { andMore, PAGE } from "../shared/listed.ts";
@@ -29,7 +27,8 @@ import { parseRepo, SLUG } from "../shared/names.ts";
 import { define, mebibytes, valueOf } from "../shared/settings.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { CUT, failure, printable, printableLines } from "../shared/text.ts";
-import { guest, paths } from "./paths.ts";
+import { keep, LAST } from "./failures.ts";
+import { guest } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type {
   Expect,
@@ -95,8 +94,8 @@ export const FLAGS = {
   stop: { name: { type: "string" }, kill: { type: "boolean" } },
 } as const;
 
-/** What the holder in the VM says on a stream this process holds while it runs (an answer, an
- *  error), gathered up to `SAID_MOST`: the VM is not trusted (an agent is root there), and
+/** The most this process keeps of what the holder in the VM says (an answer, an error), as
+ *  an exec's `maxBytes` or gathered from a stream: the VM is not trusted (an agent is root there), and
  *  what this process holds is bounded by what it is for. A holder's answer is a line of JSON,
  *  its error a traceback at most; 1 MiB of either is a holder gone wrong, and is said to be. */
 const SAID_MOST = 1024 * 1024;
@@ -110,27 +109,12 @@ const gather = (stream: NodeJS.ReadableStream) => {
   return () => text;
 };
 
-/** The holder's error, whole (R1): its last ten lines, made safe, and where all of it is
- *  kept on this Mac when that is not all of it. (Ten, and the file under the host's logs, as
- *  host/failures.ts has them on the branch that brings it: this keeper is to become that
- *  one's `keep` when both have landed.) */
+/** The holder's error, whole (R1): its last lines, made safe, and where all of it is kept
+ *  (host/failures.ts), made safe there too: the file is read with `cat` as often as not. */
 const holderError = (said: { stdout: string; stderr: string }, what: string) =>
-  failure((said.stderr || said.stdout).replace(/^agent-holder: /, ""), 10, (whole) => {
-    fs.mkdirSync(paths.logs, { recursive: true });
-    const file = path.join(
-      paths.logs,
-      `agent-${what}-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`,
-    );
-    // Made safe here too: the file is read with `cat` as often as not. At most SAID_MOST of
-    // it (an exec's answer may be up to 192 MiB, all of it the VM's choosing).
-    fs.writeFileSync(
-      file,
-      printableLines(
-        whole.length > SAID_MOST ? `${whole.slice(0, SAID_MOST)}\n(cut at 1 MiB)` : whole,
-      ),
-    );
-    return file;
-  });
+  failure((said.stderr || said.stdout).replace(/^agent-holder: /, ""), LAST, (whole) =>
+    keep(`agent-${what}`)(printableLines(whole)),
+  );
 
 declare namespace holderError {
   /** what the holder said, without its own prefix, made safe; short enough to be whole */
@@ -223,6 +207,7 @@ export const start = async (
   const name = nameOf(options.name);
   const started = await backend().exec(w.vm, holderStart(name, checkout!.path, command), {
     timeoutMs: 60_000,
+    maxBytes: SAID_MOST,
   });
   if (started.code !== 0)
     refuse(
@@ -304,6 +289,7 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
     refuse(`${w.domain}/${w.workspace} has no checkout to run it in`, `desolate list ${w.domain}`);
   const started = await backend().exec(w.vm, holderStart("agent", checkout!.path, command), {
     timeoutMs: 60_000,
+    maxBytes: SAID_MOST,
   });
   if (started.code !== 0)
     refuse(
@@ -453,7 +439,10 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
               (!workspace || w.workspace === workspace) && running.has(w.vm) && isOwnVm(d.slug, w),
           )
           .map(async (w) => {
-            const said = await b.exec(w.vm, [...HOLDER(), "list"], { timeoutMs: 30_000 });
+            const said = await b.exec(w.vm, [...HOLDER(), "list"], {
+              timeoutMs: 30_000,
+              maxBytes: SAID_MOST,
+            });
             let given: unknown = [];
             try {
               given = JSON.parse(said.stdout.trim() || "[]");
@@ -580,6 +569,7 @@ export const stop = async (
     const killed = said(
       await backend().exec(w.vm, [...HOLDER(), "stop", name, "--kill", "--wait"], {
         timeoutMs: 30_000,
+        maxBytes: SAID_MOST,
       }),
     );
     if (!killed.ended)
@@ -592,7 +582,10 @@ export const stop = async (
   if (options.kill) return kill();
   if (!(process.stdin.isTTY && process.stderr.isTTY)) {
     const asked = said(
-      await backend().exec(w.vm, [...HOLDER(), "stop", name], { timeoutMs: 30_000 }),
+      await backend().exec(w.vm, [...HOLDER(), "stop", name], {
+        timeoutMs: 30_000,
+        maxBytes: SAID_MOST,
+      }),
     );
     if (asked.ended) return ended(asked.exit);
     return out(

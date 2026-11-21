@@ -1032,6 +1032,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         timeoutMs: options.timeoutMs,
         signal: options.signal,
         idleMs: options.idleMs,
+        maxBytes: options.maxBytes,
         inheritStderr: options.inheritStderr,
       });
     },

@@ -100,6 +100,7 @@ import type {
   keepLog,
   endsOf,
   numbered,
+  readInPieces,
   setOf,
   shown,
   sixGiB,
@@ -857,8 +858,9 @@ declare namespace roomVerdict {
 /** The root's state service's answer, once it is all there: complete when its Content-Length
  *  has arrived, not when the stream closes (what carries the connection, ssh or an exec, may
  *  hold it open until this side closes, which it does not do first: measured, a relay that
- *  sees its input end drops the answer). null: not all there yet. */
-const stateAnswer = (data: Buffer): { status: number; body: string } | Error | null => {
+ *  sees its input end drops the answer). null: its head has not all come; a number: it has,
+ *  and the whole answer is that many bytes. */
+const stateAnswer = (data: Buffer): { status: number; body: string } | Error | number | null => {
   const split = data.indexOf("\r\n\r\n");
   if (split < 0) return null;
   const head = data.subarray(0, split).toString("latin1");
@@ -866,9 +868,10 @@ const stateAnswer = (data: Buffer): { status: number; body: string } | Error | n
   const length = Number(/\r\ncontent-length: (\d+)/i.exec(head)?.[1] ?? -1);
   if (status === 0 || length < 0)
     return new Error("the root's state service sent something that is not an answer");
-  if (data.length >= split + 4 + length)
-    return { status, body: data.subarray(split + 4, split + 4 + length).toString("utf8") };
-  return null;
+  const whole = split + 4 + length;
+  if (data.length >= whole)
+    return { status, body: data.subarray(split + 4, whole).toString("utf8") };
+  return whole;
 };
 
 declare namespace stateAnswer {
@@ -896,7 +899,7 @@ declare namespace stateAnswer {
       { status: 401; body: "no!" }
     >,
   ];
-  /** not all there yet */
+  /** not all there yet: its head, or the size its head says it is */
   export type Incomplete = [
     Expect<
       Invoke<
@@ -912,7 +915,7 @@ declare namespace stateAnswer {
         [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{}"]>]
       >,
       "=",
-      null
+      59
     >,
   ];
   /** a head without its length, or not HTTP/1.1's, is not an answer, and waiting will not make it one */
@@ -944,6 +947,86 @@ declare namespace stateAnswer {
       { error: "the root's state service sent something that is not an answer" }
     >,
   ];
+}
+
+/** The root's state service's answer, read as it comes in chunks cut anywhere: `take` each,
+ *  and it gives what stateAnswer does once that is whole (else null), or the bound's error
+ *  past `most` bytes. Chunks are kept and joined only when the answer can be whole: when its
+ *  head ends in one (looked for with the three bytes before it), then when all the head
+ *  says has come. (Joined at every chunk, reading it was quadratic in its size.) */
+const stateReader = (most = STATE_ANSWER_BYTES) => {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let tail = Buffer.alloc(0);
+  let whole = Infinity;
+  return {
+    size: () => size,
+    take: (chunk: Buffer): { status: number; body: string } | Error | null => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > most)
+        return new Error(
+          `${over("the root's state service's answer", most, size, "bytes", "this host reads of one")} (desolate doctor says how near the state is to it)`,
+        );
+      if (whole === Infinity) {
+        const seen = Buffer.concat([tail, chunk]);
+        tail = seen.subarray(-3);
+        if (!seen.includes("\r\n\r\n")) return null;
+      } else if (size < whole) return null;
+      const data = Buffer.concat(chunks, size);
+      chunks.splice(0, chunks.length, data);
+      const answer = stateAnswer(data);
+      if (typeof answer !== "number") return answer;
+      whole = answer;
+      return null;
+    },
+  };
+};
+
+declare namespace stateReader {
+  /** an answer cut anywhere, its head's end among the cuts, is read whole, once */
+  export type Pieces = [
+    Expect<
+      Invoke<
+        typeof readInPieces,
+        [
+          reader: typeof stateReader,
+          text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
+          piece: 1,
+        ]
+      >,
+      "=",
+      { status: 200; body: '{"a":"bcd"}' }
+    >,
+    Expect<
+      Invoke<
+        typeof readInPieces,
+        [
+          reader: typeof stateReader,
+          text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
+          piece: 7,
+        ]
+      >,
+      "=",
+      { status: 200; body: '{"a":"bcd"}' }
+    >,
+  ];
+  /** past its bound, it says the bound and the size that met it */
+  export type Over = Expect<
+    Invoke<
+      typeof readInPieces,
+      [
+        reader: typeof stateReader,
+        text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
+        piece: 16,
+        most: 40,
+      ]
+    >,
+    "=",
+    {
+      error: "the root's state service's answer is 48 bytes, over the 40 this host reads of one (desolate doctor says how near the state is to it)";
+    }
+  >;
 }
 
 /** The state's tag, as the root's user's service gave it, to ask for what changed since:
@@ -1751,7 +1834,6 @@ const serve = async () => {
       }
       const payload = body === undefined ? "" : JSON.stringify(body);
       const stream = toStateService();
-      let data = Buffer.alloc(0);
       const timer = setTimeout(
         () => settle(new Error("the root's state service did not answer")),
         timeoutMs,
@@ -1765,27 +1847,15 @@ const serve = async () => {
         if (result instanceof Error) reject(result);
         else resolve(result);
       };
-      // The answer is complete when its Content-Length has arrived, not when the stream
-      // closes: what carries the connection (ssh, an exec) may hold it open until this
-      // side closes, which it does not do first (measured: a relay that sees its input
-      // end drops the answer).
-      const complete = () => {
-        const answer = stateAnswer(data);
-        if (answer && !(answer instanceof Error))
-          stateLargest = Math.max(stateLargest, Buffer.byteLength(answer.body));
-        if (answer) settle(answer);
-      };
+      const reader = stateReader();
       stream.on("data", (chunk: Buffer) => {
-        data = Buffer.concat([data, chunk]);
-        if (data.length > STATE_ANSWER_BYTES) {
-          stateLargest = Math.max(stateLargest, data.length);
-          return settle(
-            new Error(
-              `${over("the root's state service's answer", STATE_ANSWER_BYTES, data.length, "bytes", "this host reads of one")} (desolate doctor says how near the state is to it)`,
-            ),
-          );
-        }
-        complete();
+        const answer = reader.take(chunk);
+        if (answer === null) return;
+        stateLargest = Math.max(
+          stateLargest,
+          answer instanceof Error ? reader.size() : Buffer.byteLength(answer.body),
+        );
+        settle(answer);
       });
       stream.on("error", (error) => settle(error));
       stream.on("close", () => settle(new Error("the root's state service is not there")));
