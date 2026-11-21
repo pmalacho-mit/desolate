@@ -509,6 +509,10 @@ const takeOne = async (
   const name = randomBytes(8).toString("hex");
   const bundleTo = path.join(GIT_IN, `${name}.bundle`);
   const lfsTo = path.join(GIT_IN, `${name}.lfs`);
+  const withdrawn = () =>
+    log(
+      `git VM: the ${domain ? "delivery" : "push"} of ${repoId(repo)} ${String(asked.branch)} was withdrawn where it was asked, before it was handed to the root`,
+    );
   // Copied, never moved: the git VM keeps no hold on the root's copy.
   const files = [
     {
@@ -531,7 +535,8 @@ const takeOne = async (
   ];
   try {
     // Nothing bounds a push's total, and its copy is written dense: each file is measured
-    // first, so a push this Mac's disk cannot hold is refused before a byte is copied.
+    // first, so a push this Mac's disk cannot hold is refused before a byte is copied. It
+    // is held twice: the host's copy, and the root's (its clone, on this disk too).
     let needs = 0;
     for (const file of files) {
       const opened = within(file.from, file.most, file.what, file.allows);
@@ -540,10 +545,10 @@ const takeOne = async (
       needs += opened.size;
     }
     const disk = fs.statfsSync(GIT_IN);
-    if (needs > disk.bavail * disk.bsize)
+    if (2 * needs > disk.bavail * disk.bsize)
       return answer(id, {
         pushed: false,
-        error: `the push needs ${formatBytes(needs)} of this Mac's disk to be copied for the root, and ${formatBytes(disk.bavail * disk.bsize)} is free`,
+        error: `the push needs ${formatBytes(2 * needs)} of this Mac's disk (${formatBytes(needs)} for the host's copy, and as much for the root's), and ${formatBytes(disk.bavail * disk.bsize)} is free`,
       });
     note(
       id,
@@ -552,7 +557,7 @@ const takeOne = async (
     if (lfs.length) fs.mkdirSync(lfsTo, { mode: 0o700 });
     let copied = 0;
     for (const file of files) {
-      if (gone()) break;
+      if (gone()) return withdrawn();
       const opened = within(file.from, file.most, file.what, file.allows);
       if ("refused" in opened) return answer(id, { pushed: false, error: opened.refused });
       try {
@@ -567,10 +572,7 @@ const takeOne = async (
         fs.closeSync(opened.fd);
       }
     }
-    if (gone())
-      return log(
-        `git VM: the ${domain ? "delivery" : "push"} of ${repoId(repo)} ${String(asked.branch)} was withdrawn where it was asked, before it was handed to the root`,
-      );
+    if (gone()) return withdrawn();
     log(
       `git VM: ${domain ? `a delivery to ${domain}` : "a push"} of ${repoId(repo)} ${String(asked.branch)} at ${String(asked.commit)}, handed to the root`,
     );

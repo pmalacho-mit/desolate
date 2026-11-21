@@ -439,7 +439,7 @@ export const takeLfs = async (
   const opened = dir
     ? openIn(dir, oid, FORGE.lfsObjectBytes, what, "the forge stores")
     : { why: `${what} is not there`, absent: true };
-  const tmp = `${target}.${process.pid}.tmp`;
+  const tmp = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     if (!isOpened(opened))
       return { error: opened.absent ? `${what} is not in the outbox` : opened.why };
@@ -448,7 +448,6 @@ export const takeLfs = async (
         error: `the LFS object ${oid.slice(0, 12)} is ${opened.size} bytes; its pointer says ${size}`,
       };
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.rmSync(tmp, { force: true });
     // Copied without blocking rootd: the other domains are answered meanwhile.
     if ((await copyOut(opened, tmp)) !== oid)
       return { error: `the LFS object ${oid.slice(0, 12)} does not hash to its id` };

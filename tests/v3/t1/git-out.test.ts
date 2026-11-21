@@ -113,9 +113,9 @@ describe("T1 the git VM's out-box, watched", () => {
   it("a push this Mac's disk cannot hold is refused before a byte is copied, saying what it needs", async () => {
     const id = "5555555555555555";
     // Sparse objects at the forge's bound, enough of them to need more than the disk has
-    // free. The first is not what its name says: copied first, it would be refused as that.
+    // free for the host's copy and the root's. The first is not what its name says: copied first, it would be refused as that.
     const disk = fs.statfsSync(paths.home);
-    const count = Math.ceil((disk.bavail * disk.bsize) / FORGE.lfsObjectBytes) + 1;
+    const count = Math.ceil((disk.bavail * disk.bsize) / 2 / FORGE.lfsObjectBytes) + 1;
     const liar = "f".repeat(64);
     const oids = [
       liar,
@@ -129,7 +129,7 @@ describe("T1 the git VM's out-box, watched", () => {
     assert.equal(answer.pushed, false);
     assert.match(
       answer.error,
-      /^the push needs [\d.]+ [KMGT]iB of this Mac's disk to be copied for the root, and [\d.]+ [KMGT]iB is free$/,
+      /^the push needs [\d.]+ [KMGT]iB of this Mac's disk \([\d.]+ [KMGT]iB for the host's copy, and as much for the root's\), and [\d.]+ [KMGT]iB is free$/,
     );
     assert.deepEqual(copiedForTheRoot(), []);
     assert.deepEqual(
