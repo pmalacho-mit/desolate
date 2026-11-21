@@ -194,13 +194,13 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     assert.ok(fs.existsSync("/etc/passwd"), "and what it pointed at is not");
   });
 
-  it("an LFS object is taken only if it hashes to its name and has the size its pointer said", () => {
+  it("an LFS object is taken only if it hashes to its name and has the size its pointer said", async () => {
     const data = Buffer.from("large file content");
     const oid = createHash("sha256").update(data).digest("hex");
     const target = (name: string) => path.join(work, "store", name);
     fs.writeFileSync(`${lfs}/${oid}`, data);
     assert.deepEqual(
-      outbox.takeLfs("t1-dom", "acme/widgets", oid, data.length, target(oid)),
+      await outbox.takeLfs("t1-dom", "acme/widgets", oid, data.length, target(oid)),
       { ok: true },
       "control: an honest object is accepted",
     );
@@ -209,7 +209,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.writeFileSync(`${lfs}/${oid}`, data);
     assert.match(
       (
-        outbox.takeLfs("t1-dom", "acme/widgets", oid, data.length + 1, target("size")) as {
+        (await outbox.takeLfs("t1-dom", "acme/widgets", oid, data.length + 1, target("size"))) as {
           error: string;
         }
       ).error,
@@ -219,7 +219,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.writeFileSync(`${lfs}/${wrong}`, data);
     assert.match(
       (
-        outbox.takeLfs("t1-dom", "acme/widgets", wrong, data.length, target(wrong)) as {
+        (await outbox.takeLfs("t1-dom", "acme/widgets", wrong, data.length, target(wrong))) as {
           error: string;
         }
       ).error,
@@ -228,8 +228,11 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     const linked = "c".repeat(64);
     fs.symlinkSync("/etc/passwd", `${lfs}/${linked}`);
     assert.match(
-      (outbox.takeLfs("t1-dom", "acme/widgets", linked, 1, target(linked)) as { error: string })
-        .error,
+      (
+        (await outbox.takeLfs("t1-dom", "acme/widgets", linked, 1, target(linked))) as {
+          error: string;
+        }
+      ).error,
       /^the LFS object cccccccccccc is not a plain file$/,
       "a link is not followed, and is said to be what it is",
     );
@@ -239,13 +242,17 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.writeFileSync(`${lfs}/${huge}`, "");
     fs.truncateSync(`${lfs}/${huge}`, 5 * 1024 ** 3 + 1);
     assert.equal(
-      (outbox.takeLfs("t1-dom", "acme/widgets", huge, 1, target(huge)) as { error: string }).error,
+      ((await outbox.takeLfs("t1-dom", "acme/widgets", huge, 1, target(huge))) as { error: string })
+        .error,
       "the LFS object dddddddddddd is 5368709121 bytes, over the 5368709120 the forge stores",
     );
     fs.rmSync(`${lfs}/${huge}`);
     assert.match(
-      (outbox.takeLfs("t1-dom", "acme/widgets", "../../x", 1, target("x")) as { error: string })
-        .error,
+      (
+        (await outbox.takeLfs("t1-dom", "acme/widgets", "../../x", 1, target("x"))) as {
+          error: string;
+        }
+      ).error,
       /not an LFS object id/,
     );
     assert.deepEqual(
@@ -253,6 +260,52 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       [oid],
       "nothing that was refused was kept, not even a partial copy",
     );
+  });
+
+  it("a large LFS object from one domain does not hold the root: a second domain's is taken meanwhile", async () => {
+    // rootd answers every domain from one loop. A sparse 256 MiB object, all zeros: its
+    // hash is computed here, a MiB at a time.
+    const big = 256 * 1024 * 1024;
+    const zeros = createHash("sha256");
+    for (let at = 0; at < big; at += 1024 * 1024) zeros.update(Buffer.alloc(1024 * 1024));
+    const bigOid = zeros.digest("hex");
+    fs.writeFileSync(`${lfs}/${bigOid}`, "");
+    fs.truncateSync(`${lfs}/${bigOid}`, big);
+    const other = `${domains}/t1-other/outbox/lfs/acme/other`;
+    fs.mkdirSync(other, { recursive: true });
+    const small = Buffer.from("the second domain's object");
+    const smallOid = createHash("sha256").update(small).digest("hex");
+    fs.writeFileSync(`${other}/${smallOid}`, small);
+    const store = path.join(work, "store-meanwhile");
+    const done: string[] = [];
+    const large = outbox
+      .takeLfs("t1-dom", "acme/widgets", bigOid, big, path.join(store, bigOid))
+      .then((taken) => (done.push("large"), taken));
+    const second = outbox
+      .takeLfs("t1-other", "acme/other", smallOid, small.length, path.join(store, smallOid))
+      .then((taken) => (done.push("second"), taken));
+    assert.deepEqual(await Promise.all([large, second]), [{ ok: true }, { ok: true }]);
+    assert.deepEqual(done, ["second", "large"], "the second domain did not wait for the copy");
+    assert.equal(fs.statSync(path.join(store, bigOid)).size, big);
+    fs.rmSync(store, { recursive: true, force: true });
+    fs.rmSync(`${domains}/t1-other`, { recursive: true, force: true });
+  });
+
+  it("an LFS object made shorter while it is copied is refused, and nothing of it is kept", async () => {
+    const size = 64 * 1024 * 1024;
+    const oid = "e".repeat(64);
+    fs.writeFileSync(`${lfs}/${oid}`, "");
+    fs.truncateSync(`${lfs}/${oid}`, size);
+    const store = path.join(work, "store-shorter");
+    const taking = outbox.takeLfs("t1-dom", "acme/widgets", oid, size, path.join(store, oid));
+    // The workspace, as the root copies: what is left is a MiB.
+    setImmediate(() => fs.truncateSync(`${lfs}/${oid}`, 1024 * 1024));
+    assert.deepEqual(await taking, {
+      error:
+        "the LFS object eeeeeeeeeeee could not be copied: the file got shorter while it was copied",
+    });
+    assert.deepEqual(fs.readdirSync(store), [], "not even a partial copy");
+    fs.rmSync(`${lfs}/${oid}`, { force: true });
   });
 
   it("a symlink anywhere on the way to a file is not followed: not at the end, not at a directory above", () => {

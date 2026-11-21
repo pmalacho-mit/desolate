@@ -509,45 +509,62 @@ const takeOne = async (
   const name = randomBytes(8).toString("hex");
   const bundleTo = path.join(GIT_IN, `${name}.bundle`);
   const lfsTo = path.join(GIT_IN, `${name}.lfs`);
+  // Copied, never moved: the git VM keeps no hold on the root's copy.
+  const files = [
+    {
+      from: path.join(out, names.bundle),
+      to: bundleTo,
+      oid: null as string | null,
+      most: FORGE.packBytes,
+      what: "the push's bundle",
+      allows: "a push to the forge may carry",
+    },
+    // Flat names in the out-box: no directory of the git VM's is ever walked into.
+    ...(lfs as string[]).map((oid) => ({
+      from: path.join(out, names.lfs(oid)),
+      to: path.join(lfsTo, oid),
+      oid,
+      most: FORGE.lfsObjectBytes,
+      what: `the LFS object ${oid.slice(0, 12)}`,
+      allows: "the forge stores",
+    })),
+  ];
   try {
-    // Copied, never moved: the git VM keeps no hold on the root's copy.
-    const bundle = within(
-      path.join(out, names.bundle),
-      FORGE.packBytes,
-      "the push's bundle",
-      "a push to the forge may carry",
-    );
-    if ("refused" in bundle) return answer(id, { pushed: false, error: bundle.refused });
+    // Nothing bounds a push's total, and its copy is written dense: each file is measured
+    // first, so a push this Mac's disk cannot hold is refused before a byte is copied.
+    let needs = 0;
+    for (const file of files) {
+      const opened = within(file.from, file.most, file.what, file.allows);
+      if ("refused" in opened) return answer(id, { pushed: false, error: opened.refused });
+      fs.closeSync(opened.fd);
+      needs += opened.size;
+    }
+    const disk = fs.statfsSync(GIT_IN);
+    if (needs > disk.bavail * disk.bsize)
+      return answer(id, {
+        pushed: false,
+        error: `the push needs ${formatBytes(needs)} of this Mac's disk to be copied for the root, and ${formatBytes(disk.bavail * disk.bsize)} is free`,
+      });
     note(
       id,
-      `desolate: the host is copying the push for the root (${formatBytes(bundle.size)}${lfs.length ? `, and ${lfs.length} LFS object${lfs.length === 1 ? "" : "s"}` : ""})...`,
+      `desolate: the host is copying the push for the root (${formatBytes(needs)}${lfs.length ? `, with ${lfs.length} LFS object${lfs.length === 1 ? "" : "s"}` : ""})...`,
     );
-    try {
-      copyOut(bundle, bundleTo);
-    } finally {
-      fs.closeSync(bundle.fd);
-    }
-    if (lfs.length) {
-      fs.mkdirSync(lfsTo, { mode: 0o700 });
-      for (const oid of lfs as string[]) {
-        if (gone()) return;
-        // Flat names in the out-box: no directory of the git VM's is ever walked into.
-        const object = within(
-          path.join(out, names.lfs(oid)),
-          FORGE.lfsObjectBytes,
-          `the LFS object ${oid.slice(0, 12)}`,
-          "the forge stores",
-        );
-        if ("refused" in object) return answer(id, { pushed: false, error: object.refused });
-        try {
-          if (copyOut(object, path.join(lfsTo, oid)) !== oid)
-            return answer(id, {
-              pushed: false,
-              error: `the LFS object ${oid.slice(0, 12)} does not hash to its name`,
-            });
-        } finally {
-          fs.closeSync(object.fd);
-        }
+    if (lfs.length) fs.mkdirSync(lfsTo, { mode: 0o700 });
+    let copied = 0;
+    for (const file of files) {
+      if (gone()) break;
+      const opened = within(file.from, file.most, file.what, file.allows);
+      if ("refused" in opened) return answer(id, { pushed: false, error: opened.refused });
+      try {
+        copied += opened.size;
+        if (copied > needs)
+          return answer(id, { pushed: false, error: `${file.what} grew after it was measured` });
+        // Asynchronous: the daemon serves every forward, editor and page meanwhile.
+        const sha256 = await copyOut(opened, file.to);
+        if (file.oid && sha256 !== file.oid)
+          return answer(id, { pushed: false, error: `${file.what} does not hash to its name` });
+      } finally {
+        fs.closeSync(opened.fd);
       }
     }
     if (gone())
