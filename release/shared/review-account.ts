@@ -16,7 +16,8 @@ import type { Listed } from "./listed.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { all, chunks, longLine } from "../.harness/shared-review-account.ts";
+import type { repeat } from "../.harness/shared-text.ts";
+import type { all, chunks, failsAfter, longLine } from "../.harness/shared-review-account.ts";
 
 /** What a push sends: the pack the reviewer made and keeps (its sha256, and its size in
  *  bytes), and the LFS objects its commits point to, each `<oid> <size>` as its pointer
@@ -105,8 +106,18 @@ export type AccountLine =
 export const ACCOUNT_LINE_BYTES = 8 * 1024 * 1024;
 
 /** An AccountLine as the line the reviewer writes: one JSON object, then a newline. JSON
- *  writes a newline inside a string as `\n`, so a line is always one line. */
-export const accountLine = (line: AccountLine): string => `${JSON.stringify(line)}\n`;
+ *  writes a newline inside a string as `\n`, so a line is always one line. A line its
+ *  reader would refuse, over ACCOUNT_LINE_BYTES, is not written: an `error` that says so is,
+ *  so that the bound is said where it was passed. */
+export const accountLine = (line: AccountLine): string => {
+  const text = JSON.stringify(line);
+  const bytes = Buffer.byteLength(text);
+  if (bytes <= ACCOUNT_LINE_BYTES) return `${text}\n`;
+  const what = Object.keys(line)[0];
+  return `${JSON.stringify({
+    error: `the reviewer's ${what} could not be sent: ${over("it", ACCOUNT_LINE_BYTES, bytes, "bytes", "one line may be")}`,
+  })}\n`;
+};
 
 declare namespace accountLine {
   /** one object a line, whatever it holds: a newline in a phase or an error cannot end it */
@@ -123,13 +134,64 @@ declare namespace accountLine {
       ],
     ]
   >;
+  /** a line its reader would refuse is not sent: what is, says why */
+  export type TooLong = Expect<
+    Invoke<
+      typeof accountLine,
+      [line: { error: Invoke<typeof repeat, [text: "x", count: 9000000]> }]
+    >,
+    "=",
+    '{"error":"the reviewer\'s error could not be sent: it is 8.6 MiB, over the 8 MiB one line may be"}\n'
+  >;
 }
 
-const ANSWERS = ["account", "page", "diff", "error"] as const;
+type Fields = Record<string, unknown>;
+const isObject = (value: unknown): value is Fields =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isCount = (value: unknown) => Number.isInteger(value) && (value as number) >= 0;
+/** A list as listed.ts makes it: its entries (theirs to check, each by its reader) and two
+ *  counts. */
+const isListed = (value: unknown) =>
+  isObject(value) && Array.isArray(value.items) && isCount(value.total) && isCount(value.from);
+const isSends = (value: unknown) =>
+  isObject(value) &&
+  typeof value.pack === "string" &&
+  isCount(value.size) &&
+  Array.isArray(value.lfs) &&
+  value.lfs.every((oid) => typeof oid === "string");
+const LISTS = ["commits", "files", "between"] as const;
+
+/** Whether `held`, under the name `kind`, is that kind of line: the shape a reader relies
+ *  on to tell one from another and to page (its kinds, its counts, its positions). What the
+ *  entries of a list hold is their reader's to check, and to show as text. */
+const SHAPES: Record<string, (held: unknown) => boolean> = {
+  progress: (held) =>
+    isObject(held) &&
+    typeof held.phase === "string" &&
+    (held.done === undefined || isCount(held.done)) &&
+    (held.of === undefined || isCount(held.of)),
+  account: (held) =>
+    isObject(held) &&
+    typeof held.key === "string" &&
+    Array.isArray(held.warnings) &&
+    held.warnings.every((warning) => typeof warning === "string") &&
+    LISTS.every((list) => isListed(held[list])) &&
+    isSends(held.sends),
+  page: (held) =>
+    isObject(held) &&
+    Object.keys(held).length === 1 &&
+    LISTS.some((list) => list in held && isListed(held[list])),
+  diff: (held) =>
+    isObject(held) &&
+    typeof held.text === "string" &&
+    isCount(held.from) &&
+    (held.next === null || isCount(held.next)) &&
+    isCount(held.total),
+  error: (held) => typeof held === "string",
+};
 
 /** What a line holds, or null when it is not a line of this stream: one JSON object with
- *  exactly one of the five names, an `error` that is text, a `progress` that names its
- *  phase, and anything else an object. No deeper: the fields are their reader's to check. */
+ *  exactly one of the five names, holding that kind's shape (SHAPES). */
 const lineOf = (text: string): AccountLine | null => {
   let value: unknown;
   try {
@@ -137,15 +199,10 @@ const lineOf = (text: string): AccountLine | null => {
   } catch {
     return null;
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (!isObject(value)) return null;
   const keys = Object.keys(value);
-  if (keys.length !== 1) return null;
-  const held = (value as Record<string, unknown>)[keys[0]!];
-  if (keys[0] === "error") return typeof held === "string" ? (value as AccountLine) : null;
-  if (typeof held !== "object" || held === null || Array.isArray(held)) return null;
-  if (keys[0] === "progress")
-    return typeof (held as { phase?: unknown }).phase === "string" ? (value as AccountLine) : null;
-  return ANSWERS.some((name) => name === keys[0]) ? (value as AccountLine) : null;
+  if (keys.length !== 1 || !Object.hasOwn(SHAPES, keys[0]!)) return null;
+  return SHAPES[keys[0]!]!(value[keys[0]!]) ? (value as AccountLine) : null;
 };
 
 /** The reviewer's answer stream, read: each `progress` line as it arrives, then the one
@@ -158,34 +215,52 @@ const lineOf = (text: string): AccountLine | null => {
 export async function* accountLines(
   stream: AsyncIterable<Uint8Array | string>,
 ): AsyncGenerator<AccountLine, void, void> {
-  let held: Buffer[] = [];
+  // What is held of a line not yet ended: one buffer, grown by doubling, so that a writer
+  // of one byte at a time costs its bytes and not an object each (8 MiB of one-byte chunks
+  // held as a list of them was a gigabyte).
+  let held = Buffer.alloc(0);
   let size = 0;
+  const hold = (bytes: Buffer) => {
+    if (size + bytes.length > held.length) {
+      const bigger = Buffer.alloc(Math.max(held.length * 2, size + bytes.length, 4096));
+      held.copy(bigger, 0, 0, size);
+      held = bigger;
+    }
+    bytes.copy(held, size);
+    size += bytes.length;
+  };
   const tooLong = (bytes: number): AccountLine => ({
     error: `the reviewer's answer cannot be read: ${over("a line of it", ACCOUNT_LINE_BYTES, bytes, "bytes", "one line may be")}`,
   });
-  for await (const piece of stream) {
-    let rest = typeof piece === "string" ? Buffer.from(piece, "utf8") : Buffer.from(piece);
-    for (;;) {
-      const end = rest.indexOf(10);
-      if (end < 0) break;
-      const bytes = Buffer.concat([...held, rest.subarray(0, end)]);
-      rest = rest.subarray(end + 1);
-      held = [];
-      size = 0;
-      if (bytes.length > ACCOUNT_LINE_BYTES) return void (yield tooLong(bytes.length));
-      const text = bytes.toString("utf8");
-      if (text.trim() === "") continue;
-      const line = lineOf(text);
-      if (!line)
-        return void (yield {
-          error: `the reviewer's answer cannot be read: this is not a line of an account: ${printable(text, 200)}`,
-        });
-      yield line;
-      if (!("progress" in line)) return;
+  try {
+    for await (const piece of stream) {
+      let rest = typeof piece === "string" ? Buffer.from(piece, "utf8") : Buffer.from(piece);
+      for (;;) {
+        const end = rest.indexOf(10);
+        if (end < 0) break;
+        if (size + end > ACCOUNT_LINE_BYTES) return void (yield tooLong(size + end));
+        hold(rest.subarray(0, end));
+        const text = held.toString("utf8", 0, size);
+        rest = rest.subarray(end + 1);
+        size = 0;
+        if (text.trim() === "") continue;
+        const line = lineOf(text);
+        if (!line)
+          return void (yield {
+            error: `the reviewer's answer cannot be read: this is not a line of an account: ${printable(text, 200)}`,
+          });
+        yield line;
+        if (!("progress" in line)) return;
+      }
+      if (size + rest.length > ACCOUNT_LINE_BYTES) return void (yield tooLong(size + rest.length));
+      hold(rest);
     }
-    held.push(rest);
-    size += rest.length;
-    if (size > ACCOUNT_LINE_BYTES) return void (yield tooLong(size));
+  } catch (error) {
+    // The connection failed (reset, closed under it): an answer too, never a throw that each
+    // reader must remember to catch.
+    return void (yield {
+      error: `the reviewer's answer could not be read to its end: ${printable(error instanceof Error ? error.message : error, 200)}`,
+    });
   }
   yield {
     error:
@@ -348,6 +423,24 @@ declare namespace accountLines {
         },
       ]
     >,
+    /** nor is one that has a kind's name and not its shape */
+    Expect<
+      Invoke<
+        typeof all,
+        [
+          lines: Invoke<
+            typeof accountLines,
+            [stream: Invoke<typeof chunks, [parts: ['{"diff":{"text":"+a","from":"0"}}\n']]>]
+          >,
+        ]
+      >,
+      "=",
+      [
+        {
+          error: 'the reviewer\'s answer cannot be read: this is not a line of an account: {"diff":{"text":"+a","from":"0"}}';
+        },
+      ]
+    >,
   ];
   /** a line with no end is not held without end: past the bound it is refused, as that
    *  bound, when the bound is passed and not when the stream ends */
@@ -361,6 +454,28 @@ declare namespace accountLines {
       {
         error: "the reviewer's answer cannot be read: a line of it is 8.6 MiB, over the 8 MiB one line may be";
       },
+    ]
+  >;
+  /** a connection that fails under it is an answer too: said, not thrown */
+  export type Fails = Expect<
+    Invoke<
+      typeof all,
+      [
+        lines: Invoke<
+          typeof accountLines,
+          [
+            stream: Invoke<
+              typeof failsAfter,
+              [parts: ['{"progress":{"phase":"packing"}}\n{"acc'], error: "read ECONNRESET"]
+            >,
+          ]
+        >,
+      ]
+    >,
+    "=",
+    [
+      { progress: { phase: "packing" } },
+      { error: "the reviewer's answer could not be read to its end: read ECONNRESET" },
     ]
   >;
 }
