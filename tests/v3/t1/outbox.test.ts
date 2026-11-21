@@ -148,7 +148,24 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       head.slice(0, -2) + "x".repeat(over - 1 - head.length) + head.slice(-2),
     );
     assert.deepEqual(refs("acme/widgets"), { main: A });
-    fs.rmSync(`${sync}/refs.json`);
+  });
+
+  it("a bundle past the largest pack the forge takes is dropped, and said as that bound", () => {
+    const dir = `${domains}/t1-dom/outbox/sync/acme/huge`;
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(`${dir}/a.bundle`, "");
+    fs.truncateSync(`${dir}/a.bundle`, 2 * 1024 ** 3 + 1);
+    fs.writeFileSync(`${dir}/b.bundle`, "a bundle's bytes");
+    const taken = outbox.takeBundles("t1-dom", "acme/huge");
+    assert.deepEqual(taken.dropped, [
+      "the bundle a.bundle is 2147483649 bytes, over the 2147483648 a push to the forge may carry",
+    ]);
+    assert.deepEqual(
+      taken.copies.map((copy) => fs.readFileSync(copy, "utf8")),
+      ["a bundle's bytes"],
+      "control: the one beside it, within the bound, is taken",
+    );
+    assert.deepEqual(fs.readdirSync(dir), []);
   });
 
   it("only regular bundle files with plain names are taken; every name that was looked at is removed from the outbox, and nothing else", () => {
@@ -213,8 +230,19 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     assert.match(
       (outbox.takeLfs("t1-dom", "acme/widgets", linked, 1, target(linked)) as { error: string })
         .error,
-      /not in the outbox/,
+      /^the LFS object cccccccccccc is not a plain file$/,
+      "a link is not followed, and is said to be what it is",
     );
+    // Past the largest object the forge stores (a sparse file: its size is what is checked,
+    // before a byte of it is read), refused by that bound, by name.
+    const huge = "d".repeat(64);
+    fs.writeFileSync(`${lfs}/${huge}`, "");
+    fs.truncateSync(`${lfs}/${huge}`, 5 * 1024 ** 3 + 1);
+    assert.equal(
+      (outbox.takeLfs("t1-dom", "acme/widgets", huge, 1, target(huge)) as { error: string }).error,
+      "the LFS object dddddddddddd is 5368709121 bytes, over the 5368709120 the forge stores",
+    );
+    fs.rmSync(`${lfs}/${huge}`);
     assert.match(
       (outbox.takeLfs("t1-dom", "acme/widgets", "../../x", 1, target("x")) as { error: string })
         .error,

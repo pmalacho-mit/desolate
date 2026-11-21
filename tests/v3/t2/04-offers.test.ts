@@ -1363,7 +1363,7 @@ echo "$c1 $c2 $c3 $c4"`);
     // what it pointed at is never opened, and the person is told something was dropped.
     assert.match(
       lied.stdout,
-      /2 file\(s\) in dev's outbox were not plain bundle files and were dropped|was refused and dropped/,
+      /dropped from dev's outbox: the bundle zz-evil\.bundle is not a plain file/,
       lied.stdout,
     );
     assert.ok(
@@ -1377,6 +1377,52 @@ echo "$c1 $c2 $c3 $c4"`);
       /^root:1\n$/,
       "and what it pointed at is as it was",
     );
+  });
+
+  it("a domain's list of branches is taken whole or refused out loud: none is cut, and none pruned on a part", () => {
+    stack.step("a domain with many branches");
+    // (The workspace's daemon is stopped, above: what is in the outbox is what this writes.)
+    const sync = path.join(stack.home, "domains/dev/outbox/sync/acme/widgets");
+    const kept = fs.readFileSync(path.join(sync, "refs.json"), "utf8");
+    const many = Object.fromEntries(Array.from({ length: 6000 }, (_, i) => [`many/b${i}`, commit]));
+    const countMany = () =>
+      Number(
+        inRootClone("git for-each-ref --format=x refs/remotes/dev/many/ | wc -l").stdout.trim(),
+      );
+    // More than the old cut of 5,000: every one arrives.
+    fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
+    const fetched = inRootClone("git fetch --prune dev 2>&1");
+    assert.equal(fetched.code, 0, fetched.stdout);
+    assert.equal(countMany(), 6000, "control: a long list, whole");
+    // Past the list's bound (4 MiB): the fetch fails, says which bound, and prunes nothing.
+    fs.writeFileSync(
+      path.join(sync, "refs.json"),
+      JSON.stringify({ refs: { "many/b0": commit }, pad: "x".repeat(4 * 1024 * 1024) }),
+    );
+    const refused = inRootClone("git fetch --prune dev 2>&1");
+    assert.notEqual(refused.code, 0, "a list that cannot be read whole fails the fetch");
+    assert.match(
+      refused.stdout,
+      /acme\/widgets's list of branches \(refs\.json\) is \d+ bytes, over the 4194304 allowed/,
+    );
+    assert.equal(countMany(), 6000, "and no branch was pruned on it");
+    // A bundle whose header (its list of refs) is past the same bound: refused as that.
+    fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
+    const line = `${commit} refs/heads/b\n`;
+    fs.writeFileSync(
+      path.join(sync, "zz-header.bundle"),
+      `# v2 git bundle\n${line.repeat(Math.ceil((4 * 1024 * 1024) / line.length))}\nPACK`,
+    );
+    const header = inRootClone("git fetch dev 2>&1");
+    assert.match(
+      header.stdout,
+      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/,
+    );
+    // Control: the list as the workspace wrote it, and the many branches it does not name
+    // are pruned, as an honest list says.
+    fs.writeFileSync(path.join(sync, "refs.json"), kept);
+    assert.equal(inRootClone("git fetch --prune dev 2>&1").code, 0);
+    assert.equal(countMany(), 0, "an honest list prunes what it does not name");
   });
 
   it("a person moves work between domains through the root: git push <domain> delivers", () => {

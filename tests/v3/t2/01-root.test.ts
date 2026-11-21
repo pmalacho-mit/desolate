@@ -131,6 +131,51 @@ describe("T2 phase 1: the root VM", () => {
     );
   });
 
+  it("the fetch lock is held by a live fetch, not by its age: a dead holder's is taken at once, a live one's is waited for", () => {
+    // (Not recorded: the holder's pid and time are in what is said.)
+    const lock = "/var/lib/desolate/fetch-locks/acme--widgets";
+    const holder = (pid: number) =>
+      JSON.stringify({
+        id: "f".repeat(32),
+        pid,
+        host: "root",
+        since: "2026-01-01T00:00:00.000Z",
+        start: null,
+      });
+    const leave = (pid: number) =>
+      stack.inRoot([
+        "bash",
+        "-c",
+        `mkdir -p ${lock} && printf '%s' '${holder(pid)}' > ${lock}/holder`,
+      ]);
+    // A holder that is gone (no process has this pid): taken at once, whatever its age.
+    assert.equal(leave(4_194_000).code, 0);
+    const dead = stack.quiet("fetch", REPO);
+    assert.equal(dead.code, 0, dead.stderr);
+    assert.doesNotMatch(
+      dead.stderr,
+      /waiting for another fetch/,
+      "a dead holder is not waited for",
+    );
+    // One that lives (a process in the root, which ends in a few seconds): waited for, said,
+    // and taken when it ends.
+    const sleeper = stack.inRoot(["bash", "-c", "sleep 6 >/dev/null 2>&1 </dev/null & echo $!"]);
+    const pid = Number(sleeper.stdout.trim());
+    assert.ok(pid > 1, sleeper.stdout + sleeper.stderr);
+    assert.equal(leave(pid).code, 0);
+    const started = Date.now();
+    const live = stack.quiet("fetch", REPO);
+    assert.equal(live.code, 0, live.stderr);
+    assert.match(
+      live.stderr,
+      new RegExp(
+        `waiting for another fetch of acme/widgets to finish \\(process ${pid}, since 2026-01-01T00:00:00.000Z\\)`,
+      ),
+    );
+    assert.ok(Date.now() - started > 3000, "it waited for the holder, and did not take its lock");
+    assert.equal(stack.inRoot(["test", "-e", lock]).code, 1, "and left none behind");
+  });
+
   it("the read key cannot push, and neither key works for another repository", () => {
     // Control first: the same ssh command, for what the key IS allowed, succeeds.
     const ssh = (role: string, command: string) =>

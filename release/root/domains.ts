@@ -352,7 +352,7 @@ declare namespace setSpawn {
         Invoke<typeof refusalOf, [f: typeof setSpawn, args: [slugArg: "acme", maxArg: -1]]>,
         "=",
         {
-          message: "'-1' is not a number of workspaces";
+          message: "'-1' is not a number of workspaces: a whole number from 0 to 1000";
           fix: "desolate domain acme spawn --max 2";
           code: 64;
         }
@@ -364,6 +364,16 @@ declare namespace setSpawn {
       Throws<
         Invoke<typeof setSpawn, [slugArg: "acme", maxArg: "lots"]>,
         "'lots' is not a number of workspaces"
+      >,
+      /** past the range, said with the range; the end of it is in it (the control) */
+      Throws<
+        Invoke<typeof setSpawn, [slugArg: "acme", maxArg: 1001]>,
+        "'1001' is not a number of workspaces: a whole number from 0 to 1000"
+      >,
+      Expect<
+        Invoke<typeof setSpawn, [slugArg: "acme", maxArg: 1000]>,
+        "=",
+        { domain: "acme"; max: 1000 }
       >,
     ]
   >;
