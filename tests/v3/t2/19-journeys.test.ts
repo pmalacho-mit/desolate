@@ -254,6 +254,13 @@ describe("T2 journeys through the dashboard", () => {
       "a run of two",
       30_000,
     );
+    // (The label and the file list are drawn apart: wait for the list, not only the label.
+    // Read at once, it was still Greet's alone in one run of 163.)
+    await page.until(
+      `[...document.querySelectorAll("#review [data-change]")].map((li) => li.dataset.change).sort().join(",") === "README.md,greet.txt"`,
+      "both commits' files",
+      30_000,
+    );
     assert.equal((await filesShown()).split(",").sort().join(","), "README.md,greet.txt");
     await page.click("#review [data-pick-all]", "Show all");
     await page.until(

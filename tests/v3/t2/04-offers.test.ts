@@ -607,7 +607,9 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         `blob=$(head -c 65536 /dev/zero | tr '\\0' A | git -c core.looseCompression=0 hash-object -w --stdin)`,
         `tree=$(printf '100644 blob %s\\tstored.txt\\n' "$blob" | git mktree)`,
         `c=$(git -c user.name=stored -c user.email=stored@example.invalid commit-tree "$tree" -p ${controlCommit} -m stored)`,
-        `git -c pack.compression=0 repack -d -q`,
+        // (Packed at level 0 by pack-objects itself: \`repack\` compressed it all the same.)
+        `printf '%s\\n^%s\\n' "$c" ${controlCommit} | git -c pack.compression=0 pack-objects --revs -q .git/objects/pack/pack >/dev/null`,
+        `git prune-packed`,
         `printf '%s\\n^%s\\n' "$c" ${controlCommit} | git pack-objects --stdout --revs --quiet > /tmp/reused.pack`,
         `echo "$c"`,
       ].join(" && "),
