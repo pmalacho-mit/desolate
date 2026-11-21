@@ -18,9 +18,9 @@
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { over } from "./limits.ts";
+import { NAMES, over } from "./limits.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type {
   answering,
   boxes,
@@ -79,6 +79,29 @@ declare namespace requestRefusal {
     Invoke<typeof requestRefusal, [text: Invoke<typeof requestOf, [lfs: 20000]>]>,
     "=",
     "the request is 1.3 MiB, over the 1020 KiB the host takes of one"
+  >;
+}
+
+/** A ref the person names to a command the host runs in the git VM (`desolate upstream
+ *  --from`): a branch, a domain's branch, a commit. Both sides check it, the host before it
+ *  hands it over and the git VM's command when it reads it, so the rule is here once. Never an
+ *  option, never a range or a reflog's `@{`, and no longer than a branch desolate carries. */
+export const isRef = (ref: string) =>
+  new RegExp(`^[A-Za-z0-9_][A-Za-z0-9._/-]{0,${NAMES.branch - 1}}$`).test(ref) &&
+  !ref.includes("..") &&
+  !ref.includes("@{");
+
+declare namespace isRef {
+  export type Refs = Table<
+    typeof isRef,
+    [
+      [args: [ref: "dev/up/one"], expected: true],
+      [args: [ref: "0123456789abcdef0123456789abcdef01234567"], expected: true],
+      [args: [ref: "--upload-pack=x"], expected: false],
+      [args: [ref: "main..evil"], expected: false],
+      [args: [ref: "main@{1}"], expected: false],
+      [args: [ref: ""], expected: false],
+    ]
   >;
 }
 

