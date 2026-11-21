@@ -85,7 +85,7 @@ needs none. The root keeps a record of what it pushed (`/var/lib/desolate/pushed
 across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
-every 15 minutes, for 30 days. The test is conservative: every file the branch changed is, in
+every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days. The test is conservative: every file the branch changed is, in
 the base, exactly as the branch left it (so a merge commit, a squash and a rebase all count).
 A base that has since changed one of those files again is not recognised, and the branch is
 then just not marked.
@@ -316,14 +316,22 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
 `-offer`):
 - `git fetch` and `git pull` first ask the root to refresh the mirror from the remote (the
   request `desolate fetch` makes; the root fetches with its read key), then read from the
-  read-only mirror. If the root cannot (offline, or the domain's 30 requests a minute are
-  used up), the fetch still happens, from the mirror as it is, and says so.
+  read-only mirror. If the root cannot (offline, the remote down), the fetch still happens,
+  from the mirror as it is, and says so.
 - `git push origin <branch>` offers the branch (`desolate offer`), then reports the push as
   refused, saying it was offered and that nothing went to the remote, so that no
   `origin/<branch>` appears for a branch the remote does not have.
 - Commits carry the person's git identity from the Mac (`git config --global user.name` and
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.
+- What a workspace asks of the root (`desolate fetch`, `offer`, `spawn`, `close`,
+  `issue offer`, and the `git fetch` and `git push` above) waits for as long as the root is
+  on it, with no deadline: a first fetch of a large repository can take minutes, and a wait
+  longer than 10 s says what the root is doing. A root that is not running is said to be
+  within 10 s ("nothing has been heard from the root"), and the request is withdrawn. Fetches
+  of one repository asked while one runs are one more fetch, and never hold up an offer; each
+  domain's requests are answered in turn, beside every other domain's, so no domain's flood
+  slows another's.
 
 **The editor's settings, layer by layer** (lowest first; each overrides the ones before it):
 - **VSCodium's own defaults.** In the browser its default theme is a light one, and it saves

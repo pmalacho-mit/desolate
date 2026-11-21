@@ -56,7 +56,10 @@ const uploadPacks = (repo: string) =>
     .filter((line) => line.includes(`git-upload-pack`) && line.includes(repo)).length;
 /** A commit on the workspace's own branch, offered. */
 const offer = (workspace: string, note: string) =>
-  inside(workspace, `echo '${note}' >> notes.txt && git add notes.txt && git commit -qm '${note}' && desolate offer`);
+  inside(
+    workspace,
+    `echo '${note}' >> notes.txt && git add notes.txt && git commit -qm '${note}' && desolate offer`,
+  );
 
 describe("T2 the request channel: taken, then waited on, and one domain never slows another", () => {
   before(() => {

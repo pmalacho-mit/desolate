@@ -610,7 +610,7 @@ const handle = async (
     await run.result;
     return { ok: true };
   }
-  if (request.op === "offer") return take(domain, request);
+  if (request.op === "offer") return inClone(String(request.repo), () => take(domain, request));
   if (request.op === "issue")
     return issues.offer(
       domain,
@@ -761,6 +761,23 @@ declare namespace answer {
 
 const log = (line: string) => process.stderr.write(`${new Date().toISOString()} rootd: ${line}\n`);
 
+/** One piece of work at a time in a repository's root clone, in the order asked, whichever
+ *  domain asked: an import (git fetch --prune <domain>) and an offer's take, from two domains'
+ *  lanes at once, would meet on the clone's ref locks, and the later fail. In order, so a
+ *  domain's work in a clone it shares with another waits for at most the one piece of the
+ *  other's ahead of it (each domain's lane gives one at a time). */
+const clones = new Map<string, Promise<unknown>>();
+const inClone = <T>(id: string, work: () => Promise<T>): Promise<T> => {
+  const done = (clones.get(id) ?? Promise.resolve()).catch(() => {}).then(work);
+  clones.set(id, done);
+  void done
+    .catch(() => {})
+    .then(() => {
+      if (clones.get(id) === done) clones.delete(id);
+    });
+  return done;
+};
+
 /** A domain's branches, brought into the root clone as the domain writes them out (its list
  *  beside each bundle changes), not only when one is reviewed or offered: so `git fetch
  *  root` in the git VM, and the dashboard's review, have every branch. The import is the
@@ -783,7 +800,7 @@ const importChanged = async (slug: string, repoList: string[]) => {
     const last = imported.get(key);
     if (last && (last.mtime === mtime || Date.now() - last.at < IMPORT_GAP_MS)) continue;
     imported.set(key, { mtime, at: Date.now() });
-    await fetchDomain(slug, repo).catch((error: Error) =>
+    await inClone(id, () => fetchDomain(slug, repo)).catch((error: Error) =>
       log(`${slug} ${id}: not imported: ${printable(error.message)}`),
     );
   }
@@ -949,6 +966,10 @@ const importing = new Set<string>();
 /** One request, just taken from a domain's outbox: said to be taken, then worked on in the
  *  domain's lane, or beside it for a fetch, and answered. */
 const taken = (domain: string, repoList: string[], name: string, request: unknown) => {
+  // A name the domain used again while its request of that name is still held: dropped,
+  // unanswered (its first is answered under that name). Else a name written again each pass
+  // would be held again each pass, past MOST_HELD, which counts what is held by name.
+  if (held.has(`${domain}/${name}`)) return;
   const r = request && typeof request === "object" ? (request as Record<string, unknown>) : null;
   const h: Held = {
     domain,
@@ -982,8 +1003,14 @@ const taken = (domain: string, repoList: string[], name: string, request: unknow
   });
 };
 
-/** Replies whose asker went away, and the `.taken` of a root that is gone: swept, by age. */
+/** Replies whose asker went away, and the `.taken` of a root that is gone: swept, by age, at
+ *  most once a minute for a domain (a domain that floods its outbox has as many replies, and
+ *  looking at each every pass would be its cost on everyone's loop). */
+const SWEEP_EVERY_MS = 60_000;
+const swept = new Map<string, number>();
 const sweep = (domain: string) => {
+  if (Date.now() - (swept.get(domain) ?? 0) < SWEEP_EVERY_MS) return;
+  swept.set(domain, Date.now());
   const dir = path.join(inbox(domain), "replies");
   try {
     for (const name of fs.readdirSync(dir)) {

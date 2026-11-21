@@ -495,7 +495,7 @@ export const verdict = (look: Look, window = BEAT.beatMs * BEAT.missed): Verdict
         };
   if (look.asked)
     return {
-      wait: "the root has not taken it yet: it is answering this domain's earlier requests",
+      wait: "the root has not taken it yet (it takes each domain's requests in turn)",
     };
   const boot = look.beat.split(" ")[0];
   if (look.taken ? look.taken.boot !== boot : look.lost >= window)
@@ -569,7 +569,7 @@ declare namespace verdict {
         ]
       >,
       "=",
-      { wait: "the root has not taken it yet: it is answering this domain's earlier requests" }
+      { wait: "the root has not taken it yet (it takes each domain's requests in turn)" }
     >,
     Expect<
       Invoke<
