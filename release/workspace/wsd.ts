@@ -29,8 +29,9 @@ const SOCKET = "/run/desolate/wsd.sock";
 /** desolate's own listeners in the VM: never offered for forwarding. */
 const INTERNAL = new Set([15080, 15443]);
 
-/** The VM's own way in (Lima's ssh): a listener here that is nobody's dev server. */
-const SSH = 22;
+/** The VM's own listeners below PORTS.min, which are nobody's dev server: its way in (Lima's
+ *  ssh, 22) and the resolver every name here is answered by (dnsmasq, net/up.sh: 53). */
+const OWN_LOW = new Set([22, 53]);
 
 /** The ports the host may ask this VM to hold: unprivileged ones (PORTS), each once. */
 export const reservable = (wanted: number[]): number[] => [
@@ -97,9 +98,9 @@ export const listenersOf = (ss: string, held: readonly number[]): number[] =>
   heardIn(ss).filter((port) => port >= PORTS.min && !INTERNAL.has(port) && !held.includes(port));
 
 /** The listeners there that are below PORTS.min, which the host never forwards (a port
- *  below 1024 on the Mac is the system's): named, so that it can be said. Not the VM's ssh. */
+ *  below 1024 on the Mac is the system's): named, so that it can be said. Not the VM's own. */
 export const lowOf = (ss: string): number[] =>
-  heardIn(ss).filter((port) => port < PORTS.min && port !== SSH);
+  heardIn(ss).filter((port) => port < PORTS.min && !OWN_LOW.has(port));
 
 declare namespace listenersOf {
   /** what a dev server binds, in each spelling ss gives; each port once, in order */
@@ -130,13 +131,14 @@ declare namespace listenersOf {
 }
 
 declare namespace lowOf {
-  /** a server on a privileged port, in each spelling: named, once, in order; the VM's ssh,
-   *  the resolver on its own address and everything from 1024 up are not */
+  /** a server on a privileged port, in each spelling: named, once, in order; the VM's ssh
+   *  and its resolver (on every address, and on systemd's own) and everything from 1024 up
+   *  are not */
   export type Low = Expect<
     Invoke<
       typeof lowOf,
       [
-        ss: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 [::]:80 [::]:*\nLISTEN 0 511 127.0.0.1:443 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:3000 0.0.0.0:*\n",
+        ss: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 [::]:80 [::]:*\nLISTEN 0 511 127.0.0.1:443 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\nLISTEN 0 32 0.0.0.0:53 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:3000 0.0.0.0:*\n",
       ]
     >,
     "=",
