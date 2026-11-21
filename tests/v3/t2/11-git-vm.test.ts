@@ -219,25 +219,37 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       token: string;
       branch: string;
       commit: string;
-      summary: { waiting?: boolean; ok: boolean; commits?: { subject: string }[] };
+      shown?: string;
+      review: {
+        working?: unknown;
+        error?: string;
+        account?: { commits: { items: { subject: string }[] } };
+      };
     };
     let push: Waiting | undefined;
     for (let i = 0; i < 120 && !push; i++) {
       push = (
         JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
-      ).pending.find((p) => p.branch === "from-git" && !p.summary.waiting);
+      ).pending.find((p) => p.branch === "from-git" && !p.review.working);
       if (!push) await sleep(250);
     }
     assert.ok(push, "the push waits on the approval page");
     assert.equal(push!.commit, commit);
-    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary));
+    assert.ok(push!.review.account, JSON.stringify(push!.review));
     assert.deepEqual(
-      push!.summary.commits!.map((c) => c.subject),
+      push!.review.account!.commits.items.map((c) => c.subject),
       ["from the git VM"],
       "the reviewer says what it is",
     );
     assert.equal(
-      (await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status,
+      (
+        await approvals.post("/approve", {
+          nonce: push!.nonce,
+          token: push!.token,
+          shown: push!.shown,
+          commit,
+        })
+      ).status,
       200,
     );
     await screen(/\* \[new branch\]\s+HEAD -> from-git/, 60_000);
@@ -370,18 +382,18 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       token: string;
       branch: string;
       commit: string;
-      summary: { waiting?: boolean; ok: boolean; error?: string; commits?: unknown[] };
+      review: { working?: unknown; error?: string; account?: { commits: { items: unknown[] } } };
     };
     let push: Waiting | undefined;
     for (let i = 0; i < 120 && !push; i++) {
       push = (
         JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
-      ).pending.find((p) => p.branch === "same-as-main" && !p.summary.waiting);
+      ).pending.find((p) => p.branch === "same-as-main" && !p.review.working);
       if (!push) await sleep(250);
     }
     assert.ok(push, "the push waits on the approval page");
-    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary));
-    assert.deepEqual(push!.summary.commits, [], "no commit the remote does not have");
+    assert.ok(push!.review.account, JSON.stringify(push!.review));
+    assert.deepEqual(push!.review.account!.commits.items, [], "no commit the remote does not have");
     assert.equal(
       (
         await approvals.post("/refuse", {

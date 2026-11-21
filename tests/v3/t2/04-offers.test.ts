@@ -1117,11 +1117,15 @@ echo "$c1 $c2 $c3 $c4"`);
       branch: string;
       commit: string;
       onto: string | null;
-      summary: {
-        ok: boolean;
+      /** The token over the account the page was given: a click names it. */
+      shown?: string;
+      review: {
+        working?: { phase: string };
         error?: string;
-        commits?: { commit: string; subject: string }[];
-        files?: { path: string }[];
+        account?: {
+          commits: { items: { commit: string; subject: string }[]; total: number };
+          files: { items: { path: string }[]; total: number };
+        };
       };
     };
     const waitingFor = async (branch: string) => {
@@ -1131,7 +1135,7 @@ echo "$c1 $c2 $c3 $c4"`);
           (p) => p.branch === branch,
         );
         // (The reviewer's account comes in the background: the page says it is coming.)
-        if (found && !(found.summary as { waiting?: boolean }).waiting) return found;
+        if (found && !found.review.working) return found;
         await sleep(250);
       }
       return null;
@@ -1141,7 +1145,12 @@ echo "$c1 $c2 $c3 $c4"`);
         "POST",
         `/${what}`,
         { ...asPage, origin: ORIGIN, "content-type": "application/json" },
-        JSON.stringify({ nonce: push.nonce, token: push.token, commit: push.commit }),
+        JSON.stringify({
+          nonce: push.nonce,
+          token: push.token,
+          shown: push.shown,
+          commit: push.commit,
+        }),
       );
 
     inRootClone(
@@ -1152,16 +1161,16 @@ echo "$c1 $c2 $c3 $c4"`);
     assert.equal(push!.commit, commit);
     assert.equal(push!.onto, null, "a new branch");
     // What the reviewer says the push is: from commit ids the host gave it, and the forge.
-    assert.equal(push!.summary.ok, true, String(push!.summary.error));
+    assert.ok(push!.review.account, String(push!.review.error));
     // The commit reached the remote above (issue/12): nothing new to list, from the forge's
     // own account; the files are against the remote's default branch.
     assert.deepEqual(
-      push!.summary.commits,
+      push!.review.account!.commits.items,
       [],
       "the remote has every commit already, and the reviewer says so",
     );
     assert.ok(
-      push!.summary.files!.some((f) => f.path === "big.bin" || f.path === "README.md"),
+      push!.review.account!.files.items.some((f) => f.path === "big.bin" || f.path === "README.md"),
       "the files it changes against the default branch",
     );
     // In a real browser: the card is drawn as text, and Approve waits for a person.
@@ -1240,9 +1249,9 @@ echo "$c1 $c2 $c3 $c4"`);
     );
     const large = await waitingFor("web-large");
     assert.ok(large, inRootClone("cat /tmp/web-large.log").stdout);
-    assert.equal(large!.summary.ok, true, String(large!.summary.error).slice(0, 300));
+    assert.ok(large!.review.account, String(large!.review.error));
     assert.deepEqual(
-      large!.summary.commits!.map((c) => c.subject),
+      large!.review.account!.commits.items.map((c) => c.subject),
       ["a large file"],
     );
     assert.equal((await act("refuse", large!)).status, 200);

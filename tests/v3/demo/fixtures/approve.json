@@ -7,85 +7,102 @@
    "commit": "22e522ec10cc6cd3ac907bc9c99a4f4a323c1c9d",
    "onto": "9257ca85171343983156dccec4c1294b57ad5789",
    "token": "abababababababababababababababababababababababababababababababab",
-   "summary": {
-    "ok": true,
-    "warnings": [],
-    "commits": [
-     {
-      "commit": "a625406f6977d45c1391b078f4d3656e0b75bfcb",
-      "subject": "Checkout: a step indicator, and tax shown before payment",
-      "author": "Ada Agent <ada@acme.dev>"
+   "review": {
+    "account": {
+     "warnings": [],
+     "commits": {
+      "items": [
+       {
+        "commit": "a625406f6977d45c1391b078f4d3656e0b75bfcb",
+        "subject": "Checkout: a step indicator, and tax shown before payment",
+        "author": "Ada Agent <ada@acme.dev>"
+       },
+       {
+        "commit": "6b1f53303a732ccc8c6aae6640399827c15250e3",
+        "subject": "Round money once, at the total, half to even",
+        "author": "Ada Agent <ada@acme.dev>"
+       },
+       {
+        "commit": "2f22765d04931a078909145ca628d2264c852d7d",
+        "subject": "Tests for three-item EUR orders",
+        "author": "Ada Agent <ada@acme.dev>"
+       }
+      ],
+      "total": 3,
+      "from": 0
      },
-     {
-      "commit": "6b1f53303a732ccc8c6aae6640399827c15250e3",
-      "subject": "Round money once, at the total, half to even",
-      "author": "Ada Agent <ada@acme.dev>"
+     "files": {
+      "items": [
+       {
+        "path": ".github/workflows/ci.yml",
+        "added": 3,
+        "removed": 1,
+        "sensitive": true
+       },
+       {
+        "path": "src/checkout/total.ts",
+        "added": 8,
+        "removed": 3
+       },
+       {
+        "path": "src/money/round.ts",
+        "added": 9,
+        "removed": 0
+       },
+       {
+        "path": "src/checkout/Checkout.tsx",
+        "added": 4,
+        "removed": 2
+       },
+       {
+        "path": "README.md",
+        "added": 1,
+        "removed": 0
+       },
+       {
+        "path": "src/checkout/Steps.tsx",
+        "added": 41,
+        "removed": 0
+       },
+       {
+        "path": "src/checkout/Summary.tsx",
+        "added": 12,
+        "removed": 4
+       },
+       {
+        "path": "src/checkout/total.test.ts",
+        "added": 58,
+        "removed": 6
+       },
+       {
+        "path": "src/legacy/oldTotal.ts",
+        "added": 0,
+        "removed": 22
+       },
+       {
+        "path": "public/fonts/inter.woff2",
+        "added": 0,
+        "removed": 0,
+        "binary": true
+       }
+      ],
+      "total": 10,
+      "from": 0
      },
-     {
-      "commit": "2f22765d04931a078909145ca628d2264c852d7d",
-      "subject": "Tests for three-item EUR orders",
-      "author": "Ada Agent <ada@acme.dev>"
-     }
-    ],
-    "files": [
-     {
-      "path": "src/checkout/total.ts",
-      "added": 8,
-      "removed": 3
+     "between": {
+      "items": [],
+      "total": 0,
+      "from": 0
      },
-     {
-      "path": "src/money/round.ts",
-      "added": 9,
-      "removed": 0
+     "sends": {
+      "pack": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size": 48213,
+      "lfs": []
      },
-     {
-      "path": "src/checkout/Checkout.tsx",
-      "added": 4,
-      "removed": 2
-     },
-     {
-      "path": "README.md",
-      "added": 1,
-      "removed": 0
-     },
-     {
-      "path": "src/checkout/Steps.tsx",
-      "added": 41,
-      "removed": 0
-     },
-     {
-      "path": "src/checkout/Summary.tsx",
-      "added": 12,
-      "removed": 4
-     },
-     {
-      "path": "src/checkout/total.test.ts",
-      "added": 58,
-      "removed": 6
-     },
-     {
-      "path": "src/legacy/oldTotal.ts",
-      "added": 0,
-      "removed": 22
-     },
-     {
-      "path": "public/fonts/inter.woff2",
-      "added": 0,
-      "removed": 0,
-      "binary": true
-     },
-     {
-      "path": ".github/workflows/ci.yml",
-      "added": 3,
-      "removed": 1,
-      "sensitive": true
-     }
-    ],
-    "base": "9257ca85171343983156dccec4c1294b57ad5789",
-    "remote": "origin",
-    "fastForward": true,
-    "lfs": 0,
-    "hasDiff": true
+     "fastForward": true,
+     "base": "9257ca85171343983156dccec4c1294b57ad5789",
+     "remote": "origin"
+    }
    }
   }
  ],

@@ -8,10 +8,17 @@
 //     given), a reviewer with nothing to say yet, and a keyring that is only written down
 //     (`approved`, `refused`). Nothing is signed.
 //   - `noShell` is the git terminal's way into the git VM, for a test that never opens one.
+//   - `vmRunning` is the VM layer for the host's questions to the reviewer (host/daemon.ts,
+//     reviewerSummary): each program it is asked to run as root in a VM is a local shell
+//     running `script`; `stillRunning` says how many of those are, and ends them; `firstOf`
+//     reads one line of an answer and leaves the rest unread, its asker still there.
+import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import type { Backend, Summary } from "../host/approve-web.ts";
+import type { Backend } from "../host/approve-web.ts";
+import type { backend } from "../host/stack.ts";
+import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
 import { parseEnv, planEnv, rewriteEnv } from "../shared/envfile.ts";
 
 /** `body`: text as it is sent, or an object sent as its JSON. */
@@ -69,13 +76,26 @@ export const ask = (
   });
 
 let decided: { approved: string[]; refused: string[] } = { approved: [], refused: [] };
-/** The approval page's backend, with these pushes waiting (each as the root lists it). */
-/** `summary`: what the reviewer says of each push (left out: it never answers). */
-export const waiting = (messages: string[], summary?: Summary): Backend => {
+let questions: AccountRequest[] = [];
+/** A reviewer that says `lines`, whatever it is asked. */
+async function* saying(lines: AccountLine[]): AsyncGenerator<AccountLine> {
+  for (const line of lines) yield line;
+}
+/** A reviewer still working when it is dropped: it says nothing, and ends then. */
+async function* working(signal: AbortSignal): AsyncGenerator<AccountLine> {
+  await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
+}
+/** The approval page's backend, with these pushes waiting (each as the root lists it).
+ *  `says`: what the reviewer answers each question, as its stream (left out: it never does). */
+export const waiting = (messages: string[], says?: AccountLine[]): Backend => {
   decided = { approved: [], refused: [] };
+  questions = [];
   return {
     pending: async () => messages.map((message) => ({ message, at: "2026-11-16T10:00:00Z" })),
-    summary: summary ? async () => summary : () => new Promise<Summary>(() => {}),
+    summary: (request, signal) => {
+      questions.push(request);
+      return says ? saying(says) : working(signal);
+    },
     approve: async (message) => void decided.approved.push(message),
     refuse: async (message) => void decided.refused.push(message),
     issues: async () => [],
@@ -85,6 +105,8 @@ export const waiting = (messages: string[], summary?: Summary): Backend => {
 };
 /** The texts the keyring was handed to sign, and those taken off the list. */
 export const approved = () => decided.approved;
+/** How many questions the reviewer was asked. */
+export const askedCount = () => questions.length;
 export const refused = () => decided.refused;
 
 /** No shell: the git terminal's tests never get as far as opening one. */
@@ -144,3 +166,43 @@ export const withSecrets = (): Backend => {
   };
 };
 export const secretsSet = () => given;
+
+// ------------------------------------------------------------------ the reviewer's program
+let started: ChildProcess[] = [];
+/** The VM layer, where every program asked for (`spawn`, with pipes) is `sh -c script` on
+ *  this machine: it writes what a reviewer would, on stdout and stderr, and lives as long. */
+export const vmRunning = (script: string) => {
+  started = [];
+  return {
+    spawn: () => {
+      const child = spawn("sh", ["-c", script], { stdio: ["pipe", "pipe", "pipe"] });
+      started.push(child);
+      return child;
+    },
+    exec: async () => {
+      throw new Error("this VM layer runs programs with spawn only");
+    },
+  } as unknown as ReturnType<typeof backend>;
+};
+const ended = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+/** How many of the programs `vmRunning` started are still running, a second after the last
+ *  was asked to end (a kill takes a moment to arrive); then every one is ended. */
+export const stillRunning = async (): Promise<number> => {
+  await Promise.all(
+    started.map((child) =>
+      ended(child)
+        ? null
+        : new Promise((resolve) => {
+            child.once("exit", resolve);
+            setTimeout(resolve, 1000).unref();
+          }),
+    ),
+  );
+  const running = started.filter((child) => !ended(child)).length;
+  for (const child of started) if (!ended(child)) child.kill("SIGKILL");
+  return running;
+};
+/** The first line an answer gives; the rest is left unread, and its asker does not go away
+ *  (the generator is not returned). */
+export const firstOf = async <T>(lines: AsyncGenerator<T>): Promise<T | undefined> =>
+  (await lines.next()).value as T | undefined;

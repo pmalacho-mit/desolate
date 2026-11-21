@@ -80,14 +80,17 @@ const approvals = async () => {
     repo: string;
     branch: string;
     commit: string;
-    summary: {
-      waiting?: boolean;
-      ok: boolean;
+    /** The token over the account the page was given: a click names it. */
+    shown?: string;
+    review: {
+      working?: { phase: string };
       error?: string;
-      warnings?: string[];
-      base?: string;
-      commits?: { subject: string }[];
-      files?: { path: string; sensitive?: boolean }[];
+      account?: {
+        warnings: string[];
+        base: string | null;
+        commits: { items: { subject: string }[] };
+        files: { items: { path: string; sensitive?: boolean }[] };
+      };
     };
   };
   const pending = async () =>
@@ -112,12 +115,13 @@ const approvals = async () => {
     /** The push of `branch`, once the reviewer has described it. */
     waitFor: async (match: (p: Waiting) => boolean, ms = 60_000) => {
       for (const until = Date.now() + ms; Date.now() < until; await sleep(250)) {
-        const found = (await pending()).find((p) => match(p) && !p.summary.waiting);
+        const found = (await pending()).find((p) => match(p) && !p.review.working);
         if (found) return found;
       }
       return assert.fail("no such push waited on the approval page");
     },
-    approve: (p: Waiting) => post("/approve", { nonce: p.nonce, token: p.token, commit: p.commit }),
+    approve: (p: Waiting) =>
+      post("/approve", { nonce: p.nonce, token: p.token, shown: p.shown, commit: p.commit }),
     refuse: (p: Waiting) => post("/refuse", { nonce: p.nonce, token: p.token, commit: p.commit }),
   };
 };
@@ -236,25 +240,25 @@ describe("T2 desolate upstream: a vendored dependency's change, proposed to it, 
     const push = await page.waitFor((p) => p.branch === branch);
     assert.equal(push.repo, "acme/lib", "the approval names the dependency");
     assert.deepEqual(downstreams("acme/lib"), [], "nothing reached the remote before the approval");
-    assert.equal(push.summary.ok, true, JSON.stringify(push.summary));
+    assert.ok(push.review.account, JSON.stringify(push.review));
     assert.deepEqual(
-      push.summary.commits!.map((c) => c.subject),
+      push.review.account!.commits.items.map((c) => c.subject),
       ["agent: lib/a.txt says b"],
       "the reviewer: one commit, the agent's",
     );
     assert.equal(
-      push.summary.base,
+      push.review.account!.base,
       release,
       "compared with the release it builds on, not with main's tree",
     );
     assert.deepEqual(
-      push.summary.files!.map((f) => f.path),
+      push.review.account!.files.items.map((f) => f.path),
       ["a.txt"],
       "the dependency's files only: the consumer's own app.txt is not in it",
     );
-    assert.equal(
-      push.summary.warnings,
-      undefined,
+    assert.deepEqual(
+      push.review.account!.warnings,
+      [],
       "no warning (the control for .suede/core/ below)",
     );
     assert.equal((await page.approve(push)).status, 200);
@@ -362,11 +366,11 @@ describe("T2 desolate upstream: a vendored dependency's change, proposed to it, 
     );
     const push = await page.waitFor((p) => p.branch === `downstream/acme/app-${consumerCommit}`);
     assert.ok(
-      push.summary.warnings?.some((w) => /suede's own machinery/.test(w)),
-      JSON.stringify(push.summary.warnings),
+      push.review.account?.warnings.some((w) => /suede's own machinery/.test(w)),
+      JSON.stringify(push.review.account?.warnings),
     );
     assert.ok(
-      push.summary.files!.find((f) => f.path === ".suede/core/upstream")?.sensitive,
+      push.review.account!.files.items.find((f) => f.path === ".suede/core/upstream")?.sensitive,
       "listed with what runs on the forge",
     );
     assert.match(
@@ -417,7 +421,7 @@ describe("T2 desolate upstream: a vendored dependency's change, proposed to it, 
       "cd /git/acme/lib && (timeout 150 git push origin raw-fine:refs/heads/downstream/hand/made-fine >/tmp/fine.log 2>&1 &)",
     );
     const fine = await page.waitFor((p) => p.branch === "downstream/hand/made-fine");
-    assert.equal(fine.summary.ok, true);
+    assert.ok(fine.review.account, JSON.stringify(fine.review));
     assert.equal((await page.refuse(fine)).status, 200);
     assert.deepEqual(
       downstreams("acme/lib").filter((ref) => ref.includes("hand/")),

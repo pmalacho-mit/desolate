@@ -13,8 +13,9 @@
 // THE LINK. Each workspace's only way out is one stream to its own proxy in the root. The
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
-import { printable } from "../shared/text.ts";
+import { CUT, failure, printable } from "../shared/text.ts";
 import { execFile, spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as os from "node:os";
 import type { Size } from "../shared/size.ts";
@@ -47,7 +48,10 @@ import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
-import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
+import type { Backend as ApprovalBackend } from "./approve-web.ts";
+import { accountLines } from "../shared/review-account.ts";
+import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
+import { isOldKey, oldAnswer, withOld } from "./review-fallback.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
@@ -88,6 +92,9 @@ import type {
   ws,
 } from "../.harness/host-daemon.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
+import type { firstOf, stillRunning, vmRunning } from "../.harness/host-web.ts";
+import type { all } from "../.harness/shared-review-account.ts";
+import type { abortedIn } from "../.harness/shared-run.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
@@ -200,50 +207,129 @@ const events = hub();
 /** What the approval page needs of the stack. The list of waiting pushes is the root's
  *  user's (only each one's message is used, parsed on the host); what a push would send is
  *  the reviewer's, asked as root; the signature is this host's. */
-/** What a push would send, as desolate's reviewer in the root works it out (root/reviewer.ts):
- *  the approval page shows it, and so do the terminal's prompts. */
-export const reviewerSummary = async (push: {
-  repo: string;
-  branch: string;
-  commit: string;
-  onto: string | null;
-}): Promise<Summary> => {
-  const result = await backend().exec(ROOT_VM, [...NODE, `${guest.release}/root/review-ask.ts`], {
-    root: true,
-    input: JSON.stringify({
-      repo: push.repo,
-      branch: push.branch,
-      commit: push.commit,
-      onto: push.onto,
-    }),
-    timeoutMs: 120_000,
-  });
-  try {
-    // An object, or no summary: a last line of `null`, a number or a list left the approval
-    // page waiting on the reviewer for good.
-    const answer: unknown = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
-    if (typeof answer === "object" && answer !== null && !Array.isArray(answer))
-      return answer as Summary;
-  } catch {
-    /* said below */
+/** The reviewer's answer to one request, as bytes: what root/review-ask.ts writes, asked as
+ *  root in the root VM through the host's own way in. `ended`, once the bytes have run out:
+ *  how its process ended and what it said of itself (stderr); null while it still runs. */
+const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
+  const argv = [...NODE, `${guest.release}/root/review-ask.ts`];
+  // One line, and then the host's side of the input ends: what holds the reviewer to its
+  // work is the answer's stream, which the host reads until it has the answer or goes away.
+  const input = `${JSON.stringify(request)}\n`;
+  let ended: Promise<{ code: number; stderr: string }> | null = null;
+  let ranOut = false;
+  async function* bytes(): AsyncGenerator<Uint8Array | string, void, void> {
+    if (signal?.aborted) return;
+    let child: ChildProcess;
+    try {
+      child = backend().spawn(ROOT_VM, argv, { root: true });
+    } catch {
+      // FALLBACK, until host/vm/lima.ts offers `spawn` as root in the root VM (limits ticket
+      // 11, #183: this ticket's pull request has the exact change). With `exec` the answer
+      // arrives when it is whole: no progress is seen on the way, and a request that is
+      // dropped is not ended in the root. It is still not ended for being long (R4).
+      const result = await backend().exec(ROOT_VM, argv, { root: true, input });
+      ended = Promise.resolve({ code: result.code, stderr: result.stderr });
+      ranOut = true;
+      return void (yield result.stdout);
+    }
+    let stderr = "";
+    ended = new Promise((resolve) => {
+      child.once("error", (error) => resolve({ code: 127, stderr: stderr + error.message }));
+      child.once("close", (code) => resolve({ code: code ?? 128, stderr }));
+    });
+    child.stderr?.on("data", (chunk) => {
+      // The end of it is where a program says why it stopped; a reviewer that logs for an
+      // hour is not held whole. What was dropped is marked (R1).
+      stderr += chunk;
+      if (stderr.length > 2 * REVIEWER_WORDS) stderr = `${CUT}\n${stderr.slice(-REVIEWER_WORDS)}`;
+    });
+    // Whoever asked went away: the connection is dropped, and the reviewer's end of it
+    // closing is what stops the work there.
+    const drop = () => child.kill();
+    signal?.addEventListener("abort", drop, { once: true });
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(input);
+    try {
+      for await (const chunk of child.stdout!) yield chunk as Buffer;
+      ranOut = true;
+    } catch {
+      ranOut = true;
+    } finally {
+      signal?.removeEventListener("abort", drop);
+      // Left before the stream ran out (it gave its answer; the reader went away): dropped.
+      if (!ranOut) child.kill();
+    }
   }
-  // Its own words only (stderr), never what it was printing: that is the push's content,
-  // the domain's, and was once shown here as if desolate had said it (lockfile text).
-  return {
-    ok: false,
-    error: `the reviewer's answer could not be read${result.code !== 0 ? ` (it ended with ${result.code}: ${printable(result.stderr.trim().slice(-200), 200)})` : ""}; what a push carries can cause this`,
-  };
+  return { bytes: bytes(), ended: () => (ranOut ? ended : null) };
+};
+/** What is kept of the reviewer's own words (its stderr) for an error, in characters: 64
+ *  KiB of text is a long stack trace many times over. It is the host's memory this bounds,
+ *  against a program in a VM. */
+const REVIEWER_WORDS = 64 * 1024;
+/** Where the whole of the last such error is kept (shared/text.ts, failure). */
+const REVIEWER_FAILURE = path.join(paths.logs, "reviewer-failure.txt");
+const keepFailure = (whole: string): string | null => {
+  fs.mkdirSync(paths.logs, { recursive: true });
+  fs.writeFileSync(REVIEWER_FAILURE, whole, { mode: 0o600 });
+  return REVIEWER_FAILURE;
 };
 
+/** What desolate's reviewer in the root (root/reviewer.ts) says of a push, as it says it: the
+ *  lines of its answer (shared/review-account.ts), progress while it works and then the one
+ *  answer, which is the last thing given. The approval page shows them, and so do the
+ *  terminal's prompts.
+ *
+ *  There is no deadline here (R4): the reviewer works for as long as whoever asked reads
+ *  this. When `signal` fires (the push left the list, the person went away) the connection
+ *  is dropped, and nothing more is given: no answer, and no error either.
+ *
+ *  An error is the reviewer's own, or says how its answer failed to arrive. Then its
+ *  process's own words (stderr) are added, never what it was printing where the answer
+ *  goes: that may be the push's content, the domain's. */
+export async function* reviewerSummary(
+  request: AccountRequest,
+  signal?: AbortSignal,
+): AsyncGenerator<AccountLine, void, void> {
+  // FALLBACK (review-fallback.ts): more of an account that the old reviewer gave.
+  if (request.op !== "account" && isOldKey(request.key))
+    return yield* oldAnswer(request, (again) => reviewerAsked(again, signal).bytes);
+  const asked = reviewerAsked(request, signal);
+  // FALLBACK (review-fallback.ts): the old reviewer's one JSON object, read as the stream.
+  const bytes = request.op === "account" ? withOld(request, asked.bytes) : asked.bytes;
+  for await (const line of accountLines(bytes)) {
+    if (signal?.aborted) return;
+    if (!("error" in line)) {
+      yield line;
+      continue;
+    }
+    const end = await asked.ended();
+    if (signal?.aborted) return;
+    const words = end ? failure(end.stderr.trim(), 5, keepFailure) : "";
+    yield end && end.code !== 0
+      ? {
+          error: `${line.error} (its process ended with ${end.code}${words ? `: ${words}` : ""}); what a push carries can cause this`,
+        }
+      : line;
+  }
+}
+
 declare namespace reviewerSummary {
-  type Push = {
+  type Ask = {
+    op: "account";
     repo: "acme/widgets";
     branch: "issue/12";
     commit: "1111111111111111111111111111111111111111";
     onto: null;
   };
-  /** the reviewer's answer is the last line it printed */
-  export type Answered = Given<
+  type Sends = {
+    pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    size: 100;
+    lfs: [];
+  };
+  /** the reviewer's lines as it writes them: what it is doing, while it does it, and then
+   *  its account, which ends the answer. (Here the reviewer is a program that says these
+   *  lines a moment apart; what it logs goes to stderr, and is not part of the answer.) */
+  export type Streams = Given<
     [
       Mock<"./stack.ts">,
       Call<
@@ -251,20 +337,95 @@ declare namespace reviewerSummary {
         "mockReturnValue",
         [
           value: Invoke<
-            typeof vmAnswering,
+            typeof vmRunning,
             [
-              code: 0,
-              stdout: 'reading the bundle\n{"ok":true,"commits":[],"files":[]}\n',
-              stderr: "",
+              script: 'echo \'{"progress":{"phase":"waiting for another push\\u0027s account"}}\'; echo logged >&2; sleep 0.1; echo \'{"progress":{"phase":"packing","done":1200,"of":8000}}\'; sleep 0.1; echo \'{"page":{"commits":{"items":[],"total":0,"from":0}}}\'',
             ]
           >,
         ]
       >,
     ],
-    Expect<Invoke<typeof reviewerSummary, [push: Push]>, "=", { ok: true; commits: []; files: [] }>
+    Expect<
+      Invoke<
+        typeof all,
+        [
+          lines: Invoke<
+            typeof reviewerSummary,
+            [request: { op: "page"; key: "k"; list: "commits"; from: 0 }]
+          >,
+        ]
+      >,
+      "=",
+      [
+        { progress: { phase: "waiting for another push's account" } },
+        { progress: { phase: "packing"; done: 1200; of: 8000 } },
+        { page: { commits: { items: []; total: 0; from: 0 } } },
+      ]
+    >
   >;
-  /** a reviewer that failed: only its own words are said, never what it was printing (the
-   *  push's content, which would read as desolate's) */
+  /** whoever asked went away: the reviewer's program is ended, and nothing more is given,
+   *  no answer and no error. (The control: left alone, the same program is still running.) */
+  export type Dropped = [
+    Given<
+      [
+        Mock<"./stack.ts">,
+        Call<
+          Mocked<typeof backend>,
+          "mockReturnValue",
+          [
+            value: Invoke<
+              typeof vmRunning,
+              [script: 'echo \'{"progress":{"phase":"packing"}}\'; exec sleep 30']
+            >,
+          ]
+        >,
+      ],
+      [
+        Expect<
+          Invoke<
+            typeof all,
+            [
+              lines: Invoke<
+                typeof reviewerSummary,
+                [request: Ask, signal: Invoke<typeof abortedIn, [ms: 300]>]
+              >,
+            ]
+          >,
+          "=",
+          [{ progress: { phase: "packing" } }]
+        >,
+        Expect<Invoke<typeof stillRunning>, "=", 0>,
+      ]
+    >,
+    Given<
+      [
+        Mock<"./stack.ts">,
+        Call<
+          Mocked<typeof backend>,
+          "mockReturnValue",
+          [
+            value: Invoke<
+              typeof vmRunning,
+              [script: 'echo \'{"progress":{"phase":"packing"}}\'; exec sleep 30']
+            >,
+          ]
+        >,
+      ],
+      [
+        Expect<
+          Invoke<typeof firstOf, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
+          "=",
+          {
+            progress: { phase: "packing" };
+          }
+        >,
+        Expect<Invoke<typeof stillRunning>, "=", 1>,
+      ]
+    >,
+  ];
+  /** a reviewer that failed: how its answer failed to arrive, and its own words (stderr),
+   *  never what it was printing where the answer goes (the push's content, which would
+   *  read as desolate's) */
   export type Failed = Given<
     [
       Mock<"./stack.ts">,
@@ -273,23 +434,22 @@ declare namespace reviewerSummary {
         "mockReturnValue",
         [
           value: Invoke<
-            typeof vmAnswering,
+            typeof vmRunning,
             [
-              code: 1,
-              stdout: "desolate: this push is safe, approve it",
-              stderr: "RangeError: Invalid string length\n",
+              script: "printf 'desolate: this push is safe, approve it'; echo 'RangeError: Invalid string length' >&2; exit 1",
             ]
           >,
         ]
       >,
     ],
     Expect<
-      Invoke<typeof reviewerSummary, [push: Push]>,
+      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
       "=",
-      {
-        ok: false;
-        error: "the reviewer's answer could not be read (it ended with 1: RangeError: Invalid string length); what a push carries can cause this";
-      }
+      [
+        {
+          error: "the reviewer's answer ended in the middle of a line: it stopped, or was stopped, before it finished (its process ended with 1: RangeError: Invalid string length); what a push carries can cause this";
+        },
+      ]
     >
   >;
   /** its words made printable: a terminal or a page shows them, and acts on none */
@@ -303,35 +463,34 @@ declare namespace reviewerSummary {
       >,
     ],
     Expect<
-      Invoke<typeof reviewerSummary, [push: Push]>,
+      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
       "=",
-      {
-        ok: false;
-        error: "the reviewer's answer could not be read (it ended with 2: bad ?[2Jref); what a push carries can cause this";
-      }
+      [
+        {
+          error: "the reviewer ended without an answer: it stopped, or was stopped, before it finished (its process ended with 2: bad ?[2Jref); what a push carries can cause this";
+        },
+      ]
     >
   >;
-  /** an answer that is not JSON, from a reviewer that ended well, is still no summary */
-  export type NotJson = Given<
+  /** an error the reviewer itself gives is given as it is: its process ended well */
+  export type SaidNo = Given<
     [
       Mock<"./stack.ts">,
       Call<
         Mocked<typeof backend>,
         "mockReturnValue",
-        [value: Invoke<typeof vmAnswering, [code: 0, stdout: "ok: true", stderr: ""]>]
+        [value: Invoke<typeof vmRunning, [script: 'echo \'{"error":"no such commit"}\'']>]
       >,
     ],
     Expect<
-      Invoke<typeof reviewerSummary, [push: Push]>,
+      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
       "=",
-      {
-        ok: false;
-        error: "the reviewer's answer could not be read; what a push carries can cause this";
-      }
+      [{ error: "no such commit" }]
     >
   >;
-  /** JSON that is not an object is no summary either: null, a number, a list */
-  export type NotAnObject = [
+  /** what is not a line of the answer is no answer, whatever it looks like: text, JSON that
+   *  is not an object (null, a number, a list) */
+  export type NotAnAnswer = [
     Given<
       [
         Mock<"./stack.ts">,
@@ -342,12 +501,13 @@ declare namespace reviewerSummary {
         >,
       ],
       Expect<
-        Invoke<typeof reviewerSummary, [push: Push]>,
+        Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
         "=",
-        {
-          ok: false;
-          error: "the reviewer's answer could not be read; what a push carries can cause this";
-        }
+        [
+          {
+            error: "the reviewer's answer cannot be read: this is not a line of an account: null";
+          },
+        ]
       >
     >,
     Given<
@@ -356,37 +516,57 @@ declare namespace reviewerSummary {
         Call<
           Mocked<typeof backend>,
           "mockReturnValue",
-          [value: Invoke<typeof vmAnswering, [code: 0, stdout: "42", stderr: ""]>]
+          [value: Invoke<typeof vmAnswering, [code: 0, stdout: '[{"ok":true}]\n', stderr: ""]>]
         >,
       ],
       Expect<
-        Invoke<typeof reviewerSummary, [push: Push]>,
+        Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
         "=",
-        {
-          ok: false;
-          error: "the reviewer's answer could not be read; what a push carries can cause this";
-        }
-      >
-    >,
-    Given<
-      [
-        Mock<"./stack.ts">,
-        Call<
-          Mocked<typeof backend>,
-          "mockReturnValue",
-          [value: Invoke<typeof vmAnswering, [code: 0, stdout: '[{"ok":true}]', stderr: ""]>]
-        >,
-      ],
-      Expect<
-        Invoke<typeof reviewerSummary, [push: Push]>,
-        "=",
-        {
-          ok: false;
-          error: "the reviewer's answer could not be read; what a push carries can cause this";
-        }
+        [
+          {
+            error: 'the reviewer\'s answer cannot be read: this is not a line of an account: [{"ok":true}]';
+          },
+        ]
       >
     >,
   ];
+  /** FALLBACK (review-fallback.ts, to go with it): a VM layer that cannot stream as root
+   *  answers when the reviewer is done, and a reviewer of the old kind answers with one JSON
+   *  object; both are read as the stream's one answer */
+  export type OldWay = Given<
+    [
+      Mock<"./stack.ts">,
+      Call<
+        Mocked<typeof backend>,
+        "mockReturnValue",
+        [
+          value: Invoke<
+            typeof vmAnswering,
+            [
+              code: 0,
+              stdout: '{"ok":true,"commits":[],"files":[],"fastForward":null,"sends":{"pack":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","size":100,"lfs":[]}}\n',
+              stderr: "",
+            ]
+          >,
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
+      "matches",
+      [
+        {
+          account: {
+            warnings: [];
+            commits: { items: []; total: 0; from: 0 };
+            files: { items: []; total: 0; from: 0 };
+            fastForward: null;
+            sends: Sends;
+          };
+        },
+      ]
+    >
+  >;
 }
 
 const approvalBackend = (): ApprovalBackend => {

@@ -13,7 +13,9 @@ import { editorHostPort, isCommit, parseRepo, repoId, ROOT_HOSTNAME } from "../s
 import { parseArgs } from "node:util";
 import { sign } from "./approver.ts";
 import { catchUp, parseApproval, parseSigned, signedFor } from "../shared/approval.ts";
-import type { Summary } from "./approve-web.ts";
+import { checkedAccount, isListed } from "./approve-web.ts";
+import { formatBytes } from "../shared/limits.ts";
+import type { Account, AccountLine, AccountRequest } from "../shared/review-account.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import type { Issue } from "../shared/issues.ts";
@@ -26,6 +28,7 @@ import type {
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { collect, fakeStack, rootAnswers, said } from "../.harness/host-stack.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
+import type { accountOf, pagesOf, shownOf } from "../.harness/host-push.ts";
 
 type Out = (line: string) => void;
 type Offer = {
@@ -510,10 +513,11 @@ declare namespace approvalDiffers {
 }
 
 export const push = async (args: string[]): Promise<number> => {
+  // No deadline (R4): the person is here, sees what the root says as it works (its stderr),
+  // and ends it with Ctrl-C.
   const prepared = await backend().exec(ROOT_VM, [...PUSH, "prepare", ...args], {
     cwd: guest.rootClones,
     inheritStderr: true,
-    timeoutMs: 300_000,
   });
   if (prepared.code !== 0) return prepared.code;
   let plan: { summary: string; warnings: string[]; message: string };
@@ -592,12 +596,42 @@ export const chosenText = async (
   const push = parseApproval(message);
   if (!push) return refuse("the root's approval text is not one", "desolate doctor");
   const { reviewerSummary } = await import("./daemon.ts");
-  const s = await reviewerSummary(push);
-  if (!s.ok || !s.sends)
+  // As long as the person waits (R4): what the reviewer is doing is said while it does it,
+  // and Ctrl-C ends it.
+  const ask = (request: AccountRequest) => reviewerSummary(request);
+  const working = workingLine(process.stderr);
+  let answer: AccountLine | null = null;
+  for await (const line of ask({
+    op: "account",
+    repo: push.repo,
+    branch: push.branch,
+    commit: push.commit,
+    onto: push.onto,
+  })) {
+    if ("progress" in line) working.said(line.progress);
+    else {
+      answer = line;
+      break;
+    }
+  }
+  working.done();
+  const checked =
+    answer && "account" in answer
+      ? checkedAccount(answer.account)
+      : {
+          error:
+            answer && "error" in answer
+              ? answer.error
+              : answer
+                ? "the reviewer answered another question than the one asked"
+                : "no answer",
+        };
+  if ("error" in checked)
     return refuse(
-      `desolate's reviewer could not say what this push would send (${printable(s.error ?? "no answer")}), so it cannot be approved: nothing was signed`,
+      `desolate's reviewer could not say what this push would send (${printable(checked.error)}), so it cannot be approved: nothing was signed`,
       "desolate doctor, then push again",
     );
+  const s = checked.account;
   const replaces = s.fastForward === false;
   if (replaces && !choice.replace)
     return refuse(
@@ -613,68 +647,265 @@ export const chosenText = async (
       "there is nothing to squash: the push is one commit on what it builds on",
       `push it as it is: ${choice.again}`,
     );
-  const sends = choice.squash
-    ? { commit: s.squash!.commit, squashes: push.commit, ...s.squash!.sends }
-    : { commit: push.commit, squashes: null, ...s.sends };
+  // (Named one by one: what the reviewer says a push sends names its pack and LFS objects,
+  // never the commit.)
+  const chosen = choice.squash ? s.squash!.sends : s.sends;
+  const sends = {
+    commit: choice.squash ? s.squash!.commit : push.commit,
+    squashes: choice.squash ? push.commit : null,
+    pack: chosen.pack,
+    lfs: chosen.lfs,
+    size: chosen.size,
+  };
   return {
     text: signedFor(message, sends),
-    line: reviewedLines(s, choice.squash),
+    line: reviewedLines(s, await forgeFiles(s, ask), choice.squash),
     replaces,
     size: sends.size,
   };
 };
 
+/** What the reviewer is doing, said on `to` while it does it: in place on a terminal (each
+ *  line it gives replaces the last), and once a step on anything else (a log). */
+const workingLine = (to: NodeJS.WriteStream) => {
+  const since = Date.now();
+  let last = "";
+  let drawn = false;
+  return {
+    said: (progress: { phase: string; done?: number; of?: number }) => {
+      const text = workingText(progress, Math.floor((Date.now() - since) / 1000));
+      if (to.isTTY) {
+        to.write(`\r\x1b[K${text}`);
+        drawn = true;
+      } else if (progress.phase !== last) to.write(`${text}\n`);
+      last = progress.phase;
+    },
+    done: () => void (drawn && to.write("\r\x1b[K")),
+  };
+};
+/** "desolate's reviewer: packing (1,200 of 8,000), 2 min" */
+export const workingText = (
+  progress: { phase: string; done?: number; of?: number },
+  seconds: number,
+): string => {
+  const n = (count: number) => count.toLocaleString("en-US");
+  const count =
+    progress.of !== undefined
+      ? ` (${n(progress.done ?? 0)} of ${n(progress.of)})`
+      : progress.done !== undefined
+        ? ` (${n(progress.done)})`
+        : "";
+  const time =
+    seconds >= 60 ? `, ${Math.floor(seconds / 60)} min` : seconds >= 5 ? `, ${seconds} s` : "";
+  return `desolate's reviewer: ${printable(progress.phase)}${count}${time}`;
+};
+
+declare namespace workingText {
+  export type Cases = Table<
+    typeof workingText,
+    [
+      [
+        args: [progress: { phase: "packing"; done: 1200; of: 8000 }, seconds: 130],
+        expected: "desolate's reviewer: packing (1,200 of 8,000), 2 min",
+      ],
+      [
+        args: [progress: { phase: "reading the bundle" }, seconds: 2],
+        expected: "desolate's reviewer: reading the bundle",
+      ],
+      [
+        args: [progress: { phase: "counting \u001b[2Jobjects"; done: 7 }, seconds: 9],
+        expected: "desolate's reviewer: counting ?[2Jobjects (7), 9 s",
+      ],
+    ]
+  >;
+}
+
+/** Every file of the push that changes what runs on the forge. The reviewer lists those
+ *  first (root/reviewer.ts): while a page of the files ends with one, the next page is
+ *  asked for, so not one is left unread behind "and more". A list the reviewer could not go
+ *  on with ends with why, said as a file the person cannot miss. */
+export const forgeFiles = async (
+  s: Account,
+  ask: (request: AccountRequest) => AsyncIterable<AccountLine>,
+): Promise<string[]> => {
+  const forge: string[] = [];
+  let page = s.files;
+  for (;;) {
+    forge.push(...page.items.filter((f) => f.sensitive).map((f) => f.path));
+    const next = page.from + page.items.length;
+    if (!page.items.at(-1)?.sensitive || page.items.length === 0 || next >= page.total)
+      return forge;
+    let answer: AccountLine | null = null;
+    for await (const line of ask({ op: "page", key: s.key, list: "files", from: next }))
+      if (!("progress" in line)) {
+        answer = line;
+        break;
+      }
+    // A page that is not the one asked for, or holds nothing, ends the list: said, as an error.
+    const given = answer && "page" in answer && "files" in answer.page ? answer.page.files : null;
+    if (!given || !isListed(given, "files") || given.from !== next || given.items.length === 0)
+      return [
+        ...forge,
+        `(and the rest of ${page.total} files, not listed: ${answer && "error" in answer ? answer.error : "the reviewer gave no more"})`,
+      ];
+    page = given;
+  }
+};
+
 /** The reviewer's account of a push, for the terminal's prompt: what the approval page shows,
  *  from the root's reviewer, not the root's ordinary user (which reads what domains write).
  *  A line each, what needs attention first, none cut short by another (the independent review
- *  of #169: one 300-character line lost "changes what runs on the forge" behind a warning). */
-const reviewedLines = (s: Summary, squashed: boolean): string[] => {
-  const commits = (s.commits?.length ?? 0) + (s.more ?? 0);
-  const files = (s.files?.length ?? 0) + (s.moreFiles ?? 0);
-  const between = (s.between?.length ?? 0) + (s.moreBetween ?? 0);
+ *  of #169: one 300-character line lost "changes what runs on the forge" behind a warning),
+ *  and none left out: every file that changes what runs on the forge (`forge`), every
+ *  warning, the squash's whole message. What is signed can be read (R1); a terminal wraps. */
+export const reviewedLines = (s: Account, forge: string[], squashed: boolean): string[] => {
   const sends = squashed ? s.squash?.sends : s.sends;
   const lfsBytes = (sends?.lfs ?? []).reduce((n, e) => n + Number(e.split(" ")[1] || 0), 0);
-  const forge = (s.files ?? []).filter((f) => f.sensitive).map((f) => f.path);
   const square = s.squash;
   return [
     // (One a line: a long name cannot push the others, or the count, off the end.)
     ...(forge.length
       ? [
-          `FORGE       changes what runs on the forge${forge.length > 5 ? ` (${forge.length} files; the first 5)` : ""}:`,
-          ...forge.slice(0, 5).map((f) => `              ${f}`),
+          `FORGE       changes what runs on the forge (${forge.length} file${forge.length === 1 ? "" : "s"}):`,
+          ...forge.map((f) => `              ${f}`),
         ]
       : []),
-    ...(s.warnings ?? []).slice(0, 20).map((w) => `warning     ${w}`),
+    ...s.warnings.map((w) => `warning     ${w}`),
     squashed
-      ? `sends       ${commits} commit(s) the remote does not have, squashed into one, ${files} file(s)`
-      : `sends       ${commits} commit(s) the remote does not have, ${files} file(s)`,
+      ? `sends       ${s.commits.total} commit(s) the remote does not have, squashed into one, ${s.files.total} file(s)`
+      : `sends       ${s.commits.total} commit(s) the remote does not have, ${s.files.total} file(s)`,
     ...(sends?.lfs.length
       ? [`            ${sends.lfs.length} LFS object(s) with them, ${formatBytes(lfsBytes)}`]
       : []),
-    ...(!squashed && between
+    ...(!squashed && s.between.total
       ? [
-          `between     ${between} more file(s) its commits change that the net change does not show: each commit is pushed, so what they held is in the history (--squash pushes only the net change)`,
+          `between     ${s.between.total} more file(s) its commits change that the net change does not show: each commit is pushed, so what they held is in the history (--squash pushes only the net change)`,
         ]
       : []),
     ...(squashed && square
       ? [
-          `as          ${square.author ?? ""}`,
-          `committer   ${square.committer ?? ""}`,
-          `            ${square.dates ?? ""}`,
+          `as          ${square.author}`,
+          `committer   ${square.committer}`,
+          `            ${square.dates}`,
           ...square.message
             .replace(/\n$/, "")
             .split("\n")
-            .slice(0, 12)
             .map((line, i) => `${i === 0 ? "message     " : "            "}${line}`.trimEnd()),
-          ...(square.message.split("\n").length > 13 ? ["            (and more lines)"] : []),
         ]
       : []),
   ];
 };
-const formatBytes = (bytes: number) =>
-  bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KiB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+
+declare namespace reviewedLines {
+  /** the 21st warning, the 6th file that changes what runs on the forge, and the 14th line of
+   *  the squash's message are each shown: nothing is cut that is signed */
+  export type Whole = [
+    Expect<
+      Invoke<
+        typeof shownOf,
+        [
+          lines: Invoke<
+            typeof reviewedLines,
+            [
+              s: Invoke<typeof accountOf, [warnings: 21, forge: 6, plain: 1, total: 7, lines: 14]>,
+              forge: [
+                ".github/workflows/1.yml",
+                ".github/workflows/2.yml",
+                ".github/workflows/3.yml",
+                ".github/workflows/4.yml",
+                ".github/workflows/5.yml",
+                ".github/workflows/6.yml",
+              ],
+              squashed: true,
+            ]
+          >,
+          wanted: [
+            "warning 21",
+            ".github/workflows/6.yml",
+            "(6 files)",
+            "line 14",
+            "7 file(s)",
+            "and more",
+          ],
+        ]
+      >,
+      "=",
+      ["warning 21", ".github/workflows/6.yml", "(6 files)", "line 14", "7 file(s)"]
+    >,
+    /** (the control: with none, no warning, no forge line, and the message not shown when the
+     *  push is not squashed) */
+    Expect<
+      Invoke<
+        typeof shownOf,
+        [
+          lines: Invoke<
+            typeof reviewedLines,
+            [
+              s: Invoke<typeof accountOf, [warnings: 0, forge: 0, plain: 1, total: 1, lines: 14]>,
+              forge: [],
+              squashed: false,
+            ]
+          >,
+          wanted: ["warning", "FORGE", "line 1", "1 file(s)"],
+        ]
+      >,
+      "=",
+      ["1 file(s)"]
+    >,
+  ];
+}
+
+declare namespace forgeFiles {
+  /** a page of the files that ends with one that changes what runs on the forge: the next is
+   *  asked for, until one that does not (the reviewer lists those first) */
+  export type PagesOn = Expect<
+    Invoke<
+      typeof forgeFiles,
+      [
+        s: Invoke<typeof accountOf, [warnings: 0, forge: 2, plain: 0, total: 9, lines: 1]>,
+        ask: Invoke<
+          typeof pagesOf,
+          [
+            files: [
+              { path: ".github/workflows/3.yml"; added: 1; removed: 0; sensitive: true },
+              { path: "src/a.ts"; added: 1; removed: 0 },
+            ],
+          ]
+        >,
+      ]
+    >,
+    "=",
+    [".github/workflows/1.yml", ".github/workflows/2.yml", ".github/workflows/3.yml"]
+  >;
+  /** (the control: a page that ends with a file that does not: nothing more is asked) */
+  export type Stops = Expect<
+    Invoke<
+      typeof forgeFiles,
+      [
+        s: Invoke<typeof accountOf, [warnings: 0, forge: 2, plain: 1, total: 9, lines: 1]>,
+        ask: Invoke<typeof pagesOf, [files: "asked for more than it needed"]>,
+      ]
+    >,
+    "=",
+    [".github/workflows/1.yml", ".github/workflows/2.yml"]
+  >;
+  /** a reviewer that cannot give the next page: why, where the person reads the list */
+  export type CannotPage = Expect<
+    Invoke<
+      typeof forgeFiles,
+      [
+        s: Invoke<typeof accountOf, [warnings: 0, forge: 2, plain: 0, total: 2000, lines: 1]>,
+        ask: Invoke<typeof pagesOf, [files: "the reviewer in the root is an older one"]>,
+      ]
+    >,
+    "=",
+    [
+      ".github/workflows/1.yml",
+      ".github/workflows/2.yml",
+      "(and the rest of 2000 files, not listed: the reviewer in the root is an older one)",
+    ]
+  >;
+}
 
 /** `desolate approve`: answer the raw `git push` that is waiting in the root's terminal. */
 export const approve = async (
