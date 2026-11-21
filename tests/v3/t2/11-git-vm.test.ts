@@ -172,6 +172,20 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     });
     after(() => listener.kill());
     await sleep(1500);
+    // A line of 2 MiB in the pusher's log, past the daemon's look of 1 MiB: it once stopped
+    // every event after it, for good. Written once the daemon reads the log (its first look
+    // starts where the log is), as root, who writes that log. The push's event below is the
+    // test; the daemon's log saying it skipped the line is its control (the line was read).
+    await sleep(2500);
+    const long = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        'f=/var/lib/desolate-root/pusher.log; [ -f "$f" ] && { head -c 2097152 /dev/zero | tr \'\\0\' x; echo; } >>"$f" && echo written',
+      ],
+      { root: true },
+    );
+    assert.equal(long.stdout.trim(), "written", long.stderr);
     const terminal = client("desolate-git.localhost", port);
     await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
     const opened = await terminal.post("/session", { repo: "acme/widgets" });
@@ -264,6 +278,11 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.equal((await said("approval-waiting", "root")).branch, "from-git");
     assert.equal((await said("approved", "host")).branch, "from-git");
     const pushed = await said("pushed", "pusher");
+    assert.match(
+      fs.readFileSync(path.join(stack.home, "logs", "daemon.log"), "utf8"),
+      /the pusher's log has a line longer than 1\.0 MiB: skipped to its end/,
+      "control: the long line was read, and skipped",
+    );
     assert.deepEqual(
       [pushed.repo, pushed.branch, pushed.commit, pushed.onto],
       ["acme/widgets", "from-git", commit, null],
