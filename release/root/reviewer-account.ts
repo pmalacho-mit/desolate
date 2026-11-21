@@ -282,7 +282,7 @@ const headerWarnings = async (dir: string, order: string[], say: Say): Promise<s
       order.slice(from, from + COMMITS_AT_ONCE).join("\n") + "\n",
     );
     if (!raw) unread = true;
-    for (let at = 0; raw && at < raw.length; ) {
+    for (let at = 0; raw && at < raw.length;) {
       const end = raw.indexOf(10, at);
       if (end < 0) break;
       const [id, , size] = raw.subarray(at, end).toString("latin1").split(" ");
@@ -647,7 +647,14 @@ const page = async (
   const kept = keptOf(key);
   if (!kept) return { error: GONE };
   if (list === "files")
-    return { page: { files: listed(kept.files.map(({ raw: _, ...file }) => file), from) } };
+    return {
+      page: {
+        files: listed(
+          kept.files.map(({ raw: _, ...file }) => file),
+          from,
+        ),
+      },
+    };
   if (list === "between") return { page: { between: listed(kept.between, from) } };
   const repo = parseRepo(kept.repo)!;
   const ids = listed(kept.order, from);
@@ -773,12 +780,7 @@ const eachArgs = (ids: string[]) => [
 
 /** A page of one of a kept account's diffs: the net change, one file's part of it, or one
  *  of its commits whole. */
-const diff = async (
-  key: string,
-  of: unknown,
-  from: number,
-  say: Say,
-): Promise<AccountLine> => {
+const diff = async (key: string, of: unknown, from: number, say: Say): Promise<AccountLine> => {
   const kept = keptOf(key);
   if (!kept) return { error: GONE };
   const dir = ensureRepo(parseRepo(kept.repo)!);
@@ -788,7 +790,11 @@ const diff = async (
   if (of === "net") {
     name = "net";
     args = ["diff", ...DETAILED, ...range, "--"];
-  } else if (typeof of === "object" && of !== null && typeof (of as { file?: unknown }).file === "string") {
+  } else if (
+    typeof of === "object" &&
+    of !== null &&
+    typeof (of as { file?: unknown }).file === "string"
+  ) {
     const file = (of as { file: string }).file;
     // By the path as the account shows it: every file that shows so (two names that differ
     // only in what was made safe are both this one).
@@ -810,7 +816,8 @@ const diff = async (
   } else return { error: "a diff is of the net change, of one file, or of one commit" };
   const made = await pageOf(dir, args, from, kept.totals[name], say);
   if (!made) return { error: "git could not make this diff" };
-  if (kept.totals[name] === undefined) keep({ ...kept, totals: { ...kept.totals, [name]: made.total } });
+  if (kept.totals[name] === undefined)
+    keep({ ...kept, totals: { ...kept.totals, [name]: made.total } });
   return { diff: made };
 };
 
@@ -890,7 +897,9 @@ export const oldAnswer = async (
     moreBetween: a.between.total - a.between.items.length,
     ...(each ? { eachDiff: each.text, eachDiffCut: eachCut } : {}),
     ...(eachCut
-      ? { eachDiffWhy: `the first ${firsts.length} of ${kept.order.length} commits, the first page` }
+      ? {
+          eachDiffWhy: `the first ${firsts.length} of ${kept.order.length} commits, the first page`,
+        }
       : {}),
   };
 };

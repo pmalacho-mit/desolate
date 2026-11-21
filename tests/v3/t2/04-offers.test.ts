@@ -80,18 +80,56 @@ const forgeHasLfs = (repo: string, id: string) => {
   }
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/** What desolate's reviewer says a push sends, asked as the host asks it: as root. */
-const reviewerSays = (branch: string, commit: string, onto: string | null = null) =>
-  JSON.parse(
-    stack.inRoot(
+/** What desolate's reviewer answers, asked as the host asks it (as root): its lines
+ *  (shared/review-account.ts), progress and then the one answer. */
+const askReviewer = (request: Record<string, unknown>) =>
+  stack
+    .inRoot(
       ["node", "--disable-warning=ExperimentalWarning", "/desolate/release/root/review-ask.ts"],
-      { root: true, input: JSON.stringify({ repo: "acme/widgets", branch, commit, onto }) },
-    ).stdout,
-  ) as {
-    ok: boolean;
+      { root: true, input: `${JSON.stringify(request)}\n` },
+    )
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+type Listed<T> = { items: T[]; total: number; from: number };
+type Said = {
+  ok: boolean;
+  error?: string;
+  key?: string;
+  warnings?: string[];
+  commits?: Listed<{ commit: string; subject: string; author: string }>;
+  files?: Listed<{ path: string }>;
+  between?: Listed<{ path: string }>;
+  sends?: { pack: string; size: number; lfs: string[] };
+  squash?: { commit: string; message: string; count: number; committer: string };
+  lines: Record<string, unknown>[];
+};
+/** What desolate's reviewer says a push sends: its account, or its error. */
+const reviewerSays = (branch: string, commit: string, onto: string | null = null): Said => {
+  const lines = askReviewer({ op: "account", repo: "acme/widgets", branch, commit, onto });
+  const last = lines.at(-1) ?? {};
+  return "account" in last
+    ? { ok: true, ...(last.account as object), lines }
+    : { ok: false, error: String(last.error ?? JSON.stringify(last)), lines };
+};
+/** A page of one of the reviewer's diffs of an account. */
+const reviewerDiff = (key: string, of: unknown, from = 0) =>
+  askReviewer({ op: "diff", key, of, from }).at(-1) as {
+    diff?: { text: string; from: number; next: number | null; total: number };
     error?: string;
-    sends?: { pack: string; size: number; lfs: string[] };
   };
+/** As the root's user: send the reviewer a commit, as a push would before it is approved. */
+const submitted = (commit: string) => {
+  const sent = stack.inRoot([
+    "node",
+    "--disable-warning=ExperimentalWarning",
+    "--input-type=module",
+    "-e",
+    `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+    commit,
+  ]);
+  assert.equal(sent.code, 0, sent.stderr);
+};
 /** As the root's ordinary user, taken over: hand the pusher an approval's id, a pack of its
  *  own making (a file in the root VM), and LFS objects (files there too). */
 const toPusher = (
@@ -684,12 +722,7 @@ echo "$c1 $c2 $c3 $c4"`);
       c4,
     ]);
     assert.equal(sentChain.code, 0, sentChain.stderr);
-    const saidChain = reviewerSays("chain", c4) as ReturnType<typeof reviewerSays> & {
-      warnings?: string[];
-      between?: { path: string }[];
-      squash?: { message: string; count: number; committer: string };
-      eachDiff?: string;
-    };
+    const saidChain = reviewerSays("chain", c4);
     assert.equal(saidChain.ok, true, String(saidChain.error));
     const headers = (saidChain.warnings ?? []).find((w) => /carry headers/.test(w)) ?? "";
     assert.match(headers, /^2 commit\(s\) carry headers this page does not show/);
@@ -713,7 +746,7 @@ echo "$c1 $c2 $c3 $c4"`);
       "control: a commit with only git's four headers is not warned of",
     );
     // (The list has the earlier tests' files too: what matters is this one, whole.)
-    const inBetween = saidChain.between?.map((f) => f.path) ?? [];
+    const inBetween = saidChain.between?.items.map((f) => f.path) ?? [];
     assert.ok(inBetween.includes("README.md?key.env"), String(inBetween));
     assert.ok(
       !inBetween.includes("key.env") && !inBetween.includes("README.md"),
@@ -729,10 +762,183 @@ echo "$c1 $c2 $c3 $c4"`);
       saidChain.squash?.message,
       "control\n\nSquashed from 6 commits:\n- control\n- stored\n- (no message)\n- put back\n- with headers\n- hidden\n",
     );
-    const at = (id: string) => saidChain.eachDiff?.indexOf(`commit ${id}`) ?? -1;
+    // The commits are listed first to last, and each one's own diff is its own: asked for by
+    // the commit, it is that commit whole, and no other.
+    const at = (id: string) => saidChain.commits?.items.findIndex((c) => c.commit === id) ?? -1;
     assert.ok(
       at(c1) >= 0 && at(c1) < at(c2) && at(c2) < at(c3) && at(c3) < at(c4),
       "each commit, first to last",
+    );
+    const ofC1 = reviewerDiff(saidChain.key!, { commit: c1 });
+    assert.ok(ofC1.diff?.text.startsWith(`commit ${c1}\n`), JSON.stringify(ofC1));
+    assert.ok(ofC1.diff?.text.includes("+secret"), "with its diff: the file it added");
+    assert.ok(!ofC1.diff?.text.includes(`commit ${c2}`), "and not the next commit");
+    assert.match(
+      reviewerDiff(saidChain.key!, { commit: "0".repeat(40) }).error ?? "",
+      /is not one of the commits this push sends/,
+      "a commit that is not the push's is not shown",
+    );
+  });
+
+  it("the reviewer's account: counted and paged, its diffs by file, by commit and in pages of bytes", () => {
+    stack.step("the reviewer's account: paged, diffs on demand");
+    // 105 commits, the last of which adds 120 files and one of over a MiB of diff.
+    const made = inRootClone(String.raw`set -e
+base=$(git rev-parse origin/main)
+c=$base
+for i in $(seq 1 104); do c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$base^{tree}" -p "$c" -m "commit $i"); done
+t=$( { git ls-tree "$base"; for i in $(seq -w 1 120); do printf '100644 blob %s	f-%s.txt
+' "$(printf 'file %s
+' "$i" | git hash-object -w --stdin)" "$i"; done; printf '100644 blob %s	big.txt
+' "$(seq 1 200000 | git hash-object -w --stdin)"; } | git mktree )
+c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$t" -p "$c" -m "commit 105")
+echo "$c"`);
+    assert.equal(made.code, 0, made.stderr);
+    const many = made.stdout.trim().split("\n").pop()!;
+    submitted(many);
+    const said = reviewerSays("many", many);
+    assert.equal(said.ok, true, String(said.error));
+    // Counted, not cut: the first page, first commit first, and the true total.
+    assert.equal(said.commits?.total, 105);
+    assert.equal(said.commits?.items.length, 100);
+    assert.equal(said.commits?.items[0]?.subject, "commit 1");
+    const more = askReviewer({ op: "page", key: said.key, list: "commits", from: 100 }).at(-1) as {
+      page?: { commits?: Listed<{ subject: string }> };
+    };
+    assert.deepEqual(more.page?.commits, {
+      items: more.page?.commits?.items,
+      total: 105,
+      from: 100,
+    });
+    assert.deepEqual(
+      more.page?.commits?.items.map((c) => c.subject),
+      ["commit 101", "commit 102", "commit 103", "commit 104", "commit 105"],
+      "the page past the first is the rest, in order",
+    );
+    assert.equal(said.files?.total, 121);
+    assert.equal(said.files?.items.length, 100);
+    const files = askReviewer({ op: "page", key: said.key, list: "files", from: 100 }).at(-1) as {
+      page?: { files?: Listed<{ path: string }> };
+    };
+    assert.equal(files.page?.files?.items.length, 21);
+    assert.equal(
+      new Set([...said.files!.items, ...files.page!.files!.items].map((f) => f.path)).size,
+      121,
+      "the two pages are every file once",
+    );
+    // A file's diff is that file's (CONTROL: the net change has both).
+    const one = reviewerDiff(said.key!, { file: "f-007.txt" });
+    assert.ok(one.diff?.text.includes("+file 007"), JSON.stringify(one));
+    assert.ok(!one.diff?.text.includes("f-008.txt"), "and no other file's");
+    assert.equal(one.diff?.next, null);
+    // The net change, in pages of bytes: each ends a line, each starts where the last said,
+    // and together they are the whole diff, every byte of it.
+    const pages = [reviewerDiff(said.key!, "net")];
+    while (pages.at(-1)?.diff?.next != null && pages.length < 10)
+      pages.push(reviewerDiff(said.key!, "net", pages.at(-1)!.diff!.next!));
+    assert.ok(pages.length >= 2, `a diff over a MiB is more than one page: ${pages.length}`);
+    const total = pages[0]!.diff!.total;
+    let at = 0;
+    for (const p of pages) {
+      assert.equal(p.diff?.from, at);
+      assert.ok(Buffer.byteLength(p.diff!.text) <= 1024 * 1024);
+      at += Buffer.byteLength(p.diff!.text);
+      if (p.diff!.next !== null) assert.ok(p.diff!.text.endsWith("\n"), "a page ends a line");
+    }
+    assert.equal(at, total, "the pages are the whole diff");
+    const all = pages.map((p) => p.diff!.text).join("");
+    assert.ok(all.includes("+file 007") && all.includes("+file 008") && all.includes("+200000\n"));
+  });
+
+  it("the reviewer's account takes as long as it takes, says so, waits its turn, and ends when its asker goes", () => {
+    stack.step("the reviewer's account: no deadline");
+    const fresh = (name: string) =>
+      inRootClone(
+        `git -c user.name=slow -c user.email=slow@example.invalid commit-tree origin/main^{tree} -p origin/main -m '${name}'`,
+      ).stdout.trim();
+    const [a, b] = [fresh("slow a"), fresh("slow b")];
+    submitted(a);
+    submitted(b);
+    const ask = (branch: string, commit: string) =>
+      JSON.stringify({ op: "account", repo: "acme/widgets", branch, commit, onto: null });
+    // Packing made slow: the reviewer's first pack-objects after the mark is set waits 100 s
+    // first, longer than the 95 s that used to kill the account.
+    const ran = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        String.raw`set -e
+[ ! -e /usr/local/bin/git ]
+trap 'rm -f /usr/local/bin/git; rm -rf /tmp/slowpack' EXIT
+cat > /usr/local/bin/git <<'W'
+#!/bin/sh
+if [ "$(id -un)" = desolate-reviewer ]; then case " $* " in *" pack-objects "*) rm /tmp/slowpack/once 2>/dev/null && sleep 100;; esac; fi
+exec /usr/bin/git "$@"
+W
+chmod 755 /usr/local/bin/git
+mkdir -p /tmp/slowpack && chmod 777 /tmp/slowpack && touch /tmp/slowpack/once
+ask() { node --disable-warning=ExperimentalWarning /desolate/release/root/review-ask.ts; }
+count() { pgrep -u desolate-reviewer -fc "$1" || true; }
+# Its asker goes away while it packs: read until it says so, then stop reading.
+printf '%s
+' "$1" | ask | grep -m1 -q '"packing the push"'
+sleep 1
+echo "during $(count 'sleep 100') $(count 'reviewer.ts account')"
+sleep 12
+echo "after $(count 'sleep 100') $(count 'reviewer.ts account')"
+# Asked again and read to the end; and another account asked for meanwhile, which waits.
+touch /tmp/slowpack/once
+start=$(date +%s)
+printf '%s
+' "$1" | ask > /tmp/slow.lines &
+sleep 3
+printf '%s
+' "$2" | ask > /tmp/waits.lines
+wait
+echo "took $(( $(date +%s) - start ))"
+echo "=====slow"; cat /tmp/slow.lines
+echo "=====waits"; cat /tmp/waits.lines`,
+        "_",
+        ask("slow-a", a),
+        ask("slow-b", b),
+      ],
+      { root: true },
+    );
+    assert.equal(ran.code, 0, ran.stdout + ran.stderr);
+    const [head, slowText, waitsText] = ran.stdout.split(/^=====\w+\n/m) as [
+      string,
+      string,
+      string,
+    ];
+    // CONTROL: while it packed, its processes were there to be seen; once its asker had
+    // gone, none of them is.
+    assert.match(head, /^during [1-9]\d* [1-9]\d*$/m, head);
+    assert.match(head, /^after 0 0$/m, "nothing the account started outlives its asker");
+    const took = Number(/^took (\d+)$/m.exec(head)?.[1]);
+    assert.ok(took >= 100, `the account took ${took} s`);
+    const lines = (text: string) =>
+      text
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, { phase?: string } | object>);
+    const slow = lines(slowText);
+    const waits = lines(waitsText);
+    assert.ok("account" in slow.at(-1)!, slowText.slice(-500));
+    const saying = slow.filter(
+      (l) => "progress" in l && (l.progress as { phase: string }).phase === "packing the push",
+    );
+    assert.ok(
+      saying.length >= 10,
+      `it says what it is doing while it packs: ${saying.length} times`,
+    );
+    assert.ok("account" in waits.at(-1)!, waitsText.slice(-500));
+    assert.ok(
+      waits.some(
+        (l) =>
+          "progress" in l &&
+          (l.progress as { phase: string }).phase === "waiting for another push's account",
+      ),
+      "the other account says it waits its turn",
     );
   });
 
@@ -876,19 +1082,15 @@ echo "$c1 $c2 $c3 $c4"`);
     ]);
     assert.equal(sent.code, 0, sent.stderr);
     // What the net change hides, the reviewer lists: notes.txt was added, then taken out.
-    const said = reviewerSays("squash-me", tip) as ReturnType<typeof reviewerSays> & {
-      between?: { path: string }[];
-      squash?: { commit: string; count: number; message: string };
-      files?: { path: string }[];
-    };
+    const said = reviewerSays("squash-me", tip);
     assert.equal(said.ok, true, String(said.error));
     assert.deepEqual(
-      said.files?.map((f) => f.path),
+      said.files?.items.map((f) => f.path),
       ["README.md"],
       "the net change: README alone",
     );
     assert.deepEqual(
-      said.between?.map((f) => f.path),
+      said.between?.items.map((f) => f.path),
       ["notes.txt"],
       "and what was changed in between",
     );

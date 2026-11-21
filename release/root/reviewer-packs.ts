@@ -346,7 +346,7 @@ const pointersIn = async (dir: string, tip: string, known: string[]): Promise<st
 const readPointers = (bytes: Buffer | null, oids: Set<string>) => {
   if (!bytes) throw new Error("git cat-file failed on the push's own blobs");
   // Each: "<id> blob <size>\n", the content, "\n".
-  for (let at = 0; at < bytes.length; ) {
+  for (let at = 0; at < bytes.length;) {
     const end = bytes.indexOf(10, at);
     if (end < 0) break;
     const size = Number(bytes.subarray(at, end).toString("latin1").split(" ")[2]);

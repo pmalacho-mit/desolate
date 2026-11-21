@@ -164,9 +164,7 @@ export const gitOk = async (
   if (result.code !== 0) {
     const said = (result.stderr || result.stdout).trim();
     log(`git ${args[0]} failed:\n${said}`);
-    throw new Error(
-      `git ${args[0]} failed: ${shown(said.split("\n").slice(-2).join(" | "), 300)}`,
-    );
+    throw new Error(`git ${args[0]} failed: ${shown(said.split("\n").slice(-2).join(" | "), 300)}`);
   }
   return result.stdout;
 };
