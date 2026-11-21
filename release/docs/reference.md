@@ -348,7 +348,12 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
   from the mirror as it is, and says so.
 - `git push origin <branch>` offers the branch (`desolate offer`), then reports the push as
   refused, saying it was offered and that nothing went to the remote, so that no
-  `origin/<branch>` appears for a branch the remote does not have.
+  `origin/<branch>` appears for a branch the remote does not have. So `git push` exits with
+  an error (1) even when the offer was taken, and the editor shows its generic "Can't push
+  refs to remote" dialog. The offer's own line (`offered <repo> <branch> at <commit>`) is
+  what says it worked. `desolate offer` exits 0 when it is taken, so a script or an agent
+  should use that instead. Offering a branch again replaces its earlier offer. (Kept so on
+  purpose: #189.)
 - Commits carry the person's git identity from the Mac (`git config --global user.name` and
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.
