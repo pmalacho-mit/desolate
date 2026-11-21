@@ -86,8 +86,10 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *  signal would not reach it here). */
 const rawPushWaiting = async (spec: string, name: string) => {
   const log = `/tmp/${name}.log`;
+  // The pid is written by the process that becomes git: `$!` here would be the subshell of
+  // `cd ... && ...`, not the session setsid makes, and its group is not the push's.
   inRootClone(
-    `setsid nohup git push origin ${spec} >${log} 2>&1 </dev/null & echo $! >${log}.pid; sleep 0.2`,
+    `setsid nohup sh -c 'echo $$ >${log}.pid; exec git push origin ${spec}' >${log} 2>&1 </dev/null & sleep 0.2`,
   );
   const said = () => inRootClone(`cat ${log}`).stdout;
   let waiting = false;
