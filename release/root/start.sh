@@ -138,10 +138,14 @@ if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2
   # by its processes, for as long as it takes. (Before: one second, and then on, whether or
   # not the old code had stopped.) No count here: how long a start may take is the host's to
   # say, which waits for this script; this says what it is waiting for, for the host to show.
+  # A zombie is gone: it holds nothing, and runs nothing. (Where nothing reaps orphans, as in
+  # the fake backend's containers, whose first process is `sleep`, a killed service stays one.)
   old_left() {
-    { for group in ${groups[@]+"${groups[@]}"}; do pgrep -g "$group"; done
+    local pids
+    pids=$({ for group in ${groups[@]+"${groups[@]}"}; do pgrep -g "$group"; done
       for user in desolate-keyring desolate-pusher desolate-reviewer; do pgrep -u "$user"; done
-      for proxy in "${proxies[@]}"; do pgrep -f "$proxy"; done; true; } 2>/dev/null | sort -u | paste -sd, -
+      for proxy in "${proxies[@]}"; do pgrep -f "$proxy"; done; true; } 2>/dev/null | sort -u | paste -sd, -)
+    [ -z "$pids" ] || ps -o pid=,stat= -p "$pids" 2>/dev/null | awk '$2 !~ /^Z/ { print $1 }' | paste -sd, -
   }
   said=$SECONDS
   while left=$(old_left) && [ -n "$left" ]; do
