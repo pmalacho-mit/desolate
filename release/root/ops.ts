@@ -73,6 +73,11 @@ const GITREPO_READ = 4096;
  *  newest, a terminal's screenful and more. `last` asks for another number. */
 const NET_LOG_LAST = 100;
 
+/** How long doctor waits on each local `sudo -n` it asks (P6: asked, not assumed): sudo with
+ *  -n never prompts, and answers in milliseconds; ten seconds is a system in trouble. One
+ *  that did not answer is never read as the answer a check hopes for. */
+const ASKED_MS = 10_000;
+
 export const ops: Record<string, Op> = {
   async ping() {
     const keyring = await ask(KEYRING.control, { op: "list" }, 3000).then(
@@ -605,13 +610,16 @@ export const ops: Record<string, Op> = {
       "desolate bootstrap",
     );
     // Asked, not assumed (P6): this user runs everything here that reads a domain's data.
-    const sudo = spawnSync("sudo", ["-n", "true"], { stdio: "ignore", timeout: 10_000 });
+    // (A sudo that did not answer refused nothing: it is not taken for a refusal.)
+    const sudo = spawnSync("sudo", ["-n", "true"], { stdio: "ignore", timeout: ASKED_MS });
     add(
       "root: the root's own user cannot become root",
-      sudo.status !== 0,
-      sudo.status !== 0
-        ? "sudo refuses it"
-        : "`sudo -n true` succeeds: a bug in a proxy or in git would reach the write keys",
+      sudo.status !== null && sudo.status !== 0,
+      sudo.status === null
+        ? `\`sudo -n true\` did not answer in ${ASKED_MS / 1000} s: not known to be refused`
+        : sudo.status !== 0
+          ? "sudo refuses it"
+          : "`sudo -n true` succeeds: a bug in a proxy or in git would reach the write keys",
       "desolate bootstrap (root/start.sh removes the rule)",
     );
     // What root (start.sh) and the keyring run: node, and every directory on root's PATH.
@@ -662,7 +670,7 @@ export const ops: Record<string, Op> = {
     for (const member of members) {
       const groups = spawnSync("sudo", ["-n", "-u", member, "id", "-G"], {
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: ASKED_MS,
       });
       if (groups.status !== 0) {
         wrong.push(`${member}: the root's user cannot start a program as it`);
@@ -675,24 +683,24 @@ export const ops: Record<string, Op> = {
         .filter((group) => group !== own && mine.has(group));
       if (shared.length > 0)
         wrong.push(`${member} shares the root's user's group(s) ${shared.join(", ")}`);
-      if (
-        spawnSync("sudo", ["-n", "-u", member, "test", "-x", "/desolate/root"], { timeout: 10_000 })
-          .status === 0
-      )
-        wrong.push(`${member} can reach the shares`);
+      // Whether `member` can do what `test` asks; one that did not answer is no "no", and is
+      // said as that.
+      const can = (...test: string[]) => {
+        const asked = spawnSync("sudo", ["-n", "-u", member, "test", ...test], {
+          timeout: ASKED_MS,
+        });
+        if (asked.status === null)
+          wrong.push(
+            `${member}: \`test ${test.join(" ")}\` did not answer in ${ASKED_MS / 1000} s`,
+          );
+        return asked.status === 0;
+      };
+      if (can("-x", "/desolate/root")) wrong.push(`${member} can reach the shares`);
       for (const other of domainDirs) {
         if (proxyUserOf(other) === member) continue;
         if (
-          spawnSync(
-            "sudo",
-            ["-n", "-u", member, "test", "-r", `${ROOT.proxies}/domains/${other}`],
-            { timeout: 10_000 },
-          ).status === 0 ||
-          spawnSync(
-            "sudo",
-            ["-n", "-u", member, "test", "-x", `${ROOT.proxies}/domains/${other}`],
-            { timeout: 10_000 },
-          ).status === 0
+          can("-r", `${ROOT.proxies}/domains/${other}`) ||
+          can("-x", `${ROOT.proxies}/domains/${other}`)
         )
           wrong.push(`${member} can reach the domain ${other}'s directory`);
       }
