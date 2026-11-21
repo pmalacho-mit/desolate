@@ -742,7 +742,10 @@ const forDomains = (state: Snapshot) => {
           head: c.head ? (c.head.branch ?? c.head.commit ?? null) : null,
         })),
         status: w.says.status
-          ? { color: String(w.says.status.color), message: printable(w.says.status.message, 200) }
+          ? {
+              color: String(w.says.status.color),
+              message: printable(w.says.status.message, NAMES.status),
+            }
           : null,
       })),
     };

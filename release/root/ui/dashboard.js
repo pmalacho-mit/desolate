@@ -917,7 +917,7 @@ const branchesOpen = new Set();
  *  and master) give a name of both, and the card says so. */
 const defaultsOf = (d) => d.repos.map((repo) => ({ repo, branch: (state.repos.find((r) => r.repo === repo) || {}).defaultBranch || "main" }));
 const defaultWorkspaceName = (branches) => {
-  const name = [...new Set(branches)].join("-").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "main";
+  const name = [...new Set(branches)].join("-").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, state.bounds.slug).replace(/-+$/, "") || "main";
   return name === "template" ? "template-ws" : name;
 };
 const firstWorkspace = (d) => {
