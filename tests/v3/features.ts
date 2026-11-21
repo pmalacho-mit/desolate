@@ -320,6 +320,7 @@ export const FEATURES: Feature[] = [
       "release/root/rootctl.ts",
       "release/root/ops.ts",
       "release/root/start.sh",
+      "release/root/kept.sh",
       "release/root/layout.ts",
       "release/shared/",
     ],

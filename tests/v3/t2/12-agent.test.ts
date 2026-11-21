@@ -144,4 +144,90 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     for (const name of ["add-a-shout-greeting", "add-a-shout-greeting-2"])
       stack.desolate("agent", "stop", `dev/${name}`);
   });
+
+  it("the issues recipe reads every labelled issue, and stops an agent only for an issue GitHub says is closed", async () => {
+    // GitHub, through a stand-in for the person's gh (tests/v3/forge/gh.sh): 120 labelled open
+    // issues, newest first, so #20 is the 101st; #130 open without the label; #150 closed.
+    const bin = path.join(stack.work, "gh-bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.symlinkSync(path.join(REPO_ROOT, "tests", "v3", "forge", "gh.sh"), path.join(bin, "gh"));
+    const env = { ...stack.env, PATH: `${bin}:${stack.env.PATH}` };
+    const recipe = (more: NodeJS.ProcessEnv = {}) => {
+      const ran = spawnSync(
+        path.join(REPO_ROOT, "release", "recipes", "issues.sh"),
+        ["--repo", "acme/widgets", "--domain", "dev", "--max", "1", "--", "true"],
+        { env: { ...env, ...more }, encoding: "utf8" },
+      );
+      return { code: ran.status ?? 1, stdout: ran.stdout, stderr: ran.stderr };
+    };
+    // Control: the list as the recipe read it before (its first 100) does not have #20.
+    const before = spawnSync(
+      "gh",
+      [
+        ...["issue", "list", "--repo", "acme/widgets", "--label", "desolate:run", "--state"],
+        ...["open", "--limit", "100", "--json", "number", "--jq", ".[].number"],
+      ],
+      { env, encoding: "utf8" },
+    );
+    assert.equal(before.status, 0, before.stderr);
+    assert.equal(before.stdout.split("\n").filter(Boolean).length, 100);
+    assert.ok(!before.stdout.split("\n").includes("20"), "control: #20 is past the first 100");
+    // An agent at work on each of the three, as the recipe would have started them.
+    const running = () =>
+      (
+        JSON.parse(stack.desolate("agent", "list", "dev", "--json").stdout || "[]") as {
+          workspace: string;
+          state: string;
+        }[]
+      )
+        .filter((a) => a.state === "running" && a.workspace.startsWith("dev/issue-"))
+        .map((a) => a.workspace)
+        .sort();
+    for (const n of ["20", "130", "150"]) {
+      const up = stack.quiet("up", "dev", "--name", `issue-${n}`, "--branch", `issue/${n}`);
+      assert.equal(up.code, 0, up.stderr);
+      const started = stack.desolate(
+        ...["agent", "start", `dev/issue-${n}`, "--name", "agent", "--"],
+        ...["bash", "-c", "while sleep 1; do :; done"],
+      );
+      assert.equal(started.code, 0, started.stderr);
+    }
+    for (let i = 0; i < 40 && running().length < 3; i++) await sleep(250);
+    assert.deepEqual(running(), ["dev/issue-130", "dev/issue-150", "dev/issue-20"]);
+
+    // GitHub down: nothing is done, and the pass says why.
+    const down = recipe({ GH_FAILS: "1" });
+    assert.equal(down.code, 1);
+    assert.match(
+      down.stderr,
+      /the issues of acme\/widgets labelled desolate:run could not be listed: nothing was done this pass/,
+    );
+    assert.deepEqual(running(), ["dev/issue-130", "dev/issue-150", "dev/issue-20"]);
+
+    const pass = recipe();
+    assert.equal(pass.code, 0, pass.stderr);
+    assert.doesNotMatch(pass.stdout, /#20\b/, "the 101st is read, and is at work: nothing to say");
+    assert.match(
+      pass.stdout,
+      /^#130 is open, without the label desolate:run: its agent is left running \(to stop it: desolate agent stop dev\/issue-130 --name agent\)$/m,
+    );
+    assert.match(
+      pass.stdout,
+      /^#150 is closed: stopping its agent \(the workspace stays: desolate rm dev\/issue-150\)$/m,
+    );
+    // The rest wait, said once: 119 (120 labelled issues, the pull request left out, #20 at work).
+    assert.match(
+      pass.stdout,
+      /^--max 1 are working: 119 wait for the next pass \(#120 #119 .* #21 #19 .* #1\)$/m,
+    );
+    assert.doesNotMatch(pass.stdout, /#121/, "a pull request is not an issue");
+    for (let i = 0; i < 40 && running().length > 2; i++) await sleep(250);
+    assert.deepEqual(
+      running(),
+      ["dev/issue-130", "dev/issue-20"],
+      "only the closed one's agent stopped",
+    );
+    for (const n of ["20", "130"])
+      stack.desolate("agent", "stop", `dev/issue-${n}`, "--name", "agent");
+  });
 });
