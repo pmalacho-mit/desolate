@@ -301,6 +301,19 @@ work with no credential, private repositories included. Only the `.git` spelling
   domain's own secrets: image pulls and `apt`, `npm` or `pip` in a build need nothing of
   desolate's. Only a secret's host is answered by the domain's secrets proxy, with a
   certificate of the domain's own CA, so that it can put the secret's value in.
+- **Bodies through a secret's host.** The secrets proxy holds a request or response whole
+  up to 256 MiB (`DESOLATE_SECRETS_HELD_MIB`; a domain its own: `desolate domain <d> net
+  hold 512m`, at most 1 GiB). That is where a secret's value is put into a body. Past it, or
+  of no fixed length, a body streams at any size: a response with each value taken out as
+  it passes (a compressed one arrives decompressed, with no content-length), a request
+  watched for names. A request body past the bound that names a secret is refused, its name
+  masked and its response withheld, and `net log` says why.
+- **What it reached, and what to allow.** `desolate net log [<domain>] [--last <n>]` shows the
+  last hundred decisions unless `--last` says, and how many are kept;
+  `desolate domain <d> net recommend` counts every host the log keeps, shows a hundred, and
+  prints a `net allow` for exactly the ones it shows, saying first when that is not all of
+  them (`--all` lists every one, `--json` is for a program). Each domain's log keeps about
+  1/256 of the root VM's disk (`DESOLATE_PROXY_AUDIT_MIB`), the oldest let go first.
 - **That CA is trusted in the VM and in the devcontainer** (the VM's bundle, and
   `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `REQUESTS_CA_BUNDLE`, `CURL_CA_BUNDLE` and
   `GIT_SSL_CAINFO` pointed at it), **not in a container building an image.** So a build step
