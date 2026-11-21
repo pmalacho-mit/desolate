@@ -361,6 +361,18 @@ const answer = (id: string, value: Record<string, unknown>) => {
 const note = (id: string, line: string) =>
   fs.appendFileSync(path.join(paths.gitAnswers, named(id).notes), `${line}\n`, { mode: 0o644 });
 
+/** Remove a name the git VM left in the out-box: a file or a link, never followed, never a
+ *  directory (which the git VM can make in place of any file). Never throws: whether the
+ *  name is gone now. */
+const drop = (file: string) => {
+  try {
+    fs.unlinkSync(file);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+};
+
 /** A file the git VM left, opened as copy.ts opens one (no link followed, no writer waited
  *  for) and held to `most` bytes: the open file, or the sentence that refuses it, which names
  *  the bound and the size when that is why. `what`: the file, as the person knows it;
@@ -398,6 +410,25 @@ const take = async (
   log: (line: string) => void,
   announce: (fields: Record<string, unknown>) => void = () => {},
 ) => {
+  try {
+    return await takeOne(id, log, announce);
+  } finally {
+    // Whatever it was answered (or withdrawn), what it left is the host's to remove: every
+    // name of its id's (flat names; a directory among them is left, and is the git VM's).
+    let left: string[] = [];
+    try {
+      left = fs.readdirSync(paths.gitOut);
+    } catch {
+      /* no out-box */
+    }
+    for (const name of left) if (name.startsWith(`${id}.`)) drop(path.join(paths.gitOut, name));
+  }
+};
+const takeOne = async (
+  id: string,
+  log: (line: string) => void,
+  announce: (fields: Record<string, unknown>) => void,
+) => {
   const out = paths.gitOut;
   const names = named(id);
   const gone = () =>
@@ -406,7 +437,7 @@ const take = async (
   // (Withdrawn before it was taken: nothing was asked.)
   if (!fs.lstatSync(file, { throwIfNoEntry: false })) return;
   const opened = within(file, REQUEST_BYTES, "the git VM's request", "the host takes of one");
-  fs.rmSync(file, { force: true });
+  drop(file);
   if ("refused" in opened)
     return answer(id, { pushed: false, fetched: false, error: opened.refused });
   let asked: {
@@ -531,7 +562,7 @@ const take = async (
       id,
       domain
         ? `desolate: handed to the root, for ${domain}: its workspaces see it as root/${String(asked.branch)} within seconds.`
-        : "desolate: handed to the root. Approve it beside this terminal (in the browser tab), or on the approval page (desolate approve --web).",
+        : "desolate: handed to the root. Approve it beside this terminal (in the browser tab), or on the approval page (desolate approve --web). From here Ctrl-C does not withdraw it: decline it there.",
     );
     note(id, `  ${repoId(repo)}  ${String(asked.branch)}  ${String(asked.commit)}`);
     const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>(
@@ -551,10 +582,9 @@ const take = async (
   } catch (error) {
     answer(id, { pushed: false, error: (error as Error).message });
   } finally {
+    // The host's own copies (its directory): what the git VM left goes in take's finally.
     fs.rmSync(bundleTo, { force: true });
     fs.rmSync(lfsTo, { recursive: true, force: true });
-    for (const leftover of [names.bundle, names.gone, ...lfs.map((oid) => names.lfs(String(oid)))])
-      fs.rmSync(path.join(out, leftover), { force: true });
   }
 };
 
@@ -852,8 +882,19 @@ export const watchGitOut = (
   for (const dir of [paths.gitOut, paths.gitAnswers])
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   let busy = false;
+  /** Requests whose file could not be removed (the git VM made a directory of that name):
+   *  answered once, and not taken again by this daemon. */
+  const stuck = new Set<string>();
   const scan = () => {
     if (busy) return;
+    // Nothing the git VM leaves may stop the daemon (every page it serves would go with it).
+    try {
+      look();
+    } catch (error) {
+      log(`git VM: the out-box could not be read: ${(error as Error).message}`);
+    }
+  };
+  const look = () => {
     let names: string[] = [];
     try {
       names = fs.readdirSync(paths.gitOut);
@@ -869,14 +910,19 @@ export const watchGitOut = (
     } catch {
       /* nothing there */
     }
-    // A withdrawal of a request that was never taken (or was answered as it went): nobody's.
-    for (const file of names)
-      if (file.endsWith(".gone") && !names.includes(named(file.slice(0, -5)).request))
-        fs.rmSync(path.join(paths.gitOut, file), { force: true });
+    // A name that is none of a request's is nobody's; nor is a withdrawal of a request that
+    // was never taken (or was answered as it went).
+    const there = new Set(names);
+    for (const file of names) {
+      const dot = file.indexOf(".");
+      const of = dot < 0 ? file : file.slice(0, dot);
+      if (!isId(of) || (file === named(of).gone && !there.has(named(of).request)))
+        drop(path.join(paths.gitOut, file));
+    }
     const id = names
       .filter((file) => file.endsWith(".json"))
       .map((file) => file.slice(0, -5))
-      .find(isId);
+      .find((of) => isId(of) && !stuck.has(of));
     if (!id) return;
     busy = true;
     void take(id, log, announce)
@@ -889,9 +935,14 @@ export const watchGitOut = (
         }
       })
       .finally(() => {
+        if (fs.lstatSync(path.join(paths.gitOut, named(id).request), { throwIfNoEntry: false })) {
+          stuck.add(id);
+          log(`git VM: ${named(id).request} in the out-box is not a file: it is not taken again`);
+        }
         busy = false;
-        // One that landed while this was taken: its event came and went.
-        scan();
+        // One that landed while this was taken: its event came and went. (On the next turn:
+        // never in the same one, so no request answered at once can keep the daemon here.)
+        setImmediate(scan);
       });
   };
   // The share's files are the Mac's, so a request the git VM writes is a file event here:

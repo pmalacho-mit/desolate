@@ -118,8 +118,7 @@ export const requester = (at: Boxes = GIT_VM_BOXES, pace: typeof PACE = PACE) =>
   /** The request the host may have taken: it is told when its asker goes. */
   let asked: string | null = null;
   const withdraw = () => {
-    for (const name of mine) fs.rmSync(path.join(at.out, name), { force: true });
-    mine.clear();
+    // The host is told first, so it stops before it finds a file of this request missing.
     if (asked !== null) {
       try {
         fs.writeFileSync(path.join(at.out, named(asked).gone), "");
@@ -128,6 +127,8 @@ export const requester = (at: Boxes = GIT_VM_BOXES, pace: typeof PACE = PACE) =>
       }
       asked = null;
     }
+    for (const name of mine) fs.rmSync(path.join(at.out, name), { force: true });
+    mine.clear();
   };
   const stopped = (signal: NodeJS.Signals, code: number) =>
     process.once(signal, () => {

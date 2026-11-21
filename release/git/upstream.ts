@@ -107,8 +107,12 @@ export const lineByLine = (write: (line: string) => void) => {
   return {
     add: (chunk: string) => {
       held += chunk;
+      const parts = (line: string) => {
+        for (let at = 0; at < line.length || at === 0; at += SAFE_MOST)
+          write(printable(line.slice(at, at + SAFE_MOST)));
+      };
       for (let end = held.indexOf("\n"); end >= 0; end = held.indexOf("\n")) {
-        write(printable(held.slice(0, end).replace(/\r$/, "")));
+        parts(held.slice(0, end).replace(/\r$/, ""));
         held = held.slice(end + 1);
       }
       for (; held.length >= SAFE_MOST; held = held.slice(SAFE_MOST))
@@ -129,7 +133,11 @@ declare namespace lineByLine {
     "=",
     ["one", "two", "three"]
   >;
-  export type Long = Expect<Invoke<typeof lengthsOf, [text: "x", times: 4001]>, "=", [4000, 1]>;
+  export type Long = [
+    Expect<Invoke<typeof lengthsOf, [text: "x", times: 4001]>, "=", [4000, 1]>,
+    /** ended in the same chunk it began in: in parts as well, none of it cut */
+    Expect<Invoke<typeof lengthsOf, [text: "x", times: 4001, ended: true]>, "=", [4000, 1]>,
+  ];
 }
 
 const DIR = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;

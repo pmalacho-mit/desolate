@@ -301,16 +301,21 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const told = await stranger.load(fromElsewhere, { until: shown, ms: 60_000 });
     assert.doesNotMatch(told.stdout, /refused/, told.stdout.slice(0, 300));
     assert.match(told.stdout, /desolate ui --open/, told.stdout.slice(-600));
-    // The person's browser, which opened that address once: the button opens a shell.
+    // The person's browser, which opened that address once: a shell opens. Then the button,
+    // in the same browser, after that tab went: the shell it left is still open, and offered.
     const person = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-git-")));
     after(() => person.close());
     const address = /(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!;
     await person.load(address, { until: /desolate's git VM/, ms: 60_000 });
     const opened = await person.load(fromElsewhere, {
-      until: /desolate's git VM|desolate ui --open|refused/,
+      until: /Back to the shell in|desolate's git VM|desolate ui --open|refused/,
       ms: 60_000,
     });
-    assert.match(opened.stdout, /desolate's git VM/, opened.stdout.slice(-600));
+    assert.match(
+      opened.stdout,
+      /Back to the shell in \/git\/acme\/widgets[\s\S]*New shell/,
+      opened.stdout.slice(-600),
+    );
   });
 
   it("a link in the out-box is not followed: the host neither reads, moves nor writes what it names", async () => {

@@ -58,5 +58,5 @@ export const linesOf = (chunks: string[]) => {
   return lines;
 };
 /** How long each line is that lineByLine gives for `text` printed `times` over, unended. */
-export const lengthsOf = (text: string, times: number) =>
-  linesOf([text.repeat(times)]).map((line) => line.length);
+export const lengthsOf = (text: string, times: number, ended = false) =>
+  linesOf([`${text.repeat(times)}${ended ? "\n" : ""}`]).map((line) => line.length);

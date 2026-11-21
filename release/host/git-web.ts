@@ -222,8 +222,10 @@ export const handler = (
     const out = (raw: Buffer) => {
       const chunk = Buffer.from(filter(raw));
       if (chunk.length === 0) return;
-      s.kept.push(chunk);
-      s.keptBytes += chunk.length;
+      // (One chunk larger than all that is kept: its end, which is what a tab shows last.)
+      const keep = chunk.length > KEPT_BYTES ? chunk.subarray(chunk.length - KEPT_BYTES) : chunk;
+      s.kept.push(keep);
+      s.keptBytes += keep.length;
       while (s.keptBytes > KEPT_BYTES && s.kept.length > 1) s.keptBytes -= s.kept.shift()!.length;
       for (const res of s.streams) res.write(`data: ${chunk.toString("base64")}\n\n`);
     };
