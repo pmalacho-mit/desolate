@@ -2,12 +2,47 @@
 // service uses it to refuse anything else at once and to show the command; the host's
 // daemon uses it AGAIN, on the request it collects, to build the command it runs. The host
 // never runs a command line the root VM wrote.
-import { isSlug, parseRepo } from "./names.ts";
-import { parseSigned } from "./spawn.ts";
+import { over } from "./limits.ts";
+import { characters, isSlug, parseRepo } from "./names.ts";
+import { LIMIT as SPAWN, parseSigned } from "./spawn.ts";
+import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { reposOf, textOf } from "../.harness/shared-actions.ts";
 
 type Args = Record<string, string | undefined>;
+
+/** What the dashboard's Create domain takes (R7: the root's ordinary user, which a domain's
+ *  data passes through, writes the request; the host runs it). `repos`: the repositories a
+ *  domain starts with, one click's worth (more are added with `desolate domain <d> add`).
+ *  `title`: a label of plain printable ASCII, never an option, as long as the page's field. */
+export const CREATE = { repos: 20, title: 80 } as const;
+const TITLE = new RegExp(`^[\\x20-\\x7e]{1,${CREATE.title}}$`);
+/** How long one argument of a host action may be, in characters (code points). R7: the
+ *  root's ordinary user writes them, and the host parses them; one that is not text, or is
+ *  longer, refuses the action (never left out of it). A spawn's command is JSON, which
+ *  shared/spawn.ts's LIMIT.json bounds before it is signed, so every command a workspace
+ *  may sign is carried. Its checkouts are 16 of `<owner/repo>=worktree:<branch>` (ASCII, at most 411
+ *  each), as JSON. Create's repos are 20 names of at most 201, comma-separated. Every other
+ *  argument is a name, a size or a title. */
+export const ARGUMENT = {
+  command: SPAWN.json,
+  checkouts: 8_000,
+  repos: CREATE.repos * 202,
+  other: 200,
+} as const;
+const argumentMost = (key: string) =>
+  key === "command"
+    ? ARGUMENT.command
+    : key === "checkouts"
+      ? ARGUMENT.checkouts
+      : key === "repos"
+        ? ARGUMENT.repos
+        : ARGUMENT.other;
+/** Within its bound: `length` (UTF-16 units) is never fewer than the characters, so only a
+ *  long one is counted. */
+const fits = (key: string, value: string) =>
+  value.length <= argumentMost(key) || characters(value) <= argumentMost(key);
 export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
   "workspace.start": (a) =>
     isSlug(a.domain) && isSlug(a.workspace) ? ["start", `${a.domain}/${a.workspace}`] : null,
@@ -46,14 +81,15 @@ export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
   // `repos`: the repositories it starts with, comma-separated (each must be one).
   "domain.create": (a) => {
     const repos = a.repos ? a.repos.split(",") : [];
-    return isSlug(a.domain) && repos.length <= 20 && repos.every((r) => parseRepo(r))
+    // A title that is not one is refused, not left out (actionRefusal says why): a domain
+    // made without the title the person typed is not what they asked for.
+    if (a.title && (!TITLE.test(a.title) || a.title.startsWith("-"))) return null;
+    return isSlug(a.domain) && repos.length <= CREATE.repos && repos.every((r) => parseRepo(r))
       ? [
           "domain",
           "create",
           a.domain,
-          ...(a.title && /^[\x20-\x7e]{1,80}$/.test(a.title) && !a.title.startsWith("-")
-            ? ["--title", a.title]
-            : []),
+          ...(a.title ? ["--title", a.title] : []),
           ...repos.flatMap((r) => ["--repo", r]),
         ]
       : null;
@@ -123,15 +159,86 @@ export const hostArgv = (kind: unknown, args: unknown): string[] | null => {
   )
     return null;
   const clean: Args = {};
-  // (A spawn's command and checkouts are the long arguments: JSON, bounded by shared/spawn.ts.)
-  for (const [key, value] of Object.entries(args as Record<string, unknown>))
-    if (
-      typeof value === "string" &&
-      value.length <= (key === "command" ? 200_000 : key === "checkouts" ? 8_000 : 200)
-    )
-      clean[key] = value;
+  // (Absent is absent: a key whose value is undefined was not given.)
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !fits(key, value)) return null;
+    clean[key] = value;
+  }
   return HOST_ACTIONS[kind]!(clean);
 };
+
+/** Why hostArgv refuses this action, as a sentence (R3: a bound that was hit is named, with
+ *  its limit and the value), or null when it takes it. For whoever shows the refusal (the
+ *  root's state service, the host's daemon): the bounds by name, and otherwise that the
+ *  arguments are not ones the action takes. */
+export const actionRefusal = (kind: unknown, args: unknown): string | null => {
+  if (hostArgv(kind, args) !== null) return null;
+  if (typeof kind !== "string" || !Object.hasOwn(HOST_ACTIONS, kind))
+    return `'${printable(kind, 80)}' is not something the host does`;
+  if (typeof args !== "object" || args === null) return "it was asked with no arguments";
+  const given = args as Record<string, unknown>;
+  for (const [key, value] of Object.entries(given)) {
+    if (value === undefined) continue;
+    if (typeof value !== "string") return `its ${printable(key, 40)} is not text`;
+    if (!fits(key, value))
+      return over(`its ${printable(key, 40)}`, argumentMost(key), characters(value), "characters");
+  }
+  if (kind === "domain.create") {
+    const title = typeof given.title === "string" ? given.title : "";
+    if (title && (!TITLE.test(title) || title.startsWith("-")))
+      return characters(title) > CREATE.title
+        ? over("the title", CREATE.title, characters(title), "characters")
+        : "a title is plain letters, digits, spaces and punctuation (ASCII), and does not start with -";
+    const repos = typeof given.repos === "string" && given.repos ? given.repos.split(",") : [];
+    if (repos.length > CREATE.repos)
+      return over("the new domain", CREATE.repos, repos.length, "repositories", "one Create takes");
+  }
+  return `those are not arguments '${kind}' takes`;
+};
+
+declare namespace actionRefusal {
+  /** the bound that was hit, by name and number; and what the host does not do at all */
+  export type Says = Table<
+    typeof actionRefusal,
+    [
+      [
+        args: [kind: "domain.create", args: { domain: "dev"; title: "widgets work" }],
+        expected: null,
+      ],
+      [
+        args: [
+          kind: "domain.create",
+          args: { domain: "dev"; title: Invoke<typeof textOf, [length: 81]> },
+        ],
+        expected: "the title is 81 characters, over the 80 allowed",
+      ],
+      [
+        args: [kind: "domain.create", args: { domain: "dev"; title: "Caf\u00e9" }],
+        expected: "a title is plain letters, digits, spaces and punctuation (ASCII), and does not start with -",
+      ],
+      [
+        args: [
+          kind: "domain.create",
+          args: { domain: "dev"; repos: Invoke<typeof reposOf, [count: 21]> },
+        ],
+        expected: "the new domain is 21 repositories, over the 20 one Create takes",
+      ],
+      [
+        args: [kind: "domain.create", args: { domain: Invoke<typeof textOf, [length: 201]> }],
+        expected: "its domain is 201 characters, over the 200 allowed",
+      ],
+      [
+        args: [kind: "workspace.rm", args: {}],
+        expected: "'workspace.rm' is not something the host does",
+      ],
+      [
+        args: [kind: "workspace.start", args: { domain: "dev"; workspace: "../x" }],
+        expected: "those are not arguments 'workspace.start' takes",
+      ],
+    ]
+  >;
+}
 
 declare namespace hostArgv {
   /** each kind the dashboard may ask for becomes one fixed `desolate` command line */
@@ -226,17 +333,33 @@ declare namespace hostArgv {
       ],
     ]
   >;
-  /** a title is a label: one that looks like an option or holds a control is left out, and
-   *  the domain is made without it */
+  /** a title is a label: one that looks like an option, holds a control or is longer than
+   *  the page's field is refused (actionRefusal says why), never left out of a domain made
+   *  without it (until 2026-11-21 it was); none, or an empty one, is no title */
   export type Title = Table<
     typeof hostArgv,
     [
-      [
-        args: [kind: "domain.create", args: { domain: "dev"; title: "--help" }],
-        expected: ["domain", "create", "dev"],
-      ],
+      [args: [kind: "domain.create", args: { domain: "dev"; title: "--help" }], expected: null],
       [
         args: [kind: "domain.create", args: { domain: "dev"; title: "a\u001b[2Jb" }],
+        expected: null,
+      ],
+      [
+        args: [
+          kind: "domain.create",
+          args: { domain: "dev"; title: Invoke<typeof textOf, [length: 81]> },
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          kind: "domain.create",
+          args: { domain: "dev"; title: Invoke<typeof textOf, [length: 80]> },
+        ],
+        expected: ["domain", "create", "dev", "--title", Invoke<typeof textOf, [length: 80]>],
+      ],
+      [
+        args: [kind: "domain.create", args: { domain: "dev"; title: "" }],
         expected: ["domain", "create", "dev"],
       ],
     ]

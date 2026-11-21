@@ -91,6 +91,143 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     );
   });
 
+  const holderIn = (...args: string[]) =>
+    stack.quiet(
+      "exec",
+      "dev/w1",
+      "--vm",
+      "--",
+      "python3",
+      "-I",
+      "/desolate/release/workspace/agent-holder.py",
+      ...args,
+    );
+  const stateIs = async (name: string, state: string) => {
+    let listed = "";
+    for (let i = 0; i < 80 && !new RegExp(`${name} {2}${state}`).test(listed); i++) {
+      listed = stack.quiet("agent", "list", "dev/w1").stdout;
+      if (!new RegExp(`${name} {2}${state}`).test(listed)) await sleep(250);
+    }
+    assert.match(listed, new RegExp(`dev/w1 {2}${name} {2}${state}`), listed);
+  };
+
+  it("an agent's log keeps the newest past its most, says so, is read by page or from the start, and outlives the agent", async () => {
+    // A most of 1 MiB (the setting agent.logMiB; its default is a twentieth of the VM's disk).
+    stack.env.DESOLATE_AGENT_LOG_MIB = "1";
+    const started = stack.desolate(
+      "agent",
+      "start",
+      "dev/w1",
+      "--name",
+      "loud",
+      "--",
+      "seq",
+      "1",
+      "400000",
+    );
+    delete stack.env.DESOLATE_AGENT_LOG_MIB;
+    assert.equal(started.code, 0, started.stderr);
+    await stateIs("loud", "exited");
+    const all = stack.quiet("agent", "log", "dev/w1", "--name", "loud", "--all");
+    assert.equal(all.code, 0, all.stderr);
+    const head =
+      /^\[desolate: ([\d.]+) MiB of older output was dropped here: the log keeps the newest 1\.0 MiB \(the setting agent\.logMiB\)\]\r\n(\d+)\r\n/.exec(
+        all.stdout,
+      );
+    assert.ok(head, all.stdout.slice(0, 300));
+    assert.ok(Number(head[2]) > 100000, "the oldest output went, from a whole line on");
+    assert.match(
+      all.stdout,
+      /\r\n400000\r\n\r\n\[desolate: the agent ended, exit 0\]\r\n$/,
+      "the newest is kept",
+    );
+    // A page from the end, and what comes before it said, on stderr: stdout is the log alone.
+    const page = stack.desolate("agent", "log", "dev/w1", "--name", "loud", "--lines", "3");
+    assert.equal(page.stdout, "400000\r\n\r\n[desolate: the agent ended, exit 0]\r\n");
+    assert.match(
+      page.stderr,
+      /desolate: [\d.]+ (KiB|MiB) of earlier output is not shown \(all of it: desolate agent log dev\/w1 --name loud --all\)/,
+    );
+    // By time: all of it came in the last hour.
+    const since = stack.quiet("agent", "log", "dev/w1", "--name", "loud", "--since", "1h");
+    assert.equal(since.stdout, all.stdout);
+    assert.equal(
+      stack.quiet("agent", "log", "dev/w1", "--name", "loud", "--since", "soon").code,
+      64,
+    );
+    // Ended: nothing holds it any more (no clock keeps it attachable), and it is still read.
+    assert.equal(
+      stack.quiet("exec", "dev/w1", "--vm", "--", "pgrep", "-f", "agent-holder.py start loud").code,
+      1,
+      "its holder ended with it (pgrep: nothing matched)",
+    );
+    const replayed = holderIn("attach", "loud");
+    assert.match(replayed.stdout, /^\[desolate: earlier output is not replayed here/);
+    assert.match(replayed.stdout, /400000\r\n[\s\S]*\[desolate: this agent is not running\]/);
+    // (the control) an agent that printed less than its most: all of it, nothing said dropped.
+    const echo = stack.quiet("agent", "log", "dev/w1", "--name", "echo");
+    assert.match(echo.stdout, /^in \/workspaces\//);
+    assert.doesNotMatch(echo.stdout + echo.stderr, /dropped|not shown/);
+  });
+
+  it("stop is Ctrl-C, then asks the person before anything is killed; --kill for scripts", async () => {
+    const stubborn = (name: string) => {
+      const started = stack.desolate(
+        "agent",
+        "start",
+        "dev/w1",
+        "--name",
+        name,
+        "--",
+        "bash",
+        "-c",
+        'trap "echo not yet" INT; echo up; while :; do sleep 0.1; done',
+      );
+      assert.equal(started.code, 0, started.stderr);
+    };
+    stubborn("stubborn");
+    await stateIs("stubborn", "running");
+    // A script: asked, and told it has not ended, and how to end it.
+    const asked = stack.desolate("agent", "stop", "dev/w1", "--name", "stubborn");
+    assert.equal(asked.code, 0, asked.stderr);
+    assert.match(
+      asked.stdout,
+      /asked agent stubborn in dev\/w1 to stop \(Ctrl-C\); it has not ended yet\. To end it at once: desolate agent stop dev\/w1 --name stubborn --kill/,
+    );
+    await sleep(4000); // past the 3 s at which the holder once killed it, unasked
+    await stateIs("stubborn", "running");
+    // A person who says no: nothing is killed.
+    const no = stack.person("Kill it now?", "n", "agent", "stop", "dev/w1", "--name", "stubborn");
+    assert.equal(no.code, 0, no.stdout);
+    assert.match(no.stdout, /waiting for it to end/);
+    assert.match(no.stdout, /not killed: it may still be ending/);
+    await stateIs("stubborn", "running");
+    // A person who says yes.
+    const yes = stack.person("Kill it now?", "y", "agent", "stop", "dev/w1", "--name", "stubborn");
+    assert.equal(yes.code, 0, yes.stdout);
+    assert.match(yes.stdout, /agent stubborn in dev\/w1 has ended \(exit -9\)/);
+    await stateIs("stubborn", "exited");
+    // A script that wants it gone.
+    stubborn("stubborn-2");
+    await stateIs("stubborn-2", "running");
+    const killed = stack.desolate("agent", "stop", "dev/w1", "--name", "stubborn-2", "--kill");
+    assert.equal(killed.code, 0, killed.stderr);
+    assert.match(killed.stdout, /agent stubborn-2 in dev\/w1 has ended \(exit -9\)/);
+    await stateIs("stubborn-2", "exited");
+    // (the control) a program that ends on Ctrl-C ends on a plain stop, killed by nothing.
+    assert.equal(
+      stack.desolate("agent", "start", "dev/w1", "--name", "meek", "--", "sleep", "600").code,
+      0,
+    );
+    await stateIs("meek", "running");
+    assert.equal(stack.desolate("agent", "stop", "dev/w1", "--name", "meek").code, 0);
+    await stateIs("meek", "exited");
+    assert.doesNotMatch(
+      stack.quiet("agent", "list", "dev/w1").stdout,
+      /meek {2}exited \(exit -9\)/,
+    );
+  });
+
   it("the agent recipe: a sentence becomes a workspace on its own branch, a program at work in it, and an offer", async () => {
     // A recipe is a script of ordinary desolate commands (release/recipes/): run here as a
     // person runs it, with this stack's environment.
@@ -143,5 +280,91 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     assert.match(old.stderr, /'desolate task' is a recipe now/);
     for (const name of ["add-a-shout-greeting", "add-a-shout-greeting-2"])
       stack.desolate("agent", "stop", `dev/${name}`);
+  });
+
+  it("the issues recipe reads every labelled issue, and stops an agent only for an issue GitHub says is closed", async () => {
+    // GitHub, through a stand-in for the person's gh (tests/v3/forge/gh.sh): 120 labelled open
+    // issues, newest first, so #20 is the 101st; #130 open without the label; #150 closed.
+    const bin = path.join(stack.work, "gh-bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.symlinkSync(path.join(REPO_ROOT, "tests", "v3", "forge", "gh.sh"), path.join(bin, "gh"));
+    const env = { ...stack.env, PATH: `${bin}:${stack.env.PATH}` };
+    const recipe = (more: NodeJS.ProcessEnv = {}) => {
+      const ran = spawnSync(
+        path.join(REPO_ROOT, "release", "recipes", "issues.sh"),
+        ["--repo", "acme/widgets", "--domain", "dev", "--max", "1", "--", "true"],
+        { env: { ...env, ...more }, encoding: "utf8" },
+      );
+      return { code: ran.status ?? 1, stdout: ran.stdout, stderr: ran.stderr };
+    };
+    // Control: the list as the recipe read it before (its first 100) does not have #20.
+    const before = spawnSync(
+      "gh",
+      [
+        ...["issue", "list", "--repo", "acme/widgets", "--label", "desolate:run", "--state"],
+        ...["open", "--limit", "100", "--json", "number", "--jq", ".[].number"],
+      ],
+      { env, encoding: "utf8" },
+    );
+    assert.equal(before.status, 0, before.stderr);
+    assert.equal(before.stdout.split("\n").filter(Boolean).length, 100);
+    assert.ok(!before.stdout.split("\n").includes("20"), "control: #20 is past the first 100");
+    // An agent at work on each of the three, as the recipe would have started them.
+    const running = () =>
+      (
+        JSON.parse(stack.desolate("agent", "list", "dev", "--json").stdout || "[]") as {
+          workspace: string;
+          state: string;
+        }[]
+      )
+        .filter((a) => a.state === "running" && a.workspace.startsWith("dev/issue-"))
+        .map((a) => a.workspace)
+        .sort();
+    for (const n of ["20", "130", "150"]) {
+      const up = stack.quiet("up", "dev", "--name", `issue-${n}`, "--branch", `issue/${n}`);
+      assert.equal(up.code, 0, up.stderr);
+      const started = stack.desolate(
+        ...["agent", "start", `dev/issue-${n}`, "--name", "agent", "--"],
+        ...["bash", "-c", "while sleep 1; do :; done"],
+      );
+      assert.equal(started.code, 0, started.stderr);
+    }
+    for (let i = 0; i < 40 && running().length < 3; i++) await sleep(250);
+    assert.deepEqual(running(), ["dev/issue-130", "dev/issue-150", "dev/issue-20"]);
+
+    // GitHub down: nothing is done, and the pass says why.
+    const down = recipe({ GH_FAILS: "1" });
+    assert.equal(down.code, 1);
+    assert.match(
+      down.stderr,
+      /the issues of acme\/widgets labelled desolate:run could not be listed: nothing was done this pass/,
+    );
+    assert.deepEqual(running(), ["dev/issue-130", "dev/issue-150", "dev/issue-20"]);
+
+    const pass = recipe();
+    assert.equal(pass.code, 0, pass.stderr);
+    assert.doesNotMatch(pass.stdout, /#20\b/, "the 101st is read, and is at work: nothing to say");
+    assert.match(
+      pass.stdout,
+      /^#130 is open, without the label desolate:run: its agent is left running \(to stop it: desolate agent stop dev\/issue-130 --name agent\)$/m,
+    );
+    assert.match(
+      pass.stdout,
+      /^#150 is closed: stopping its agent \(the workspace stays: desolate rm dev\/issue-150\)$/m,
+    );
+    // The rest wait, said once: 119 (120 labelled issues, the pull request left out, #20 at work).
+    assert.match(
+      pass.stdout,
+      /^--max 1 are working: 119 wait for the next pass \(#120 #119 .* #21 #19 .* #1\)$/m,
+    );
+    assert.doesNotMatch(pass.stdout, /#121/, "a pull request is not an issue");
+    for (let i = 0; i < 40 && running().length > 2; i++) await sleep(250);
+    assert.deepEqual(
+      running(),
+      ["dev/issue-130", "dev/issue-20"],
+      "only the closed one's agent stopped",
+    );
+    for (const n of ["20", "130"])
+      stack.desolate("agent", "stop", `dev/issue-${n}`, "--name", "agent");
   });
 });

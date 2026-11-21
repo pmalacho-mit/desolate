@@ -14,6 +14,7 @@
 //             control characters, no bidirectional overrides), not true.
 //
 // One JSON object per line: {"v":1,"at","type","source",...}.
+import { define, valueOf, whole } from "../shared/settings.ts";
 import { printable } from "../shared/text.ts";
 import { isBranch, isCommit, isSlug, parseRepo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -155,8 +156,21 @@ declare namespace pusherEvent {
   >;
 }
 
+/** How many of the last events the daemon holds for `desolate events --replay <n>`: a replay
+ *  of more gives what is held. They are held in the daemon's memory, a few hundred bytes
+ *  each; five hundred is a day of pushes, approvals and offers for one person, and a script
+ *  that restarts wants the last few. A setting for one that wants more. */
+export const EVENTS_KEPT = define({
+  name: "events.kept",
+  env: "DESOLATE_EVENTS_KEPT",
+  side: "host",
+  default: 500,
+  parse: whole(1, 100_000),
+  why: "How many of the last events the host daemon holds, for `desolate events --replay <n>` to repeat: a replay of more gives these.",
+});
+
 /** The daemon's hub: the last events, and whoever listens. */
-export const hub = (keep = 500) => {
+export const hub = (keep = valueOf(EVENTS_KEPT)) => {
   const recent: Event[] = [];
   const listeners = new Set<(line: string) => void>();
   return {

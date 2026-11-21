@@ -29,7 +29,7 @@ secrets live on the root VM's own disk, on purpose, so no share leads to them (s
   lima/                    the VMs themselves: their disks and settings        (no VM sees it)
   state/                   the Mac side's own facts and tokens                 (no VM sees it)
   approver/                the key that approves pushes                        (no VM sees it)
-  logs/                    the daemon's log                                    (no VM sees it)
+  logs/                    the daemon's log, and failures' whole texts         (no VM sees it)
   root-kept/               only between `destroy` and the next `bootstrap`     (no VM sees it)
 ```
 
@@ -144,6 +144,10 @@ Only the Mac sees these.
   which the root holds), and `kind`, how you approve (`terminal`, or `touchid` with the
   Mac's Secure Enclave). A push needs a signature with this key.
 - **`logs/daemon.log`**: the host daemon's log. A VM's own logs are in `lima/<vm>/`.
+- **`logs/failures/`**: when another layer fails (the root, `limactl`, a provisioning, `gh`)
+  and what it said is longer than an error shows (its last ten lines), the whole of it is
+  kept here, one file each, named by the time and what failed, and the error names the file.
+  The newest hundred are kept; `desolate doctor` names the last.
 - **`root-kept/`** exists only between `desolate destroy` and the next `bootstrap`: the root's
   keys, repository list, secrets and network rules, taken out of the root VM so a rebuild of
   it keeps them. `bootstrap` puts them back and deletes it.

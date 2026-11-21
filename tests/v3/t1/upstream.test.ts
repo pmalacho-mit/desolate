@@ -279,7 +279,7 @@ describe("T1 desolate upstream: what the split must be", () => {
     const checked = verify(p, app, splitOf(p));
     assert.deepEqual(checked.core, []);
     assert.match(checked.stat, /a\.txt \| 1 \+/);
-    assert.equal(checked.commits.length, 1);
+    assert.equal(checked.commits.total, 1);
   });
 
   it("a split whose tree is not the dependency's files is refused", () => {
@@ -385,6 +385,36 @@ describe("T1 the root's rule for a downstream/... push", () => {
     assert.match(
       (await downstreamRefusal(run(lib), lone, tips)) ?? "",
       /builds on nothing the remote has/,
+    );
+  });
+
+  it("searches every tip: a release past the first 200 branches is found (control: then not)", async () => {
+    const lib = path.join(work, "lib");
+    // 1,200 branches the proposal shares nothing with, in refname order before the release,
+    // as root/repos.ts gives them: until 2026-11-21 only the first 200 were searched.
+    const empty = g(lib, "mktree");
+    const others = Array.from({ length: 1200 }, (_, i) =>
+      g(lib, "commit-tree", empty, "-m", `unrelated ${i}`),
+    );
+    const fine = g(
+      lib,
+      "commit-tree",
+      g(lib, "rev-parse", `${release}^{tree}`),
+      "-p",
+      release,
+      "-m",
+      "same .github",
+    );
+    assert.equal(await downstreamRefusal(run(lib), fine, [...others, release]), null);
+    assert.match(
+      (await downstreamRefusal(run(lib), fine, others)) ?? "",
+      /builds on nothing the remote has/,
+      "the control: without the release among them, it builds on none",
+    );
+    assert.match(
+      (await downstreamRefusal(run(lib), fine, others.slice(0, 200))) ?? "",
+      /builds on nothing the remote has/,
+      "what the first 200 alone answered",
     );
   });
 });

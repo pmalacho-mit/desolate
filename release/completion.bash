@@ -10,8 +10,11 @@
 # Hardening kept from v2's completion: a name is offered only if it is a slug. A file name
 # is something a program can choose, and a completion that offers `$(...)`, an option-like
 # word or a control sequence would put it on the person's command line.
+# The rule is shared/names.ts's isSlug, clause for clause. Shell cannot import it, so T1
+# (tests/v3/t1/scripts.test.ts) reads this line and compares the two, name by name. The
+# letters are spelled out: in a UTF-8 locale, [a-z] matches é too (macOS's bash, measured).
 _desolate_home="${DESOLATE_HOME:-$HOME/.desolate}"
-_desolate_slug() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]]; }
+_desolate_slug() { [[ $1 =~ ^[0123456789abcdefghijklmnopqrstuvwxyz][-0123456789abcdefghijklmnopqrstuvwxyz]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
 _desolate_domains() {
     local dir name
     for dir in "$_desolate_home"/domains/*/; do
@@ -46,7 +49,7 @@ _desolate() {
     local i
     for ((i = 1; i < COMP_CWORD; i++)); do [ "${COMP_WORDS[i]}" = "--" ] && return 0; done
     if [ "$COMP_CWORD" -eq 1 ]; then
-        words="bootstrap doctor destroy down clone fetch repos keys domain up list status board start stop resize rm exec editor ui ports offers branches review push approve root net git events notify agent suede upstream completion help"
+        words="bootstrap doctor destroy down clone fetch repos keys domain up list status board start stop resize rm exec editor ui ports offers branches review push approve root net git events notify agent suede upstream settings completion help"
     else
         case "$verb" in
             domain)
@@ -72,6 +75,9 @@ _desolate() {
             approve) words="--selftest" ;;
             root) if [ "$COMP_CWORD" -eq 2 ]; then words="shell"; fi ;;
             net) if [ "$COMP_CWORD" -eq 2 ]; then words="log"; else words="$(_desolate_domains) --json"; fi ;;
+            # (A setting's name is not offered: the settings are known by loading desolate's
+            # code, which a completion must not do on every key press. `desolate settings` lists them.)
+            settings) if [ "$COMP_CWORD" -eq 2 ]; then words="set unset --json"; fi ;;
             destroy) words="--all" ;;
             doctor|repos|keys) words="--json" ;;
         esac

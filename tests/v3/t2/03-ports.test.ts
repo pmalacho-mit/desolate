@@ -17,6 +17,7 @@ type Ports = {
   workspace: string;
   forwarded: { port: number; url: string }[];
   reserved: { port: number; why: string }[];
+  notes: string[];
 }[];
 const ports = () => JSON.parse(stack.quiet("ports", "--json").stdout) as Ports;
 const vms = new Map<string, string>();
@@ -648,6 +649,42 @@ else {
       "and the dashboard",
     );
     assert.equal(stack.quiet("ui").code, 0);
+  });
+
+  it("past the host's 256 listeners of a workspace, the rest are not forwarded, and that is said", async () => {
+    stack.step("more listeners than are forwarded");
+    // 300 listeners in one workspace: the host forwards 256 of a workspace's at most (a VM
+    // may not have this Mac listen on every port), and says how many more it left out.
+    const many = stack.inVm(vmOf("web/one"), [
+      "bash",
+      "-c",
+      `setsid nohup node -e 'const net = require("node:net"); for (let p = 21000; p < 21300; p++) net.createServer((s) => s.end("many:" + p + "\\n")).listen(p, "0.0.0.0"); setInterval(() => {}, 1e6)' >/tmp/many.log 2>&1 </dev/null & echo $!`,
+    ]);
+    const pid = many.stdout.trim();
+    assert.match(pid, /^\d+$/, many.stderr);
+    const past = () =>
+      ports()
+        .find((w) => w.workspace === "web/one")
+        ?.notes.map((note) =>
+          /^(\d+) more listeners are not forwarded: past the first 256 of a workspace$/.exec(note),
+        )
+        .find(Boolean)?.[1];
+    assert.ok(await until(() => past() !== undefined, 20_000), JSON.stringify(ports()));
+    const one = ports().find((w) => w.workspace === "web/one")!;
+    // (What it took of the workspace's: not the rows that say a port below 1024 is left out,
+    // which the workspace's own report adds since limits 08.)
+    const forwarded = one.forwarded.length + one.reserved.filter((r) => r.port >= 1024).length;
+    assert.ok(forwarded <= 256, `at most 256 taken: ${forwarded}`);
+    assert.ok(Number(past()) >= 300 - 256, `the rest counted: ${past()}`);
+    assert.deepEqual(
+      ports().find((w) => w.workspace === "web/two")?.notes,
+      [],
+      "control: the other workspace left nothing out",
+    );
+    // Gone again: nothing is said, and the workspace's own server is still forwarded.
+    stack.inVm(vmOf("web/one"), ["kill", pid]);
+    assert.ok(await until(() => past() === undefined, 20_000), JSON.stringify(ports()));
+    assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/);
   });
 
   it("stopping a workspace takes its ports down", async () => {

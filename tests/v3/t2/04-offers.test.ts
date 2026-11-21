@@ -80,18 +80,98 @@ const forgeHasLfs = (repo: string, id: string) => {
   }
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/** What desolate's reviewer says a push sends, asked as the host asks it: as root. */
-const reviewerSays = (branch: string, commit: string, onto: string | null = null) =>
-  JSON.parse(
-    stack.inRoot(
-      ["node", "--disable-warning=ExperimentalWarning", "/desolate/release/root/review-ask.ts"],
-      { root: true, input: JSON.stringify({ repo: "acme/widgets", branch, commit, onto }) },
-    ).stdout,
-  ) as {
-    ok: boolean;
-    error?: string;
-    sends?: { pack: string; size: number; lfs: string[] };
+/** A raw `git push` in the root's terminal, left waiting for the person as it would be, in a
+ *  session of its own; `stop` ends its process group, as a closed terminal does (SIGTERM: a
+ *  job started in the background of a shell with no job control ignores SIGINT, so Ctrl-C's
+ *  signal would not reach it here). */
+const rawPushWaiting = async (spec: string, name: string) => {
+  const log = `/tmp/${name}.log`;
+  // The pid is written by the process that becomes git: `$!` here would be the subshell of
+  // `cd ... && ...`, not the session setsid makes, and its group is not the push's.
+  inRootClone(
+    `setsid nohup sh -c 'echo $$ >${log}.pid; exec git push origin ${spec}' >${log} 2>&1 </dev/null & sleep 0.2`,
+  );
+  const said = () => inRootClone(`cat ${log}`).stdout;
+  let waiting = false;
+  for (let i = 0; i < 80 && !waiting; i++) {
+    waiting = /waiting for it for as long as this push waits/.test(said());
+    if (!waiting) await sleep(250);
+  }
+  assert.ok(waiting, said());
+  const ps = () =>
+    inRootClone(
+      `echo pid $(cat ${log}.pid); ps -eo pid,pgid,sid,stat,args | grep -v ' ps -eo' | grep -E 'git|node' ; ls -l /var/lib/desolate/approvals/ 2>&1; cat /var/lib/desolate/approvals/*.json 2>&1 | cut -c1-80`,
+    );
+  return {
+    said,
+    stop: () => {
+      const killed = inRootClone(`kill -TERM -- -$(cat ${log}.pid) 2>&1; echo kill=$?`);
+      return `${killed.stdout}${killed.stderr}`;
+    },
+    ps: () => {
+      const seen = ps();
+      return `${seen.stdout}${seen.stderr}`;
+    },
   };
+};
+/** Waits until nothing is waiting for the person on the host (or a few seconds pass). */
+const nothingWaits = async () => {
+  for (let i = 0; i < 40; i++) {
+    if (/nothing is waiting for approval/.test(stack.quiet("approve").stdout)) return true;
+    await sleep(250);
+  }
+  return false;
+};
+/** What desolate's reviewer answers, asked as the host asks it (as root): its lines
+ *  (shared/review-account.ts), progress and then the one answer. */
+const askReviewer = (request: Record<string, unknown>) =>
+  stack
+    .inRoot(
+      ["node", "--disable-warning=ExperimentalWarning", "/desolate/release/root/review-ask.ts"],
+      { root: true, input: `${JSON.stringify(request)}\n` },
+    )
+    .stdout.split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+type Listed<T> = { items: T[]; total: number; from: number };
+type Said = {
+  ok: boolean;
+  error?: string;
+  key?: string;
+  warnings?: string[];
+  commits?: Listed<{ commit: string; subject: string; author: string }>;
+  files?: Listed<{ path: string }>;
+  between?: Listed<{ path: string }>;
+  sends?: { pack: string; size: number; lfs: string[] };
+  squash?: { commit: string; message: string; count: number; committer: string };
+  lines: Record<string, unknown>[];
+};
+/** What desolate's reviewer says a push sends: its account, or its error. */
+const reviewerSays = (branch: string, commit: string, onto: string | null = null): Said => {
+  const lines = askReviewer({ op: "account", repo: "acme/widgets", branch, commit, onto });
+  const last = lines.at(-1) ?? {};
+  return "account" in last
+    ? { ok: true, ...(last.account as object), lines }
+    : { ok: false, error: String(last.error ?? JSON.stringify(last)), lines };
+};
+/** A page of one of the reviewer's diffs of an account. */
+const reviewerDiff = (key: string, of: unknown, from = 0) =>
+  askReviewer({ op: "diff", key, of, from }).at(-1) as {
+    diff?: { text: string; from: number; next: number | null; total: number };
+    error?: string;
+  };
+/** As the root's user: send the reviewer a commit, as a push would before it is approved. */
+const submitted = (commit: string) => {
+  const sent = stack.inRoot([
+    "node",
+    "--disable-warning=ExperimentalWarning",
+    "--input-type=module",
+    "-e",
+    `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+    commit,
+  ]);
+  assert.equal(sent.code, 0, sent.stderr);
+};
 /** As the root's ordinary user, taken over: hand the pusher an approval's id, a pack of its
  *  own making (a file in the root VM), and LFS objects (files there too). */
 const toPusher = (
@@ -113,7 +193,8 @@ const attempt = (tries) => {
   const socket = connect("/run/desolate/pusher/control.sock");
   let answer = "";
   let connected = false;
-  socket.on("data", (c) => { answer += c; if (answer.includes("\\n")) { console.log(answer.split("\\n")[0]); process.exit(0); } });
+  // Lines saying how far it is come first ({"progress"}); the answer is the line after them.
+  socket.on("data", (c) => { answer += c; for (const line of answer.split("\\n").slice(0, -1)) if (!("progress" in JSON.parse(line))) { console.log(line); process.exit(0); } });
   socket.on("error", (e) => { if (!connected && tries > 0) setTimeout(() => attempt(tries - 1), 500); else { console.log(JSON.stringify({ ok: false, error: "no answer: " + e.message })); process.exit(0); } });
   socket.on("connect", () => {
     connected = true;
@@ -263,25 +344,29 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     const json = JSON.parse(
       stack.quiet("review", "dev", "acme/widgets", "issue/12", "--json").stdout,
-    ) as { commit: string; files: string[]; pushable: boolean };
+    ) as { commit: string; changes: { items: { path: string }[]; total: number } };
     assert.equal(json.commit, commit);
-    assert.deepEqual(json.files.sort(), ["README.md", "new.bin"]);
+    assert.deepEqual(json.changes.items.map((c) => c.path).sort(), ["README.md", "new.bin"]);
+    assert.equal(json.changes.total, 2);
   });
 
-  it("a push is impossible without a person: every automation path is tried, and refused", () => {
+  it("a push is impossible without a person: every automation path is tried, and refused", async () => {
     stack.step("automation tries to push");
     // 1. The CLI, driven by a script: no terminal.
     const cli = stack.desolate("push", "dev", "acme/widgets", "issue/12", "--expect", commit);
     assert.equal(cli.code, 78);
     assert.match(cli.stderr, /there is no terminal to ask on/);
     assert.match(cli.stderr, /no person confirmed the push, so nothing was pushed/);
-    // 2. Raw git in the root clone: it asks for an approval on the host, none comes, it gives up.
-    const raw = inRootClone(
-      `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/issue/12 2>&1`,
+    // 2. Raw git in the root clone: it asks for an approval on the host, and waits for as long
+    //    as it is waited for; none comes, and stopped, it takes its request with it.
+    const raw = await rawPushWaiting(`${commit}:refs/heads/issue/12`, "automation-push");
+    assert.match(raw.said(), /needs your approval, given on the host, outside every VM/);
+    const killed = raw.stop();
+    assert.ok(
+      await nothingWaits(),
+      `stopped, it is no longer waiting on the host\n${killed}\n${raw.ps()}\n${raw.said()}`,
     );
-    assert.notEqual(raw.code, 0);
-    assert.match(raw.stdout, /needs your approval, given on the host, outside every VM/);
-    assert.match(raw.stdout, /no person approved the push on the host, so nothing was pushed/);
+    assert.equal(forgeRefs("acme/widgets")["issue/12"], undefined);
     // 3. Skipping desolate's hook: straight to the remote's own address, around desolate's
     //    helper and its hook. This user has no way to a write key at all (the pusher does).
     const noVerify = inRootClone(
@@ -589,6 +674,26 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       controlCommit,
       "control: the approved pack lands",
     );
+    // Once the pusher is done with it, the approval is gone: its claim was the pusher's
+    // connection to the keyring, closed when the push ended. Handed over again (the control
+    // is the push just above, which it allowed), it allows nothing.
+    const reused = toPusher(
+      approved3.id!,
+      controlPack,
+      [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
+      saidControl.sends!.lfs,
+    );
+    assert.equal(reused.ok, false);
+    assert.match(String(reused.error), /holds no live approval/);
+    assert.ok(
+      (audit() as Record<string, unknown>[]).some(
+        (e) =>
+          e.event === "revoked" &&
+          e.approval === approved3.id &&
+          e.why === "the pusher is done with it",
+      ),
+      "the claim ended with the pusher's push",
+    );
     assert.equal(forgeHasLfs("acme/widgets", oid), true, "with its LFS object");
     // CONTROL for the checks above that something is NOT on the forge: they see what is.
     assert.equal(
@@ -684,12 +789,7 @@ echo "$c1 $c2 $c3 $c4"`);
       c4,
     ]);
     assert.equal(sentChain.code, 0, sentChain.stderr);
-    const saidChain = reviewerSays("chain", c4) as ReturnType<typeof reviewerSays> & {
-      warnings?: string[];
-      between?: { path: string }[];
-      squash?: { message: string; count: number; committer: string };
-      eachDiff?: string;
-    };
+    const saidChain = reviewerSays("chain", c4);
     assert.equal(saidChain.ok, true, String(saidChain.error));
     const headers = (saidChain.warnings ?? []).find((w) => /carry headers/.test(w)) ?? "";
     assert.match(headers, /^2 commit\(s\) carry headers this page does not show/);
@@ -713,7 +813,7 @@ echo "$c1 $c2 $c3 $c4"`);
       "control: a commit with only git's four headers is not warned of",
     );
     // (The list has the earlier tests' files too: what matters is this one, whole.)
-    const inBetween = saidChain.between?.map((f) => f.path) ?? [];
+    const inBetween = saidChain.between?.items.map((f) => f.path) ?? [];
     assert.ok(inBetween.includes("README.md?key.env"), String(inBetween));
     assert.ok(
       !inBetween.includes("key.env") && !inBetween.includes("README.md"),
@@ -729,10 +829,210 @@ echo "$c1 $c2 $c3 $c4"`);
       saidChain.squash?.message,
       "control\n\nSquashed from 6 commits:\n- control\n- stored\n- (no message)\n- put back\n- with headers\n- hidden\n",
     );
-    const at = (id: string) => saidChain.eachDiff?.indexOf(`commit ${id}`) ?? -1;
+    // The commits are listed first to last, and each one's own diff is its own: asked for by
+    // the commit, it is that commit whole, and no other.
+    const at = (id: string) => saidChain.commits?.items.findIndex((c) => c.commit === id) ?? -1;
     assert.ok(
       at(c1) >= 0 && at(c1) < at(c2) && at(c2) < at(c3) && at(c3) < at(c4),
       "each commit, first to last",
+    );
+    const ofC1 = reviewerDiff(saidChain.key!, { commit: c1 });
+    assert.ok(ofC1.diff?.text.startsWith(`commit ${c1}\n`), JSON.stringify(ofC1));
+    assert.ok(ofC1.diff?.text.includes("+secret"), "with its diff: the file it added");
+    assert.ok(!ofC1.diff?.text.includes(`commit ${c2}`), "and not the next commit");
+    assert.match(
+      reviewerDiff(saidChain.key!, { commit: "0".repeat(40) }).error ?? "",
+      /is not one of the commits this push sends/,
+      "a commit that is not the push's is not shown",
+    );
+  });
+
+  it("the reviewer's account: counted and paged, its diffs by file, by commit and in pages of bytes", () => {
+    stack.step("the reviewer's account: paged, diffs on demand");
+    // 105 commits, the last of which adds 120 files, one of over a MiB of diff, and one that
+    // changes what runs (devcontainer.json, which git lists after big.txt).
+    const made = inRootClone(String.raw`set -e
+base=$(git rev-parse origin/main)
+c=$base
+for i in $(seq 1 104); do c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$base^{tree}" -p "$c" -m "commit $i"); done
+t=$( { git ls-tree "$base"; for i in $(seq -w 1 120); do printf '100644 blob %s\tf-%s.txt\n' "$(printf 'file %s\n' "$i" | git hash-object -w --stdin)" "$i"; done; printf '100644 blob %s\tbig.txt\n' "$(seq 1 200000 | git hash-object -w --stdin)"; printf '100644 blob %s\tdevcontainer.json\n' "$(echo '{}' | git hash-object -w --stdin)"; } | git mktree )
+c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$t" -p "$c" -m "commit 105")
+echo "$c"`);
+    assert.equal(made.code, 0, made.stderr);
+    const many = made.stdout.trim().split("\n").pop()!;
+    submitted(many);
+    const said = reviewerSays("many", many);
+    assert.equal(said.ok, true, String(said.error));
+    // Counted, not cut: the first page, first commit first, and the true total.
+    assert.equal(said.commits?.total, 105);
+    assert.equal(said.commits?.items.length, 100);
+    assert.equal(said.commits?.items[0]?.subject, "commit 1");
+    const more = askReviewer({ op: "page", key: said.key, list: "commits", from: 100 }).at(-1) as {
+      page?: { commits?: Listed<{ subject: string }> };
+    };
+    assert.deepEqual(more.page?.commits, {
+      items: more.page?.commits?.items,
+      total: 105,
+      from: 100,
+    });
+    assert.deepEqual(
+      more.page?.commits?.items.map((c) => c.subject),
+      ["commit 101", "commit 102", "commit 103", "commit 104", "commit 105"],
+      "the page past the first is the rest, in order",
+    );
+    assert.equal(said.files?.total, 122);
+    assert.equal(said.files?.items.length, 100);
+    // What changes what runs comes first, whatever git's order: the page and the terminal
+    // show the first page (CONTROL below: git's own order has big.txt before it).
+    assert.deepEqual(
+      said.files?.items.slice(0, 2).map((f) => f.path),
+      ["devcontainer.json", "big.txt"],
+    );
+    const files = askReviewer({ op: "page", key: said.key, list: "files", from: 100 }).at(-1) as {
+      page?: { files?: Listed<{ path: string }> };
+    };
+    assert.equal(files.page?.files?.items.length, 22);
+    assert.equal(
+      new Set([...said.files!.items, ...files.page!.files!.items].map((f) => f.path)).size,
+      122,
+      "the two pages are every file once",
+    );
+    // A file's diff is that file's (CONTROL: the net change has both).
+    const one = reviewerDiff(said.key!, { file: "f-007.txt" });
+    assert.ok(one.diff?.text.includes("+file 007"), JSON.stringify(one));
+    assert.ok(!one.diff?.text.includes("f-008.txt"), "and no other file's");
+    assert.equal(one.diff?.next, null);
+    // The net change, in pages of bytes: each ends a line, each starts where the last said,
+    // and together they are the whole diff, every byte of it.
+    const pages = [reviewerDiff(said.key!, "net")];
+    while (pages.at(-1)?.diff?.next != null && pages.length < 10)
+      pages.push(reviewerDiff(said.key!, "net", pages.at(-1)!.diff!.next!));
+    assert.ok(pages.length >= 2, `a diff over a MiB is more than one page: ${pages.length}`);
+    const total = pages[0]!.diff!.total;
+    let at = 0;
+    for (const p of pages) {
+      assert.equal(p.diff?.from, at);
+      assert.ok(Buffer.byteLength(p.diff!.text) <= 1024 * 1024);
+      at += Buffer.byteLength(p.diff!.text);
+      if (p.diff!.next !== null) assert.ok(p.diff!.text.endsWith("\n"), "a page ends a line");
+    }
+    assert.equal(at, total, "the pages are the whole diff");
+    const all = pages.map((p) => p.diff!.text).join("");
+    assert.ok(all.includes("+file 007") && all.includes("+file 008") && all.includes("+200000\n"));
+    // CONTROL for the order of the files above: git's own puts big.txt first.
+    assert.ok(all.indexOf("b/big.txt\n") < all.indexOf("b/devcontainer.json\n"));
+    // A commit git shows only in part (a NUL in its message, past which git log prints
+    // nothing) is refused before the reviewer takes any of it: what follows the NUL would ride
+    // in the pack unseen. (CONTROL: the commits above, sent the same way, were taken.)
+    const hidden = inRootClone(
+      String.raw`printf 'tree %s\nparent %s\nauthor a <a@example.invalid> 1700000000 +0000\ncommitter a <a@example.invalid> 1700000000 +0000\n\nvisible\n\0hidden payload\n' "$(git rev-parse origin/main^{tree})" "$(git rev-parse origin/main)" | git hash-object -t commit --literally -w --stdin`,
+    );
+    assert.equal(hidden.code, 0, hidden.stderr);
+    const refused = stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); console.log(why ?? "taken");`,
+      hidden.stdout.trim(),
+    ]);
+    assert.match(
+      refused.stdout,
+      /^the bundle's objects are refused: .*nul/im,
+      refused.stdout + refused.stderr,
+    );
+  });
+
+  it("the reviewer's account takes as long as it takes, says so, waits its turn, and ends when its asker goes", () => {
+    stack.step("the reviewer's account: no deadline");
+    const fresh = (name: string) =>
+      inRootClone(
+        `git -c user.name=slow -c user.email=slow@example.invalid commit-tree origin/main^{tree} -p origin/main -m '${name}'`,
+      ).stdout.trim();
+    const [a, b] = [fresh("slow a"), fresh("slow b")];
+    submitted(a);
+    submitted(b);
+    const ask = (branch: string, commit: string) =>
+      JSON.stringify({ op: "account", repo: "acme/widgets", branch, commit, onto: null });
+    // Packing made slow: the reviewer's first pack-objects after the mark is set waits 100 s
+    // first, longer than the 95 s that used to kill the account.
+    const ran = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        String.raw`set -e
+[ ! -e /usr/local/bin/git ]
+trap 'rm -f /usr/local/bin/git; rm -rf /tmp/slowpack' EXIT
+cat > /usr/local/bin/git <<'W'
+#!/bin/sh
+if [ "$(id -un)" = desolate-reviewer ]; then case " $* " in *" pack-objects "*) rm /tmp/slowpack/once 2>/dev/null && sleep 100;; esac; fi
+exec /usr/bin/git "$@"
+W
+chmod 755 /usr/local/bin/git
+mkdir -p /tmp/slowpack && chmod 777 /tmp/slowpack && touch /tmp/slowpack/once
+ask() { node --disable-warning=ExperimentalWarning /desolate/release/root/review-ask.ts; }
+count() { pgrep -u desolate-reviewer -fc "$1" || true; }
+# Its asker goes away while it packs: read until it says so, then stop reading. (In the
+# background: a pipeline is waited for until review-ask, last, has ended.)
+rm -f /tmp/gone
+{ printf '%s\n' "$1" | ask | { grep -m1 -q '"packing the push"'; touch /tmp/gone; }; } &
+until [ -e /tmp/gone ]; do sleep 0.2; done
+sleep 1
+echo "during $(count 'sleep 100') $(count 'reviewer.ts account')"
+sleep 12
+echo "after $(count 'sleep 100') $(count 'reviewer.ts account')"
+wait
+# Asked again and read to the end; and another account asked for meanwhile, which waits.
+touch /tmp/slowpack/once
+start=$(date +%s)
+printf '%s\n' "$1" | ask > /tmp/slow.lines &
+sleep 3
+printf '%s\n' "$2" | ask > /tmp/waits.lines
+wait
+echo "took $(( $(date +%s) - start ))"
+echo "=====slow"; cat /tmp/slow.lines
+echo "=====waits"; cat /tmp/waits.lines`,
+        "_",
+        ask("slow-a", a),
+        ask("slow-b", b),
+      ],
+      { root: true },
+    );
+    assert.equal(ran.code, 0, ran.stdout + ran.stderr);
+    const [head, slowText, waitsText] = ran.stdout.split(/^=====\w+\n/m) as [
+      string,
+      string,
+      string,
+    ];
+    // CONTROL: while it packed, its processes were there to be seen; once its asker had
+    // gone, none of them is.
+    assert.match(head, /^during [1-9]\d* [1-9]\d*$/m, head);
+    assert.match(head, /^after 0 0$/m, "nothing the account started outlives its asker");
+    const took = Number(/^took (\d+)$/m.exec(head)?.[1]);
+    assert.ok(took >= 100, `the account took ${took} s`);
+    const lines = (text: string) =>
+      text
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, { phase?: string } | object>);
+    const slow = lines(slowText);
+    const waits = lines(waitsText);
+    assert.ok("account" in slow.at(-1)!, slowText.slice(-500));
+    const saying = slow.filter(
+      (l) => "progress" in l && (l.progress as { phase: string }).phase === "packing the push",
+    );
+    assert.ok(
+      saying.length >= 10,
+      `it says what it is doing while it packs: ${saying.length} times`,
+    );
+    assert.ok("account" in waits.at(-1)!, waitsText.slice(-500));
+    assert.ok(
+      waits.some(
+        (l) =>
+          "progress" in l &&
+          (l.progress as { phase: string }).phase === "waiting for another push's account",
+      ),
+      "the other account says it waits its turn",
     );
   });
 
@@ -876,19 +1176,15 @@ echo "$c1 $c2 $c3 $c4"`);
     ]);
     assert.equal(sent.code, 0, sent.stderr);
     // What the net change hides, the reviewer lists: notes.txt was added, then taken out.
-    const said = reviewerSays("squash-me", tip) as ReturnType<typeof reviewerSays> & {
-      between?: { path: string }[];
-      squash?: { commit: string; count: number; message: string };
-      files?: { path: string }[];
-    };
+    const said = reviewerSays("squash-me", tip);
     assert.equal(said.ok, true, String(said.error));
     assert.deepEqual(
-      said.files?.map((f) => f.path),
+      said.files?.items.map((f) => f.path),
       ["README.md"],
       "the net change: README alone",
     );
     assert.deepEqual(
-      said.between?.map((f) => f.path),
+      said.between?.items.map((f) => f.path),
       ["notes.txt"],
       "and what was changed in between",
     );
@@ -1029,7 +1325,9 @@ echo "$c1 $c2 $c3 $c4"`);
     );
     let waiting = false;
     for (let i = 0; i < 40 && !waiting; i++) {
-      waiting = /waiting up to/.test(inRootClone("cat /tmp/raw-push.log").stdout);
+      waiting = /waiting for it for as long as this push waits/.test(
+        inRootClone("cat /tmp/raw-push.log").stdout,
+      );
       if (!waiting) await sleep(250);
     }
     assert.ok(waiting, "the push is waiting for the host");
@@ -1055,15 +1353,46 @@ echo "$c1 $c2 $c3 $c4"`);
     assert.equal(entries.pop()?.event, "revoked", "the approval did not outlive the push");
     // The default branch is pushed this way too, and waits for the person like any branch
     // (since 2026-11-18; unanswered here, so nothing goes); nothing is ever deleted.
-    const def = inRootClone(
-      `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/main 2>&1`,
+    const def = await rawPushWaiting(`${commit}:refs/heads/main`, "main-push");
+    assert.doesNotMatch(def.said(), /default branch/);
+    assert.match(def.said(), /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    // It waits for as long as its asker does, and no longer: stopped (its terminal closed),
+    // its request goes from the host's list, and the keyring will not take an answer to it,
+    // even one signed with the approver's key. (Control: while it waited, the keyring held it,
+    // refusing an answer only for its signature.)
+    const request = JSON.parse(
+      stack.inRoot(["bash", "-c", "cat /var/lib/desolate/approvals/*.json"]).stdout,
+    ) as { message: string };
+    // (What it says it sends is not what is looked at here: the challenge is.)
+    const text = signedFor(request.message, {
+      commit,
+      squashes: null,
+      pack: "e".repeat(64),
+      lfs: [],
+    });
+    assert.match(
+      String(keyring({ op: "approve", message: text, signature: "" }).error),
+      /signature is not the host approver's/,
+      "control: outstanding while its asker waits",
     );
-    assert.doesNotMatch(def.stdout, /default branch/);
-    assert.match(def.stdout, /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    const killedDef = def.stop();
+    assert.ok(
+      await nothingWaits(),
+      `stopped, it is no longer listed on the host\n${killedDef}\n${def.ps()}\n${def.said()}`,
+    );
+    const hostKey = createPrivateKey(
+      fs.readFileSync(path.join(stack.home, "approver", "key"), "utf8"),
+    );
+    const late = keyring({
+      op: "approve",
+      message: text,
+      signature: sign("sha256", Buffer.from(text), hostKey).toString("base64"),
+    });
+    assert.equal(late.ok, false);
+    assert.match(String(late.error), /not outstanding/);
     assert.notEqual(forgeRefs("acme/widgets")["main"], commit, "unapproved: not pushed");
     assert.match(
-      inRootClone("DESOLATE_APPROVAL_WAIT_MS=1500 git push origin :refs/heads/raw-push 2>&1")
-        .stdout,
+      inRootClone("git push origin :refs/heads/raw-push 2>&1").stdout,
       /deleting a branch on the remote is not something desolate does/,
     );
     assert.equal(forgeRefs("acme/widgets")["raw-push"], commit);
@@ -1117,11 +1446,15 @@ echo "$c1 $c2 $c3 $c4"`);
       branch: string;
       commit: string;
       onto: string | null;
-      summary: {
-        ok: boolean;
+      /** The token over the account the page was given: a click names it. */
+      shown?: string;
+      review: {
+        working?: { phase: string };
         error?: string;
-        commits?: { commit: string; subject: string }[];
-        files?: { path: string }[];
+        account?: {
+          commits: { items: { commit: string; subject: string }[]; total: number };
+          files: { items: { path: string }[]; total: number };
+        };
       };
     };
     const waitingFor = async (branch: string) => {
@@ -1131,7 +1464,7 @@ echo "$c1 $c2 $c3 $c4"`);
           (p) => p.branch === branch,
         );
         // (The reviewer's account comes in the background: the page says it is coming.)
-        if (found && !(found.summary as { waiting?: boolean }).waiting) return found;
+        if (found && !found.review.working) return found;
         await sleep(250);
       }
       return null;
@@ -1141,7 +1474,12 @@ echo "$c1 $c2 $c3 $c4"`);
         "POST",
         `/${what}`,
         { ...asPage, origin: ORIGIN, "content-type": "application/json" },
-        JSON.stringify({ nonce: push.nonce, token: push.token, commit: push.commit }),
+        JSON.stringify({
+          nonce: push.nonce,
+          token: push.token,
+          shown: push.shown,
+          commit: push.commit,
+        }),
       );
 
     inRootClone(
@@ -1152,16 +1490,16 @@ echo "$c1 $c2 $c3 $c4"`);
     assert.equal(push!.commit, commit);
     assert.equal(push!.onto, null, "a new branch");
     // What the reviewer says the push is: from commit ids the host gave it, and the forge.
-    assert.equal(push!.summary.ok, true, String(push!.summary.error));
+    assert.ok(push!.review.account, String(push!.review.error));
     // The commit reached the remote above (issue/12): nothing new to list, from the forge's
     // own account; the files are against the remote's default branch.
     assert.deepEqual(
-      push!.summary.commits,
+      push!.review.account!.commits.items,
       [],
       "the remote has every commit already, and the reviewer says so",
     );
     assert.ok(
-      push!.summary.files!.some((f) => f.path === "big.bin" || f.path === "README.md"),
+      push!.review.account!.files.items.some((f) => f.path === "big.bin" || f.path === "README.md"),
       "the files it changes against the default branch",
     );
     // In a real browser: the card is drawn as text, and Approve waits for a person.
@@ -1240,9 +1578,9 @@ echo "$c1 $c2 $c3 $c4"`);
     );
     const large = await waitingFor("web-large");
     assert.ok(large, inRootClone("cat /tmp/web-large.log").stdout);
-    assert.equal(large!.summary.ok, true, String(large!.summary.error).slice(0, 300));
+    assert.ok(large!.review.account, String(large!.review.error));
     assert.deepEqual(
-      large!.summary.commits!.map((c) => c.subject),
+      large!.review.account!.commits.items.map((c) => c.subject),
       ["a large file"],
     );
     assert.equal((await act("refuse", large!)).status, 200);
@@ -1348,7 +1686,7 @@ echo "$c1 $c2 $c3 $c4"`);
         },
       }),
     );
-    fs.symlinkSync("/etc/passwd", path.join(sync, "zz-evil.bundle"));
+    fs.symlinkSync("/etc/passwd", path.join(sync, "zz-link.bundle"));
     fs.writeFileSync(path.join(sync, "zy-garbage.bundle"), "this is not a bundle");
     const lied = inRootClone(
       "git fetch dev 2>&1; git for-each-ref --format='%(refname)' refs/remotes/dev refs/desolate; ls /desolate/root/acme/widgets/.git/refs/remotes/dev",
@@ -1363,12 +1701,12 @@ echo "$c1 $c2 $c3 $c4"`);
     // what it pointed at is never opened, and the person is told something was dropped.
     assert.match(
       lied.stdout,
-      /2 file\(s\) in dev's outbox were not plain bundle files and were dropped|was refused and dropped/,
+      /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/,
       lied.stdout,
     );
     assert.ok(
-      !fs.existsSync(path.join(sync, "zz-evil.bundle")) &&
-        fs.lstatSync(path.join(sync, "zz-evil.bundle"), { throwIfNoEntry: false }) === undefined,
+      !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
+        fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
       "the link itself is gone from the outbox",
     );
     assert.match(
@@ -1377,6 +1715,52 @@ echo "$c1 $c2 $c3 $c4"`);
       /^root:1\n$/,
       "and what it pointed at is as it was",
     );
+  });
+
+  it("a domain's list of branches is taken whole or refused out loud: none is cut, and none pruned on a part", () => {
+    stack.step("a domain with many branches");
+    // (The workspace's daemon is stopped, above: what is in the outbox is what this writes.)
+    const sync = path.join(stack.home, "domains/dev/outbox/sync/acme/widgets");
+    const kept = fs.readFileSync(path.join(sync, "refs.json"), "utf8");
+    const many = Object.fromEntries(Array.from({ length: 6000 }, (_, i) => [`many/b${i}`, commit]));
+    const countMany = () =>
+      Number(
+        inRootClone("git for-each-ref --format=x refs/remotes/dev/many/ | wc -l").stdout.trim(),
+      );
+    // More than the old cut of 5,000: every one arrives.
+    fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
+    const fetched = inRootClone("git fetch --prune dev 2>&1");
+    assert.equal(fetched.code, 0, fetched.stdout);
+    assert.equal(countMany(), 6000, "control: a long list, whole");
+    // Past the list's bound (4 MiB): the fetch fails, says which bound, and prunes nothing.
+    fs.writeFileSync(
+      path.join(sync, "refs.json"),
+      JSON.stringify({ refs: { "many/b0": commit }, pad: "x".repeat(4 * 1024 * 1024) }),
+    );
+    const refused = inRootClone("git fetch --prune dev 2>&1");
+    assert.notEqual(refused.code, 0, "a list that cannot be read whole fails the fetch");
+    assert.match(
+      refused.stdout,
+      /acme\/widgets's list of branches \(refs\.json\) is \d+ bytes, over the 4194304 allowed/,
+    );
+    assert.equal(countMany(), 6000, "and no branch was pruned on it");
+    // A bundle whose header (its list of refs) is past the same bound: refused as that.
+    fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
+    const line = `${commit} refs/heads/b\n`;
+    fs.writeFileSync(
+      path.join(sync, "zz-header.bundle"),
+      `# v2 git bundle\n${line.repeat(Math.ceil((4 * 1024 * 1024) / line.length))}\nPACK`,
+    );
+    const header = inRootClone("git fetch dev 2>&1");
+    assert.match(
+      header.stdout,
+      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/,
+    );
+    // Control: the list as the workspace wrote it, and the many branches it does not name
+    // are pruned, as an honest list says.
+    fs.writeFileSync(path.join(sync, "refs.json"), kept);
+    assert.equal(inRootClone("git fetch --prune dev 2>&1").code, 0);
+    assert.equal(countMany(), 0, "an honest list prunes what it does not name");
   });
 
   it("a person moves work between domains through the root: git push <domain> delivers", () => {
@@ -1578,6 +1962,51 @@ echo "$c1 $c2 $c3 $c4"`);
       /deleting a branch is not something a workspace does/,
     );
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");
+  });
+
+  it("an offer of more LFS objects than the old cap of 2,000 is taken whole, and reviewed whole", () => {
+    stack.step("an offer of 2,001 LFS objects");
+    // (Before, the root took the first 2,000 an offer named and then found the commits
+    // pointing at one it did not have: refused, and "offer again" refused it again. The
+    // control is the first offer here, of one object, taken the same way.)
+    const work = inWs(
+      "dev/w1",
+      `cd ${WT} && git fetch -q && git switch -q -c lfs/many origin/main && mkdir many && for i in $(seq 1 2001); do echo "object $i" > many/$i.bin; done && git add many && git commit -qm 'many LFS objects' && git rev-parse HEAD`,
+    );
+    assert.equal(work.code, 0, work.stderr);
+    const tip = work.stdout.trim().split("\n").pop()!;
+    const offered = stack.desolate(
+      "exec",
+      "dev/w1",
+      "--checkout",
+      "acme/widgets",
+      "--",
+      "desolate",
+      "offer",
+    );
+    assert.equal(offered.code, 0, offered.stdout + offered.stderr);
+    assert.match(
+      offered.stdout,
+      /offered acme\/widgets lfs\/many at [0-9a-f]{12}, with 2001 LFS object\(s\)/,
+    );
+    const offers = JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as {
+      branch: string;
+      commit: string;
+      lfs: number;
+    }[];
+    assert.deepEqual(
+      offers.filter((o) => o.branch === "lfs/many").map((o) => [o.commit, o.lfs]),
+      [[tip, 2001]],
+      "the root took it, with every object",
+    );
+    const review = JSON.parse(
+      stack.quiet("review", "dev", "acme/widgets", "lfs/many", "--json").stdout,
+    ) as { lfsObjects: number; changes: { total: number }; commits: { total: number } };
+    assert.deepEqual(
+      [review.lfsObjects, review.changes.total, review.commits.total],
+      [2001, 2001, 1],
+      "and the review counts every one",
+    );
   });
 
   it("the transcript reads as reviewed", () => {

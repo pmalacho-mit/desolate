@@ -76,10 +76,15 @@ to push exactly this: desolate push dev acme/widgets issue/12 --expect <commit>
 ## automation tries to push
 
 $ desolate push dev acme/widgets issue/12 --expect <commit>
+desolate's reviewer: <what it is doing, as it goes>
 desolate: a push needs a person's confirmation, and there is no terminal to ask on
 desolate: no person confirmed the push, so nothing was pushed
   fix: run it from a terminal of your own, on the host
 [exit 78]
+
+## the reviewer's account: paged, diffs on demand
+
+## the reviewer's account: no deadline
 
 ## refusals before and at the prompt
 
@@ -164,6 +169,7 @@ desolate (on the Mac): the workspace's squash-me still has the commits that were
 [exit 0]
 
 $ desolate push dev acme/widgets squash-me --expect <commit>
+desolate's reviewer: <what it is doing, as it goes>
 desolate: this push REPLACES the remote's squash-me, which is the squash of <id>, a commit of this branch, pushed before. Nothing was signed
   fix: to build on the squash, run `git fetch && git rebase --rebase-merges --autostash --onto origin/squash-me <commit> squash-me` in the workspace, then push again. To replace it instead: desolate push dev acme/widgets squash-me --expect <commit> --replace
 [exit 1]
@@ -183,6 +189,7 @@ pushed acme/widgets squash-me at <commit> (1 commit(s)).
 [exit 0]
 
 $ desolate push dev acme/widgets squash-me --expect <commit>
+desolate's reviewer: <what it is doing, as it goes>
 desolate: this push REPLACES the remote's squash-me: it does not build on it, and the commits only the remote has would be dropped. Nothing was signed
   fix: to replace it, say so: desolate push dev acme/widgets squash-me --expect <commit> --replace (or fetch, and rebase in the workspace)
 [exit 1]
@@ -228,6 +235,7 @@ nothing is waiting for approval. (`desolate push` asks by itself; this is for a 
 [exit 0]
 
 $ desolate approve
+desolate's reviewer: <what it is doing, as it goes>
 desolate: a push needs a person's confirmation, and there is no terminal to ask on
 desolate: no person confirmed the push, so nothing was pushed
   fix: run it from a terminal of your own, on the host
@@ -261,6 +269,8 @@ desolate: acme/consumer is not pushable: the root holds no write key for it
 [exit 1]
 
 ## a hostile domain repository
+
+## a domain with many branches
 
 ## a delivery to another domain
 
@@ -296,3 +306,10 @@ $ desolate branches dev
 [exit 0]
 
 ## git fetch and git push in a workspace
+
+## an offer of 2,001 LFS objects
+
+$ desolate exec dev/w1 --checkout acme/widgets -- desolate offer
+offered acme/widgets lfs/many at <id>, with 2001 LFS object(s).
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.
+[exit 0]

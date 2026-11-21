@@ -106,10 +106,27 @@ if ! listening "$GATE_PORT" || [ "$(cat "$DATA/gate.host" 2>/dev/null)" != "$GAT
   echo $! >"$DATA/gate.pid"
   printf '%s' "$GATE_ID" >"$DATA/gate.host"
 fi
-for _ in $(seq 1 300); do
-  if listening "$SERVER_PORT" && listening "$GATE_PORT"; then exit 0; fi
+# Both listening: started. One of them gone: it failed, and says why in its log. Both
+# still starting after a minute (a first start in a devcontainer can be slow): nothing is
+# stopped, and the start goes on without waiting for them. The host says the editor is still
+# starting; it is there once it listens (`desolate editor`, the dashboard).
+server_alive() { pgrep -f -- "--host 127.0.0.1 --port $SERVER_PORT" >/dev/null; }
+gate_alive() { [ -s "$DATA/gate.pid" ] && kill -0 "$(cat "$DATA/gate.pid")" 2>/dev/null; }
+began=$SECONDS
+until listening "$SERVER_PORT" && listening "$GATE_PORT"; do
+  if ! listening "$SERVER_PORT" && ! server_alive; then
+    echo "editor: its server stopped before it listened; see $DATA/server.log" >&2
+    tail -5 "$DATA/server.log" >&2 || true
+    exit 1
+  fi
+  if ! listening "$GATE_PORT" && ! gate_alive; then
+    echo "editor: its gate stopped before it listened; see $DATA/gate.log" >&2
+    tail -5 "$DATA/gate.log" >&2 || true
+    exit 1
+  fi
+  if [ $((SECONDS - began)) -ge 60 ]; then
+    echo "editor: still starting"
+    exit 0
+  fi
   sleep 0.2
 done
-echo "editor: it did not start listening; see $DATA/server.log and $DATA/gate.log" >&2
-tail -5 "$DATA/server.log" >&2 || true
-exit 1

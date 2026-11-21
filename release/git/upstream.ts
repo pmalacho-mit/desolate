@@ -34,10 +34,20 @@ import {
   SUEDE_CORE,
 } from "../shared/suede.ts";
 import type { Gitrepo } from "../shared/suede.ts";
-import { printable } from "../shared/text.ts";
+import { isRef } from "../shared/git-out-box.ts";
+import { andMore, PAGE } from "../shared/listed.ts";
+import type { Listed } from "../shared/listed.ts";
+import { failure, printable, SAFE_MOST } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { cwdIs, gitVm, outsideEveryClone, releaseWith } from "../.harness/git-upstream.ts";
+import type {
+  cwdIs,
+  gitVm,
+  lengthsOf,
+  linesOf,
+  outsideEveryClone,
+  releaseWith,
+} from "../.harness/git-upstream.ts";
 
 export class Stop extends Error {
   fix: string | undefined;
@@ -76,16 +86,61 @@ const git = (dir: string, args: string[], input?: string) => {
   return { code: ran.status ?? 1, stdout: ran.stdout ?? "", stderr: ran.stderr ?? "" };
 };
 const bare = (dir: string, args: string[]) => git("/", ["--git-dir", dir, ...args]);
+/** Where the whole of a failure's text is kept, when only its end is shown (text.ts,
+ *  `failure`): a file in the git VM's own /tmp, which you can read in the terminal. */
+const kept = (whole: string) => {
+  const file = path.join(os.tmpdir(), "desolate-upstream-failure.txt");
+  fs.writeFileSync(file, whole);
+  return file;
+};
 const ok = (dir: string, args: string[], input?: string) => {
   const ran = git(dir, args, input);
-  if (ran.code !== 0)
-    stop(`git ${args[0]} failed: ${printable(ran.stderr.trim().split("\n").pop() ?? "", 300)}`);
+  if (ran.code !== 0) stop(`git ${args[0]} failed:\n${failure(ran.stderr, 5, kept)}`);
   return ran.stdout;
 };
 
+/** A program's output, shown as it comes, a line at a time and each made safe (it is the
+ *  repository's text): `write` is given each whole line. A line longer than the bound against
+ *  a flood is shown in parts of that bound, nothing of it held past it or left out. */
+export const lineByLine = (write: (line: string) => void) => {
+  let held = "";
+  return {
+    add: (chunk: string) => {
+      held += chunk;
+      const parts = (line: string) => {
+        for (let at = 0; at < line.length || at === 0; at += SAFE_MOST)
+          write(printable(line.slice(at, at + SAFE_MOST)));
+      };
+      for (let end = held.indexOf("\n"); end >= 0; end = held.indexOf("\n")) {
+        parts(held.slice(0, end).replace(/\r$/, ""));
+        held = held.slice(end + 1);
+      }
+      for (; held.length >= SAFE_MOST; held = held.slice(SAFE_MOST))
+        write(printable(held.slice(0, SAFE_MOST)));
+    },
+    end: () => {
+      if (held) write(printable(held));
+      held = "";
+    },
+  };
+};
+
+declare namespace lineByLine {
+  /** whole lines as they are completed, a line over the bound in parts, the last unended
+   *  line when the program ends */
+  export type Lines = Expect<
+    Invoke<typeof linesOf, [chunks: ["one\ntw", "o\r\nthr", "ee"]]>,
+    "=",
+    ["one", "two", "three"]
+  >;
+  export type Long = [
+    Expect<Invoke<typeof lengthsOf, [text: "x", times: 4001]>, "=", [4000, 1]>,
+    /** ended in the same chunk it began in: in parts as well, none of it cut */
+    Expect<Invoke<typeof lengthsOf, [text: "x", times: 4001, ended: true]>, "=", [4000, 1]>,
+  ];
+}
+
 const DIR = /^[A-Za-z0-9_][A-Za-z0-9._-]*(\/[A-Za-z0-9_][A-Za-z0-9._-]*)*$/;
-/** A ref the person names: a branch, a remote's branch, a commit. Never an option. */
-const REF = /^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/;
 
 export type Asked = {
   consumer: Repo;
@@ -139,7 +194,7 @@ export const prepare = (asked: Asked, at: Places = GIT_VM): Prepared => {
       );
     commit = ok(clone, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).trim();
   } else {
-    if (!REF.test(asked.from) || asked.from.includes("..") || asked.from.includes("@{"))
+    if (!isRef(asked.from))
       stop(
         `'${printable(asked.from, 100)}' is not a branch or a commit`,
         "--from <branch> | <domain>/<branch> | <commit>",
@@ -663,12 +718,13 @@ declare namespace pinnedScript {
 }
 
 /** Step 2: suede's upstream, in a scratch clone, its push caught. Returns the scratch clone and
- *  the commit suede would have pushed. */
-export const split = (
+ *  the commit suede would have pushed. What the script says is shown as it says it: a long
+ *  history takes a while to split, and it runs for as long as you let it (Ctrl-C stops it). */
+export const split = async (
   p: Prepared,
   scratch: string,
   at: Places = GIT_VM,
-): { work: string; split: string; said: string } => {
+): Promise<{ work: string; split: string }> => {
   const script = pinnedScript(at);
   const work = path.join(scratch, "consumer");
   const caught = path.join(scratch, "caught.git");
@@ -707,22 +763,27 @@ export const split = (
     GIT_LFS_SKIP_SMUDGE: "1",
     GIT_TERMINAL_PROMPT: "0",
   };
-  const ran = spawnSync("bash", [script, p.dir, "-r", "dependency", "--no-wait"], {
-    cwd: work,
-    env,
-    encoding: "utf8",
-    timeout: 10 * 60_000,
-    maxBuffer: 64 * 1024 * 1024,
+  const ended = await new Promise<string | null>((resolve) => {
+    const child = spawn("bash", [script, p.dir, "-r", "dependency", "--no-wait"], {
+      cwd: work,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const streams = [child.stdout, child.stderr].map((stream) => {
+      const shown = lineByLine((line) => say(`    ${line}`));
+      stream.setEncoding("utf8");
+      stream.on("data", shown.add);
+      return shown;
+    });
+    child.on("error", (error) => resolve(error.message));
+    child.on("close", (code, signal) => {
+      for (const shown of streams) shown.end();
+      resolve(code === 0 ? null : signal ? `ended by ${signal}` : `exit ${code}`);
+    });
   });
-  const said = `${ran.stdout ?? ""}${ran.stderr ?? ""}`;
-  if (ran.status !== 0)
+  if (ended !== null)
     stop(
-      `suede's upstream stopped${ran.error ? ` (${ran.error.message})` : ""}:\n${said
-        .trim()
-        .split("\n")
-        .slice(-12)
-        .map((line) => `    ${printable(line, 300)}`)
-        .join("\n")}`,
+      `suede's upstream stopped (${ended}): what it said is above`,
       "if it says the tree is behind, git subrepo pull in a workspace first",
     );
   const refs = bare(caught, ["for-each-ref", "--format=%(objectname) %(refname)"])
@@ -736,10 +797,12 @@ export const split = (
     stop(
       `suede's upstream did not make the one branch it names (${p.branch}): ${printable(refs.join(", ") || "nothing", 300)}`,
     );
-  return { work, split: refs[0]!.split(" ")[0]!, said };
+  return { work, split: refs[0]!.split(" ")[0]! };
 };
 
-export type Checked = { commits: string[]; stat: string; core: string[] };
+/** The split's commits the remote lacks (a page of them, and how many there are), its diff
+ *  --stat, and the files of suede's own machinery it changes. */
+export type Checked = { commits: Listed<string>; stat: string; core: string[] };
 
 /** Step 3: what the split is, checked against what it should be. */
 export const verify = (p: Prepared, work: string, made: string): Checked => {
@@ -775,16 +838,19 @@ export const verify = (p: Prepared, work: string, made: string): Checked => {
   const tips = bare(p.mirror, ["for-each-ref", "--format=%(objectname)", "refs/heads"])
     .stdout.split("\n")
     .filter(isCommit);
-  const commits = ok(work, [
+  // Counted, then a page of them listed (R2): never a page's length said as the count.
+  const lacked = [made, ...tips.map((tip) => `^${tip}`)];
+  const total = Number(ok(work, ["rev-list", "--count", ...lacked]).trim());
+  const page = ok(work, [
     "log",
     "--no-decorate",
     "--format=%h %s",
-    "--max-count=50",
-    made,
-    ...tips.map((tip) => `^${tip}`),
+    `--max-count=${PAGE}`,
+    ...lacked,
   ])
     .split("\n")
     .filter(Boolean);
+  const commits = { items: page, total, from: 0 };
   const stat = ok(work, [
     "diff",
     "--stat",
@@ -850,14 +916,17 @@ export const upstream = async (argv: string[], cwdRepo: () => string): Promise<n
   );
   const scratch = fs.mkdtempSync(path.join(GIT_VM.scratch, "desolate-upstream-"));
   try {
-    const { work, split: made } = split(p, scratch);
+    const { work, split: made } = await split(p, scratch);
     const checked = verify(p, work, made);
     say(
       `  builds on ${repoId(dependency)}'s ${p.base.slice(0, 12)} (the release commit ${p.dir}/.gitrepo names)`,
     );
-    say(`  ${checked.commits.length} commit(s) the remote does not have:`);
-    for (const line of checked.commits) say(`    ${printable(line, 200)}`);
-    for (const line of checked.stat.split("\n")) say(`  ${printable(line, 200)}`);
+    const { total } = checked.commits;
+    say(`  ${total} commit${total === 1 ? "" : "s"} the remote does not have:`);
+    for (const line of checked.commits.items) say(`    ${printable(line)}`);
+    const more = andMore(checked.commits, "commit");
+    if (more) say(`    (${more})`);
+    for (const line of checked.stat.split("\n")) say(`  ${printable(line)}`);
     if (checked.core.length) {
       say(
         red(

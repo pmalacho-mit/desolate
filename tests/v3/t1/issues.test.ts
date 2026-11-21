@@ -111,6 +111,16 @@ describe("T1 the Markdown preview", () => {
     );
     assert.match(show(items), /<a href=https:\/\/tracker\.example\/p\.png>image: c<\/a>/);
   });
+  it("an address too long to look through is left as text, never linked cut (the control: one that fits is linked)", () => {
+    const long = `https://example.com/${"a".repeat(3000)}`;
+    assert.deepEqual(tags(markdown.parse(`see ${long} here`)), ["p"]);
+    assert.match(show(markdown.parse(`see ${long} here`)), new RegExp(`see ${long} here`));
+    const fits = `https://example.com/${"a".repeat(2000)}`;
+    assert.match(
+      show(markdown.parse(`see ${fits} here`)),
+      new RegExp(`<a href=${fits}>${fits}</a>`),
+    );
+  });
   it("costs little whatever it is given: unclosed emphasis, code and links", () => {
     for (const body of [
       "*".repeat(65_536),

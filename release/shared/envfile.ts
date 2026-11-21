@@ -14,6 +14,7 @@
 // URL in the same file; a table of known keys by name; the name's ending. What none of these
 // can tell is asked, or left a value. Values are read here and never shown: a plan names keys,
 // hosts and reasons only.
+import { createHash } from "node:crypto";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -306,16 +307,27 @@ const NOT_SECRET =
   /(_ID|_URL|_URI|_ENDPOINT|_HOST|_HOSTNAME|_PORT|_REGION|_BUCKET|_ALGORITHM|_MINUTES|_SECONDS|_HOURS|_DAYS|_TTL|_TIMEOUT|_ENV|_MODE|_LEVEL|_DEBUG|_CHANNEL|_TENANT|_ORG|_PROJECT|_MODEL|_VERSION|_NAME|_EMAIL|_PATH|_DIR|_FILE|_ORIGIN|_DOMAIN|_BASE|_SCOPE|_SCOPES|PUBLIC_KEY|_PUBLISHABLE_KEY)$|^(NEXT_PUBLIC_|VITE_|REACT_APP_|PUBLIC_|EXPO_PUBLIC_)|_EXPIRE/;
 const SECRETISH = /(SECRET|TOKEN|API_?KEY|_KEY|PASSWORD|PASSPHRASE|CREDENTIALS?)$|_SECRET_/;
 
+/** How long a secret's name may be, in characters (ASCII), and how short: the root's rule
+ *  (root/proxy/secret-store.ts, secrets_addon.py; the secrets page's pattern says it too). */
+export const SECRET_NAME = { least: 8, most: 64 } as const;
+/** A secret's name, whole: a capital letter first, then capitals, digits, `_` and `-`. */
+export const SECRET_NAME_RULE = /^[A-Z][A-Z0-9_-]{7,63}$/;
+
 /** A secret's name, from its key: `OPENAI_API_KEY` is `OPENAI-API-KEY`. Dashes, so the
  *  workspace's .env holds something that is not the variable's own name; at least 8
- *  characters, as the root takes names. */
+ *  characters, as the root takes names. A key too long for a name is cut, and the cut ends
+ *  in a hash of the whole key, so two long keys that begin alike are two names (as
+ *  names.ts's domainNameFor keeps two repositories apart). */
 export const secretName = (key: string): string => {
   const dashed = key
     .toUpperCase()
     .replace(/[^A-Z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   const named = /^[A-Z]/.test(dashed) ? dashed : `KEY-${dashed}`;
-  return (named.length < 8 ? `${named}-SECRET` : named).slice(0, 64);
+  if (named.length < SECRET_NAME.least) return `${named}-SECRET`;
+  if (named.length <= SECRET_NAME.most) return named;
+  const hash = createHash("sha256").update(key).digest("hex").slice(0, 8).toUpperCase();
+  return `${named.slice(0, SECRET_NAME.most - hash.length - 1).replace(/-+$/, "")}-${hash}`;
 };
 
 declare namespace secretName {
@@ -326,6 +338,22 @@ declare namespace secretName {
       [args: [key: "SLACK_TOKEN"], expected: "SLACK-TOKEN"],
       [args: [key: "API_KEY"], expected: "API-KEY-SECRET"],
       [args: [key: "_2FA_TOKEN"], expected: "KEY-2FA-TOKEN"],
+    ]
+  >;
+  /** a key too long for a name: cut, and the cut ends in a hash of the whole key, so two
+   *  that begin alike are two secrets (until 2026-11-21 both were the first 64 characters,
+   *  and one secret's value stood for the other's) */
+  export type Long = Table<
+    typeof secretName,
+    [
+      [
+        args: [key: "A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_ONE_API_KEY"],
+        expected: "A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-1E86EE3E",
+      ],
+      [
+        args: [key: "A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_A_TWO_API_KEY"],
+        expected: "A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-A-8C2DDEC6",
+      ],
     ]
   >;
 }
@@ -748,18 +776,56 @@ export const keepApart = (rows: PlanRow[], others: string[] = []): PlanRow[] => 
   const out = rows.map((r) => ({ ...r }));
   const secretRows = out.filter((r) => r.kind === "secret");
   const overlap = (a: string, b: string) => a !== b && (a.includes(b) || b.includes(a));
-  for (const row of secretRows) {
-    const base = row.name!;
-    const rest = () => [...others, ...secretRows.filter((r) => r !== row).map((r) => r.name!)];
-    // Only the contained one moves: a name that contains another keeps its own.
-    const contained = (name: string) => rest().some((o) => o !== name && o.includes(name));
-    const clashes = (name: string) => rest().some((o) => overlap(o, name));
-    if (!contained(base)) continue;
-    let n = 1;
-    while (clashes(`${base}-${n}`)) n++;
-    row.name = `${base}-${n}`;
+  // The shortest first: a name that moves for a longer one is then never inside one that
+  // moves after it. (Until 2026-11-21, MY_API_TOKEN, MY_API_TOKEN_2 and API_TOKEN, in that
+  // order, numbered MY-API-TOKEN for ever, and the host's daemon with it: review of #187.)
+  // Again while any moved: one that could not move may be able to once a longer one has
+  // (each that moves overlaps nothing then, and every later one is checked against it, so
+  // it never moves again: at most one pass more than there are rows).
+  for (let moved = true; moved;) {
+    moved = false;
+    for (const row of [...secretRows].sort((a, b) => a.name!.length - b.name!.length)) {
+      const base = row.name!;
+      const rows = () => secretRows.filter((r) => r !== row).map((r) => r.name!);
+      const rest = () => [...others, ...rows()];
+      // Only the contained one moves: a name that contains another keeps its own.
+      const contained = (name: string) => rest().some((o) => o !== name && o.includes(name));
+      // (Another row's own name is a clash too; a secret the domain has, of the same name, is
+      // this one imported again.)
+      const clashes = (name: string) =>
+        rest().some((o) => overlap(o, name)) || rows().includes(name);
+      if (!contained(base)) continue;
+      // The number goes inside the name's bound: a name at its longest is cut to make room
+      // (until 2026-11-21 it went past it, and the root refused the name: review of #187).
+      const numbered = (n: number) =>
+        `${base.slice(0, SECRET_NAME.most - String(n).length - 1).replace(/-+$/, "")}-${n}`;
+      // A number ends what can be ended by one. One that cannot be (the name holds a secret
+      // the domain already has, which no number takes out of it) keeps its name, as a name
+      // that contains another always has.
+      for (let n = 1; n < 100; n++)
+        if (!clashes(numbered(n))) {
+          row.name = numbered(n);
+          moved = true;
+          break;
+        }
+    }
   }
   return out;
+};
+
+/** Two secret names that one would hold the other (the root refuses such a pair, since its
+ *  proxy puts a value in place of each name in text), as a refusal, or null when every
+ *  secret row is apart from the rest and from the domain's own: what keepApart could not
+ *  end, said before anything is set, rather than partway through an import. */
+export const apartRefusal = (rows: PlanRow[], others: string[] = []): string | null => {
+  const names = rows.filter((r) => r.kind === "secret").map((r) => r.name!);
+  for (const [i, name] of names.entries())
+    for (const other of [...names.slice(i + 1), ...others])
+      if (name !== other && (name.includes(other) || other.includes(name)))
+        return name.includes(other)
+          ? `the secret ${name} would hold ${other}: rename one of their keys in the .env`
+          : `the secret ${other} would hold ${name}: rename one of their keys in the .env`;
+  return null;
 };
 
 declare namespace keepApart {
@@ -802,5 +868,75 @@ declare namespace keepApart {
     >,
     "matches",
     [{ name: "API-KEY-SECRET-1" }]
+  >;
+  /** three that hold one another, in any order: each kept apart, and it ends (until
+   *  2026-11-21 this order never did) */
+  export type Nested = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [
+          Row<"MY_API_TOKEN", "MY-API-TOKEN">,
+          Row<"MY_API_TOKEN_2", "MY-API-TOKEN-2">,
+          Row<"API_TOKEN", "API-TOKEN">,
+        ],
+      ]
+    >,
+    "matches",
+    [{ name: "MY-API-TOKEN-3" }, { name: "MY-API-TOKEN-2" }, { name: "API-TOKEN-1" }]
+  >;
+  /** one that holds a secret the domain has, which no number takes out: it ends, and keeps
+   *  its name */
+  export type HoldsAnOther = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [Row<"MY_API_TOKEN", "MY-API-TOKEN">, Row<"MY_API_TOKEN_2", "MY-API-TOKEN-2">],
+        others: ["API-TOKEN"],
+      ]
+    >,
+    "matches",
+    [{ name: "MY-API-TOKEN" }, { name: "MY-API-TOKEN-2" }]
+  >;
+  /** what no number ends is said, before anything is set (the control: names kept apart
+   *  are nothing to say) */
+  export type Said = [
+    Expect<
+      Invoke<
+        typeof apartRefusal,
+        [
+          rows: [Row<"MY_API_TOKEN", "MY-API-TOKEN">, Row<"MY_API_TOKEN_2", "MY-API-TOKEN-2">],
+          others: ["API-TOKEN"],
+        ]
+      >,
+      "=",
+      "the secret MY-API-TOKEN-2 would hold MY-API-TOKEN: rename one of their keys in the .env"
+    >,
+    Expect<
+      Invoke<
+        typeof apartRefusal,
+        [rows: [Row<"API_KEY", "API-KEY-SECRET-1">], others: ["MYAPP-API-KEY-SECRET"]]
+      >,
+      "=",
+      null
+    >,
+  ];
+  /** a name at its longest is cut to make room for its number: never past 64, which the
+   *  root would refuse */
+  export type Longest = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [
+          Row<
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX_TOKEN",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX-TOKEN"
+          >,
+        ],
+        others: ["XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX-TOKEN2"],
+      ]
+    >,
+    "matches",
+    [{ name: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX-TOKE-1" }]
   >;
 }

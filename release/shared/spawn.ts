@@ -16,9 +16,12 @@
 // The command is a list of words, run as an agent in the new workspace (agent-holder.py):
 // never a line for a shell on the Mac. On the host it is only ever an argv element.
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { isBranch, isSlug, parseRepo } from "./names.ts";
+import { over } from "./limits.ts";
+import { printable } from "./text.ts";
+import { branchRefusal, characters, isBranch, isSlug, parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { wordsOf } from "../.harness/shared-spawn.ts";
 
 /** Where the VM's key is, inside the VM (and its devcontainer, which binds /run/desolate). */
 export const IDENTITY_FILE = "/run/desolate/identity";
@@ -28,20 +31,84 @@ const NONCE = /^[0-9a-f]{32}$/;
 /** How long a signed request stays good: the host refuses one older than this, and one it
  *  has already run. */
 export const FRESH_MS = 15 * 60_000;
-export const LIMIT = { words: 64, word: 16_384, total: 65_536 } as const;
+/** How far ahead of the host's clock a request may say it was made: two clocks, the VM's
+ *  and the Mac's, a little apart. */
+const SKEW_MS = 120_000;
+/** What one spawn may carry (R7: a workspace writes it, and the root's ordinary user and the
+ *  host parse it). The command's words and characters (code points): what a program's
+ *  arguments hold, far past any agent's prompt, and far under the system's own argument
+ *  limit (1 MiB on macOS). `checkouts`: the `--checkout`s, each a repository the workspace
+ *  is given. Choices, generous ones; actions.ts's argument bounds are sized to hold them. */
+export const LIMIT = {
+  words: 64,
+  word: 16_384,
+  total: 65_536,
+  checkouts: 16,
+  /** The command as it is carried, JSON, in characters: what one host action's argument
+   *  holds (actions.ts's ARGUMENT.command), and what every request waiting for the host is
+   *  handed over with. A command of plain text is far under it; one of control characters,
+   *  which JSON writes six characters each, is refused here, before it is signed, rather
+   *  than signed and then not carried (the independent review of #187). */
+  json: 200_000,
+} as const;
+
+/** Why a spawn's command is not one desolate will carry (R3: the bound, and by how much), or
+ *  null when it is: for `desolate spawn` to say before it signs, so the agent is told which
+ *  bound (commandOf, which the host checks again, is the same rule). */
+export const commandRefusal = (value: unknown): string | null => {
+  if (!Array.isArray(value)) return "the command is not a list of words";
+  if (value.length > LIMIT.words) return over("the command", LIMIT.words, value.length, "words");
+  let total = 0;
+  for (const [i, word] of value.entries()) {
+    if (typeof word !== "string") return `word ${i + 1} of the command is not text`;
+    if (word.includes("\0"))
+      return `word ${i + 1} of the command holds a NUL, which no program's argument can`;
+    const n = characters(word);
+    if (n > LIMIT.word) return over(`word ${i + 1} of the command`, LIMIT.word, n, "characters");
+    total += n;
+  }
+  if (total > LIMIT.total) return over("the command", LIMIT.total, total, "characters");
+  const json = JSON.stringify(value).length;
+  return json > LIMIT.json ? over("the command's JSON", LIMIT.json, json, "characters") : null;
+};
+
+declare namespace commandRefusal {
+  /** which bound, and the value: never just "not a request" */
+  export type Says = Table<
+    typeof commandRefusal,
+    [
+      [args: [value: ["claude", "-p", "hi"]], expected: null],
+      [args: [value: "claude -p hi"], expected: "the command is not a list of words"],
+      [args: [value: ["a", 1]], expected: "word 2 of the command is not text"],
+      [
+        args: [value: ["a\u0000b"]],
+        expected: "word 1 of the command holds a NUL, which no program's argument can",
+      ],
+      [
+        args: [value: Invoke<typeof wordsOf, [count: 65, length: 1]>],
+        expected: "the command is 65 words, over the 64 allowed",
+      ],
+      [
+        args: [value: Invoke<typeof wordsOf, [count: 1, length: 16385]>],
+        expected: "word 1 of the command is 16385 characters, over the 16384 allowed",
+      ],
+      [
+        args: [value: Invoke<typeof wordsOf, [count: 5, length: 16384]>],
+        expected: "the command is 81920 characters, over the 65536 allowed",
+      ],
+      /** the control: at each bound exactly, a command */
+      [args: [value: Invoke<typeof wordsOf, [count: 4, length: 16384]>], expected: null],
+      [args: [value: Invoke<typeof wordsOf, [count: 64, length: 1]>], expected: null],
+    ]
+  >;
+}
 
 /** The command a spawn runs, if it is one desolate will carry: words, no NUL (which no argv
- *  can hold), bounded. Anything else in a word (spaces, quotes, `$(...)`, a leading dash) is
- *  that word's text: nothing on the host reads it as more than an argv element. */
-export const commandOf = (value: unknown): string[] | null => {
-  if (!Array.isArray(value) || value.length > LIMIT.words) return null;
-  let total = 0;
-  for (const word of value) {
-    if (typeof word !== "string" || word.length > LIMIT.word || word.includes("\0")) return null;
-    total += word.length;
-  }
-  return total <= LIMIT.total ? (value as string[]) : null;
-};
+ *  can hold), bounded (commandRefusal says why not). Anything else in a word (spaces,
+ *  quotes, `$(...)`, a leading dash) is that word's text: nothing on the host reads it as
+ *  more than an argv element. */
+export const commandOf = (value: unknown): string[] | null =>
+  commandRefusal(value) === null ? (value as string[]) : null;
 
 declare namespace commandOf {
   /** words, as they are; nothing a shell would read is special; no NUL; bounded */
@@ -142,21 +209,57 @@ declare namespace canonical {
   >;
 }
 
-/** A spawn's `--checkout`s, as `up` takes them: `<owner/repo>=main` or
- *  `<owner/repo>=worktree:<branch>`, at most 16; null if any is not one. (v2 of the signed
- *  form: v1 had no checkouts.) */
-export const checkoutsOf = (value: unknown): string[] | null => {
-  if (value === undefined) return [];
-  if (!Array.isArray(value) || value.length > 16) return null;
+/** Why a spawn's `--checkout`s are not ones `up` takes (`<owner/repo>=main` or
+ *  `<owner/repo>=worktree:<branch>`, at most LIMIT.checkouts), or null when they are. */
+export const checkoutsRefusal = (value: unknown): string | null => {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return "the checkouts are not a list";
+  if (value.length > LIMIT.checkouts)
+    return over("the spawn", LIMIT.checkouts, value.length, "--checkouts");
   for (const c of value) {
     const m =
       typeof c === "string"
         ? /^([A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})=(main|worktree:(.+))$/.exec(c)
         : null;
-    if (!m || !parseRepo(m[1]) || (m[3] !== undefined && !isBranch(m[3]))) return null;
+    if (!m || !parseRepo(m[1]))
+      return `'${printable(c, 300)}' is not <owner/repo>=main or <owner/repo>=worktree:<branch>`;
+    const branch = m[3] === undefined ? null : branchRefusal(m[3]);
+    if (branch) return branch;
   }
-  return value as string[];
+  return null;
 };
+
+declare namespace checkoutsRefusal {
+  /** what is wrong, and with which --checkout; how many, past the bound */
+  export type Says = Table<
+    typeof checkoutsRefusal,
+    [
+      [args: [value: ["acme/web=worktree:task/web"]], expected: null],
+      [args: [value: undefined], expected: null],
+      [
+        args: [value: ["acme/web"]],
+        expected: "'acme/web' is not <owner/repo>=main or <owner/repo>=worktree:<branch>",
+      ],
+      [
+        args: [value: ["acme/web=worktree:-x"]],
+        expected: "'-x' is not a branch desolate will carry",
+      ],
+      [
+        args: [value: Invoke<typeof wordsOf, [count: 17, length: 1, word: "acme/app=main"]>],
+        expected: "the spawn is 17 --checkouts, over the 16 allowed",
+      ],
+      [
+        args: [value: Invoke<typeof wordsOf, [count: 16, length: 1, word: "acme/app=main"]>],
+        expected: null,
+      ],
+    ]
+  >;
+}
+
+/** A spawn's `--checkout`s, as `up` takes them, or null if any is not one (checkoutsRefusal
+ *  says why). (v2 of the signed form: v1 had no checkouts.) */
+export const checkoutsOf = (value: unknown): string[] | null =>
+  checkoutsRefusal(value) === null ? ((value ?? []) as string[]) : null;
 
 declare namespace checkoutsOf {
   /** up's own spellings, and nothing else */
@@ -464,7 +567,7 @@ export const verify = (
   if (expected.length !== given.length || !timingSafeEqual(expected, given))
     return `the request is not signed by ${r.domain}/${r.parent}`;
   const at = Date.parse(r.at);
-  if (!Number.isFinite(at) || now - at > FRESH_MS || at - now > 120_000)
+  if (!Number.isFinite(at) || now - at > FRESH_MS || at - now > SKEW_MS)
     return "the request is too old (or from the future): ask again";
   return null;
 };

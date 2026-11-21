@@ -136,3 +136,11 @@ export const madeWithoutLinkToken = (name: string) => {
     }),
   );
 };
+
+/** What a person waiting on a provisioning is told, of the lines provision.sh printed. */
+export const stepsSaid = async (lines: string[]): Promise<string[]> => {
+  const { provisionStep } = await import("../host/vm/lima.ts");
+  const said: string[] = [];
+  for (const line of lines) provisionStep(line, (text) => void said.push(text));
+  return said;
+};
