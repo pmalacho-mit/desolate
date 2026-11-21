@@ -31,6 +31,8 @@ Every day: a workspace, your work in it, and its push:
   desolate rm <domain>/<workspace> --if-clean [--if-pushed]      only if nothing in it would be lost (and its commits are on the remote)
   desolate up <domain> ... -- <command...>                       and an agent in it, once it is up
   desolate ui [--open | --link] [--json]                         the dashboard's address; --open signs your browser in to all three pages
+  desolate phone [on | off]                                      the dashboard on your phone, over Tailscale
+  desolate phone dev <domain> | off                              which one domain's dev servers the phone reaches
   desolate offers [<domain>] [--json]                            what workspaces have offered: needs you
   desolate offers dismiss <domain> <owner/repo> <branch>         not this one: off "Needs you" (the branch stays)
   desolate branches [<domain>] [--json]                          every branch each domain has (offered or not)
@@ -81,10 +83,12 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
                                                                  a watcher, a coding agent), with its terminal; no tmux
   desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   your terminal on it; Ctrl-] detaches
   desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
+  desolate agent say <domain>/<workspace> [--name <n>] -- <text>  type a line into it (and Enter), without attaching
 
 Hearing about it, and scripting it:
-  desolate notify                                               notifications on this Mac: a push waiting, an offer,
+  desolate notify [--ntfy <https://ntfy.sh/topic>]              notifications on this Mac: a push waiting, an offer,
                                                                  a workspace asking for you, a push done; until stopped
+                                                                 (--ntfy: to your phone too; pick a long random topic)
   desolate events [--replay <n>]                                 what happens, as JSON lines, until stopped: pushed,
                                                                  offered, status, approval-waiting, workspace-up, ...
 
@@ -543,6 +547,76 @@ const main = async (argv: string[]): Promise<number> => {
     if (values.open === true) openInBrowser(await signinAddress());
     return EXIT.ok;
   }
+  if (verb === "phone") {
+    const { positionals } = flags(rest, {});
+    const what = positionals[0] ?? "status";
+    const phone = await import("./phone.ts");
+    // Serve is pointed only at ports this daemon holds: a port another program holds would be
+    // sent the phone's requests, the tokens in their cookies.
+    const ready = async () => {
+      const { phoneReady } = await import("./daemon.ts");
+      const missing = await phoneReady();
+      if (missing.length)
+        refuse(
+          `another program holds what the phone would be sent to (${missing.slice(0, 3).join(", ")})`,
+          "find it (lsof -nP -iTCP -sTCP:LISTEN), stop it, then: desolate bootstrap",
+        );
+    };
+    if (what === "on") {
+      await ready();
+      const on = await phone.phoneOn();
+      if ("refused" in on) refuse(on.refused, on.fix);
+      const { ui } = await import("./daemon.ts");
+      const token = new URL((await ui()).dashboard).searchParams.get("tkn") ?? "";
+      const { agentsToken } = await import("./agents-web.ts");
+      out(
+        `on your tailnet, for ${on.login}'s devices only:\n` +
+          `  dashboard  ${phone.phoneAddress(on, token)}\n` +
+          `  agents     ${phone.phoneAddress({ ...on, httpsPort: on.httpsPort + 1 }, agentsToken())}\n` +
+          "open each once on your phone: they carry their pages' tokens, so keep them to yourself.\n" +
+          "Pushes are still approved here, on the Mac. desolate phone off takes both off the tailnet.",
+      );
+      return EXIT.ok;
+    }
+    if (what === "dev") {
+      const domain = positionals[1];
+      if (!domain || positionals.length > 2)
+        refuse(
+          "which domain's dev servers?",
+          "desolate phone dev <domain>   (or: off)",
+          EXIT.usage,
+        );
+      if (domain !== "off") await ready();
+      const set = await phone.phoneDev(domain === "off" ? null : domain);
+      if ("refused" in set) refuse(set.refused, set.fix);
+      out(
+        set.dev
+          ? `the phone reaches ${set.dev}'s dev servers now (desolate ports lists their addresses), and no other domain's.\n` +
+              "They share one name on the tailnet with each other: use it for a domain whose pages you trust, and close its tabs before choosing another."
+          : "the phone reaches no dev servers now.",
+      );
+      return EXIT.ok;
+    }
+    if (what === "off") {
+      await phone.phoneOff();
+      out("the dashboard is off your tailnet.");
+      return EXIT.ok;
+    }
+    if (what === "status" && positionals.length <= 1) {
+      const on = phone.readPhone();
+      out(
+        on
+          ? `on: https://${on.name}:${on.httpsPort}/ for ${on.login}'s devices (desolate phone on prints it with its token); dev servers: ${on.dev ?? "none (desolate phone dev <domain>)"}`
+          : "off: desolate phone on puts the dashboard on your tailnet",
+      );
+      return EXIT.ok;
+    }
+    refuse(
+      `desolate phone takes on, off, or nothing, not '${what}'`,
+      "desolate phone on",
+      EXIT.usage,
+    );
+  }
   if (verb === "down") {
     if (flags(rest, {}).positionals.length > 0)
       refuse(
@@ -722,10 +796,24 @@ const main = async (argv: string[]): Promise<number> => {
     else if (sub === "stop")
       await agents.stop(where, { name: values.name as string | undefined }, out);
     else if (sub === "log") await agents.log(where, { name: values.name as string | undefined });
-    else
+    else if (sub === "say") {
+      // A line typed into it, as at its terminal, ended with Enter: for a phone, or a script.
+      if (command.length === 0)
+        refuse(
+          "say what?",
+          `desolate agent say ${where ?? "<domain>/<workspace>"} -- <text>`,
+          EXIT.usage,
+        );
+      await agents.say(
+        where!,
+        values.name as string | undefined,
+        Buffer.from(`${command.join(" ")}\r`),
+      );
+      out("said.");
+    } else
       refuse(
         "desolate agent what?",
-        "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]",
+        "desolate agent start|attach|list|log|say|stop <domain>/<workspace> [--name <n>]",
         EXIT.usage,
       );
     return EXIT.ok;
@@ -769,8 +857,8 @@ const main = async (argv: string[]): Promise<number> => {
     return upstreamCommand(positionals, values, out);
   }
   if (verb === "notify") {
-    flags(rest, {});
-    await (await import("./notify.ts")).notify(out);
+    const { values: notifyValues } = flags(rest, { ntfy: { type: "string" } });
+    await (await import("./notify.ts")).notify(out, notifyValues.ntfy as string | undefined);
     return EXIT.ok;
   }
   if (verb === "git") {
@@ -807,7 +895,8 @@ const main = async (argv: string[]): Promise<number> => {
         out(w.workspace);
         if (w.forwarded.length === 0)
           out("  nothing is listening yet: start a dev server in it and its URL appears here");
-        for (const f of w.forwarded) out(`  ${f.url}`);
+        for (const f of w.forwarded)
+          out(`  ${f.url}${f.phone ? `   on your phone: ${f.phone}` : ""}`);
         for (const r of w.reserved)
           out(
             `  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`,
@@ -938,7 +1027,7 @@ declare namespace main {
     "=",
     {
       message: "desolate agent what?";
-      fix: "desolate agent start|attach|list|log|stop <domain>/<workspace> [--name <n>]";
+      fix: "desolate agent start|attach|list|log|say|stop <domain>/<workspace> [--name <n>]";
       code: 64;
     }
   >;

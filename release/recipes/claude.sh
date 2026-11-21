@@ -97,6 +97,21 @@ desolate exec "$w" ${at[@]+"${at[@]}"} -- /desolate/bin/node -e '
   p.hasTrustDialogAccepted = true; p.hasCompletedProjectOnboarding = true;
   fs.writeFileSync(file, JSON.stringify(c, null, 2));'
 
+# 4b. When Claude stops to ask you something (a permission it needs, a question), the
+#     workspace says so: its status goes orange with Claude's own words, which the dashboard
+#     shows under Needs you and `desolate notify` (with --ntfy, on your phone) passes on. Not
+#     on Claude's idle notice, which comes a minute after every finished turn and would cover
+#     the green it sets when done. A hook in its user settings, in the container.
+desolate exec "$w" ${at[@]+"${at[@]}"} -- /desolate/bin/node -e '
+  const fs = require("fs"), dir = require("os").homedir() + "/.claude", file = dir + "/settings.json";
+  let s = {}; try { s = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+  const asks = "/desolate/bin/node -e \"let s=\x27\x27;process.stdin.on(\x27data\x27,d=>s+=d).on(\x27end\x27,()=>{let m=\x27Claude is waiting for you\x27;try{m=String(JSON.parse(s).message||m)}catch{}require(\x27child_process\x27).execFileSync(\x27desolate\x27,[\x27status\x27,\x27set\x27,\x27orange\x27,m.slice(0,190)])})\"";
+  s.hooks = s.hooks || {};
+  s.hooks.Notification = (s.hooks.Notification || []).filter((h) => !JSON.stringify(h).includes("Claude is waiting for you"));
+  s.hooks.Notification.push({ matcher: "permission_prompt|elicitation_dialog", hooks: [{ type: "command", command: asks }] });
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(s, null, 2));'
+
 # 5. Claude at work, kept running (`desolate agent`). Its environment holds the secret's NAME
 #    as its token (the proxy substitutes it); variables that would outrank that are unset.
 #    --permission-mode auto: the workspace is the boundary, so nothing in it needs to ask.

@@ -202,7 +202,9 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
   return "agent";
 };
 
-export const list = async (only: string | undefined, out: Out, json: boolean) => {
+/** Every agent in the running workspaces (of `only`: a domain, or domain/workspace), as each
+ *  workspace's VM tells it, checked. */
+export const agents = async (only?: string) => {
   const [domain, workspace] = String(only ?? "").split("/");
   const all = await rootctl<{ slug: string; workspaces: Workspace[] }[]>(
     "domain.list",
@@ -261,6 +263,11 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
       ),
   );
   rows.sort((a, b2) => a.workspace.localeCompare(b2.workspace) || a.name.localeCompare(b2.name));
+  return rows;
+};
+
+export const list = async (only: string | undefined, out: Out, json: boolean) => {
+  const rows = await agents(only);
   if (json) return out(JSON.stringify(rows));
   if (rows.length === 0)
     return out("no agents. Start one: desolate agent start <domain>/<workspace> -- <command...>");
@@ -358,6 +365,94 @@ export const log = async (where: string | undefined, options: { name?: string })
   process.stdout.write(
     process.stdout.isTTY ? terminalFilter()(Buffer.from(shown.stdout, "utf8")) : shown.stdout,
   );
+};
+
+/** What an agent printed from byte `from` of its log on (a megabyte at most; `from` below 0,
+ *  or past the end, starts at its last 256 KiB), kept to what a screen needs: for a page that
+ *  draws it in a terminal of its own (agents-web.ts). `next` is where the next read starts. */
+export const output = async (
+  where: string,
+  name: string | undefined,
+  from: number,
+): Promise<{ data: Buffer; next: number }> => {
+  const w = await target(where);
+  const agent = nameOf(name);
+  const read = await backend().exec(
+    w.vm,
+    [
+      "bash",
+      "-c",
+      'f="$HOME/.desolate-agents/$1.log"; s=$(stat -c %s "$f") || exit 3; from=$2; ' +
+        'if [ "$from" -lt 0 ] || [ "$from" -gt "$s" ]; then from=$(( s > 262144 ? s - 262144 : 0 )); fi; ' +
+        'echo "$from"; tail -c +$(( from + 1 )) "$f" | head -c 1048576 | base64 -w0',
+      "_",
+      agent,
+      String(Math.trunc(from)),
+    ],
+    { timeoutMs: 30_000 },
+  );
+  if (read.code !== 0)
+    refuse(
+      `no agent '${agent}' in ${w.domain}/${w.workspace}`,
+      `desolate agent list ${w.domain}/${w.workspace}`,
+    );
+  const [start = "0", data = ""] = read.stdout.split("\n");
+  const raw = Buffer.from(data, "base64");
+  // Each answer ends on a whole UTF-8 sequence; a partial one at its end is read again next
+  // time. The filter is new for each answer, and the page's terminal keeps decoding across
+  // answers: a sequence split between two (C2 | 9D, the C1 form of OSC) passed both filters
+  // and reached the terminal whole (audit, 2026-11-20).
+  const whole = wholeUtf8(raw);
+  return { data: terminalFilter()(raw.subarray(0, whole)), next: Number(start) + whole };
+};
+
+/** How many of `bytes` end on a whole UTF-8 sequence: all of them, less a sequence begun at
+ *  the end and not finished there. */
+export const wholeUtf8 = (bytes: ArrayLike<number>): number => {
+  const n = bytes.length;
+  for (let back = 1; back <= Math.min(3, n); back++) {
+    const b = bytes[n - back]!;
+    if ((b & 0xc0) === 0x80) continue; // a continuation byte: look further back
+    const needs = (b & 0xe0) === 0xc0 ? 2 : (b & 0xf0) === 0xe0 ? 3 : (b & 0xf8) === 0xf0 ? 4 : 1;
+    return needs > back ? n - back : n;
+  }
+  return n;
+};
+
+declare namespace wholeUtf8 {
+  /** a lead byte at the end, or a lead and too few continuations, waits; anything whole goes */
+  export type Cases = Table<
+    typeof wholeUtf8,
+    [
+      [args: [bytes: [0x61, 0xc2, 0xc2]], expected: 2],
+      [args: [bytes: [0x61, 0xc2, 0x9d]], expected: 3],
+      [args: [bytes: [0x61, 0xe2, 0x94]], expected: 1],
+      [args: [bytes: [0x61, 0xe2, 0x94, 0x80]], expected: 4],
+      [args: [bytes: [0x61, 0x62]], expected: 2],
+      [args: [bytes: []], expected: 0],
+    ]
+  >;
+}
+
+/** Type into an agent's terminal, as `attach` would, without staying: the bytes, then let go.
+ *  (A line ends with "\r", as a terminal's Enter sends it.) */
+export const say = async (where: string, name: string | undefined, bytes: Buffer) => {
+  const w = await target(where);
+  const agent = nameOf(name);
+  if (bytes.length === 0 || bytes.length > 64 * 1024)
+    refuse(
+      "say takes up to 64 KiB of text",
+      `desolate agent say ${w.domain}/${w.workspace} -- <text>`,
+      EXIT.usage,
+    );
+  const child = backend().spawn(w.vm, [...HOLDER(), "attach", agent]);
+  child.stdout?.resume();
+  child.stdin!.end(`i ${bytes.toString("base64")}\n`);
+  // The holder passes the line on as it reads it; then this client is let go (an attach that
+  // sends nothing more keeps streaming until it is ended).
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  for (const stream of [child.stdin, child.stdout, child.stderr]) stream?.destroy();
+  child.kill();
 };
 
 /** Your terminal, attached: raw, its size passed on, Ctrl-] to let go. */

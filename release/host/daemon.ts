@@ -46,6 +46,18 @@ import { secretOps } from "./domains.ts";
 import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
+import {
+  assignSlots,
+  phoneOff,
+  phonePort,
+  phonePortsHeld,
+  readPhone,
+  serveSlots,
+  servePhone,
+  slotAddress,
+  SLOTS,
+} from "./phone.ts";
+import { serveAgents } from "./agents-web.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
 import type { Backend as ApprovalBackend, Summary } from "./approve-web.ts";
 import { statusDir } from "../shared/status.ts";
@@ -113,7 +125,7 @@ type Entry = Registered & {
 };
 export type PortView = {
   workspace: string;
-  forwarded: { port: number; url: string }[];
+  forwarded: { port: number; url: string; phone?: string }[];
   reserved: { port: number; why: string }[];
 };
 
@@ -1896,6 +1908,8 @@ const listenersFrom = (ports: number[], ours: ReadonlySet<number>) =>
           port !== EDITOR.server &&
           port !== EDITOR.gate &&
           port !== editorHostPort() &&
+          // The phone's own loopback ports (phone.ts) are never a workspace's dev server's.
+          !(port >= phonePort() && port < phonePort() + 10 + SLOTS) &&
           !ours.has(port),
       )
       .slice(0, 256),
@@ -2164,6 +2178,7 @@ const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
   hostHeld: { has(port: number): boolean },
   rawOwner: { get(port: number): string | undefined },
   holderOf: (port: number) => string,
+  phoneOf: (vm: string, port: number) => string | undefined = () => undefined,
 ): PortView[] =>
   workspaces
     .map((entry) => ({
@@ -2171,10 +2186,14 @@ const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
       forwarded: [...entry.listeners]
         .sort((a, b) => a - b)
         .filter((port) => !hostHeld.has(port))
-        .map((port) => ({
-          port,
-          url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}`,
-        })),
+        .map((port) => {
+          const phone = phoneOf(entry.vm, port);
+          return {
+            port,
+            url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${port}`,
+            ...(phone ? { phone } : {}),
+          };
+        }),
       reserved: [
         ...[...entry.reserved]
           .sort((a, b) => a - b)
@@ -2730,6 +2749,66 @@ const serve = async () => {
     editors6.listen({ port: editorHostPort(), host: "::1", exclusive: true, ipv6Only: true }),
   );
   editors.listen({ port: editorHostPort(), host: "127.0.0.1", exclusive: true });
+  // The dashboard for your phone, over Tailscale Serve (phone.ts): on 127.0.0.1 only, and it
+  // refuses everything until `desolate phone on`.
+  // A phone port another program holds is sent the phone's cookies (the tokens): fail closed.
+  // Only when the phone is on: else nothing is sent there, and a program holding one of these
+  // ports must not be able to retire everyone's tokens at every start (audit, 2026-11-20). It
+  // stays refused either way (phoneReady), so `phone on` cannot point Serve at it.
+  const phoneHeld = (what: string) => {
+    if (!readPhone())
+      return log(`${what} is held by another program: desolate phone on is refused`);
+    log(`${what} is held by another program: the pages' tokens are retired, and the phone is off`);
+    retire();
+    void phoneOff().catch((error) => log(`phone off: ${(error as Error).message}`));
+  };
+  // The agents page types into agents: while the phone is on, its token is made new at each
+  // start of this daemon. While the daemon is down, Tailscale Serve still sends the phone's
+  // requests to its loopback ports, which any program on this Mac may take for that time;
+  // a token it saw then is dead once the daemon is back (audit, 2026-11-20). `desolate phone
+  // on` prints the new link.
+  if (readPhone()) fs.rmSync(path.join(paths.state, "agents-token"), { force: true });
+  servePhone(log, phoneHeld);
+  // Your agents, from your phone (agents-web.ts): the next port, an origin of its own.
+  serveAgents(log, phonePort() + 1, phoneHeld);
+  // Dev servers on the tailnet (phone.ts): each forwarded one a slot, kept while it listens.
+  let slots: (string | null)[] = [];
+  // Only the one domain `desolate phone dev <domain>` names: every slot is the same name on the
+  // tailnet, so one site, and a page of one domain's could act on another's there (phone.ts).
+  const assigned = () => {
+    const dev = readPhone()?.dev ?? null;
+    const wanted = [...entries.values()]
+      .filter((e) => dev !== null && e.domain === dev)
+      .flatMap((e) =>
+        [...e.listeners]
+          .filter((p) => !hostHeld.has(p))
+          .sort((x, y) => x - y)
+          .map((p) => `${e.vm} ${p}`),
+      );
+    slots = assignSlots(slots, wanted);
+    return slots;
+  };
+  const phoneOf = (vm: string, port: number) => {
+    const slot = assigned().indexOf(`${vm} ${port}`);
+    return slot >= 0 ? slotAddress(slot) : undefined;
+  };
+  serveSlots(
+    log,
+    (slot) => {
+      const key = assigned()[slot];
+      const [vm = "", port = ""] = (key ?? "").split(" ");
+      const e = key ? entries.get(vm) : undefined;
+      // Only a port this daemon's forwarder holds, on both loopback addresses: else a slot
+      // would connect to whatever program does (audit, 2026-11-20).
+      const p = Number(port);
+      const forwarded =
+        forwards.get(p)?.listening === true && forwards6.get(p)?.listening !== false;
+      return e && forwarded
+        ? { devHost: devHostname(INSTANCE, e.domain, e.workspace), port: p }
+        : null;
+    },
+    phoneHeld,
+  );
 
   const reconcile = () => {
     const wanted = new Set<number>();
@@ -2968,7 +3047,8 @@ const serve = async () => {
     reconcile();
   };
 
-  const view = (): PortView[] => portsView([...entries.values()], hostHeld, rawOwner, holderOf);
+  const view = (): PortView[] =>
+    portsView([...entries.values()], hostHeld, rawOwner, holderOf, phoneOf);
 
   // ---------------------------------------------------------------- the root UI's host side
   // The root's state service cannot see the host, and cannot ask: no VM can open a
@@ -3101,10 +3181,14 @@ const serve = async () => {
               ports: [...entry.listeners]
                 .sort((x, y) => x - y)
                 .filter((p) => !hostHeld.has(p))
-                .map((p) => ({
-                  port: p,
-                  url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}`,
-                })),
+                .map((p) => {
+                  const phone = phoneOf(entry.vm, p);
+                  return {
+                    port: p,
+                    url: `http://${devHostname(INSTANCE, entry.domain, entry.workspace)}:${p}`,
+                    ...(phone ? { phone } : {}),
+                  };
+                }),
               // Listening in the workspace, held on the Mac: not forwarded, and the workspace's
               // address on that port reaches the Mac's program (the dashboard says so).
               heldOnMac: [...entry.listeners]
@@ -3455,6 +3539,10 @@ const serve = async () => {
           connection.on("close", stop);
           connection.on("error", stop);
           return;
+        } else if (request.op === "phone-ready") {
+          // `desolate phone on` and `phone dev`: whether this daemon holds every port they
+          // would point Tailscale Serve at (phone.ts phonePortsHeld).
+          reply = { ok: true, ...phonePortsHeld() };
         } else if (request.op === "signin") {
           // `desolate ui --open`: the chain of sign-in codes (signin.ts), the host's pages first.
           // The dashboard's is told to the root first, as a digest: a chain whose last link
@@ -3746,6 +3834,13 @@ export const editorPort = async (): Promise<{ port: number; error: string }> => 
 /** The dashboard's address, with the token that lets a browser in (the root's state
  *  service exchanges it for a cookie). Like an editor's address, it is the person's to
  *  open, and not to paste anywhere else. */
+/** Whether this daemon holds every phone port: what is missing, if anything. */
+export const phoneReady = async (): Promise<string[]> => {
+  await ensureDaemon();
+  const reply = await ask({ op: "phone-ready" }, 15_000);
+  return Array.isArray(reply.missing) ? reply.missing.map(String) : ["the host daemon did not say"];
+};
+
 export const ui = async (): Promise<{ dashboard: string; approvals: string }> => {
   await ensureDaemon();
   let token = "";
