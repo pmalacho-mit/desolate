@@ -237,7 +237,11 @@ declare namespace accountLines {
           [
             stream: Invoke<
               typeof chunks,
-              [parts: ['{"diff":{"text":"+a\\n","from":0,"next":null,"total":3}}\n{"error":"late"}\n']]
+              [
+                parts: [
+                  '{"diff":{"text":"+a\\n","from":0,"next":null,"total":3}}\n{"error":"late"}\n',
+                ],
+              ]
             >,
           ]
         >,

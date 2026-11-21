@@ -65,11 +65,7 @@ declare namespace listed {
 
 /** What a shown page leaves unsaid: "and 37 more commits", or null when the page ends the
  *  list. `noun` is one of them; `nouns` is several, when adding an s is not it ("branches"). */
-export const andMore = (
-  list: Listed<unknown>,
-  noun: string,
-  nouns = `${noun}s`,
-): string | null => {
+export const andMore = (list: Listed<unknown>, noun: string, nouns = `${noun}s`): string | null => {
   const more = list.total - list.from - list.items.length;
   return more > 0 ? `and ${more} more ${more === 1 ? noun : nouns}` : null;
 };

@@ -134,7 +134,11 @@ export const withLock: <T>(
 ) => Promise<T>;
 ```
 - `machine` (every process that takes it runs in one VM or on the Mac): the lock names its
-  holder's pid and start time; it is stale only when that process is gone.
+  holder's pid and start time; it is stale only when that process is gone (no such pid, a
+  pid that is now another process, or a zombie).
+- `dir` is there while the lock is held. Beside it, for moments, are others named after it
+  (`<dir>.new-<id>`, `.heir-<id>`, `.gone-<id>`, `.beat-<id>`): whatever sweeps the lock's
+  folder leaves them (as `root/reviewer.ts` sweeps its home at start, by a list of names).
 - `share` (a folder several VMs see, where one cannot see another's processes): the holder
   writes a heartbeat while it lives, from a thread of its own, so work that keeps the
   process busy does not stop it; the lock is stale only when the beat has stopped. The
