@@ -71,7 +71,10 @@ const confirmed = (card) => !card.replaces || card.typed;
 // And a push arms only once the reviewer has said what it sends, and the page shows it: what
 // is signed is that (the host signs no other: approve-web.ts).
 const reviewedOf = (card) => Boolean(card.issue) || card.reviewed;
-const ready = (card, arm) => reviewedOf(card) && attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden && confirmed(card);
+// And only while the page's last look at what waits worked: a page that cannot see the list
+// cannot see that what it shows has changed.
+let current = false;
+const ready = (card, arm) => current && reviewedOf(card) && attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden && confirmed(card);
 const armedOf = (card) => card.arms.find((a) => a.armedAt);
 const disarm = (card) => {
   for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
@@ -83,7 +86,7 @@ const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
 
 const post = async (what, card, squash) => {
-  const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
+  const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, shown: card.push.shown, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
   const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
   const body = await answer.json().catch(() => ({}));
   if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
@@ -203,6 +206,8 @@ const pagedList = (card, name, listed, ul, line, noun, onPage) => {
         add(items, "start");
         first = Math.min(first, page.from);
       } else {
+        // Only the page asked for, holding something: anything else ends the list, said.
+        if (page.from !== from || page.items.length === 0) throw new Error("the reviewer gave another page than the one asked for");
         const items = page.items.slice(Math.max(0, end - page.from));
         add(items, "end");
         end = Math.max(end, page.from + page.items.length);
@@ -441,9 +446,18 @@ const render = (pending, issues) => {
     }
     const shown = JSON.stringify(push.review);
     if (shown !== card.shown) {
-      card.shown = shown;
-      card.summary.replaceChildren(summaryOf(push.review, card));
-      choicesOf(card, push.review);
+      // The click names the very account drawn (`shown`): the host signs no other.
+      card.push.shown = push.shown;
+      try {
+        card.summary.replaceChildren(summaryOf(push.review, card));
+        choicesOf(card, push.review);
+        card.shown = shown;
+      } catch (error) {
+        // An account this page cannot draw is not one it can approve: said, and not armed.
+        card.shown = "";
+        card.summary.replaceChildren(el("p", `this account of the push could not be shown: ${error.message}. It cannot be approved here.`, "error"));
+        choicesOf(card, null);
+      }
       card.changedAt = performance.now();
       changed = true;
     }
@@ -477,9 +491,9 @@ const poll = async () => {
     const body = await answer.json();
     const asked = await fetch("/issues", { credentials: sendCookie, headers: credential });
     const issues = asked.ok ? (await asked.json()).issues : [];
-    if (!answer.ok) say(body.error || `HTTP ${answer.status}`);
-    else render(body.pending, issues);
-  } catch (error) { say(`the host daemon did not answer: ${error.message}`); }
+    if (!answer.ok) { current = false; disarmAll(); say(body.error || `HTTP ${answer.status}`); }
+    else { render(body.pending, issues); current = true; }
+  } catch (error) { current = false; disarmAll(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(poll, 1000);
 };
 poll();

@@ -76,6 +76,9 @@ const account = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 let slow = "";
+/** The branch whose account names another pack each time it is asked (`changing`). */
+let changing = "";
+let asked_ = 0;
 let release = () => {};
 const dropped: string[] = [];
 const asks: Record<string, unknown>[] = [];
@@ -124,6 +127,10 @@ async function* answering(
     if (signal.aborted) return;
   }
   if (asked.branch === unreviewed.branch) return void (yield { error: "bad object" } as never);
+  if (asked.branch === changing)
+    return void (yield {
+      account: account({ sends: { ...SENDS, pack: String(++asked_).repeat(64).slice(0, 64) } }),
+    } as never);
   if (asked.branch === other.branch)
     return void (yield {
       account: account({
@@ -193,15 +200,21 @@ const call = (
       (res) => {
         let text = "";
         res.on("data", (chunk) => (text += chunk));
-        res.on("end", () =>
-          resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }),
-        );
+        res.on("end", () => {
+          // What the page was last given for each push: its click names that account.
+          if (url === "/pending" && res.statusCode === 200)
+            for (const p of (JSON.parse(text) as { pending: { nonce: string; shown?: string }[] })
+              .pending)
+              if (p.shown) lastShown.set(p.nonce, p.shown);
+          resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text });
+        });
       },
     );
     req.on("error", reject);
     req.end(body);
   });
 
+const lastShown = new Map<string, string>();
 let cookie = "";
 /** The page key the sign-in page carried, which the page's script keeps and sends. */
 let storedKey = "";
@@ -212,11 +225,12 @@ const approve = (body: Record<string, unknown>, headers: Record<string, string> 
     "POST",
     "/approve",
     { ...asPage(), origin: ORIGIN, "content-type": "application/json", ...headers },
-    JSON.stringify(body),
+    JSON.stringify({ shown: lastShown.get(String(body.nonce)), ...body }),
   );
 const good = () => ({
   nonce: push.nonce,
   token: pushToken(approveToken(), message),
+  shown: lastShown.get(push.nonce),
   commit: push.commit,
 });
 
@@ -501,6 +515,46 @@ describe("T1 the approval page", () => {
       assert.ok(again.pending[0]!.review.account, "the one still listed keeps its account");
     } finally {
       slow = "";
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
+  it("the push leaves the list and comes back, and the reviewer gives another account: the page's click, for the one it showed, signs nothing", async () => {
+    const again = { ...push, branch: "issue/18", nonce: "8".repeat(32) };
+    const againMessage = formatApproval(again);
+    changing = again.branch;
+    approved.length = 0;
+    try {
+      listed = [{ message: againMessage, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      const shownFirst = lastShown.get(again.nonce)!;
+      // Gone from the list (another page's poll saw it go), and back: asked again.
+      listed = [];
+      await call("GET", "/pending", asPage());
+      listed = [{ message: againMessage, at: "2026-11-12T00:00:00Z" }];
+      await call("GET", "/pending", asPage());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // ...and given, but to a request whose answer never reached the page that is clicked.
+      await call("GET", "/pending", asPage());
+      const click = (shown: string) =>
+        approve({
+          nonce: again.nonce,
+          token: pushToken(approveToken(), againMessage),
+          commit: again.commit,
+          shown,
+        });
+      const stale = await click(shownFirst);
+      assert.equal(stale.status, 409, stale.body);
+      assert.match(stale.body, /not the account of this push the page has now/);
+      assert.equal((await click("")).status, 409, "and with none, nothing");
+      assert.deepEqual(approved, [], "nothing signed");
+      const control = await click(lastShown.get(again.nonce)!);
+      assert.equal(control.status, 200, `control: the account it has now signs: ${control.body}`);
+      assert.equal(approved.length, 1);
+      assert.match(approved[0]!, /\npack: 2{64}\n/, "the pack of the account shown last");
+    } finally {
+      changing = "";
+      approved.length = 0;
       listed = [{ message, at: "2026-11-12T00:00:00Z" }];
     }
   });

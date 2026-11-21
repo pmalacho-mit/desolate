@@ -202,7 +202,7 @@ export const sign = async (
       ? [
           // Every line, whole (what is signed can be read: R1), made safe for the terminal,
           // which wraps a long one. A name in another script is shown as itself.
-          ...summary.map((line) => `  ${printable(line)}`.trimEnd()),
+          ...summary.map((line) => `  ${printable(line, Infinity)}`.trimEnd()),
           "              (desolate's reviewer, in the root)",
         ]
       : []),

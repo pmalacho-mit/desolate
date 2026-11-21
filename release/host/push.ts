@@ -13,7 +13,7 @@ import { editorHostPort, isCommit, parseRepo, repoId, ROOT_HOSTNAME } from "../s
 import { parseArgs } from "node:util";
 import { sign } from "./approver.ts";
 import { catchUp, parseApproval, parseSigned, signedFor } from "../shared/approval.ts";
-import { checkedAccount } from "./approve-web.ts";
+import { checkedAccount, isListed } from "./approve-web.ts";
 import { formatBytes } from "../shared/limits.ts";
 import type { Account, AccountLine, AccountRequest } from "../shared/review-account.ts";
 import { guest } from "./paths.ts";
@@ -647,9 +647,16 @@ export const chosenText = async (
       "there is nothing to squash: the push is one commit on what it builds on",
       `push it as it is: ${choice.again}`,
     );
-  const sends = choice.squash
-    ? { commit: s.squash!.commit, squashes: push.commit, ...s.squash!.sends }
-    : { commit: push.commit, squashes: null, ...s.sends };
+  // (Named one by one: what the reviewer says a push sends names its pack and LFS objects,
+  // never the commit.)
+  const chosen = choice.squash ? s.squash!.sends : s.sends;
+  const sends = {
+    commit: choice.squash ? s.squash!.commit : push.commit,
+    squashes: choice.squash ? push.commit : null,
+    pack: chosen.pack,
+    lfs: chosen.lfs,
+    size: chosen.size,
+  };
   return {
     text: signedFor(message, sends),
     line: reviewedLines(s, await forgeFiles(s, ask), choice.squash),
@@ -734,12 +741,14 @@ export const forgeFiles = async (
         answer = line;
         break;
       }
-    if (!answer || !("page" in answer) || !("files" in answer.page))
+    // A page that is not the one asked for, or holds nothing, ends the list: said, as an error.
+    const given = answer && "page" in answer && "files" in answer.page ? answer.page.files : null;
+    if (!given || !isListed(given, "files") || given.from !== next || given.items.length === 0)
       return [
         ...forge,
         `(and the rest of ${page.total} files, not listed: ${answer && "error" in answer ? answer.error : "the reviewer gave no more"})`,
       ];
-    page = answer.page.files;
+    page = given;
   }
 };
 

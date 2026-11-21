@@ -218,8 +218,9 @@ export async function* withOld(
       held = [];
       size = 0;
       let old: OldSummary | null = null;
+      // (A line past the stream's bound is no answer of either kind: not even parsed.)
       try {
-        old = oldOf(JSON.parse(line.toString("utf8")));
+        if (line.length <= ACCOUNT_LINE_BYTES) old = oldOf(JSON.parse(line.toString("utf8")));
       } catch {
         /* not JSON: not an old answer */
       }

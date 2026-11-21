@@ -58,6 +58,7 @@ import type { mint } from "./signin.ts";
 import type {
   approved,
   ask,
+  askedCount,
   quiet,
   secretsSet,
   waiting,
@@ -102,6 +103,13 @@ const cookieName = (token: string) =>
 export const pushToken = (token: string, message: string) =>
   createHmac("sha256", Buffer.from(token, "hex")).update(`approve\n${message}`).digest("hex");
 const digestOf = (message: string) => createHash("sha256").update(message).digest("hex");
+/** The token over the very account the page was given for a push's text: an approval names
+ *  it, so what is signed is that account and no other, even if the host has since been given
+ *  another for the same text (the push left the list and came back, and was asked again). */
+export const shownToken = (token: string, message: string, account: unknown) =>
+  createHmac("sha256", Buffer.from(token, "hex"))
+    .update(`account\n${digestOf(message)}\n${digestOf(JSON.stringify(account))}`)
+    .digest("hex");
 /** An issue's own token: over its id and every word the page showed (shared/issues.ts). An
  *  issue the root lists with other words by the time of the click no longer matches. */
 export const issueToken = (token: string, issue: Issue) =>
@@ -299,15 +307,25 @@ const isSends = (v: unknown): v is Account["sends"] => {
     sends.lfs.every((entry) => typeof entry === "string")
   );
 };
-const isListed = (v: unknown): boolean => {
-  const list = v as Partial<Listed<unknown>> | null;
+/** Each entry of a list, as the page and the terminal read it: its texts are text, its
+ *  counts are counts. (shared/review-account.ts checks a list's shape; its entries are their
+ *  reader's to check.) */
+const ENTRY: Record<"commits" | "files" | "between", (item: Record<string, unknown>) => boolean> = {
+  commits: (c) =>
+    typeof c.commit === "string" && typeof c.subject === "string" && typeof c.author === "string",
+  files: (f) =>
+    typeof f.path === "string" && Number.isSafeInteger(f.added) && Number.isSafeInteger(f.removed),
+  between: (f) => typeof f.path === "string",
+};
+export const isListed = (v: unknown, list: "commits" | "files" | "between"): boolean => {
+  const listed = v as Partial<Listed<Record<string, unknown>>> | null;
   return (
-    typeof list === "object" &&
-    list !== null &&
-    Array.isArray(list.items) &&
-    list.items.every((item) => typeof item === "object" && item !== null) &&
-    Number.isSafeInteger(list.total) &&
-    Number.isSafeInteger(list.from)
+    typeof listed === "object" &&
+    listed !== null &&
+    Array.isArray(listed.items) &&
+    listed.items.every((item) => typeof item === "object" && item !== null && ENTRY[list](item)) &&
+    Number.isSafeInteger(listed.total) &&
+    Number.isSafeInteger(listed.from)
   );
 };
 /** The reviewer's account, if it is one in every part that is signed or counted: what it
@@ -323,9 +341,10 @@ export const checkedAccount = (value: unknown): { account: Account } | { error: 
     typeof a.key !== "string" ||
     !Array.isArray(a.warnings) ||
     !a.warnings.every((w) => typeof w === "string") ||
-    !isListed(a.commits) ||
-    !isListed(a.files) ||
-    !isListed(a.between) ||
+    !isListed(a.commits, "commits") ||
+    !isListed(a.files, "files") ||
+    !isListed(a.between, "between") ||
+    (a.base !== null && typeof a.base !== "string") ||
     !isSends(a.sends) ||
     ![true, false, null].includes(a.fastForward as boolean | null) ||
     (squash !== undefined &&
@@ -334,11 +353,23 @@ export const checkedAccount = (value: unknown): { account: Account } | { error: 
         typeof squash.commit !== "string" ||
         !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(squash.commit) ||
         typeof squash.message !== "string" ||
+        (squash.parent !== null && typeof squash.parent !== "string") ||
+        ![squash.author, squash.committer, squash.dates].every((t) => typeof t === "string") ||
         !isSends(squash.sends)))
   )
     return { error: "the reviewer's account of the push is not one desolate can read" };
   return { account: a as Account };
 };
+
+// How much of the reviewer the page asks for. Hard bounds against the root's ordinary user,
+// which lists the pushes waiting and can list as many as it likes (R7): each push listed is a
+// question to the reviewer, a process in the root and on this Mac, and an account held here.
+/** Questions answered at once: the rest wait their turn, and say so. A person reads one push
+ *  at a time; four is room for a push from each of a few places at once. */
+const ASKING_MOST = 4;
+/** Pushes the page keeps an account of: past it, a push is listed and said to wait. Far more
+ *  than a person has waiting; at the account's own bound (8 MiB a line) it is 256 MiB. */
+const LISTED_MOST = 32;
 
 /** The one answer to a question asked of the reviewer, past what it says while it works. */
 const answerOf = async (lines: AsyncIterable<AccountLine>): Promise<AccountLine | null> => {
@@ -368,13 +399,19 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     listed: boolean;
   };
   const reviews = new Map<string, Asking>();
+  /** Questions not yet asked, first come first asked, and how many are being answered. */
+  const queued: (() => void)[] = [];
+  let answering = 0;
+  const next = () => {
+    while (answering < ASKING_MOST && queued.length) queued.shift()!();
+  };
   const askingOf = (push: PushApproval, message: string): Asking => {
     const known = reviews.get(digestOf(message));
     if (known) return known;
     const asking: Asking = {
       stop: new AbortController(),
       since: Date.now(),
-      progress: null,
+      progress: { phase: "waiting for another push's account" },
       answer: null,
       listed: false,
     };
@@ -386,7 +423,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       commit: push.commit,
       onto: push.onto,
     };
-    void (async () => {
+    const ask = async () => {
+      if (asking.stop.signal.aborted) return;
+      answering += 1;
+      asking.progress = null;
       try {
         for await (const line of backend.summary(request, asking.stop.signal)) {
           if ("progress" in line) asking.progress = line.progress;
@@ -401,8 +441,13 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         if (!asking.stop.signal.aborted) asking.answer = { error: "the reviewer gave no answer" };
       } catch (error) {
         asking.answer = { error: (error as Error).message };
+      } finally {
+        answering -= 1;
+        next();
       }
-    })();
+    };
+    queued.push(() => void ask());
+    next();
     return asking;
   };
   /** What the page is told of a push's account, now. */
@@ -688,6 +733,21 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       for (const waiting of listed) {
         const push = parseApproval(waiting.message);
         if (!push) continue;
+        // Past the most this page keeps an account of, a push is listed, and not asked about.
+        if (!reviews.has(digestOf(waiting.message)) && reviews.size >= LISTED_MOST) {
+          out.push({
+            nonce: push.nonce,
+            repo: push.repo,
+            branch: push.branch,
+            commit: push.commit,
+            onto: push.onto,
+            token: pushToken(token, waiting.message),
+            review: {
+              error: `over ${LISTED_MOST} pushes are waiting, more than this page asks the reviewer about at once: refuse the ones that are not yours, and this one is asked about then`,
+            },
+          });
+          continue;
+        }
         // Everything shown is the parsed text and the reviewer's account; the root's user's own
         // words about a push are not shown at all. A diff, and the rest of a long list, are
         // asked for when the person wants them (/diff, /page): not in a list polled every second.
@@ -705,6 +765,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           onto: push.onto,
           token: pushToken(token, waiting.message),
           review,
+          ...("account" in review
+            ? { shown: shownToken(token, waiting.message, review.account) }
+            : {}),
         });
       }
       return json(res, 200, { pending: out });
@@ -788,7 +851,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       if (res.destroyed) return;
       if (answer === null) return json(res, 410, { error: "that push is no longer waiting" });
       if ("error" in answer) return json(res, 502, { error: answer.error });
-      if (request.op === "page" && "page" in answer && request.list in answer.page)
+      if (
+        request.op === "page" &&
+        "page" in answer &&
+        isListed((answer.page as Record<string, unknown>)[request.list], request.list)
+      )
         return json(res, 200, {
           page: (answer.page as Record<string, Listed<unknown>>)[request.list],
         });
@@ -844,6 +911,18 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
             error:
               "the page has not shown desolate's reviewer's account of this push yet, so it cannot be approved: nothing was signed. Look at it, then approve",
           });
+        // The very account the page showed: the click names it (`shown`, from /pending).
+        if (
+          reviewed &&
+          !sameSecret(
+            String(asked.shown ?? ""),
+            shownToken(token, waiting.message, (reviewOf(entry!) as { account: Shown }).account),
+          )
+        )
+          return json(res, 409, {
+            error:
+              "that is not the account of this push the page has now: it changed, so nothing was signed; look at it again",
+          });
         if (!reviewed)
           return json(res, 409, {
             error: `desolate's reviewer could not say what this push would send (${printable(entry?.answer && "error" in entry.answer ? entry.answer.error : "no answer")}), so it cannot be approved: nothing was signed`,
@@ -859,9 +938,21 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           return json(res, 409, { error: "there is nothing to squash: it is one commit" });
         signed = signedFor(
           waiting.message,
+          // (Named one by one: what the reviewer says a push sends names its pack and LFS
+          // objects, never the commit.)
           asked.squash === true
-            ? { commit: reviewed.squash!.commit, squashes: push.commit, ...reviewed.squash!.sends }
-            : { commit: push.commit, squashes: null, ...reviewed.sends },
+            ? {
+                commit: reviewed.squash!.commit,
+                squashes: push.commit,
+                pack: reviewed.squash!.sends.pack,
+                lfs: reviewed.squash!.sends.lfs,
+              }
+            : {
+                commit: push.commit,
+                squashes: null,
+                pack: reviewed.sends.pack,
+                lfs: reviewed.sends.lfs,
+              },
         );
       }
       try {
@@ -1561,6 +1652,52 @@ declare namespace handler {
         };
       }
     >
+  >;
+  /** a reviewer asked about four pushes at once, and no more: the fifth waits its turn, and
+   *  says so (the root's user can list as many as it likes) */
+  export type FourAtOnce = Given<
+    HasToken,
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Invoke<
+              typeof handler,
+              [
+                backend: Invoke<
+                  typeof waiting,
+                  [
+                    messages: [
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/1\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/2\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000002\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/3\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000003\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/4\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000004\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/5\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000005\n",
+                    ],
+                  ]
+                >,
+                log: typeof quiet,
+              ]
+            >,
+            request: { method: "GET"; url: "/pending"; headers: Script },
+          ]
+        >,
+        "matches",
+        {
+          json: {
+            pending: [
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "waiting for another push's account" } } },
+            ];
+          };
+        }
+      >,
+      Expect<Invoke<typeof askedCount>, "=", 4>,
+    ]
   >;
   /** no cookie: nothing; the cookie alone, from the page's own origin (what a program on another
    *  port of this name is sent): nothing; the cookie and key without the browser's same-origin

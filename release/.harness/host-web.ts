@@ -105,8 +105,8 @@ export const waiting = (messages: string[], says?: AccountLine[]): Backend => {
 };
 /** The texts the keyring was handed to sign, and those taken off the list. */
 export const approved = () => decided.approved;
-/** The questions the reviewer was asked. */
-export const asked = () => questions;
+/** How many questions the reviewer was asked. */
+export const askedCount = () => questions.length;
 export const refused = () => decided.refused;
 
 /** No shell: the git terminal's tests never get as far as opening one. */
