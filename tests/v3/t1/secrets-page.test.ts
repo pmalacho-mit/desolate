@@ -47,7 +47,9 @@ describe("T1 the secrets page's bounds are the TypeScript's", () => {
       assert.equal(page.test(name), SECRET_NAME_RULE.test(name), name);
     assert.match(
       html,
-      new RegExp(`\\(${SECRET_NAME.least} to ${SECRET_NAME.most} of A-Z, 0-9, _ and -, a letter first\\)`),
+      new RegExp(
+        `\\(${SECRET_NAME.least} to ${SECRET_NAME.most} of A-Z, 0-9, _ and -, a letter first\\)`,
+      ),
     );
     assert.equal(SECRET_NAME_RULE.source, "^[A-Z][A-Z0-9_-]{7,63}$");
     assert.ok(
