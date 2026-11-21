@@ -13,9 +13,11 @@
 // root's user could have been sent straight on to this one (the audit of that version said
 // so). Now nothing the root's user sends is parsed in this process, beyond one JSON line
 // (at most 1 MiB, read by node's own parser) that says how many bytes follow:
-//   - the pack is forwarded to the remote as bytes, counted, never read. The forge's git
-//     reads it;
-//   - an LFS object is hashed as it arrives, and goes up only if it hashes to its name.
+//   - the pack is taken whole and hashed, never read, and goes to the remote only if it is
+//     the pack the person approved (the reviewer made it, of the approved commits' own
+//     objects): no other object rides along. The forge's git reads it;
+//   - an LFS object is hashed as it arrives, and goes up only if it hashes to its name and is
+//     one the approved commits point to (the approval carries their ids' digest).
 //     git-lfs uploads it from a repository of this push's own that holds no git object;
 //   - what is pushed is decided by the keyring's record of the approval, not by anything
 //     sent: this process speaks git's push protocol itself (receive-pack: a few lines of
@@ -35,8 +37,10 @@
 // The socket (PUSHER.control) is in a directory only the root's user and this user enter.
 // One request per connection:
 //   {"op":"ping"}                                             -> {"ok":true}
-//   {"op":"push","approval":id,"pack":N,"lfs":[{"oid","size"}...]}\n
-//     then each LFS object's bytes in that order, then N bytes of pack
+//   {"op":"push","approval":id,"pack":N,"lfs":[{"oid","size"}...],"lfsListed":[oid...]}\n
+//     then each LFS object's bytes in that order, then N bytes of pack. `lfsListed` is every
+//     LFS object the approved commits point to (the reviewer's list, whose digest the person
+//     signed); `lfs` is those of them the root holds, sent
 //                                       -> {"ok":true,...} | {"ok":false,"error","moved"}
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -45,6 +49,7 @@ import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { lfsDigest } from "../shared/approval.ts";
 import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 import { ask } from "./keyring-client.ts";
@@ -103,6 +108,8 @@ type Approved = {
   ref: string;
   commit: string;
   onto: string | null;
+  pack: string;
+  lfs: { count: number; digest: string };
   pubkey: string;
 };
 
@@ -813,7 +820,9 @@ const push = async (
     !isBranch(approved.ref) ||
     !isCommit(approved.commit) ||
     (approved.onto !== null && !isCommit(approved.onto)) ||
-    typeof approved.pubkey !== "string"
+    typeof approved.pubkey !== "string" ||
+    !/^[0-9a-f]{64}$/.test(String(approved.pack)) ||
+    !/^[0-9a-f]{64}$/.test(String(approved.lfs?.digest))
   )
     return { ok: false, error: "the keyring's approval is not well formed" };
   const packSize = Number(request.pack);
@@ -833,17 +842,43 @@ const push = async (
     )
   )
     return { ok: false, error: "LFS objects are named by sha256, with a size of at most 5 GiB" };
+  // The LFS objects the person approved (their ids' digest is in the text they signed): the
+  // whole list, which must be that one, and of it only those the root holds go up.
+  // Each as `<oid> <size>`: the size its pointer says, which the object sent must have.
+  const listed = Array.isArray(request.lfsListed) ? (request.lfsListed as unknown[]) : [];
+  if (
+    listed.length > LIMIT.objects ||
+    !listed.every(
+      (entry) => typeof entry === "string" && /^[0-9a-f]{64} [0-9]{1,12}$/.test(entry),
+    ) ||
+    new Set(listed).size !== approved.lfs.count ||
+    lfsDigest(listed as string[]) !== approved.lfs.digest
+  )
+    return {
+      ok: false,
+      error: "the LFS objects listed are not the ones approved: nothing was pushed",
+    };
+  const allowed = new Set(listed as string[]);
+  if (lfs.some((o) => !allowed.has(`${String(o.oid)} ${String(o.size)}`)))
+    return {
+      ok: false,
+      error:
+        "an LFS object sent is not one the approved commits point to, of the size they say: nothing was pushed",
+    };
   const onto = approved.onto ?? ZERO;
   const forge = forgeAddress();
   const work = fs.mkdtempSync(path.join(PUSHER.home, "push-"));
   const identity = path.join(work, "write.pub");
   fs.writeFileSync(identity, `${approved.pubkey.trim()}\n`, { mode: 0o600 });
   try {
-    // LFS first: the remote never has a pointer without its object. Each object is the
-    // bytes that hash to its name, or nothing goes up.
+    // Everything is received, and checked, before anything goes to the forge: each LFS object
+    // is the bytes that hash to its name, and the pack is the one the person approved, whole.
+    // (Not forwarded as it came, its end held back: any stretch of what arrives may be a
+    // whole pack of its own, which the forge takes as soon as it ends, whatever follows. The
+    // independent review of #165's fix found that, in the first version of it.)
     let left = rest;
+    const dir = path.join(work, "lfs.git");
     if (lfs.length > 0) {
-      const dir = path.join(work, "lfs.git");
       const made = await run("git", ["init", "--bare", "--quiet", dir], { env: env() });
       if (made.code !== 0)
         return {
@@ -878,6 +913,26 @@ const push = async (
           };
         fs.renameSync(`${file}.part`, file);
       }
+    }
+    const packFile = path.join(work, "push.pack");
+    const packOut = fs.openSync(
+      packFile,
+      fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+      0o600,
+    );
+    let packed: { rest: Buffer; sha256: string };
+    try {
+      packed = await receive(socket, left, packSize, (chunk) => void fs.writeSync(packOut, chunk));
+    } finally {
+      fs.closeSync(packOut);
+    }
+    if (packed.sha256 !== approved.pack)
+      return {
+        ok: false,
+        error: `the pack is not the one approved (it hashes to ${packed.sha256.slice(0, 12)}, not ${approved.pack.slice(0, 12)}): nothing was pushed`,
+      };
+    // LFS first: the remote never has a pointer without its object.
+    if (lfs.length > 0) {
       const url = `ssh://${forge.user}@${forge.host}:${forge.port}/${repo.owner}/${repo.name}.git`;
       log(`${approved.repo}: uploading ${lfs.length} LFS object(s)`);
       const up = await run(
@@ -939,7 +994,9 @@ const push = async (
         approved.onto,
         approved.commit,
         async (sink) => {
-          left = (await receive(socket, left, packSize, (chunk) => write(sink, chunk))).rest;
+          // The approved pack, as checked above: its bytes, never read.
+          for await (const chunk of fs.createReadStream(packFile))
+            await write(sink, chunk as Buffer);
         },
       );
       ssh.stdin.end();

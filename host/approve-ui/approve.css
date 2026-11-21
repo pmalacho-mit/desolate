@@ -75,6 +75,11 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .arm { display: inline-block; }
 .onto { color: var(--muted); }
 button.approve:disabled { pointer-events: none; }
+/* The other choice, beside Approve: the same push as one commit. */
+button.approve.squash { background: var(--card); color: var(--fg); border-color: var(--fg); }
+.summary pre.message { margin: 0; padding: var(--s2) var(--s3); background: var(--raise); border-radius: 10px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 11em; overflow: auto; }
+.confirm-replace { color: var(--danger); font-weight: 550; }
+.confirm-replace input { font: 13px var(--mono); padding: 4px 8px; border: 1px solid var(--danger); border-radius: 7px; background: var(--card); color: var(--fg); margin-left: var(--s1); }
 .gone { opacity: 0.5; }
 .sensitive code { color: var(--danger); font-weight: 600; background: color-mix(in srgb, var(--danger) 12%, var(--card)); }
 /* Beside the git terminal (/embed): the same page, narrower. */

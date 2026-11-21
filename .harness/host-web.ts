@@ -70,11 +70,12 @@ export const ask = (
 
 let decided: { approved: string[]; refused: string[] } = { approved: [], refused: [] };
 /** The approval page's backend, with these pushes waiting (each as the root lists it). */
-export const waiting = (messages: string[]): Backend => {
+/** `summary`: what the reviewer says of each push (left out: it never answers). */
+export const waiting = (messages: string[], summary?: Summary): Backend => {
   decided = { approved: [], refused: [] };
   return {
     pending: async () => messages.map((message) => ({ message, at: "2026-11-16T10:00:00Z" })),
-    summary: () => new Promise<Summary>(() => {}),
+    summary: summary ? async () => summary : () => new Promise<Summary>(() => {}),
     approve: async (message) => void decided.approved.push(message),
     refuse: async (message) => void decided.refused.push(message),
     issues: async () => [],

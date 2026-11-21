@@ -7,7 +7,7 @@
 // (pusher.ts); what the person is shown is the reviewer's (reviewer.ts).
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseApproval } from "../shared/approval.ts";
+import { catchUp, parseApproval, squashedFrom } from "../shared/approval.ts";
 import { isBranch, repoId } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
 import type { Repo } from "../shared/names.ts";
@@ -25,9 +25,15 @@ import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
 
 export const WAIT_MS = Number(process.env.DESOLATE_APPROVAL_WAIT_MS) || 110_000;
 
-const approvedId = async (push: Record<string, unknown>) => {
+/** The live approval for this push, if the person gave one: its id, and what it pushes (the
+ *  commit, or the squash of it they chose). */
+const approvedId = async (
+  push: Record<string, unknown>,
+): Promise<{ id: string; commit: string; pack: string } | null> => {
   const reply = await ask(KEYRING.control, { op: "approved", ...push });
-  return reply.ok === true ? String(reply.id) : null;
+  return reply.ok === true
+    ? { id: String(reply.id), commit: String(reply.commit), pack: String(reply.pack) }
+    : null;
 };
 
 /** Returns null when pushed, or why not (one line). `say` is for the person waiting. */
@@ -57,19 +63,22 @@ export const pushCommit = async (
     onto &&
     !forced &&
     (await git(clone, ["merge-base", "--is-ancestor", onto, commit])).code !== 0
-  )
-    return `the remote's ${branch} has commits this does not (non-fast-forward): fetch and rebase, or push with + to replace it`;
+  ) {
+    // After a squashed push, the remote's branch is the squash: say how to build on it.
+    const squashed = await squashedFrom((args) => git(clone, args), onto, commit).catch(() => null);
+    return squashed
+      ? `the remote's ${branch} is the squash of ${squashed.slice(0, 12)}, a commit of this branch, pushed before. To build on it, run \`${catchUp(branch, squashed)}\` in the workspace, on the branch you pushed, then push again; or push with + to replace it`
+      : `the remote's ${branch} has commits this does not (non-fast-forward): fetch and rebase, or push with + to replace it`;
+  }
   const push = { repo: name, ref: branch, commit, onto };
   let approval = await approvedId(push);
   if (!approval) {
     // What the approval page shows of this push is the reviewer's (reviewer.ts): it gets the
-    // objects first, before the challenge's two minutes start. A reviewer that cannot be
-    // reached does not stop the push; the page says it could not say what the push is.
+    // objects first, before the challenge's two minutes start. It makes the pack the push
+    // sends, too, which the approval names: a reviewer that cannot be reached stops the push.
     const unreviewed = await submitForReview(repo, commit);
     if (unreviewed)
-      say(
-        `desolate: the reviewer was not sent this push (${unreviewed}); the approval page will say it cannot describe it`,
-      );
+      return `the reviewer was not sent this push (${unreviewed}), and a push is approved only as the reviewer describes it: desolate doctor`;
     const challenge = await ask(KEYRING.control, { op: "challenge", ...push });
     const nonce = parseApproval(challenge.message)?.nonce;
     if (challenge.ok !== true || !nonce)
@@ -101,17 +110,23 @@ export const pushCommit = async (
     if (!approval) return "no person approved the push on the host, so nothing was pushed";
   }
   try {
-    const failed = await send(repo, approval, commit);
+    const failed = await send(repo, approval.id, { pack: approval.pack });
     if (failed) return failed.error.replace(/\n/g, " ");
   } finally {
-    await ask(KEYRING.control, { op: "revoke", id: approval }).catch(() => {});
+    await ask(KEYRING.control, { op: "revoke", id: approval.id }).catch(() => {});
+  }
+  if (approval.commit !== commit) {
+    say(
+      `desolate: pushed squashed into one commit, ${approval.commit}. The branch you pushed still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace, on that branch (what you committed since is kept, on top):`,
+    );
+    say(`desolate:   ${catchUp(branch, commit)}`);
   }
   // The base a pull request goes into: what an offer of this commit named, else the default.
   const base =
     allOffers().find((o) => o.repo === name && o.branch === branch && o.commit === commit)?.base ??
     repos.registry().repos[name]?.defaultBranch ??
     null;
-  const link = afterPush({ repo: name, branch, commit, base }, say);
+  const link = afterPush({ repo: name, branch, commit: approval.commit, base }, say);
   await repos.fetch(repo).catch(() => {});
   if (link)
     say(`desolate: open a pull request into ${base}, in your browser, as yourself: ${link}`);

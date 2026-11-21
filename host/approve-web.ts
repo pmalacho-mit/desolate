@@ -35,7 +35,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
-import { parseApproval } from "../shared/approval.ts";
+import { parseApproval, signedFor } from "../shared/approval.ts";
 import type { PushApproval } from "../shared/approval.ts";
 import { digestOf as issueDigest, draftOf } from "../shared/issues.ts";
 import type { Issue } from "../shared/issues.ts";
@@ -188,9 +188,30 @@ export type Summary = {
   base?: string | null;
   remote?: string | null;
   fastForward?: boolean | null;
+  /** The commit of this branch the remote's is a squash of (root/reviewer.ts). */
+  squashedFrom?: string;
   lfs?: number;
   diff?: string;
   diffCut?: boolean;
+  /** What the push sends (root/reviewer.ts, `prepare`): put in the text the person signs. */
+  sends?: { pack: string; size: number; lfs: string[] };
+  /** The same push squashed into one commit, when it has two or more. */
+  squash?: {
+    commit: string;
+    parent: string | null;
+    count: number;
+    message: string;
+    author?: string;
+    committer?: string;
+    dates?: string;
+    sends: { pack: string; size: number; lfs: string[] };
+  };
+  /** Files a commit changes that the net change does not list: changed, then put back. */
+  between?: { path: string; sensitive?: boolean }[];
+  moreBetween?: number;
+  eachDiff?: string;
+  eachDiffCut?: boolean;
+  eachDiffWhy?: string;
 };
 export type Waiting = { message: string; at: string };
 const SUMMARY = { deadlineMs: 90_000, keepMs: 120_000 } as const;
@@ -200,8 +221,9 @@ export type Backend = {
   pending: () => Promise<Waiting[]>;
   /** What the push would send, from the reviewer. */
   summary: (push: PushApproval) => Promise<Summary>;
-  /** Sign the message and give the signature to the keyring. */
-  approve: (message: string) => Promise<void>;
+  /** Sign the approval text (the challenge with what the reviewer says the push sends:
+   *  shared/approval.ts, signedFor) and give the signature to the keyring. */
+  approve: (signed: string) => Promise<void>;
   /** Take a waiting push off the list: the push that asked is refused. */
   refuse: (message: string) => Promise<void>;
   /** Issues the person chose to publish on the dashboard, waiting here (the root's word:
@@ -250,7 +272,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   // What the reviewer said of each text, by the text's own digest: a text listed again under
   // the same nonce is another push, with a summary of its own. Asked once per text, in the
   // background, with a deadline: a slow reviewer never holds up the list.
-  const summaries = new Map<string, { at: number; value: Summary | null }>();
+  const summaries = new Map<string, { at: number; value: Summary | null; listed?: boolean }>();
   const summaryOf = (push: PushApproval, message: string): Summary => {
     const key = digestOf(message);
     for (const [k, entry] of summaries)
@@ -509,7 +531,12 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         // Everything shown is the parsed text and the reviewer's account; the root's user's own
         // words about a push are not shown at all.
         // The diff stays here until asked for (/diff): not in a list polled every second.
-        const { diff, ...summary } = summaryOf(push, waiting.message);
+        const { diff, eachDiff, ...summary } = summaryOf(push, waiting.message);
+        // The page is given this account now: from here it may be signed.
+        const given = summaries.get(digestOf(waiting.message));
+        // (An account that says the reviewer could not describe it is shown too: the click is
+        // then refused for that, not for an account not shown.)
+        if (given?.value) given.listed = true;
         out.push({
           nonce: push.nonce,
           repo: push.repo,
@@ -517,7 +544,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           commit: push.commit,
           onto: push.onto,
           token: pushToken(token, waiting.message),
-          summary: { ...summary, hasDiff: diff !== undefined },
+          summary: {
+            ...summary,
+            hasDiff: diff !== undefined,
+            hasEachDiff: eachDiff !== undefined,
+          },
         });
       }
       return json(res, 200, { pending: out });
@@ -584,6 +615,13 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         });
       const shown = summaries.get(digestOf(waiting.message))?.value;
       if (!shown?.ok) return json(res, 404, { error: "the reviewer has not worked it out yet" });
+      // `each`: every commit's own diff, for what was changed in between.
+      if (url.searchParams.get("each") === "1")
+        return json(res, 200, {
+          diff: shown.eachDiff ?? null,
+          cut: shown.eachDiffCut === true,
+          ...(shown.eachDiffWhy ? { why: shown.eachDiffWhy } : {}),
+        });
       return json(res, 200, { diff: shown.diff ?? null, cut: shown.diffCut === true });
     }
     if (req.method === "POST" && (url.pathname === "/approve" || url.pathname === "/refuse")) {
@@ -592,7 +630,13 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
         return json(res, 403, { error: "a request from another origin" });
       const body = await readBody(req);
-      let asked: { nonce?: unknown; token?: unknown; commit?: unknown };
+      let asked: {
+        nonce?: unknown;
+        token?: unknown;
+        commit?: unknown;
+        squash?: unknown;
+        replace?: unknown;
+      };
       try {
         asked = JSON.parse(body ?? "") as typeof asked;
       } catch {
@@ -617,11 +661,48 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         });
       if (asked.commit !== push.commit)
         return json(res, 409, { error: "that is not the commit this push names" });
+      // What is signed: the challenge, with what the reviewer says the push sends (it made the
+      // pack, and the pusher sends no other). No account of it, no approval.
+      // (As the page was shown it, or, if this daemon has not asked yet, asked now.)
+      // Only an account the page was given (/pending listed it): what is signed is what the
+      // person could read, never one asked for at the click (the independent review of #165's
+      // fix: a button armed while the reviewer was still working signed what came after).
+      const entry = summaries.get(digestOf(waiting.message));
+      const reviewed = entry?.listed ? entry.value : null;
+      let signed = "";
+      if (url.pathname === "/approve") {
+        // (Two refusals, told apart: the page has not shown an account yet, or the reviewer
+        // had none to give.)
+        if (!entry?.listed)
+          return json(res, 409, {
+            error:
+              "the page has not shown desolate's reviewer's account of this push yet, so it cannot be approved: nothing was signed. Look at it, then approve",
+          });
+        if (!reviewed?.ok || !reviewed.sends)
+          return json(res, 409, {
+            error: `desolate's reviewer could not say what this push would send (${String(reviewed?.error ?? "no answer").slice(0, 300)}), so it cannot be approved: nothing was signed`,
+          });
+        // A push that replaces the remote's branch, only when the page said so and the
+        // person confirmed that, apart from Approve (approve.js: the branch's name, typed).
+        if (reviewed.fastForward === false && asked.replace !== true)
+          return json(res, 409, {
+            error:
+              "this push replaces the remote's branch: confirm the replace on the page, or nothing is signed",
+          });
+        if (asked.squash === true && !reviewed.squash)
+          return json(res, 409, { error: "there is nothing to squash: it is one commit" });
+        signed = signedFor(
+          waiting.message,
+          asked.squash === true
+            ? { commit: reviewed.squash!.commit, squashes: push.commit, ...reviewed.squash!.sends }
+            : { commit: push.commit, squashes: null, ...reviewed.sends },
+        );
+      }
       try {
         if (url.pathname === "/approve") {
-          await backend.approve(waiting.message);
+          await backend.approve(signed);
           log(
-            `approve page: approved ${push.repo} ${push.branch} ${push.commit}${push.onto ? ` (from ${push.onto})` : " (a new branch)"}`,
+            `approve page: approved ${push.repo} ${push.branch} ${push.commit}${asked.squash === true ? ` squashed into ${reviewed!.squash!.commit}` : ""}${push.onto ? ` (from ${push.onto}${reviewed!.fastForward === false ? ", replacing it" : ""})` : " (a new branch)"}`,
           );
         } else {
           await backend.refuse(waiting.message);
@@ -1380,31 +1461,57 @@ declare namespace handler {
     ]
   >;
 
-  /** the click: the push the page showed, by its nonce, its token and its commit, is signed */
-  export type Approves = Given<
+  /** What desolate's reviewer says the push sends: its pack, no LFS object, and the other
+   *  choice, its two commits squashed into one. */
+  type Sends = {
+    pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    size: 100;
+    lfs: [];
+  };
+  type Reviewed = {
+    ok: true;
+    fastForward: null;
+    sends: Sends;
+    squash: {
+      commit: "5555555555555555555555555555555555555555";
+      parent: null;
+      count: 2;
+      message: "Fix it\n";
+      sends: {
+        pack: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        size: 90;
+        lfs: [];
+      };
+    };
+  };
+  type ReviewedPage = Invoke<
+    typeof handler,
+    [backend: Invoke<typeof waiting, [messages: [Push], summary: Reviewed]>, log: typeof quiet]
+  >;
+  /** The click on Approve, as the page's script sends it. */
+  type Click = {
+    method: "POST";
+    url: "/approve";
+    headers: Script;
+    body: {
+      nonce: "00000000000000000000000000000001";
+      token: Invoke<typeof pushToken, [token: Token, message: Push]>;
+      commit: "0123456789abcdef0123456789abcdef01234567";
+    };
+  };
+  /** a click before the page listed the reviewer's account signs nothing, though the reviewer
+   *  has one: what is signed is what the page was given to show (the T1 node test signs
+   *  after the page's own poll, squashed and replacing too, and is refused after it for a
+   *  push the reviewer could not describe) */
+  export type NotListed = Given<
     HasToken,
     [
       Expect<
-        Invoke<
-          typeof ask,
-          [
-            handler: Page,
-            request: {
-              method: "POST";
-              url: "/approve";
-              headers: Script;
-              body: {
-                nonce: "00000000000000000000000000000001";
-                token: Invoke<typeof pushToken, [token: Token, message: Push]>;
-                commit: "0123456789abcdef0123456789abcdef01234567";
-              };
-            },
-          ]
-        >,
+        Invoke<typeof ask, [handler: ReviewedPage, request: Click]>,
         "matches",
-        { status: 200; json: { ok: true } }
+        { status: 409 }
       >,
-      Expect<Invoke<typeof approved>, "=", [Push]>,
+      Expect<Invoke<typeof approved>, "=", []>,
     ]
   >;
   /** the root's list now has another text under that nonce: the page's token is not over it */

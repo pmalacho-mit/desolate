@@ -352,7 +352,33 @@ git push origin you--app/feature/greet-by-name:refs/heads/feature/greet-by-name
 
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
-it; one click, and the root pushes exactly that commit.
+it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes
+is the one desolate's reviewer made of its commits, and what you approve names it.
+
+What the approval page shows, and the two choices it may add:
+
+- **Files changed in between.** The file list is the net change. Each commit is pushed,
+  though, so a file one commit added and a later one took out again is in the history. The
+  page lists those files, and **Show each commit whole** shows every commit on its own:
+  who wrote it, when, its whole message and its diff.
+- **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
+  the last commit's files, on what the branch builds on, with a message listing every
+  commit. Nothing that was in between reaches the remote. The workspace's branch still has
+  the commits that were squashed, so to carry on, move it onto the squash. After the push,
+  the Mac prints the command, to run in the workspace:
+
+  ```bash
+  git fetch && git rebase --rebase-merges --autostash --onto origin/<branch> <the commit squashed> <branch>
+  ```
+
+  It keeps anything you committed since (a merge stays a merge), and sets aside and puts
+  back what you have not committed. Forget, and the next push says the remote's branch is
+  the squash, and names the command again.
+  From a terminal: `desolate push ... --squash`, or `desolate approve --squash`.
+- **Replacing a branch.** A push that does not build on the remote's branch replaces it, and
+  drops the commits only the remote has. The page says so in red, and approves it only once
+  you type the branch's name. `desolate push` needs `--replace` for it, and the terminal asks
+  you to type `replace <branch>`.
 
 ![A push from the git terminal, waiting for approval beside it](assets/git-approve.png)
 
