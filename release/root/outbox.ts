@@ -8,24 +8,39 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
 import { readJson, writeJson } from "../shared/json.ts";
-import { readPlain } from "../shared/status.ts";
+import { FORGE, formatBytes, over } from "../shared/limits.ts";
+import { printable } from "../shared/text.ts";
 import { domainPath, ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type {
-  aDomain,
-  emptyRoot,
-  linkIn,
-  pathIn,
-  writeFilledIn,
-  writeIn,
-  writeJsonIn,
-} from "../.harness/root-state.ts";
+import type { aDomain, emptyRoot, pathIn } from "../.harness/root-state.ts";
 
 export const outbox = (domain: string) => path.join(domainPath(domain), "outbox");
 export const inbox = (domain: string) => path.join(domainPath(domain), "inbox");
 
-const LIMIT = { json: 1024 * 1024, bundle: 2 * 1024 ** 3, lfs: 5 * 1024 ** 3 } as const;
+// What the root reads from an outbox is bounded, each bound hard (R7): a domain writes these
+// files, and may write anything. Each says why its number, and a file past one is refused by
+// name, with the bound and its size (R3), never as "not a file".
+
+/** A request or a note a workspace leaves (outbox/requests/, an offer's note): a few hundred
+ *  bytes of JSON each. A mebibyte is far past any of them, and what the root holds of one at
+ *  a time. */
+const JSON_BYTES = 1024 * 1024;
+
+/** A domain's list of its branches, in either form it is written: refs.json, one per
+ *  repository (workspace/sync.ts), and a bundle's header (intake.ts), which lists the same
+ *  branches and the commits the bundle leaves out. A branch is at most 200 characters
+ *  (NAMES.branch) and a commit 40, so 4 MiB holds over 16,000 branches at the longest name
+ *  desolate carries, and some 50,000 at a usual one. The root holds and parses the whole
+ *  list, for the dashboard every time it looks: that is what the number bounds. Past it,
+ *  the list is refused whole, said, and never read in part (a part is a list of branches
+ *  git would prune the rest of). */
+export const REFS_BYTES = 4 * 1024 * 1024;
+
+/** A refusal's reason, as kept and shown (a row of the dashboard, a line of `desolate
+ *  offers`), in characters. git's own reasons are under 200; past that the text is the
+ *  bundle's author's, and is cut, with the mark. */
+export const WHY_MOST = 300;
 
 // HOW THE ROOT TOUCHES AN OUTBOX
 //
@@ -85,8 +100,18 @@ export const openDir = (dir: string): Dir | null => {
   }
 };
 
-/** Open a regular file of at most `max` bytes by name in a checked directory; else null. */
-const openIn = (dir: Dir, name: string, max: number): { fd: number; size: number } | null => {
+/** Open a regular file of at most `max` bytes by name in a checked directory; else why not
+ *  (`what` names it for that: "the bundle"; `allows`, who sets the limit, as over() has it).
+ *  `absent`: there is no such name, which is not the domain doing anything. */
+type Opened = { fd: number; size: number };
+type NotOpened = { why: string; absent: boolean };
+const openIn = (
+  dir: Dir,
+  name: string,
+  max: number,
+  what = "the file",
+  allows?: string,
+): Opened | NotOpened => {
   let fd: number | null = null;
   try {
     fd = fs.openSync(
@@ -94,16 +119,19 @@ const openIn = (dir: Dir, name: string, max: number): { fd: number; size: number
       fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK,
     );
     const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > max) throw new Error("not a plain file within the limit");
+    if (!stat.isFile()) return { why: `${what} is not a plain file`, absent: false };
+    if (stat.size > max) return { why: over(what, max, stat.size, "bytes", allows), absent: false };
     const opened = fd;
     fd = null;
     return { fd: opened, size: stat.size };
-  } catch {
-    return null;
+  } catch (error) {
+    const absent = (error as NodeJS.ErrnoException).code === "ENOENT";
+    return { why: absent ? `${what} is not there` : `${what} is not a plain file`, absent };
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
 };
+const isOpened = (value: Opened | NotOpened): value is Opened => "fd" in value;
 
 /** Remove a name from a checked directory. Never a path. */
 const removeIn = (dir: Dir, name: string) => {
@@ -114,12 +142,13 @@ const removeIn = (dir: Dir, name: string) => {
   }
 };
 
-/** The bytes of a file in a checked directory, at most `max` of them. The size was checked
- *  when the file was opened, and a workspace can make it grow afterwards: what is read is
- *  bounded here, by counting, and a file that turns out longer is not taken. */
-const readIn = (dir: Dir, name: string, max: number): Buffer | null => {
-  const opened = openIn(dir, name, max);
-  if (!opened) return null;
+/** The bytes of a file in a checked directory, at most `max` of them; else why not (`what`
+ *  names it). The size was checked when the file was opened, and a workspace can make it
+ *  grow afterwards: what is read is bounded here, by counting, and a file that turns out
+ *  longer is not taken. */
+const readIn = (dir: Dir, name: string, max: number, what: string): Buffer | string => {
+  const opened = openIn(dir, name, max, what);
+  if (!isOpened(opened)) return opened.why;
   try {
     const buffer = Buffer.alloc(Math.min(opened.size, max) + 1);
     let total = 0;
@@ -129,11 +158,12 @@ const readIn = (dir: Dir, name: string, max: number): Buffer | null => {
       read = fs.readSync(opened.fd, buffer, total, buffer.length - total, total)
     ) {
       total += read;
-      if (total >= buffer.length) return null;
+      if (total >= buffer.length)
+        return `${what} grew while it was read, past the ${max} bytes allowed`;
     }
     return buffer.subarray(0, total);
   } catch {
-    return null;
+    return `${what} could not be read`;
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -163,35 +193,14 @@ const copyOut = (fd: number, target: string, max: number): string | null => {
   }
 };
 
-const parse = <T>(data: Buffer | null): T | null => {
-  if (!data) return null;
-  try {
-    return JSON.parse(data.toString("utf8")) as T;
-  } catch {
-    return null;
-  }
-};
-
-/** One JSON file a domain wrote, as data; null for anything else. */
-export const readData = <T>(file: string): T | null => {
-  const dir = openDir(path.dirname(file));
-  if (!dir) return null;
-  try {
-    return parse<T>(readIn(dir, path.basename(file), LIMIT.json));
-  } catch {
-    return null;
-  } finally {
-    dir.close();
-  }
-};
-
 /** Every JSON file waiting in a directory of an outbox whose name matches, oldest name
- *  first, each read once and removed (its name, in that directory). */
+ *  first, each read once and removed (its name, in that directory). One that could not be
+ *  taken (past JSON_BYTES, a link, not JSON) is `data: null`, with `why`, to answer with. */
 export const drain = <T>(
   directory: string,
   pattern: RegExp,
   most: number,
-): { name: string; data: T | null }[] => {
+): ({ name: string; data: T } | { name: string; data: null; why: string })[] => {
   const dir = openDir(directory);
   if (!dir) return [];
   try {
@@ -200,9 +209,15 @@ export const drain = <T>(
       .filter((name) => pattern.test(name))
       .slice(0, most)
       .map((name) => {
-        const data = parse<T>(readIn(dir, name, LIMIT.json));
+        const what = `the request ${name}`;
+        const read = readIn(dir, name, JSON_BYTES, what);
         removeIn(dir, name);
-        return { name, data };
+        if (typeof read === "string") return { name, data: null, why: read };
+        try {
+          return { name, data: JSON.parse(read.toString("utf8")) as T };
+        } catch {
+          return { name, data: null, why: `${what} is not JSON` };
+        }
       });
   } finally {
     dir.close();
@@ -211,28 +226,83 @@ export const drain = <T>(
 
 const syncDir = (domain: string, repo: string) => path.join(outbox(domain), "sync", repo);
 
-/** The domain's branches, as it listed them: only well-formed names and commits survive. */
-export const listedRefs = (domain: string, repo: string): Record<string, string> => {
-  if (!parseRepo(repo)) return {};
-  const data = readData<{ refs?: unknown }>(path.join(syncDir(domain, repo), "refs.json"));
-  const out: Record<string, string> = {};
-  if (data && typeof data.refs === "object" && data.refs !== null)
-    for (const [branch, commit] of Object.entries(data.refs as Record<string, unknown>).slice(
-      0,
-      5000,
-    ))
-      if (isBranch(branch) && isCommit(commit)) out[branch] = commit;
-  return out;
+/** Whether a directory under `base` is not there at all: some directory on the way to it
+ *  is missing, and each before that is a plain one. Anything else in the way (a link, one
+ *  that leads nowhere among them) is something there, and not taken for nothing. */
+const notThere = (base: string, below: string): boolean => {
+  let at = base;
+  for (const part of ["", ...below.split("/")]) {
+    at = path.join(at, part);
+    const stat = fs.lstatSync(at, { throwIfNoEntry: false });
+    if (!stat) return true;
+    if (!stat.isDirectory()) return false;
+  }
+  return false;
 };
 
-declare namespace listedRefs {
-  // (A list that is there is read through openDir, which asks Linux's /proc where an open
-  // directory is: on macOS it finds nothing, so only what is refused before that is here.)
+/** A domain's list of the branches of one repository (refs.json, which its workspaces write
+ *  beside each bundle: workspace/sync.ts), read as data: the one reader of that file, for
+ *  the root's remote helper (what git fetches, and prunes the rest of) and for the dashboard.
+ *  Only names desolate carries and whole commits are taken; any other entry is not a branch
+ *  the root holds. A list that is not there is an empty one (nothing synced yet). One that
+ *  cannot be read whole (over REFS_BYTES, a link, not JSON, not a record of branches) is
+ *  `refused`, with why: never a part, and never taken for none.
+ *
+ *  Read as everything in an outbox is (openDir, above): so off Linux every list that is
+ *  there is refused. Its cases are in tests/v3/t1/outbox.test.ts, which runs on Linux. */
+export const refsOf = (
+  domain: string,
+  repo: string,
+): { refs: Record<string, string> } | { refused: string } => {
+  if (!parseRepo(repo)) return { refused: `'${printable(repo, 100)}' is not a repository` };
+  const what = `${repo}'s list of branches (refs.json)`;
+  const dir = openDir(syncDir(domain, repo));
+  if (!dir)
+    return notThere(outbox(domain), path.join("sync", repo))
+      ? { refs: {} }
+      : { refused: `${what} could not be read: its directory in the outbox is not a plain one` };
+  let text: string;
+  try {
+    const opened = openIn(dir, "refs.json", REFS_BYTES, what);
+    if (!isOpened(opened)) return opened.absent ? { refs: {} } : { refused: opened.why };
+    try {
+      const bytes = Buffer.alloc(opened.size);
+      let total = 0;
+      for (let read = -1; read !== 0 && total < bytes.length; total += read)
+        read = fs.readSync(opened.fd, bytes, total, bytes.length - total, total);
+      text = bytes.subarray(0, total).toString("utf8");
+    } finally {
+      fs.closeSync(opened.fd);
+    }
+  } finally {
+    dir.close();
+  }
+  let refs: unknown;
+  try {
+    refs = (JSON.parse(text) as { refs?: unknown } | null)?.refs;
+  } catch {
+    return { refused: `${what} is not JSON` };
+  }
+  if (typeof refs !== "object" || refs === null || Array.isArray(refs))
+    return { refused: `${what} holds no record of branches` };
+  const out: Record<string, string> = {};
+  for (const [branch, commit] of Object.entries(refs as Record<string, unknown>))
+    if (isBranch(branch) && isCommit(commit)) out[branch] = commit;
+  return { refs: out };
+};
+
+declare namespace refsOf {
+  type Fresh = Invoke<typeof emptyRoot>;
   /** a repository is named as one, or nothing is read */
   export type NotARepo = Expect<
-    Invoke<typeof listedRefs, [domain: "acme", repo: "../../state"]>,
+    Invoke<typeof refsOf, [domain: "acme", repo: "../../state"]>,
     "=",
-    {}
+    { refused: "'../../state' is not a repository" }
+  >;
+  /** nothing synced yet: no branches, which is not a refusal */
+  export type NotThere = Given<
+    [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>],
+    Expect<Invoke<typeof refsOf, [domain: "acme", repo: "acme/app"]>, "=", { refs: {} }>
   >;
 }
 
@@ -260,11 +330,11 @@ export const takeBundles = (
   domain: string,
   repo: string,
   most = Infinity,
-): { copies: string[]; dropped: number; more: boolean } => {
+): { copies: string[]; dropped: string[]; more: boolean } => {
   const dir = openDir(syncDir(domain, repo));
-  if (!dir) return { copies: [], dropped: 0, more: false };
+  if (!dir) return { copies: [], dropped: [], more: false };
   const copies: string[] = [];
-  let dropped = 0;
+  const dropped: string[] = [];
   let more = false;
   try {
     const incoming = path.join(ROOT.state, "incoming");
@@ -275,21 +345,32 @@ export const takeBundles = (
         more = true;
         break;
       }
-      const opened = openIn(dir, name, LIMIT.bundle);
+      // A bundle carries what a push would: no more than the forge takes.
+      const opened = openIn(
+        dir,
+        name,
+        FORGE.packBytes,
+        `the bundle ${name}`,
+        "a push to the forge may carry",
+      );
       // A name of the root's own making, never one a domain chose, and never one already there.
       const copy = path.join(
         incoming,
         `${Date.now().toString(36)}-${randomBytes(8).toString("hex")}.bundle`,
       );
       try {
-        if (!opened || copyOut(opened.fd, copy, LIMIT.bundle) === null)
-          throw new Error("not a plain bundle file within the limit");
+        if (!isOpened(opened)) throw new Error(opened.why);
+        // (Grown since it was opened: refused as what it became.)
+        if (copyOut(opened.fd, copy, FORGE.packBytes) === null)
+          throw new Error(
+            `the bundle ${name} grew while it was read, past the ${formatBytes(FORGE.packBytes)} a push to the forge may carry`,
+          );
         copies.push(copy);
-      } catch {
+      } catch (error) {
         fs.rmSync(copy, { force: true });
-        dropped++;
+        dropped.push((error as Error).message);
       } finally {
-        if (opened) fs.closeSync(opened.fd);
+        if (isOpened(opened)) fs.closeSync(opened.fd);
         removeIn(dir, name);
       }
     }
@@ -313,7 +394,7 @@ export const noteRefusal = (domain: string, repo: string, why: string) => {
     domain,
     repo,
     at: new Date().toISOString(),
-    why: why.replace(/[^\x20-\x7e]/g, "?").slice(0, 300),
+    why: printable(why, WHY_MOST),
   };
   writeJson(
     refusedFile(domain),
@@ -373,11 +454,14 @@ export const takeLfs = (
 ): { ok: true } | { error: string } => {
   if (!isLfsOid(oid)) return { error: "not an LFS object id" };
   const dir = openDir(path.join(outbox(domain), "lfs", repo));
-  const opened = dir ? openIn(dir, oid, LIMIT.lfs) : null;
+  const what = `the LFS object ${oid.slice(0, 12)}`;
+  const opened = dir
+    ? openIn(dir, oid, FORGE.lfsObjectBytes, what, "the forge stores")
+    : { why: `${what} is not there`, absent: true };
   const tmp = `${target}.${process.pid}.tmp`;
   try {
-    if (!dir || !opened)
-      return { error: `the LFS object ${oid.slice(0, 12)} is not in the outbox` };
+    if (!isOpened(opened))
+      return { error: opened.absent ? `${what} is not in the outbox` : opened.why };
     if (opened.size !== size)
       return {
         error: `the LFS object ${oid.slice(0, 12)} is ${opened.size} bytes; its pointer says ${size}`,
@@ -387,10 +471,10 @@ export const takeLfs = (
     if (copyOut(opened.fd, tmp, size) !== oid)
       return { error: `the LFS object ${oid.slice(0, 12)} does not hash to its id` };
     fs.renameSync(tmp, target);
-    removeIn(dir, oid);
+    removeIn(dir!, oid);
     return { ok: true };
   } finally {
-    if (opened) fs.closeSync(opened.fd);
+    if (isOpened(opened)) fs.closeSync(opened.fd);
     dir?.close();
     fs.rmSync(tmp, { force: true });
   }
@@ -455,110 +539,18 @@ export const dropLfs = (domain: string, repo: string, oid: string) => {
  *  workspace/sync.ts): the domain's word, read as data, each name one desolate would carry.
  *  What it holds is not believed from this: a review brings the branch into the root clone
  *  and reads it there. */
-const BRANCHES_PER_REPO = 200;
 export const branchesOf = (slug: string, repoList: string[]) => {
   const out: { repo: string; branch: string; commit: string }[] = [];
-  const base = outbox(slug);
   for (const repo of repoList) {
-    const text = readPlain(base, path.join(base, "sync", repo, "refs.json"), 256 * 1024, true);
-    if (text === null) continue;
-    let refs: Record<string, unknown> = {};
-    try {
-      const parsed = JSON.parse(text) as { refs?: unknown };
-      if (parsed.refs && typeof parsed.refs === "object" && !Array.isArray(parsed.refs))
-        refs = parsed.refs as Record<string, unknown>;
-    } catch {
-      continue;
-    }
-    for (const [branch, commit] of Object.entries(refs).slice(0, BRANCHES_PER_REPO))
-      if (isBranch(branch) && isCommit(commit)) out.push({ repo, branch, commit });
+    // Every one (refsOf's bound is the bound). A list that was refused shows none here; the
+    // root's helper refuses it out loud when it fetches, and the dashboard shows that.
+    const listed = refsOf(slug, repo);
+    if ("refs" in listed)
+      for (const [branch, commit] of Object.entries(listed.refs))
+        out.push({ repo, branch, commit });
   }
   return out;
 };
 
-declare namespace branchesOf {
-  type Fresh = Invoke<typeof emptyRoot>;
-  type Acme = Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app", "acme/web"]]>;
-  /** the domain's own list of its branches, read as data: only names desolate carries, and
-   *  whole commits, survive */
-  export type Lists = Given<
-    [
-      Fresh,
-      Acme,
-      Invoke<
-        typeof writeJsonIn,
-        [
-          where: "domains",
-          name: "acme/outbox/sync/acme/app/refs.json",
-          value: {
-            refs: {
-              main: "0123456789abcdef0123456789abcdef01234567";
-              "feature/login": "0123456789abcdef0123456789abcdef01234567";
-              "--upload-pack=x": "0123456789abcdef0123456789abcdef01234567";
-              "a..b": "0123456789abcdef0123456789abcdef01234567";
-              short: "0123456";
-              "x@{1}": "0123456789abcdef0123456789abcdef01234567";
-            };
-          },
-        ]
-      >,
-    ],
-    Expect<
-      Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>,
-      "=",
-      [
-        { repo: "acme/app"; branch: "main"; commit: "0123456789abcdef0123456789abcdef01234567" },
-        {
-          repo: "acme/app";
-          branch: "feature/login";
-          commit: "0123456789abcdef0123456789abcdef01234567";
-        },
-      ]
-    >
-  >;
-  /** a list that is a link (to a file of the root's, say), too large, not JSON, or not a
-   *  record of branches is no list: that repository shows none, the others theirs */
-  export type NotAList = Given<
-    [
-      Fresh,
-      Acme,
-      Invoke<
-        typeof writeJsonIn,
-        [
-          where: "state",
-          name: "secret.json",
-          value: { refs: { main: "0123456789abcdef0123456789abcdef01234567" } },
-        ]
-      >,
-      Invoke<
-        typeof linkIn,
-        [
-          where: "domains",
-          name: "acme/outbox/sync/acme/app/refs.json",
-          target: Invoke<typeof pathIn, [where: "state", name: "secret.json"]>,
-        ]
-      >,
-      Invoke<
-        typeof writeFilledIn,
-        [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", bytes: 300000]
-      >,
-    ],
-    Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", []>
-  >;
-  /** a list that is not JSON, or whose refs are not a record, is none either */
-  export type NotJson = Given<
-    [
-      Fresh,
-      Acme,
-      Invoke<
-        typeof writeIn,
-        [where: "domains", name: "acme/outbox/sync/acme/app/refs.json", text: "{"]
-      >,
-      Invoke<
-        typeof writeJsonIn,
-        [where: "domains", name: "acme/outbox/sync/acme/web/refs.json", value: { refs: ["main"] }]
-      >,
-    ],
-    Expect<Invoke<typeof branchesOf, [slug: "acme", repoList: ["acme/app", "acme/web"]]>, "=", []>
-  >;
-}
+// (branchesOf is refsOf for each repository: its cases, which read an outbox, are in
+// tests/v3/t1/outbox.test.ts, on Linux.)
