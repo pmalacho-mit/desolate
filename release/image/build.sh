@@ -2,14 +2,22 @@
 # Build desolate's base image from the Ubuntu archive alone (debootstrap), on a Linux host.
 #
 #   sudo image/build.sh --out <dir> [--node-from <dir>] [--subrepo-from <dir>] [--editor-from <dir>]
-#                       [--build-ca <bundle.pem>]
+#                       [--no-editor] [--build-ca <bundle.pem>] [--disk-gb <n>]
 #
+# --no-editor: an image without the editor server (P1's editor), for a builder that cannot
+# reach GitHub's releases and has none to give with --editor-from. The image says so
+# (/opt/desolate/EDITOR-MISSING, which `desolate editor` shows). Without it, a build that
+# cannot fetch the editor fails: an image never lacks it by accident.
 # --build-ca: a CA bundle the BUILD trusts, for a builder behind a proxy that re-signs TLS.
 # It is used while provisioning and is not left in the image.
 #
 # Writes into <dir>:
 #   rootfs.tar        the provisioned root filesystem
-#   disk.raw          the same as a bootable ext4 disk (label desolate-root), for the qemu backend
+#   disk.raw          the same as a bootable ext4 disk (label desolate-root), for the qemu backend:
+#                     --disk-gb big (8 unless said): room for what is provisioned (the
+#                     container image, without a kernel, is 2.0 GB), not a VM's size. Lima grows it to the base VM's disk
+#                     (host/vm/lima.ts, BASE_DISK_GIB) when it makes the base, and every VM
+#                     is a clone of that base (shared/size.ts).
 #   vmlinuz, initrd   its kernel, booted directly (no bootloader on the disk)
 #   manifest.json     sha256 of each, and the versions inside
 # and, with docker on PATH, imports rootfs.tar as the image desolate/base:<sha12> for the
@@ -21,13 +29,14 @@
 # backend provisions a pinned Ubuntu cloud image with the same image/provision.sh instead.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT="" NODE_FROM="" SUBREPO_FROM="" EDITOR_FROM="" BUILD_CA="" DISK_GB=8
+OUT="" NODE_FROM="" SUBREPO_FROM="" EDITOR_FROM="" EDITOR_SERVER="" BUILD_CA="" DISK_GB=8
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT=$2; shift ;;
     --node-from) NODE_FROM=$2; shift ;;
     --subrepo-from) SUBREPO_FROM=$2; shift ;;
     --editor-from) EDITOR_FROM=$2; shift ;;
+    --no-editor) EDITOR_SERVER=none ;;
     --disk-gb) DISK_GB=$2; shift ;;
     --build-ca) BUILD_CA=$2; shift ;;
     *) echo "build.sh: unknown flag $1" >&2; exit 64 ;;
@@ -35,6 +44,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$OUT" ] || { echo "build.sh: --out <dir> is required" >&2; exit 64; }
+[[ $DISK_GB =~ ^[1-9][0-9]*$ ]] || { echo "build.sh: --disk-gb is a whole number of GiB, not '$DISK_GB'" >&2; exit 64; }
+[ -z "$EDITOR_SERVER" ] || [ -z "$EDITOR_FROM" ] || { echo "build.sh: --no-editor or --editor-from, not both" >&2; exit 64; }
 [ "$(id -u)" = 0 ] || { echo "build.sh: needs root (debootstrap, chroot). Run it with sudo." >&2; exit 1; }
 for t in debootstrap mkfs.ext4 chroot; do
   command -v "$t" >/dev/null || { echo "build.sh: '$t' is missing. Install it: apt-get install debootstrap e2fsprogs" >&2; exit 1; }
@@ -87,7 +98,7 @@ if [ -n "$BUILD_CA" ]; then
 fi
 echo "==> provision"
 chroot "$R" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/root \
-  "${CA_ENV[@]}" DESOLATE_IMAGE_KIND=vm bash /opt/desolate-build/image/provision.sh 2>&1 | tee "$OUT/provision.log" | grep -E '^(==>|    )' || true
+  "${CA_ENV[@]}" DESOLATE_IMAGE_KIND=vm DESOLATE_IMAGE_EDITOR="$EDITOR_SERVER" bash /opt/desolate-build/image/provision.sh 2>&1 | tee "$OUT/provision.log" | grep -E '^(==>|    |provision: )' || true
 grep -q '^==> done' "$OUT/provision.log" || { echo "build.sh: provisioning did not finish; see $OUT/provision.log" >&2; tail -15 "$OUT/provision.log" >&2; exit 1; }
 
 echo "==> guest settings for a directly booted disk"

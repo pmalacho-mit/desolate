@@ -174,8 +174,11 @@ while :; do recipes/issues.sh --repo you/app --domain you--app; sleep 60; done  
 
 On your Mac, with your `gh`: every open issue labelled `desolate:run` (`--label`) gets a
 workspace `issue-<n>` on `issue/<n>`, with Claude (or `-- <command...>`) on it, the issue as
-its task; at most `--max` at once. When an issue is closed, its agent is stopped; its
-workspace and branch stay for you (`desolate rm` when you are done). After you push its
+its task; at most `--max` at once (the rest are named, and wait for a later pass). Every
+labelled issue is read, however many there are. When GitHub says an issue is closed, its
+agent is stopped; its workspace and branch stay for you (`desolate rm` when you are done). An
+issue whose label you took off, still open, keeps its agent, and each pass says how to stop
+it. A pass that cannot read the list from GitHub does nothing, and says so. After you push its
 branch, desolate gives you GitHub's page for opening the pull request. An issue's text
 becomes an agent's instructions: label only issues whose text you would hand an agent
 yourself. All of a run's workspaces share one domain, so an agent misled by one issue can
