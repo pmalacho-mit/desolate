@@ -579,7 +579,9 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     );
     assert.match(made.stdout, /MADE/, made.stdout + made.stderr);
     let out = "";
-    for (let i = 0; i < 40 && !/beyond/.test(out); i++) {
+    // (Until the root has the branch with its commit: it can see `harmless` made and not yet
+    // committed on, the same commit as main, and say 0. Seen once in 163.)
+    for (let i = 0; i < 40 && !/beyond dev's main: 1 commit/.test(out); i++) {
       const asked = stack.desolate(
         "review",
         "dev",
@@ -589,7 +591,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
         "domain",
       );
       out = asked.stdout || asked.stderr;
-      if (!/beyond/.test(out)) await sleep(500);
+      if (!/beyond dev's main: 1 commit/.test(out)) await sleep(500);
     }
     assert.match(out, /beyond dev's main: 1 commit\(s\)/, out);
     assert.match(out, /A push would send 2 commit\(s\) \(against origin\)/, out);

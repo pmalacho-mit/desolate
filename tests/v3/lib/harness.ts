@@ -246,6 +246,8 @@ export const newStack = (label: string): Stack => {
       .replace(/\b[0-9a-f]{64}\b/g, "<oid>")
       .replace(/sha256:[0-9a-f]{12}|\b[0-9a-f]{12}\b/g, "<id>")
       .replace(/\d{4}-\d\d-\d\dT[\d:.]+Z/g, "<time>")
+      // (With an offset, as git's iso-strict dates are: a squash's, in the terminal.)
+      .replace(/\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d/g, "<time>")
       .replace(/\b\d+(\.\d+)? ?(ms|s)\b/g, "<duration>")
       .replace(/dsl-<instance>-[0-9a-f]{10}/g, "dsl-<instance>-<vm>")
       .replace(/-[0-9a-f]{6}\.localhost/g, "-<hex>.localhost")

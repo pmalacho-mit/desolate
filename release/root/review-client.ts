@@ -143,3 +143,69 @@ export const submitForReview = async (repo: Repo, commit: string): Promise<strin
     return (error as Error).message;
   }
 };
+
+/** A pack the reviewer made and keeps (reviewer.ts, `prepare`), by its sha256, into `file`, and
+ *  what it says the push sends. The root's user carries it to the pusher and can change
+ *  nothing in it: the approval names its digest. */
+export const packFor = (
+  repo: Repo,
+  pack: string,
+  file: string,
+): Promise<{ pack: string; size: number; lfs: string[] }> =>
+  withReviewer(
+    () =>
+      new Promise((resolve, reject) => {
+        const socket = connect(REVIEWER.control);
+        let head: Buffer = Buffer.alloc(0);
+        let header: { pack: string; size: number; lfs: string[] } | null = null;
+        let out: number | null = null;
+        let left = 0;
+        let done = false;
+        const finish = (error?: Error) => {
+          if (done) return;
+          done = true;
+          socket.destroy();
+          if (out !== null) fs.closeSync(out);
+          if (error) reject(error);
+          else resolve(header!);
+        };
+        const take = (chunk: Buffer) => {
+          const part = chunk.subarray(0, left);
+          if (part.length) fs.writeSync(out!, part);
+          left -= part.length;
+          if (left === 0) finish();
+        };
+        socket.on("error", (error) => finish(error));
+        socket.on("close", () =>
+          finish(new Error("the reviewer closed the connection before the pack had come")),
+        );
+        socket.on("data", (chunk: Buffer) => {
+          if (header) return take(chunk);
+          head = Buffer.concat([head, chunk]);
+          const end = head.indexOf(10);
+          if (end < 0)
+            return head.length > 1024 * 1024 ? finish(new Error("no answer")) : undefined;
+          let said: Record<string, unknown>;
+          try {
+            said = JSON.parse(head.subarray(0, end).toString("utf8")) as Record<string, unknown>;
+          } catch {
+            return finish(new Error("the reviewer's answer was not JSON"));
+          }
+          if (said.ok !== true) return finish(new Error(String(said.error ?? "no pack")));
+          if (
+            typeof said.pack !== "string" ||
+            !Number.isInteger(said.size) ||
+            (said.size as number) < 1 ||
+            !Array.isArray(said.lfs)
+          )
+            return finish(new Error("the reviewer's answer was not a pack's"));
+          header = { pack: said.pack, size: said.size as number, lfs: said.lfs as string[] };
+          out = fs.openSync(file, "w", 0o600);
+          left = header.size;
+          take(head.subarray(end + 1));
+        });
+        socket.on("connect", () =>
+          socket.write(JSON.stringify({ op: "pack", repo: repoId(repo), pack }) + "\n"),
+        );
+      }),
+  );

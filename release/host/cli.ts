@@ -38,10 +38,12 @@ Every day: a workspace, your work in it, and its push:
   desolate issue publish | refuse <id>                           create one on GitHub, as you, once you have read it (or not)
   desolate review <domain> <owner/repo> <branch> [--diff] [--against origin|domain] [--json]
                                                                  what a push would send; --diff: the diff itself
-  desolate push <domain> <owner/repo> <branch> --expect <commit>
+  desolate push <domain> <owner/repo> <branch> --expect <commit> [--squash] [--replace]
                                                                  to the remote; you approve it here, on the
-                                                                 host, on your terminal
-  desolate approve [--web [--open] | --selftest]                 approve a push waiting for you (the dashboard's, the
+                                                                 host, on your terminal. --squash: its commits as
+                                                                 one; --replace: a push that does not build on the
+                                                                 remote's branch, which it then replaces
+  desolate approve [--web [--open] | --selftest | --squash]      approve a push waiting for you (the dashboard's, the
                                                                  git terminal's, the root shell's)
                                                                  (--web: the approval page's address, for one click)
   desolate git [<owner/repo>] [--open]                           a shell in the git VM, in your browser: your own
@@ -517,7 +519,12 @@ const main = async (argv: string[]): Promise<number> => {
     return EXIT.ok;
   }
   if (verb === "push") {
-    flags(rest, { expect: { type: "string" }, "allow-default": { type: "boolean" } });
+    flags(rest, {
+      expect: { type: "string" },
+      "allow-default": { type: "boolean" },
+      squash: { type: "boolean" },
+      replace: { type: "boolean" },
+    });
     const { push } = await import("./push.ts");
     return push(rest);
   }
@@ -639,6 +646,7 @@ const main = async (argv: string[]): Promise<number> => {
       selftest: { type: "boolean" },
       web: { type: "boolean" },
       open: { type: "boolean" },
+      squash: { type: "boolean" },
     });
     if (values.selftest === true) return (await import("./approver.ts")).selftest(out);
     if (values.web === true) {
@@ -653,7 +661,7 @@ const main = async (argv: string[]): Promise<number> => {
       return EXIT.ok;
     }
     const { approve } = await import("./push.ts");
-    return approve(out);
+    return approve(out, { squash: values.squash === true, replace: true });
   }
   if (verb === "events") {
     // JSON lines, one per event, until stopped: for a script to act on (events.ts says how

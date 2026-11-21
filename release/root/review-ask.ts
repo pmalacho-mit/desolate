@@ -75,6 +75,14 @@ const main = async () => {
       "PATH=/usr/local/bin:/usr/bin:/bin",
       "LANG=C.UTF-8",
       `HOME=${REVIEWER.home}`,
+      // A process group of its own, ended whole at 95 s: killed by spawnSync's timeout, runuser
+      // left node and its git running (the independent review of #169). Low priority too.
+      "timeout",
+      "--signal=KILL",
+      "95",
+      "nice",
+      "-n",
+      "10",
       "node",
       "--disable-warning=ExperimentalWarning",
       "/opt/desolate/proxy-code/root/reviewer.ts",

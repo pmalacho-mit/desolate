@@ -1413,13 +1413,77 @@ are left for the owner, with what would close them.
   scrubbing, which knows the value only as it is. Closing it: no secret substituted in a
   request body unless the person says so for that secret; the import presets naming each
   service's header (Gemini's `x-goog-api-key`, Tavily's `Authorization`).
-- **What a push carries beyond its commit is not in its approval.** The LFS objects and the
-  pack the pusher sends come from the root's request: a root user taken over could add objects
-  to an approved push (they are uploaded before the branch's compare-and-swap). Closing it: the
-  reviewer computes the objects and the oids, the approval covers them, the pusher sends only
-  those, after the swap. Also: the approval shows the net change, while every commit between
-  is pushed (content added then removed is still in the history), and `desolate push` replaces
-  a remote branch that does not build on the commit with no flag asked for it.
+- **What a push carries beyond its commit is not in its approval: closed the same day (#165).**
+  The LFS objects and the pack the pusher sent came from the root's request: a root user
+  taken over could add objects to an approved push, uploaded under the write key. Now the
+  reviewer makes the pack (`root/reviewer.ts`, `prepare`: the objects the commit has that the
+  remote's branches do not, each compressed by the reviewer's git itself, `--no-reuse-object`)
+  and keeps it by its sha256, and lists the LFS objects its new blobs point to. The HOST puts
+  the pack's sha256 and the LFS ids' digest in the text the person signs (`shared/approval.ts`,
+  v3: the root's user writes neither). The pusher takes the whole pack, and every LFS object,
+  before it sends a byte: the pack only if it hashes to the approved one, an LFS object only if
+  it hashes to its name and is on the approved list.
+  Two independent reviews of the first version found two ways round it, each now a test:
+  - It forwarded the pack as it came, holding back its last 32 bytes until the hash was
+    checked. But any stretch of what arrives can be a whole pack of its own: the root's user's
+    own pack, whole, with 32 bytes after it, went whole to the forge, which took it before the
+    hash was checked (T2 04 sends exactly that; run against that pusher, the branch moved).
+  - The reviewer's pack-objects copied each object's compressed bytes as the root's user sent
+    them. zlib's choices (a stored block's padding, its tables) and a delta's form are not the
+    object, so they carried bytes of the root's user's choosing inside the approved pack, to the
+    forge's own pack store (shown with git 2.39 by the review). T2 04 stores an object
+    uncompressed in the root's clone: a pack that reuses it carries its bytes as they are
+    (the control), and the reviewer's does not.
+  Left open on purpose: the LFS objects go up before the branch's swap, as they must (the
+  remote never has a pointer without its object), so a push the forge then refuses leaves
+  approved objects there, and nothing else. The reviewer's repositories still grow with what
+  the root's user submits, as before.
+  The same change closes the other two items. The approval page lists the files a commit
+  changes that the net change does not show, shows each commit's diff, and offers to push the
+  commits squashed into one. The squash is the reviewer's commit: the last commit's tree, on
+  where the branch leaves the remote's history, with the last commit's author and dates. The
+  approval names it, and `squashes:` the reviewed one. And a push that replaces the remote's
+  branch is signed only once the person confirms the replace apart from Approve: the branch's
+  name typed on the page (the host refuses the click without it), `--replace` for `desolate
+  push`, `replace <branch>` typed at the terminal (before Touch ID too). The keyring files a
+  signed text only if it answers its own challenge: the same repository, branch, onto and
+  nonce, and `squashes`, or else `commit`, the challenge's commit (that `commit` is a squash
+  of it, the keyring cannot check: the host's signature vouches for it). The page signs only an
+  account it listed, and its Approve arms only once that account is on it. A push the reviewer
+  cannot describe can no longer be approved at all.
+  Two more independent reviews, of the whole change (one trying to break it, one against this
+  repository's own rules), found nothing that sends the forge anything unapproved, and gaps in
+  what the person is shown, in the tests, and in the root's resources, all fixed before it
+  merged:
+  - **Shown.** The terminal cut its account at 300 characters, so a header warning could push
+    "changes what runs on the forge" off the end: now a line each, the forge's files and the
+    warnings first. Only the first 50 commits' headers were read, and a signature, a mergetag
+    or an encoding was taken as git's own: now every pushed commit's, and anything but the
+    four every commit has is warned of with its size. A single commit's message was shown
+    nowhere, and each commit's diff gave the newest 50 under "cut at 256 KiB": now each commit
+    whole, a single one too, first to last, cut with its reason, and a warning when it could
+    not be made. The squash's dates were not shown, nor anything of it in the terminal: now
+    its message, who it names and when, read back from the commit git wrote. A file name with
+    a newline was listed as two.
+  - **Tests.** The recompression had no test; the checks that something is not on the forge
+    had no control; the case of an LFS object sent but not on the list was refused by the
+    digest, never reaching the check it named; an in-source test of an undescribed push could
+    not fail. Each now has a test with its control.
+  - **The root's resources.** Every summary recompresses a push twice, and the root's user
+    could have the page ask again and again: now one summary at a time, each kept ten minutes
+    by the push and the remote's branches, git's pack memory and threads bounded, and a
+    summary that runs past 95 s killed whole, git and all.
+  - **After a squash.** The command printed to carry on came from the root's ordinary user,
+    which could print any: now the host prints it, from the text it signed. A plain rebase
+    made copies of what a merge brought in: now `--rebase-merges`.
+  A fresh review of those fixes found the header check still open: a second `committer`
+  line, or a line continuing the first, passed `fsck --strict` and `receive.fsckObjects`,
+  and was taken as git's own by its name. Now the four are matched as git writes them, in
+  order, once, and every byte after them is extra (T2 04 pushes exactly that commit's
+  account). It also found the lock and the kept summaries cleared at each restart of the
+  reviewer, which the root's user causes at will (now kept), two races in the lock, and a
+  single commit's message unseen when its change was too large (now its message is shown,
+  without the diff).
 - **Tokens in a command line.** `desolate approve --web --open`, `git --open` and
   `editor --open` pass the page's address, its token in it, to `open`, whose arguments any
   user of the Mac can read in `ps`. Closing it: open them through a one-time sign-in code, as

@@ -49,6 +49,8 @@ desolate: this push needs your confirmation.
   branch      feature/greet
   commit      <commit>
   onto        none: the remote has no feature/greet yet
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
   sends       2 commit(s) the remote does not have, 2 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (feature/greet) to push, or anything else to refuse: feature/greet
@@ -63,6 +65,8 @@ desolate: this push needs your confirmation.
   branch      main
   commit      <commit>
   onto        <commit>  (the remote's main now: it moves from this to the commit, or not at all)
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
   sends       1 commit(s) the remote does not have, 1 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (main) to push, or anything else to refuse: main

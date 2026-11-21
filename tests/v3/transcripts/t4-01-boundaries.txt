@@ -108,6 +108,22 @@ index cd7f97a..987c87a 100644
 to push exactly this: desolate push a acme/widgets offered --expect <commit>
 [exit 0]
 
+## a push from the real root VM, and the root's user's own pack
+
+$ desolate push a acme/widgets offered --expect <commit>    # at a terminal; the person types: offered
+desolate: this push needs your confirmation.
+  repository  acme/widgets
+  branch      offered
+  commit      <commit>
+  onto        none: the remote has no offered yet
+  pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
+  LFS         0 object(s), only those its commits point to
+  sends       3 commit(s) the remote does not have, 1 file(s)
+              (desolate's reviewer, in the root)
+Type the branch name (offered) to push, or anything else to refuse: offered
+pushed acme/widgets offered at <commit> (3 commit(s)).
+[exit 0]
+
 ## the editor, in a real VM
 
 $ desolate editor a/w1
