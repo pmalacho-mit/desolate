@@ -16,6 +16,12 @@ export async function* longLine(bytes: number): AsyncGenerator<Buffer> {
   throw new Error("the reader went on reading a line past its bound");
 }
 
+/** A stream of `parts` that then fails, as a connection reset under its reader does. */
+export async function* failsAfter(parts: string[], error: string): AsyncGenerator<Buffer> {
+  for (const part of parts) yield Buffer.from(part, "latin1");
+  throw new Error(error);
+}
+
 /** Everything a stream of lines gives, in order. */
 export const all = async <T>(lines: AsyncIterable<T>): Promise<T[]> => {
   const got: T[] = [];

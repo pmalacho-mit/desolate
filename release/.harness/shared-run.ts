@@ -2,6 +2,8 @@
 // asked for a program and then went away (a closed connection, a person's Ctrl-C), and looks
 // for what a program left running behind it.
 import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { run, sleep, waitFor } from "../shared/run.ts";
@@ -74,4 +76,70 @@ export const outlivesItsRunner = async (grouped: boolean): Promise<boolean> => {
   const left = !(await waitFor(() => !alive(pid), grouped ? 2000 : 300, 20));
   if (left) process.kill(pid, "SIGKILL");
   return left;
+};
+
+const NODE = [process.execPath, "--disable-warning=ExperimentalWarning", "--input-type=module"];
+
+/** run() runs a node that itself runs a `sleep` with run(), with a signal of its own (so in a
+ *  group of its own), and writes the sleep's pid to a file; the outer run is then cancelled.
+ *  Is the `sleep` still running afterwards? (Whatever is left is then ended here.) */
+export const nestedLeftRunning = async (): Promise<boolean> => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-run-"));
+  const said = path.join(dir, "pid");
+  const gone = new AbortController();
+  try {
+    const outer = run(
+      NODE[0]!,
+      [
+        ...NODE.slice(1),
+        "-e",
+        `import { run } from ${JSON.stringify(RUN_TS)};
+         await run("sh", ["-c", "echo $$ > " + process.argv[1] + "; exec sleep 30"], { signal: new AbortController().signal });`,
+        said,
+      ],
+      { signal: gone.signal },
+    );
+    let pid = 0;
+    if (
+      !(await waitFor(() => (pid = Number(fs.readFileSync(said, "utf8").trim())) > 1, 10_000, 20))
+    )
+      throw new Error("the inner sleep never said its pid");
+    // (The pid is the shell's until it has become the sleep: let it.)
+    await sleep(100);
+    gone.abort();
+    await outer;
+    const left = !(await waitFor(() => !alive(pid), 4000, 20));
+    if (left) process.kill(pid, "SIGKILL");
+    return left;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+};
+
+/** A process runs a `sleep` with run() and a signal, listens for SIGTERM itself (so it lives
+ *  on), and is sent SIGTERM: what does its run answer? */
+export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
+  const runner = spawn(
+    NODE[0]!,
+    [
+      ...NODE.slice(1),
+      "-e",
+      `import { run } from ${JSON.stringify(RUN_TS)};
+       process.on("SIGTERM", () => {});
+       const answer = run("sh", ["-c", "exec sleep 30"], { signal: new AbortController().signal });
+       process.stderr.write("running\\n");
+       process.stdout.write(JSON.stringify(await answer));`,
+    ],
+    { stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let out = "";
+  runner.stdout.on("data", (chunk) => (out += chunk));
+  await new Promise<void>((resolve, reject) => {
+    runner.stderr.on("data", (chunk) => String(chunk).includes("running") && resolve());
+    runner.on("close", () => reject(new Error("the runner ended before its program ran")));
+  });
+  await sleep(100);
+  runner.kill("SIGTERM");
+  await new Promise((resolve) => runner.on("close", resolve));
+  return JSON.parse(out);
 };
