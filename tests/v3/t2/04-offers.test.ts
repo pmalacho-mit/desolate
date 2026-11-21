@@ -263,9 +263,10 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     const json = JSON.parse(
       stack.quiet("review", "dev", "acme/widgets", "issue/12", "--json").stdout,
-    ) as { commit: string; files: string[]; pushable: boolean };
+    ) as { commit: string; changes: { items: { path: string }[]; total: number } };
     assert.equal(json.commit, commit);
-    assert.deepEqual(json.files.sort(), ["README.md", "new.bin"]);
+    assert.deepEqual(json.changes.items.map((c) => c.path).sort(), ["README.md", "new.bin"]);
+    assert.equal(json.changes.total, 2);
   });
 
   it("a push is impossible without a person: every automation path is tried, and refused", () => {
@@ -1578,6 +1579,51 @@ echo "$c1 $c2 $c3 $c4"`);
       /deleting a branch is not something a workspace does/,
     );
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");
+  });
+
+  it("an offer of more LFS objects than the old cap of 2,000 is taken whole, and reviewed whole", () => {
+    stack.step("an offer of 2,001 LFS objects");
+    // (Before, the root took the first 2,000 an offer named and then found the commits
+    // pointing at one it did not have: refused, and "offer again" refused it again. The
+    // control is the first offer here, of one object, taken the same way.)
+    const work = inWs(
+      "dev/w1",
+      `cd ${WT} && git fetch -q && git switch -q -c lfs/many origin/main && mkdir many && for i in $(seq 1 2001); do echo "object $i" > many/$i.bin; done && git add many && git commit -qm 'many LFS objects' && git rev-parse HEAD`,
+    );
+    assert.equal(work.code, 0, work.stderr);
+    const tip = work.stdout.trim().split("\n").pop()!;
+    const offered = stack.desolate(
+      "exec",
+      "dev/w1",
+      "--checkout",
+      "acme/widgets",
+      "--",
+      "desolate",
+      "offer",
+    );
+    assert.equal(offered.code, 0, offered.stdout + offered.stderr);
+    assert.match(
+      offered.stdout,
+      /offered acme\/widgets lfs\/many at [0-9a-f]{12}, with 2001 LFS object\(s\)/,
+    );
+    const offers = JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as {
+      branch: string;
+      commit: string;
+      lfs: number;
+    }[];
+    assert.deepEqual(
+      offers.filter((o) => o.branch === "lfs/many").map((o) => [o.commit, o.lfs]),
+      [[tip, 2001]],
+      "the root took it, with every object",
+    );
+    const review = JSON.parse(
+      stack.quiet("review", "dev", "acme/widgets", "lfs/many", "--json").stdout,
+    ) as { lfsObjects: number; changes: { total: number }; commits: { total: number } };
+    assert.deepEqual(
+      [review.lfsObjects, review.changes.total, review.commits.total],
+      [2001, 2001, 1],
+      "and the review counts every one",
+    );
   });
 
   it("the transcript reads as reviewed", () => {
