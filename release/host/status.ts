@@ -23,7 +23,14 @@ import type { emptyHome } from "../.harness/home.ts";
 type Out = (line: string) => void;
 const viewOf = (w: WorkspacePlan): View => statusView(paths.domainRepos(w.domain), w);
 
-export const status = async (target: string | undefined, out: Out, json: boolean) => {
+/** `notes`: what the host says of each workspace's forwarding, by `<domain>/<workspace>`
+ *  (`desolate ports`'s notes), asked for only once there is something to show. */
+export const status = async (
+  target: string | undefined,
+  out: Out,
+  json: boolean,
+  notes?: () => Promise<ReadonlyMap<string, readonly string[]>>,
+) => {
   const [domain, workspace] = (target ?? "").split("/");
   if (!domain)
     refuse("status of what?", "desolate status <domain>[/<workspace>] [--json]", EXIT.usage);
@@ -43,10 +50,12 @@ export const status = async (target: string | undefined, out: Out, json: boolean
   if (workspace && views.length === 0)
     refuse(`there is no workspace '${target}'`, `desolate list ${domain}`);
   if (json) return out(JSON.stringify(workspace ? views[0] : views));
+  const noted = views.length > 0 ? await notes?.() : undefined;
   for (const view of views) {
     out(
       `${view.workspace}  ${view.status ? `[${view.status.color}] ${view.status.message}` : "(no status)"}`,
     );
+    for (const note of noted?.get(view.workspace) ?? []) out(`  note: ${note}`);
     for (const c of view.checkouts) {
       out(
         `  ${c.repo}@${c.branch}  ${c.status ? `[${c.status.color}] ${c.status.message}  (${c.status.updated})` : "(no status)"}`,
@@ -96,6 +105,35 @@ declare namespace status {
           "    | changed the parser",
           "    | next: its tests",
           "dev/w2  (no status)",
+          "  acme/widgets@w2  (no status)",
+        ];
+      }
+    >
+  >;
+  /** what the host says of a workspace's forwarding, under it */
+  export type Notes = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts">,
+      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: Dev]>,
+    ],
+    Expect<
+      Invoke<
+        typeof statusSays,
+        [
+          command: typeof status,
+          target: "dev",
+          json: false,
+          notes: { "dev/w2": ["3 connections out were refused"] },
+        ]
+      >,
+      "=",
+      {
+        lines: [
+          "dev/w1  (no status)",
+          "  acme/widgets@main  (no status)",
+          "dev/w2  (no status)",
+          "  note: 3 connections out were refused",
           "  acme/widgets@w2  (no status)",
         ];
       }

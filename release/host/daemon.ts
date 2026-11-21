@@ -2358,7 +2358,13 @@ export const ensureDaemon = async () => {
   const child = spawn(
     process.execPath,
     ["--disable-warning=ExperimentalWarning", fileURLToPath(import.meta.url), "serve"],
-    { detached: true, stdio: ["ignore", log, log], env: process.env },
+    // Its port is the one it is started with, for its life: what it listens on is what every
+    // address and origin it checks names, whatever `desolate settings set` stores meanwhile.
+    {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: { ...process.env, DESOLATE_EDITOR_PORT: String(editorHostPort()) },
+    },
   );
   child.unref();
   if (!(await waitFor(alive, 20_000, 100)))
@@ -2398,7 +2404,7 @@ export const tokenAddressesSafe = async () => {
   if (held)
     refuse(
       `not printed: ${held}, and this address carries a token`,
-      "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap",
+      "stop what holds it, or give this stack another port: desolate settings set editor.port <port>, desolate down, then desolate bootstrap",
     );
 };
 
@@ -2427,7 +2433,7 @@ declare namespace tokenAddressesSafe {
       "=",
       {
         message: "not printed: a program on this machine holds [::1]:31580, where browsers look first, and this address carries a token";
-        fix: "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap";
+        fix: "stop what holds it, or give this stack another port: desolate settings set editor.port <port>, desolate down, then desolate bootstrap";
         code: 1;
       }
     >

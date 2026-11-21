@@ -11,7 +11,7 @@ terminal. Nothing in any VM can approve, and a script or agent harness driving `
 on your Mac stops there too, because the prompt is on the terminal and not on its input.
 It is a gate against work being pushed without you having looked, not a defence against
 hostile code on your Mac (see [the one rule](../README.md#the-one-rule-you-keep)). If you want that as well, on a Mac
-`DESOLATE_APPROVER=touchid desolate bootstrap` keeps the approver key in the Secure Enclave
+`desolate settings set approver.kind touchid`, then a first `desolate bootstrap`, keeps the approver key in the Secure Enclave
 behind Touch ID; that path is written and has never been run. `desolate approve --selftest`
 checks whichever you have without pushing anything.
 
@@ -619,6 +619,10 @@ Every setting there is (T1 checks that this table names exactly those):
 | `agent.logMiB` | `DESOLATE_AGENT_LOG_MIB` | on the Mac | a twentieth of the workspace's disk | the most of an agent's output its log keeps: past it the oldest is dropped, and the log says so |
 | `events.kept` | `DESOLATE_EVENTS_KEPT` | on the Mac | 500 | the last events the host daemon holds for `desolate events --replay <n>` |
 | `doctor.ports` | `DESOLATE_DOCTOR_PORTS` | on the Mac | 3000, 3001, 4200, 5000, 5173, 5174, 8000, 8080, 8888 | the ports `desolate doctor` checks for a program of this Mac's holding them |
+| `editor.port` | `DESOLATE_EDITOR_PORT` | on the Mac | 31581 | the one port on this Mac for every editor, the dashboard and the approval page: another, for a second stack beside the first (the daemon has it when it starts again) |
+| `approver.kind` | `DESOLATE_APPROVER` | on the Mac | terminal | which key the first bootstrap makes to approve pushes: `terminal` (a software key) or `touchid` (the Secure Enclave); one made already stays what it is |
+| `workspace.templates` | `DESOLATE_TEMPLATES` | on the Mac | on | whether a domain's environment is built once for its workspaces to start from; off makes each from the base |
+| `browser.app` | `DESOLATE_BROWSER` | on the Mac | the first of Chrome, Firefox, Chromium, Brave and Edge this Mac has | the browser `--open` opens desolate's pages in |
 | `root.landedCheckMinutes` | `DESOLATE_ROOT_LANDED_CHECK_MINUTES` | in the root VM | 15 | how often the root fetches a repository with a push still waiting to land, to see its pull request merged |
 | `proxy.auditMiB` | `DESOLATE_PROXY_AUDIT_MIB` | in the root VM | 1/256 of the root VM's disk | how much of each domain's audit log the root VM keeps: what `net log` and `net recommend` read |
 | `secrets.heldMiB` | `DESOLATE_SECRETS_HELD_MIB` | in the root VM | 256 | how much of one request or response a secrets proxy holds in memory to put a secret in or take one out; past it a body streams (a domain's own: `desolate domain <d> net hold`) |

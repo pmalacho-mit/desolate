@@ -208,9 +208,10 @@ export const whole: (min: number, max: number) => Parse<number>;
 export const mebibytes: (min: number, max: number) => Parse<number>; // "4g", "512m", "4096"
 export const ports: Parse<number[]>; // "3000,5173": each within limits.ts's PORTS
 ```
-A tunable is declared with `define` in the file that uses it, and read with `valueOf`. Until
-the settings ticket lands, `valueOf` reads the environment variable; after it, the same call
-reads what `desolate settings` stored and what the host passed into each VM.
+A tunable is declared with `define` in the file that uses it, and read with `valueOf`, which
+reads, in order: the variable, in the process that reads it; what `desolate settings set`
+stored (on the Mac, `~/.desolate/settings.json`; in a VM, what the host passed in when it
+started it, `/etc/desolate/settings.json`, and only that VM's side's); the default.
 - `define` refuses (throws, when the file loads) a name that is not `area.thing`, a variable
   that is not `DESOLATE_...`, and a name or variable defined before: one definition each.
 - `valueOf` gives the default when the variable is unset or empty, and refuses (throws) a
