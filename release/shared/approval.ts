@@ -200,6 +200,57 @@ export const signedFor = (
 
 /** Is a signed text about this challenge: the same repository, branch, onto and nonce, and
  *  the challenge's commit as it is, or squashed? */
+/** After a squashed push, the remote's branch is one commit the workspace's branch does not
+ *  have, so its next push would replace the remote's. The command, run in the workspace,
+ *  that puts the branch on that commit: what was squashed is dropped (the squash has the very
+ *  same files), what was committed since is kept on top, and uncommitted work is set aside
+ *  and put back. With nothing since, the branch simply becomes the remote's. */
+export const catchUp = (branch: string, squashed: string): string => {
+  if (!isBranch(branch) || !isCommit(squashed)) throw new Error("not a branch and a commit");
+  return `git fetch && git rebase --autostash --onto origin/${branch} ${squashed} ${branch}`;
+};
+declare namespace catchUp {
+  /** the branch's name and the commit squashed, as they are (a branch name is never one a
+   *  shell reads specially: names.ts) */
+  export type Cases = Table<
+    typeof catchUp,
+    [
+      [
+        args: [branch: "fix/login", squashed: "0123456789abcdef0123456789abcdef01234567"],
+        expected: "git fetch && git rebase --autostash --onto origin/fix/login 0123456789abcdef0123456789abcdef01234567 fix/login",
+      ],
+    ]
+  >;
+}
+
+/** Whether the remote's branch, at `onto`, is a squash of a commit of `commit`'s history:
+ *  one commit, with that commit's files, on a parent that commit builds on. What a squashed
+ *  push leaves, and the usual reason a workspace's next push does not build on the remote's.
+ *  That commit, or null. `git` runs git in a repository holding both. */
+export const squashedFrom = async (
+  git: (args: string[]) => Promise<{ code: number; stdout: string }>,
+  onto: string,
+  commit: string,
+): Promise<string | null> => {
+  const [, ...parents] = (await git(["rev-list", "--parents", "-n", "1", onto])).stdout
+    .trim()
+    .split(" ");
+  const tree = (await git(["rev-parse", "--verify", "--quiet", `${onto}^{tree}`])).stdout.trim();
+  const parent = parents[0];
+  if (parents.length !== 1 || !parent || !isCommit(parent) || !/^[0-9a-f]{40}$/.test(tree))
+    return null;
+  // Newest first, so with the same files twice, the commit nearer the tip.
+  const mine = await git(["log", "--format=%H %T", "--max-count=10000", commit, `^${parent}`]);
+  const found =
+    mine.stdout
+      .split("\n")
+      .map((line) => line.split(" "))
+      .find(([id, t]) => t === tree && isCommit(id))?.[0] ?? null;
+  return found && (await git(["merge-base", "--is-ancestor", parent, found])).code === 0
+    ? found
+    : null;
+};
+
 export const answers = (signed: SignedApproval, challenge: PushApproval): boolean =>
   signed.repo === challenge.repo &&
   signed.branch === challenge.branch &&

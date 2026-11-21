@@ -732,7 +732,13 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.match(squashed.stdout, new RegExp(`squashes {4}${tip}`));
     assert.match(
       squashed.stdout,
-      /2 commit\(s\) squashed into one\. The workspace's squash-me keeps its own commits/,
+      /2 commit\(s\) squashed into one\.\nThe workspace's squash-me still has the commits that were squashed/,
+    );
+    assert.ok(
+      squashed.stdout.includes(
+        `  git fetch && git rebase --autostash --onto origin/squash-me ${tip} squash-me\n`,
+      ),
+      squashed.stdout,
     );
     const remote = forgeRefs("acme/widgets")["squash-me"];
     assert.equal(remote, said.squash?.commit, "the remote has the reviewer's squash");
@@ -752,9 +758,57 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     // the remote's. That is refused unless asked for.
     const unasked = stack.desolate("push", "dev", "acme/widgets", "squash-me", "--expect", tip);
     assert.notEqual(unasked.code, 0);
-    assert.match(unasked.stderr, /this push REPLACES the remote's squash-me/);
+    assert.match(
+      unasked.stderr,
+      /this push REPLACES the remote's squash-me, which is the squash of/,
+    );
     assert.match(unasked.stderr, /--replace/);
     assert.equal(forgeRefs("acme/widgets")["squash-me"], remote, "nothing was signed or pushed");
+    // The command it names catches the branch up: run in the workspace, with a commit made
+    // since and an edit not committed, the branch is that commit on the squash, the edit still
+    // there; pushed, it builds on the remote's, with no --replace.
+    const catchUp = /run `(git fetch && git rebase [^`]+)` in the workspace/.exec(
+      unasked.stderr,
+    )?.[1];
+    assert.equal(
+      catchUp,
+      `git fetch && git rebase --autostash --onto origin/squash-me ${tip} squash-me`,
+    );
+    const caught = inWs(
+      "dev/w1",
+      `cd ${SQ} && echo 'after the squash' >> README.md && git commit -qam 'carry on' && echo 'not yet' >> README.md && { ${catchUp}; } >/dev/null 2>&1 && git rev-parse HEAD HEAD^ && git rev-list --count origin/squash-me..HEAD && git diff --stat | tail -1 && git checkout -q -- README.md && desolate offer >/dev/null`,
+    );
+    assert.equal(caught.code, 0, caught.stdout + caught.stderr);
+    const [next, onSquash, ahead, edit] = caught.stdout.trim().split("\n");
+    assert.equal(onSquash, remote, "the commit made since is on the squash");
+    assert.equal(ahead, "1", "and only it: the squashed commits are gone");
+    assert.match(edit ?? "", /1 file changed/, "the edit not committed was put back");
+    const onward = stack.person(
+      "Type the branch name",
+      "squash-me",
+      "push",
+      "dev",
+      "acme/widgets",
+      "squash-me",
+      "--expect",
+      next!,
+    );
+    assert.equal(onward.code, 0, onward.stdout);
+    assert.doesNotMatch(onward.stdout, /REPLACES/);
+    assert.equal(forgeRefs("acme/widgets")["squash-me"], next, "built on the squash, no replace");
+    // Back to the two commits, for the replace: the remote's is no squash of them now, so the
+    // refusal is the plain one.
+    const back = inWs(
+      "dev/w1",
+      `cd ${SQ} && git reset -q --hard ${tip} && desolate offer >/dev/null`,
+    );
+    assert.equal(back.code, 0, back.stdout + back.stderr);
+    const plain = stack.desolate("push", "dev", "acme/widgets", "squash-me", "--expect", tip);
+    assert.notEqual(plain.code, 0);
+    assert.match(
+      plain.stderr,
+      /this push REPLACES the remote's squash-me: it does not build on it/,
+    );
     // Asked for, the prompt wants `replace <branch>`: the branch's name alone is not that.
     const nameOnly = stack.person(
       "Type 'replace squash-me'",
@@ -769,7 +823,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     assert.equal(nameOnly.code, 78, nameOnly.stdout);
     assert.match(nameOnly.stdout, /REPLACES {4}the remote's squash-me/);
-    assert.equal(forgeRefs("acme/widgets")["squash-me"], remote);
+    assert.equal(forgeRefs("acme/widgets")["squash-me"], next);
     const replaced = stack.person(
       "Type 'replace squash-me'",
       "replace squash-me",

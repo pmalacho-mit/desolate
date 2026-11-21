@@ -9,10 +9,10 @@
 // Nothing in a VM can do step 2, so nothing in a VM can push.
 import { printable, printableLines } from "../shared/text.ts";
 import { EXIT, refuse } from "../shared/exit.ts";
-import { editorHostPort, parseRepo, repoId, ROOT_HOSTNAME } from "../shared/names.ts";
+import { editorHostPort, isCommit, parseRepo, repoId, ROOT_HOSTNAME } from "../shared/names.ts";
 import { parseArgs } from "node:util";
 import { sign } from "./approver.ts";
-import { parseApproval, signedFor } from "../shared/approval.ts";
+import { catchUp, parseApproval, signedFor } from "../shared/approval.ts";
 import type { Summary } from "./approve-web.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
@@ -591,8 +591,12 @@ export const chosenText = async (
   const replaces = s.fastForward === false;
   if (replaces && !choice.replace)
     return refuse(
-      `this push REPLACES the remote's ${push.branch}: it does not build on it, and the commits only the remote has would be dropped. Nothing was signed`,
-      `to replace it, say so: ${choice.again} --replace (or fetch, and rebase in the workspace)`,
+      s.squashedFrom && isCommit(s.squashedFrom)
+        ? `this push REPLACES the remote's ${push.branch}, which is the squash of ${s.squashedFrom.slice(0, 12)}, a commit of this branch, pushed before. Nothing was signed`
+        : `this push REPLACES the remote's ${push.branch}: it does not build on it, and the commits only the remote has would be dropped. Nothing was signed`,
+      s.squashedFrom && isCommit(s.squashedFrom)
+        ? `to build on the squash, run \`${catchUp(push.branch, s.squashedFrom)}\` in the workspace, then push again. To replace it instead: ${choice.again} --replace`
+        : `to replace it, say so: ${choice.again} --replace (or fetch, and rebase in the workspace)`,
     );
   if (choice.squash && !s.squash)
     return refuse(

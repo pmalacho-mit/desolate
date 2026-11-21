@@ -160,6 +160,14 @@ const summaryOf = (summary, card) => {
   }
   for (const warning of summary.warnings || []) box.append(el("p", `Warning: ${warning}`, "error"));
   if (summary.fastForward === false) box.append(el("p", "This does not build on the remote's branch: it REPLACES it, and the commits only the remote has are dropped from the branch. To do that, type the branch's name below.", "error"));
+  // After a squashed push the remote's branch is the squash, and the workspace's is not on
+  // it: most likely nothing would be lost, and a rebase in the workspace is the way on.
+  const branch = card.push && card.push.branch;
+  if (summary.fastForward === false && /^[0-9a-f]{40}$/.test(summary.squashedFrom || "") && /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branch || "")) {
+    const p = el("p", `The remote's ${branch} is the squash of ${summary.squashedFrom.slice(0, 12)}, a commit of this branch, pushed before. To build on it instead, refuse this, and in the workspace run `);
+    p.append(el("code", `git fetch && git rebase --autostash --onto origin/${branch} ${summary.squashedFrom} ${branch}`), document.createTextNode(", then push again."));
+    box.append(p);
+  }
   const commits = summary.commits || [];
   const total = commits.length + (summary.more || 0);
   box.append(el("p", total ? `${total} commit(s) the remote does not have:` : "No commit the remote does not have already."));

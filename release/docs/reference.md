@@ -19,14 +19,19 @@ checks whichever you have without pushing anything.
 the branch, the commit and what the remote's branch is now, and also what desolate's
 reviewer says the push sends: the sha256 of the pack it made of the commits (the objects the
 commit has that the remote's branches do not), and the LFS objects those commits point to.
-The pusher sends that pack and those objects, and no other: a pack that does not hash to the
-approved one is cut short before its end, and the forge takes nothing of it. A push the
+The pusher sends that pack and those objects, and no other: it takes the whole pack and
+every object first, and one that does not hash to what was approved is refused before a byte
+reaches the forge. A push the
 reviewer cannot describe cannot be approved. Two choices go in the same text:
 - **Squashed into one commit** (`desolate push ... --squash`, `desolate approve --squash`,
   or the page's second button): the reviewer's commit with the last commit's files, on what
   the branch builds on, so nothing a commit in between held reaches the remote's history.
   The page lists files a commit changed and a later one changed back, which the net change
-  does not show, and shows each commit's own diff.
+  does not show, and shows each commit's own diff. The workspace's branch still has the
+  commits that were squashed; the push prints the command that moves it onto the squash,
+  keeping what was committed since:
+  `git fetch && git rebase --autostash --onto origin/<branch> <the commit squashed> <branch>`.
+  A later push that would replace the squash says so, and names that command again.
 - **Replacing the remote's branch**, when the commit does not build on it: `desolate push`
   refuses it without `--replace`, the terminal asks you to type `replace <branch>`, and the
   page approves it only after you type the branch's name.

@@ -13,7 +13,7 @@
 // Nothing here can make the signature: the approver's key is not in this VM (P2).
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseSigned } from "../shared/approval.ts";
+import { catchUp, parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
@@ -513,7 +513,7 @@ const main = async () => {
   await repos.fetch(repo).catch(() => {});
   process.stdout.write(
     signed.squashes
-      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${r.commits.length} commit(s) squashed into one${signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : ""}. The workspace's ${branch} keeps its own commits: reset it to origin/${branch} before working on, or its next push replaces the remote's.\n`
+      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${r.commits.length} commit(s) squashed into one${signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : ""}.\nThe workspace's ${branch} still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace (what you committed since is kept, on top):\n  ${catchUp(branch, signed.squashes)}\n`
       : `pushed ${r.repo} ${branch} at ${r.commit} (${r.commits.length} commit(s)${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s) first` : ""}).\n`,
   );
   if (link)

@@ -362,9 +362,17 @@ What the approval page shows, and the two choices it may add:
   page lists those files, and **Show each commit's diff** shows every commit on its own.
 - **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
   the last commit's files, on what the branch builds on, with a message listing every
-  commit. Nothing that was in between reaches the remote. The workspace's branch keeps its
-  own commits: reset it to the remote's (`git reset --hard origin/<branch>`) before working
-  on, or its next push replaces the remote's.
+  commit. Nothing that was in between reaches the remote. The workspace's branch still has
+  the commits that were squashed, so to carry on, move it onto the squash. The push prints
+  the command, to run in the workspace:
+
+  ```bash
+  git fetch && git rebase --autostash --onto origin/<branch> <the commit squashed> <branch>
+  ```
+
+  It keeps anything you committed since, and sets aside and puts back what you have not
+  committed. Forget, and the next push says the remote's branch is the squash, and names the
+  command again.
   From a terminal: `desolate push ... --squash`, or `desolate approve --squash`.
 - **Replacing a branch.** A push that does not build on the remote's branch replaces it, and
   drops the commits only the remote has. The page says so in red, and approves it only once

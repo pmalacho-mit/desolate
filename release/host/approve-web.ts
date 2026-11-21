@@ -188,6 +188,8 @@ export type Summary = {
   base?: string | null;
   remote?: string | null;
   fastForward?: boolean | null;
+  /** The commit of this branch the remote's is a squash of (root/reviewer.ts). */
+  squashedFrom?: string;
   lfs?: number;
   diff?: string;
   diffCut?: boolean;

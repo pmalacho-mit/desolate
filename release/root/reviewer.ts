@@ -33,6 +33,7 @@ import * as fs from "node:fs";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
+import { squashedFrom } from "../shared/approval.ts";
 import { isBranch, isCommit, parseRepo, repoId } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
@@ -741,6 +742,9 @@ export type Summary = {
   base?: string | null;
   remote?: string | null;
   fastForward?: boolean | null;
+  /** When the push replaces the remote's branch, and that branch is a squash of a commit of
+   *  this one (the same files, on where this one starts): that commit. */
+  squashedFrom?: string;
   lfs?: number;
   /** The diff itself, as git makes it from objects (no external program, no textconv): what
    *  the approval page shows on asking. Cut at 256 KiB; not made at all past 20 000 lines. */
@@ -942,6 +946,12 @@ const summary = async (
   const fastForward = onto
     ? (await gitIn(dir, ["merge-base", "--is-ancestor", onto, commit])).code === 0
     : null;
+  // A replace after a squashed push: named, so the person is told the command that catches
+  // up, not only how to replace. Advice: what is pushed and signed does not depend on it.
+  const remoteSquash =
+    onto && fastForward === false
+      ? await squashedFrom((args) => gitIn(dir, args), onto, commit)
+      : null;
   // A commit's headers git itself writes, and no other: anything else in one (fsck takes any
   // well-formed header) travels unseen, so it is said (the third independent review).
   const ids = commits.map((c) => c.commit);
@@ -1042,6 +1052,7 @@ const summary = async (
     base,
     remote: now,
     fastForward,
+    ...(remoteSquash ? { squashedFrom: remoteSquash } : {}),
     lfs,
     ...(diff !== undefined ? { diff } : {}),
     diffCut,

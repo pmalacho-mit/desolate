@@ -7,7 +7,7 @@
 // (pusher.ts); what the person is shown is the reviewer's (reviewer.ts).
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseApproval } from "../shared/approval.ts";
+import { catchUp, parseApproval, squashedFrom } from "../shared/approval.ts";
 import { isBranch, repoId } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
 import type { Repo } from "../shared/names.ts";
@@ -63,8 +63,13 @@ export const pushCommit = async (
     onto &&
     !forced &&
     (await git(clone, ["merge-base", "--is-ancestor", onto, commit])).code !== 0
-  )
-    return `the remote's ${branch} has commits this does not (non-fast-forward): fetch and rebase, or push with + to replace it`;
+  ) {
+    // After a squashed push, the remote's branch is the squash: say how to build on it.
+    const squashed = await squashedFrom((args) => git(clone, args), onto, commit).catch(() => null);
+    return squashed
+      ? `the remote's ${branch} is the squash of ${squashed.slice(0, 12)}, a commit of this branch, pushed before. To build on it, run \`${catchUp(branch, squashed)}\`, then push again; or push with + to replace it`
+      : `the remote's ${branch} has commits this does not (non-fast-forward): fetch and rebase, or push with + to replace it`;
+  }
   const push = { repo: name, ref: branch, commit, onto };
   let approval = await approvedId(push);
   if (!approval) {
@@ -110,10 +115,12 @@ export const pushCommit = async (
   } finally {
     await ask(KEYRING.control, { op: "revoke", id: approval.id }).catch(() => {});
   }
-  if (approval.commit !== commit)
+  if (approval.commit !== commit) {
     say(
-      `desolate: pushed squashed into one commit, ${approval.commit}. This ${branch} keeps its own commits: reset it to origin/${branch} before working on, or its next push replaces the remote's.`,
+      `desolate: pushed squashed into one commit, ${approval.commit}. This ${branch} still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash (what you committed since is kept, on top):`,
     );
+    say(`desolate:   ${catchUp(branch, commit)}`);
+  }
   // The base a pull request goes into: what an offer of this commit named, else the default.
   const base =
     allOffers().find((o) => o.repo === name && o.branch === branch && o.commit === commit)?.base ??
