@@ -32,7 +32,7 @@
 // Repository content (branch names, commit subjects, statuses, notes) leaves here as JSON
 // strings and is put on the page as text, never as HTML.
 import { pendingIn } from "./approvals.ts";
-import { printable } from "../shared/text.ts";
+import { CUT, printable } from "../shared/text.ts";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
@@ -41,7 +41,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
 import { hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
 import { stateEvents } from "../shared/events.ts";
+import { LIMIT as ISSUE } from "../shared/issues.ts";
 import { writeJson } from "../shared/json.ts";
+import { formatBytes, NAMES, over } from "../shared/limits.ts";
 import { outlived } from "../shared/plan.ts";
 import type { Unpushed } from "../shared/plan.ts";
 import type { Stats } from "../shared/stats.ts";
@@ -56,6 +58,8 @@ import {
   ROOT_HOSTNAME,
   ROOT_UI,
 } from "../shared/names.ts";
+import { SIGNIN } from "../shared/signin.ts";
+import { capToMac, defaultsFor, LIMITS as SIZE } from "../shared/size.ts";
 import { readHead, statusView } from "../shared/status.ts";
 import type { Head } from "../shared/status.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
@@ -189,7 +193,9 @@ type HostFacts = {
   >;
   at?: string;
 };
-/** `link`: after a push, GitHub's page for opening its pull request (shared/names.ts). */
+/** `link`: after a push, GitHub's page for opening its pull request (shared/names.ts).
+ *  `lines`: the last of what it printed (SHOWN); `earlier`: how many lines came before
+ *  those; `log`: the file that has all of them (`said`). */
 type Action = {
   id: string;
   kind: string;
@@ -197,6 +203,8 @@ type Action = {
   command: string;
   state: "queued" | "running" | "done" | "failed";
   lines: string[];
+  earlier: number;
+  log?: string;
   at: string;
   code?: number;
   link?: string;
@@ -204,6 +212,35 @@ type Action = {
 let facts: HostFacts = {};
 let hostSeen = 0;
 const actions: Action[] = [];
+/** What an action printed is kept whole, in a file of the root's own, and the page shows
+ *  its last lines and says how many came before them and where they are (docs/v3/limits.md,
+ *  R1: before, the oldest lines went, and with them the start of a long error). Each line is
+ *  made safe to show, and is not shortened: fitting it is the page's. The files live as long
+ *  as this process remembers their actions. */
+const LOGS = path.join(ROOT.state, "actions");
+/** The lines of an action the page is sent: what a row of the page shows without becoming
+ *  the page. Not a cut of what is kept. */
+const SHOWN = 60;
+const said = (action: Action, lines: readonly string[]) => {
+  const safe = lines.map((line) => printable(line, undefined, " "));
+  if (safe.length === 0) return;
+  try {
+    const log = path.join(LOGS, `${action.id}.log`);
+    fs.mkdirSync(LOGS, { recursive: true });
+    fs.appendFileSync(log, `${safe.join("\n")}\n`, { mode: 0o600 });
+    action.log = log;
+  } catch (error) {
+    // Not kept (a full disk): the page then says how many lines it lacks, and no path.
+    console.error(`stated: an action's output could not be kept: ${String(error)}`);
+  }
+  const all = [...action.lines, ...safe];
+  const drop = Math.max(0, all.length - SHOWN);
+  action.lines = all.slice(drop);
+  action.earlier += drop;
+};
+const forget = (action: Action) => {
+  if (action.log) fs.rmSync(action.log, { force: true });
+};
 /** The host's long polls that are waiting for something to do. An action stays "queued"
  *  (and is handed to every poll) until the host reports on it: a poll whose connection
  *  died takes nothing with it. The host runs each id once. */
@@ -276,8 +313,9 @@ export const makingOf = (
   const a = actionFor(w, domain, list);
   if (!a) return null;
   if (a.state === "queued") return "waiting for the Mac";
+  // (Safe to show, and whole: the page fits it to its row, with all of it in its title.)
   const last = [...a.lines].reverse().find((line) => line.trim() !== "") ?? "";
-  return printable(last.replace(/^progress:\s*/, "").trim()).slice(0, 200);
+  return printable(last.replace(/^progress:\s*/, "").trim());
 };
 /** What that action is doing to it, in a word or two ("starting", "stopping"...), or null. */
 export const doingOf = (
@@ -605,6 +643,26 @@ const snapshot = () => {
     refused: domains.domains().flatMap((d) => refusalsOf(d.slug)),
     approvals: pendingApprovals(),
     actions: actions.slice(-12),
+    bounds: bounds(),
+  };
+};
+/** What the page's forms may take, each from where its rule is written, so that the page
+ *  holds no copy of a number (R3). A size's `defaults` and `most` are this Mac's (shared/
+ *  size.ts: what a workspace gets when nothing says, and the most one may have here), and
+ *  null until the host has said what the Mac has. */
+const bounds = () => {
+  const mac = facts.stack?.mac;
+  return {
+    slug: NAMES.slug,
+    issueTitle: ISSUE.title,
+    size: {
+      limits: SIZE,
+      defaults: mac ? defaultsFor(mac.cpus, mac.memoryMiB) : null,
+      most: mac
+        ? capToMac({ cpus: SIZE.cpus[1], memoryMiB: SIZE.memoryMiB[1] }, mac.cpus, mac.memoryMiB)
+            .size
+        : null,
+    },
   };
 };
 
@@ -854,6 +912,7 @@ const act = (
       command,
       state: "queued",
       lines: [],
+      earlier: 0,
       at: new Date().toISOString(),
     };
     actions.push(action);
@@ -861,17 +920,25 @@ const act = (
     // domain's requests pushed others', and the person's clicks, out before they ran: audit).
     if (actions.length > 50) {
       const done = actions.findIndex((a) => a.state === "done" || a.state === "failed");
-      if (done >= 0) actions.splice(done, 1);
-      else if (actions.length > 1000) actions.shift();
+      if (done >= 0) forget(actions.splice(done, 1)[0]!);
+      else if (actions.length > 1000) forget(actions.shift()!);
     }
     return action;
   };
   if (kind === "offer.push") return push(args, record);
   const argv = hostArgv(kind, args);
   if (!argv) return { error: `'${kind}' with those arguments is not something the dashboard does` };
-  // The command shown is the one the host will run: the dashboard teaches the CLI.
+  // A title the host's list would leave out (shared/actions.ts) is refused here, in words:
+  // the domain was made without it, and nothing said so.
+  if (kind === "domain.create" && args.title && !argv.includes("--title"))
+    return {
+      error:
+        "that title is not one the dashboard takes: at most 80 characters, plain ASCII, not starting with a dash. (Any title: `desolate domain create <name> --title ...` in a terminal on the Mac.)",
+    };
+  // The command shown is the one the host will run: the dashboard teaches the CLI. A
+  // workspace's spawn carries a whole command: its start is enough to know it by.
   const shown = `desolate ${argv.map(quote).join(" ")}`;
-  const action = record(shown.length > 600 ? `${shown.slice(0, 600)} ...` : shown);
+  const action = record(shown.length > 600 ? `${shown.slice(0, 599)}${CUT}` : shown);
   for (const wake of [...waiters]) wake();
   return action;
 };
@@ -946,9 +1013,9 @@ const push = (
     `desolate push ${args.domain} ${args.repo} ${args.branch} --expect ${args.commit}`,
   );
   action.state = "running";
-  action.lines.push(
+  said(action, [
     "waiting for your approval on the host: run `desolate approve` in a terminal there",
-  );
+  ]);
   const child = spawn(
     "git",
     [
@@ -966,13 +1033,14 @@ const push = (
     },
   );
   const take = (chunk: Buffer) => {
-    for (const line of chunk
-      .toString()
-      .split("\n")
-      .map((l) => printable(l, 300, " ").trim())
-      .filter(Boolean))
-      action.lines.push(line.slice(0, 300));
-    if (action.lines.length > 60) action.lines.splice(0, action.lines.length - 60);
+    said(
+      action,
+      chunk
+        .toString()
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    );
     changed();
   };
   child.stdout.on("data", take);
@@ -982,7 +1050,7 @@ const push = (
     action.state = code === 0 ? "done" : "failed";
     if (code === 0) {
       offers.withdraw(args.domain!, args.repo!, args.branch!);
-      action.lines.push(`pushed ${args.repo} ${args.branch} at ${args.commit}`);
+      said(action, [`pushed ${args.repo} ${args.branch} at ${args.commit}`]);
       // (Recorded by the push itself, in raw-push.ts; this is only the page's link.)
       try {
         const base =
@@ -1096,18 +1164,30 @@ declare namespace push {
 }
 
 // ------------------------------------------------------------------ http
-const body = (req: IncomingMessage, limit = 262_144): Promise<unknown> =>
+/** The most a request to this service may carry, in bytes. It bounds what a browser page or
+ *  the host's daemon can make this process hold (R7): the largest honest one is the host's
+ *  facts (every VM's state and ports, a few kilobytes each) or an issue's text (64 KiB,
+ *  shared/issues.ts), and 256 KiB is four of the larger. */
+const BODY_BYTES = 256 * 1024;
+const body = (req: IncomingMessage): Promise<unknown> =>
   new Promise((resolve, reject) => {
-    let text = "";
-    req.on("data", (chunk) => {
-      text += chunk;
-      if (text.length > limit) {
-        reject(new Error("too large"));
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > BODY_BYTES) {
+        reject(
+          new Error(
+            `the request is over the ${formatBytes(BODY_BYTES)} the dashboard's service takes`,
+          ),
+        );
         req.destroy();
       }
     });
     req.on("end", () => {
       try {
+        const text = Buffer.concat(chunks).toString("utf8");
         resolve(text ? JSON.parse(text) : {});
       } catch (error) {
         reject(error as Error);
@@ -1115,6 +1195,10 @@ const body = (req: IncomingMessage, limit = 262_144): Promise<unknown> =>
     });
     req.on("error", reject);
   });
+/** The most one argument of a dashboard action may be, in characters: the bound
+ *  shared/actions.ts puts on what a click may carry to the host (its `hostArgv`; the longest
+ *  honest one is a branch's name, limits.ts's NAMES.branch). */
+const ARG_MOST = NAMES.branch;
 const SECURITY = {
   "content-security-policy":
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -1152,7 +1236,6 @@ const STATIC: Record<string, [string, string]> = {
 // is up. The host sends only a digest: the code itself first reaches the root in the
 // browser's request, after the host's own pages spent theirs.
 const signinCodes = new Map<string, number>();
-const SIGNIN = { ttlMs: 60_000, most: 32 };
 const takeSignin = (given: string, now = Date.now()) => {
   for (const [key, until] of signinCodes) if (until <= now) signinCodes.delete(key);
   if (!/^[0-9a-f]{48}$/.test(given)) return false;
@@ -1202,8 +1285,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       if (action) {
         action.state = report.done ? (report.code === 0 ? "done" : "failed") : "running";
         if (report.done) action.code = report.code;
-        for (const line of report.lines ?? []) action.lines.push(printable(line, 300, " "));
-        if (action.lines.length > 60) action.lines.splice(0, action.lines.length - 60);
+        said(action, (report.lines ?? []).map(String));
         if (report.done) requestEnded(action);
         changed();
       }
@@ -1403,38 +1485,45 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     });
     return;
   }
-  if (req.method === "GET" && url.pathname === "/review") {
+  // A review (root/offers.ts): what a branch would send, then more of its lists and its
+  // diff, a page at a time, as the person reads. None has a timer here: git runs for as long
+  // as the page waits, and is ended when the page goes away (the review closed, the tab).
+  const reviews: Record<
+    string,
+    (
+      domain: string,
+      repo: unknown,
+      branch: unknown,
+      against: unknown,
+      ask: Record<string, unknown>,
+      signal: AbortSignal,
+    ) => Promise<unknown>
+  > = {
+    "/review": (domain, repo, branch, against, _ask, signal) =>
+      offers.review(domain, repo, branch, against, signal),
+    "/review/more": offers.more,
+    "/diff": offers.diff,
+  };
+  if (req.method === "GET" && Object.hasOwn(reviews, url.pathname)) {
+    const gone = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) gone.abort();
+    });
     try {
       return json(
         res,
         200,
-        await offers.review(
+        await reviews[url.pathname]!(
           domains.slugOf(url.searchParams.get("domain"), "domain"),
           url.searchParams.get("repo"),
           url.searchParams.get("branch"),
           url.searchParams.get("against"),
+          Object.fromEntries(url.searchParams),
+          gone.signal,
         ),
       );
     } catch (error) {
-      return json(res, 400, { error: (error as Error).message });
-    }
-  }
-  if (req.method === "GET" && url.pathname === "/diff") {
-    try {
-      return json(
-        res,
-        200,
-        await offers.diff(
-          domains.slugOf(url.searchParams.get("domain"), "domain"),
-          url.searchParams.get("repo"),
-          url.searchParams.get("branch"),
-          url.searchParams.get("against"),
-          url.searchParams.get("whitespace"),
-          url.searchParams.get("from"),
-          url.searchParams.get("to"),
-        ),
-      );
-    } catch (error) {
+      if (gone.signal.aborted) return res.end();
       return json(res, 400, { error: (error as Error).message });
     }
   }
@@ -1499,10 +1588,19 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       !String(req.headers["content-type"] ?? "").startsWith("application/json")
     )
       return json(res, 403, { error: "actions come from the dashboard itself" });
-    const request = (await body(req)) as { kind?: string; args?: Record<string, string> };
+    const request = (await body(req)) as { kind?: string; args?: Record<string, unknown> };
+    // Each argument is a short text (shared/actions.ts takes no longer one from a click).
+    // One that is not is refused, by name: left out, the command ran without it.
     const args: Record<string, string> = {};
-    for (const [key, value] of Object.entries(request.args ?? {}))
-      if (typeof value === "string" && value.length <= 200) args[key] = value;
+    for (const [key, value] of Object.entries(request.args ?? {})) {
+      if (typeof value !== "string")
+        return json(res, 400, { error: `the argument '${printable(key, 40)}' is not text` });
+      if (value.length > ARG_MOST)
+        return json(res, 400, {
+          error: over(`the argument '${printable(key, 40)}'`, ARG_MOST, value.length, "characters"),
+        });
+      args[key] = value;
+    }
     const result = act(String(request.kind ?? ""), args);
     changed();
     return "error" in result
@@ -1521,6 +1619,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   }).listen(ROOT_UI.port, "127.0.0.1", () =>
     console.error(`stated: listening on 127.0.0.1:${ROOT_UI.port}`),
   );
+  // The actions of a process before this one are not remembered: nor is what they printed.
+  fs.rmSync(LOGS, { recursive: true, force: true });
   // The root's own files: looked at when one changes. (The shares cannot be watched from
   // inside a VM; the host's daemon watches those and nudges.) And a look every second
   // regardless, which costs a few small files read, so that a missed event is a second

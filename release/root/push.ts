@@ -176,7 +176,7 @@ export const refusePush = (
       `review it again (${again}), then push with --expect ${r.commit}`,
       EXIT.expectMismatch,
     );
-  if (r.commits.length === 0) refuse(`${branch} has nothing the remote lacks`, again);
+  if (r.commits.total === 0) refuse(`${branch} has nothing the remote lacks`, again);
 };
 
 declare namespace refusePush {
@@ -186,7 +186,11 @@ declare namespace refusePush {
     commit: "0123456789abcdef0123456789abcdef01234567";
     pushable: true;
     isDefault: false;
-    commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+    commits: {
+      items: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+      total: 1;
+      from: 0;
+    };
   };
   /** the commit the person reviewed, on a branch that is not the default, with something to send */
   export type Passes = Expect<
@@ -218,7 +222,7 @@ declare namespace refusePush {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: false;
               isDefault: false;
-              commits: [];
+              commits: { items: []; total: 0; from: 0 };
             },
             domain: "acme",
             branch: "fix",
@@ -279,7 +283,7 @@ declare namespace refusePush {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
               isDefault: false;
-              commits: [];
+              commits: { items: []; total: 0; from: 0 };
             },
             domain: "acme",
             branch: "fix",
@@ -308,7 +312,11 @@ declare namespace refusePush {
             commit: "0123456789abcdef0123456789abcdef01234567";
             pushable: true;
             isDefault: true;
-            commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+            commits: {
+              items: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+              total: 1;
+              from: 0;
+            };
           },
           domain: "acme",
           branch: "main",
@@ -454,7 +462,7 @@ const main = async () => {
     });
     if (reply.ok !== true)
       refuse(String(reply.error ?? "the keyring gave no challenge"), "desolate doctor");
-    const summary = `${r.commits.length} commit(s), ${r.stat || "no file changes"}${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s)` : ""}`;
+    const summary = `${r.commits.total} commit(s), ${r.stat || "no file changes"}${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s)` : ""}`;
     process.stdout.write(
       JSON.stringify({
         repo: r.repo,
@@ -524,7 +532,7 @@ const main = async () => {
           }))
         ).stdout.trim(),
       ) || null
-    : r.commits.length;
+    : r.commits.total;
   const commits = sent ? `${sent} commit(s)` : "its commits";
   const lfs = signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : "";
   process.stdout.write(
