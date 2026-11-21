@@ -24,12 +24,13 @@
 //
 // WHAT IS NOT CARRIED. Whatever is one workspace's: its editor's connection token (each
 // clone makes its own, so no two editors share one), who it is, its logs, its containers.
-import { printable } from "../shared/text.ts";
+import { printableLines } from "../shared/text.ts";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import type { Size } from "../shared/size.ts";
+import { because } from "./failures.ts";
 import { imageFingerprint } from "./image.ts";
 import { INSTANCE, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
@@ -137,7 +138,7 @@ export const ensure = async (
     return await ensureOrThrow(domain, repos, build, say, envRepo, size);
   } catch (error) {
     say(
-      `  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`,
+      `  no template: ${printableLines((error as Error).message)}. This workspace is made from desolate's base.`,
     );
     return null;
   }
@@ -263,12 +264,16 @@ const ensureOrThrow = async (
     const scrubbed = await b.exec(name, ["bash", "-c", SCRUB], { root: true, timeoutMs: 120_000 });
     if (scrubbed.code !== 0)
       throw new Error(
-        `it could not be emptied of what was the builder's: ${scrubbed.stderr.trim().slice(-200)}`,
+        because(
+          "it could not be emptied of what was the builder's",
+          "template-scrub",
+          scrubbed.stderr,
+        ),
       );
     made = true;
   } catch (error) {
     say(
-      `  no template: ${printable((error as Error).message)}. This workspace is made from desolate's base.`,
+      `  no template: ${printableLines((error as Error).message)}. This workspace is made from desolate's base.`,
     );
   } finally {
     await disconnectWorkspace(name).catch(() => {});

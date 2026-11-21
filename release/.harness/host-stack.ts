@@ -81,6 +81,8 @@ const noVm = () => {
 /** host/stack.ts, with no VM behind it. */
 export const fakeStack = {
   rootctl,
+  // A brief call is a call: here, nothing is waited on.
+  rootctlBrief: rootctl,
   backend: noVm,
   ROOT_VM: "dsl-main-root",
   config: () => null,

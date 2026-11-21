@@ -5,6 +5,15 @@ desolate bootstrap: backend vz, instance <instance>
   + home <home>
     creating the base VM from Lima's pinned Ubuntu image (downloads it the first time)
     provisioning it (packages, node, docker, the editor server): several minutes
+      packages
+      node 24.18.0
+      devcontainer CLI 0.88.0
+      mitmproxy 11.0.2 (the root's proxies)
+      git-subrepo 0.4.9 (for desolate upstream)
+      editor server (VSCodium 1.116.02821)
+      git: system settings a domain clone needs (section 4.2)
+      desolate's directories and identity
+      done
   + base image
   + config: backend vz, forge stand-in (<forge>:22)
     approver: a software key in <home>/approver; every push will ask on your terminal

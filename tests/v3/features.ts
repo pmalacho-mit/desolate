@@ -311,6 +311,7 @@ export const FEATURES: Feature[] = [
       "release/.gitrepo",
       "release/host/bootstrap.ts",
       "release/host/stack.ts",
+      "release/host/failures.ts",
       "release/host/daemon.ts",
       "release/host/cli.ts",
       "release/host/paths.ts",
