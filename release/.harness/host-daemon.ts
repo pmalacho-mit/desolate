@@ -118,7 +118,7 @@ const unnamed = (text: string) =>
 export const ws = (
   at: string,
   listening: number[],
-  more: { reserved?: number[]; editorTokenEpoch?: number } = {},
+  more: { reserved?: number[]; editorTokenEpoch?: number; low?: number[]; notes?: string[] } = {},
 ) => {
   const [domain = "", workspace = ""] = at.split("/");
   return {
@@ -128,6 +128,8 @@ export const ws = (
     listeners: new Set(listening),
     reserved: new Set(more.reserved ?? []),
     editorTokenEpoch: more.editorTokenEpoch ?? 0,
+    ...(more.low ? { low: more.low } : {}),
+    ...(more.notes ? { notes: more.notes } : {}),
   };
 };
 
@@ -151,6 +153,19 @@ export const asked = (text: string) => said(text).sniffed;
 /** `text`, its names written as above, as bytes. */
 export const wire = (text: string) => Buffer.from(named(text), "latin1");
 
+/** `count` ports from `from` on, which a type would take a long time to write. */
+export const portRange = (from: number, count: number) =>
+  Array.from({ length: count }, (_, i) => from + i);
+/** Lines "1" to `count`, the first of them `first` when given. */
+export const numbered = (count: number, first?: string) =>
+  Array.from({ length: count }, (_, i) => (i === 0 && first !== undefined ? first : String(i + 1)));
+/** How many lines, and the first two and the last: what a reader checks of a long list. */
+export const endsOf = (lines: string[]) => ({
+  count: lines.length,
+  first: lines[0],
+  second: lines[1],
+  last: lines[lines.length - 1],
+});
 /** A set, which a type cannot write. */
 export const setOf = (items: any[]): Set<any> => new Set(items);
 /** Which workspace (`at`) had each raw port first, as the daemon keeps it: by VM. */

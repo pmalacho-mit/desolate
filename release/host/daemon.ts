@@ -14,6 +14,7 @@
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
 import { formatBytes } from "../shared/limits.ts";
+import { define, valueOf, whole } from "../shared/settings.ts";
 import { printable } from "../shared/text.ts";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -64,6 +65,7 @@ import {
   greetingGoes,
   inboundRoute,
   listenersFrom,
+  notesOf,
   pagesRoute,
   portsView,
   rawOwnerFor,
@@ -71,6 +73,7 @@ import {
   reservedFor,
   spokeAsBrowser,
   tokenEpochOf,
+  unforwardedOf,
 } from "./forward.ts";
 import type { Checkouts, PortView } from "./forward.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -90,6 +93,8 @@ import type {
   failsAtOnce,
   failsHalfway,
   keepLog,
+  endsOf,
+  numbered,
   setOf,
   shown,
   sixGiB,
@@ -114,6 +119,14 @@ type Entry = Registered & {
   devcontainer: string;
   folder: string;
   watchers: fs.FSWatcher[];
+  /** Its listeners not forwarded for a bound's sake: below PORTS.min (`low`), a compose
+   *  service's past its mirrors (`more`, the VM's count), past FORWARDS_MOST (`past`). */
+  low: number[];
+  more: number;
+  past: number;
+  /** Its connections out that its link refused (LINK_CONNECTIONS): how many, the last when,
+   *  and when the daemon's log last said so. */
+  refused: { count: number; at: string; logged: number };
 };
 
 /** A page's request that throws is that request's 500, logged: never the daemon's end (it
@@ -206,8 +219,61 @@ const SERVER_FIRST_MS = 400;
  *  sockets could otherwise lock the person out (decisions.md, the audit of 2026-11-16). */
 const SILENT_MOST = 512;
 
-/** How many connections one workspace's link may have open at once. */
-const LINK_CONNECTIONS = 64;
+/** What one connection a link carries costs this Mac: a session into the root VM, which on
+ *  Lima is a `limactl shell` of its own (83 MB, and 2 MB for its ssh: measured on the M1,
+ *  2026-11-21, `footprint`). */
+const LINK_CONNECTION_MIB = 85;
+
+/** How many connections out one workspace has carried to its proxy at once. Past it, as many
+ *  more wait their turn, and past those a connection is refused, saying so (linkVerdict). */
+export const LINK_CONNECTIONS = define({
+  name: "link.connections",
+  env: "DESOLATE_LINK_CONNECTIONS",
+  side: "host",
+  default: () =>
+    Math.min(256, Math.max(16, Math.floor(os.totalmem() / 1048576 / 8 / LINK_CONNECTION_MIB))),
+  // Every session into the root VM is one of its sshd's, which allows 1000 on a connection
+  // (root/start.sh, MaxSessions): no workspace may have more than that.
+  parse: whole(1, 1000),
+  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; as many more wait their turn, and past those one is refused. Each carried one is a session into the root VM, about 85 MB of this Mac's memory: by default an eighth of this Mac's memory's worth, from 16 to 256.",
+});
+
+/** What a workspace's link does with a connection out that has proved it is the workspace's:
+ *  carry it, while fewer than `most` are carried; else have it wait its turn, while fewer
+ *  than `most` wait; else refuse it. A connection waits for as long as its program does:
+ *  the program's own patience, not a timer here (R4). */
+const linkVerdict = (carried: number, waiting: number, most: number) =>
+  carried < most ? "carry" : waiting < most ? "wait" : "refuse";
+
+declare namespace linkVerdict {
+  /** carried while there is room, then waiting as many again, then refused */
+  export type Verdicts = Table<
+    typeof linkVerdict,
+    [
+      [args: [carried: 0, waiting: 0, most: 48], expected: "carry"],
+      [args: [carried: 47, waiting: 0, most: 48], expected: "carry"],
+      [args: [carried: 48, waiting: 0, most: 48], expected: "wait"],
+      [args: [carried: 48, waiting: 47, most: 48], expected: "wait"],
+      [args: [carried: 48, waiting: 48, most: 48], expected: "refuse"],
+    ]
+  >;
+}
+
+/** What a refused connection out is answered: as its proxy refuses (an HTTP status and
+ *  `X-Desolate-Reason`), which the workspace's relay (workspace/net/egress.ts) shows a
+ *  plain-HTTP program as text. */
+const linkRefusal = (most: number) => {
+  const reason = `this workspace has ${most} connections out carried at once and ${most} more waiting their turn, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`;
+  return `HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: ${reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`;
+};
+
+declare namespace linkRefusal {
+  export type Refusal = Expect<
+    Invoke<typeof linkRefusal, [most: 2]>,
+    "=",
+    "HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: this workspace has 2 connections out carried at once and 2 more waiting their turn, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+  >;
+}
 
 /** `desolate events` (events.ts): every event the daemon learns of, for whoever listens. */
 const events = hub();
@@ -477,6 +543,49 @@ const approvalBackend = (): ApprovalBackend => {
     refuseIssue: async (issue) => (await import("./issues.ts")).refuseIssue(issue),
   };
 };
+
+/** The most of a dashboard action's lines the root keeps (root/stated.ts): its last 60.
+ *  More in one post is sent for nothing. */
+const ACTION_LINES = 60;
+
+/** A dashboard action's lines waiting to be posted, as the root will keep them: the last
+ *  ACTION_LINES, the first of them saying how many came before when some did (R1). A line
+ *  that already says so is counted, not said twice. */
+const lastLines = (lines: string[]) => {
+  if (lines.length <= ACTION_LINES) return lines;
+  const said = /^\((\d+) earlier lines not shown\)$/.exec(lines[0] ?? "");
+  const before = (said ? Number(said[1]) - 1 : 0) + lines.length - (ACTION_LINES - 1);
+  return [`(${before} earlier lines not shown)`, ...lines.slice(-(ACTION_LINES - 1))];
+};
+
+declare namespace lastLines {
+  /** up to the root's 60, as they are */
+  export type Few = Expect<Invoke<typeof lastLines, [lines: ["a", "b"]]>, "=", ["a", "b"]>;
+  /** past them, the last 59 and how many came before, counted across posts */
+  export type Many = [
+    Expect<
+      Invoke<
+        typeof endsOf,
+        [lines: Invoke<typeof lastLines, [lines: Invoke<typeof numbered, [count: 61]>]>]
+      >,
+      "=",
+      { count: 60; first: "(2 earlier lines not shown)"; second: "3"; last: "61" }
+    >,
+    Expect<
+      Invoke<
+        typeof endsOf,
+        [
+          lines: Invoke<
+            typeof lastLines,
+            [lines: Invoke<typeof numbered, [count: 61, first: "(2 earlier lines not shown)"]>]
+          >,
+        ]
+      >,
+      "=",
+      { count: 60; first: "(3 earlier lines not shown)"; second: "3"; last: "61" }
+    >,
+  ];
+}
 
 /** The memory given to running workspaces: each one's size, else the stack's. */
 const memoryGiven = (
@@ -806,6 +915,9 @@ const serve = async () => {
   // Ports whose protocol carries no name: the known ones and the person's (forward.ts).
   const knownRaw = rawPortsOf();
   const waiting = new Set<Socket>();
+  // Read once, at the start: a value the setting does not take stops the daemon here, saying
+  // so in its log, not at the first workspace.
+  const linkMost = valueOf(LINK_CONNECTIONS);
   /** What a client says first, once it has (shared/sniff.ts), held among the waiting. */
   const heard = async (client: Socket, quietMs: number) => {
     if (waiting.size >= SILENT_MOST) {
@@ -1087,6 +1199,7 @@ const serve = async () => {
         editorTokenEpoch?: unknown;
         devcontainer?: unknown;
         folder?: unknown;
+        unforwarded?: unknown;
       };
       // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
       // rest is cut to a line.
@@ -1096,18 +1209,29 @@ const serve = async () => {
       // asked directly, and only once tokens have been retired (review of the final fixes).
       if (reply.editorTokenEpoch === undefined && retiredAt() > 0)
         entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
+      // Whole from the VM (it once cut it, and this cut it again): made safe here, bounded
+      // against a flood only, and fitted to a line by what shows it (R1).
       entry.devcontainer =
-        typeof reply.devcontainer === "string" ? printable(reply.devcontainer, 400, " ") : "";
+        typeof reply.devcontainer === "string" ? printable(reply.devcontainer) : "";
       entry.folder = folderFrom(entry.folder, reply.folder);
       if (!reply.ok || !Array.isArray(reply.listeners))
         throw new Error(reply.error ?? `exit ${result.code}`);
       // Fail closed on what the VM says (listenersFrom).
       const ours = b.hostPorts?.() ?? new Set<number>();
-      entry.listeners = listenersFrom(reply.listeners, ours);
+      const taken = listenersFrom(reply.listeners, ours);
+      // What the VM itself left out (an older wsd says nothing of it), and what was cut here.
+      const left = unforwardedOf(reply.unforwarded);
+      entry.listeners = taken.listeners;
+      entry.low = [...new Set([...left.low, ...taken.low])].sort((x, y) => x - y);
+      entry.more = left.more;
+      entry.past = taken.past;
       entry.lastError = "";
     } catch (error) {
       // A workspace that cannot be asked forwards nothing new, and what it had is dropped.
       entry.listeners = new Set();
+      entry.low = [];
+      entry.more = 0;
+      entry.past = 0;
       entry.lastError = String(error);
     }
   };
@@ -1117,11 +1241,53 @@ const serve = async () => {
     fs.mkdirSync(dir, { recursive: true });
     const socket = path.join(dir, "proxy.sock");
     fs.rmSync(socket, { force: true });
+    // Each connection carried costs a session into the root VM and processes here: linkMost
+    // are carried at once, as many more wait their turn (first come, first carried), and
+    // past those one is refused, saying so to the program, to the daemon's log (at most a
+    // line a minute: the workspace is not trusted with this Mac's disk) and to `desolate
+    // ports`. (It was refused at 64 with no word anywhere, and a parallel install saw resets.)
+    let carried = 0;
+    const queue = new Set<() => void>();
+    const turn = () => {
+      for (const next of queue) {
+        if (carried >= linkMost) return;
+        queue.delete(next);
+        next();
+      }
+    };
+    const toProxy = (client: Socket, head: Buffer) => {
+      const verdict = linkVerdict(carried, queue.size, linkMost);
+      if (verdict === "refuse") {
+        const refused = entry.refused;
+        refused.count += 1;
+        refused.at = new Date().toISOString();
+        if (Date.now() - refused.logged > 60_000) {
+          refused.logged = Date.now();
+          log(
+            `link ${entry.vm}: refused a connection out (${refused.count} so far): ${linkMost} were carried and ${linkMost} waiting (link.connections)`,
+          );
+        }
+        return void client.end(linkRefusal(linkMost));
+      }
+      const go = () => {
+        if (client.destroyed || entry.proxy === null) return void client.destroy();
+        carried += 1;
+        client.once("close", () => {
+          carried -= 1;
+          turn();
+        });
+        // To this workspace's proxy in the root, and nowhere else.
+        pipe(client, b.dial(ROOT_VM, entry.proxy), head);
+      };
+      if (verdict === "carry") return go();
+      // What it sends meanwhile waits in its socket, read when it is carried.
+      queue.add(go);
+      client.once("close", () => queue.delete(go));
+    };
     const carry = (client: Socket) => {
       client.on("error", () => client.destroy());
       if (entry.proxy === null) return client.destroy();
-      // To this workspace's proxy in the root, and nowhere else.
-      pipe(client, b.dial(ROOT_VM, entry.proxy), Buffer.alloc(0));
+      toProxy(client, Buffer.alloc(0));
     };
     const server = createServer(carry);
     server.on("error", (error) => log(`link ${entry.vm}: ${error.message}`));
@@ -1132,18 +1298,24 @@ const serve = async () => {
     const { hostPort, token } = b.link(entry.vm);
     if (hostPort) {
       // Every process on this machine can connect to a loopback port. Only a connection
-      // that opens with this workspace's token is carried; without a token, none is.
-      // Each connection costs a session into the root VM and processes here: a workspace
-      // gets this many at once, and no more.
-      let open = 0;
+      // that opens with this workspace's token is carried; without a token, none is. Until
+      // it has proved it is the workspace's, a connection is nobody's: at most linkMost are
+      // in their handshake at once (shared/link.ts gives each ten seconds), and past that
+      // one is closed with no word, since it is not known to be the workspace's to tell.
+      let proving = 0;
       const tcp = createServer((client) => {
         client.on("error", () => client.destroy());
-        if (!token || entry.proxy === null || open >= LINK_CONNECTIONS) return client.destroy();
-        open += 1;
-        client.once("close", () => (open -= 1));
+        if (!token || entry.proxy === null || proving >= linkMost) return client.destroy();
+        proving += 1;
+        let proved = false;
+        const done = () => {
+          if (!proved) ((proved = true), (proving -= 1));
+        };
+        client.once("close", done);
         void acceptLink(client, token).then((rest) => {
+          done();
           if (rest === null || entry.proxy === null) return client.destroy();
-          pipe(client, b.dial(ROOT_VM, entry.proxy), rest);
+          toProxy(client, rest);
         });
       });
       // If something else holds the port (it was free a moment, and another program took
@@ -1186,6 +1358,10 @@ const serve = async () => {
       devcontainer: "",
       folder: "",
       watchers: [],
+      low: [],
+      more: 0,
+      past: 0,
+      refused: { count: 0, at: "", logged: 0 },
     };
     entries.set(r.vm, entry);
     // A status set in the workspace is a file changing in a share. A VM gets no events for
@@ -1257,7 +1433,14 @@ const serve = async () => {
     reconcile();
   };
 
-  const view = (): PortView[] => portsView([...entries.values()], hostHeld, rawOwner, holderOf);
+  const notes = (entry: Entry) => notesOf(entry, { ...entry.refused, most: linkMost });
+  const view = (): PortView[] =>
+    portsView(
+      [...entries.values()].map((entry) => ({ ...entry, notes: notes(entry) })),
+      hostHeld,
+      rawOwner,
+      holderOf,
+    );
 
   // ---------------------------------------------------------------- the root UI's host side
   // The root's state service cannot see the host, and cannot ask: no VM can open a
@@ -1400,6 +1583,16 @@ const serve = async () => {
                 .sort((x, y) => x - y)
                 .filter((p) => hostHeld.has(p))
                 .map((p) => ({ port: p, by: holderOf(p) })),
+              // What only the host knows of it, in sentences: listeners cut here, connections
+              // its link refused. (What the VM left out is in its devcontainer line already.)
+              ...(entry.past > 0 || entry.refused.count > 0
+                ? {
+                    notes: notesOf(
+                      { more: 0, past: entry.past },
+                      { ...entry.refused, most: linkMost },
+                    ),
+                  }
+                : {}),
             }
           : {}),
       };
@@ -1556,12 +1749,13 @@ const serve = async () => {
     let pending: string[] = [];
     let flushing: NodeJS.Timeout | null = null;
     const take = (chunk: Buffer) => {
-      pending.push(
+      pending = lastLines([
+        ...pending,
         ...chunk
           .toString()
           .split("\n")
           .filter((line) => line.trim() !== ""),
-      );
+      ]);
       flushing ??= setTimeout(() => {
         flushing = null;
         void report(pending.splice(0));

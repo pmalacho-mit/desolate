@@ -15,6 +15,7 @@ import {
 import { greetingIs, LIMIT } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { define, ports, valueOf } from "../shared/settings.ts";
+import { PORTS } from "../shared/limits.ts";
 import { INSTANCE } from "./paths.ts";
 import { dashboardStale, stale } from "./retired.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -32,6 +33,7 @@ import type {
   heldByColima,
   helloTo,
   nameOf,
+  portRange,
   rawOwners,
   said,
   setOf,
@@ -50,6 +52,8 @@ export type PortView = {
   workspace: string;
   forwarded: { port: number; url: string }[];
   reserved: { port: number; why: string }[];
+  /** what else is said of its forwarding: listeners left out, connections refused (notesOf) */
+  notes: string[];
 };
 
 // ------------------------------------------------------------------ the forwarder's decisions
@@ -1470,26 +1474,115 @@ const folderFrom = (current: string, value: unknown) =>
   /^\/workspaces\/[A-Za-z0-9._\/-]+$/.test(value)
     ? value
     : current;
-/** Fail closed on what the VM says: integers, 1024 and up, and a sane number of them.
+/** The most listeners of one workspace the host forwards. Against the VM, which is not
+ *  trusted (R7): each is two listeners of this daemon's (127.0.0.1 and ::1), and the daemon
+ *  carries every workspace. As many as a compose service gets mirrors (workspace/bridge.ts):
+ *  no dev stack listens on more. */
+const FORWARDS_MOST = 256;
+
+/** Fail closed on what the VM says: whole numbers from PORTS.min, and FORWARDS_MOST of them.
  *  The editor's two in-VM ports are never dev-server ports: a dev hostname must not
  *  reach the editor, and nothing may reach its server around its gate. Nor any port
  *  desolate itself uses on this machine (`ours`: a VM's ssh, a link): a workspace
- *  listening there must not get the host to bind it. */
-const listenersFrom = (ports: number[], ours: ReadonlySet<number>) =>
-  new Set(
-    ports
-      .filter(
-        (port) =>
-          Number.isInteger(port) &&
-          port >= 1024 &&
-          port <= 65535 &&
-          port !== EDITOR.server &&
-          port !== EDITOR.gate &&
-          port !== editorHostPort() &&
-          !ours.has(port),
-      )
-      .slice(0, 256),
+ *  listening there must not get the host to bind it. What is left out for a bound's sake
+ *  is said: `low`, the ports below PORTS.min (the Mac's system's), and `past`, how many
+ *  came after the first FORWARDS_MOST. */
+const listenersFrom = (ports: number[], ours: ReadonlySet<number>) => {
+  const whole = ports.filter((port) => Number.isInteger(port) && port >= 1 && port <= PORTS.max);
+  const may = whole.filter(
+    (port) =>
+      port >= PORTS.min &&
+      port !== EDITOR.server &&
+      port !== EDITOR.gate &&
+      port !== editorHostPort() &&
+      !ours.has(port),
   );
+  return {
+    listeners: new Set(may.slice(0, FORWARDS_MOST)),
+    low: [...new Set(whole.filter((port) => port < PORTS.min))].sort((a, b) => a - b),
+    past: Math.max(0, may.length - FORWARDS_MOST),
+  };
+};
+
+/** What the VM says it did not offer for a bound's sake (wsd's `unforwarded`, ticket 8): its
+ *  listeners below PORTS.min, and how many of a compose service's came after its mirrors.
+ *  Its word, so only whole ports below PORTS.min and a whole count are taken; a VM that
+ *  says nothing of it (an older wsd) has none. */
+const unforwardedOf = (value: unknown): { low: number[]; more: number } => {
+  const said = (value ?? {}) as { low?: unknown; more?: unknown };
+  const low = Array.isArray(said.low)
+    ? said.low.filter(
+        (port): port is number => Number.isInteger(port) && port >= 1 && port < PORTS.min,
+      )
+    : [];
+  const more =
+    Number.isSafeInteger(said.more) && (said.more as number) > 0 ? (said.more as number) : 0;
+  return { low: [...new Set(low)].sort((a, b) => a - b), more };
+};
+
+declare namespace unforwardedOf {
+  /** the VM's word for what it left out: ports below 1024, and a count */
+  export type Said = Table<
+    typeof unforwardedOf,
+    [
+      [args: [value: { low: [443, 80]; more: 44 }], expected: { low: [80, 443]; more: 44 }],
+      [args: [value: undefined], expected: { low: []; more: 0 }],
+      /** anything else in it is not taken: a port from 1024 (forwarded, or said otherwise), a
+       *  count that is not one */
+      [
+        args: [value: { low: [80, 3000, "22", 80.5, 0, 80]; more: -3 }],
+        expected: { low: [80]; more: 0 },
+      ],
+      [args: [value: { low: "80"; more: "44" }], expected: { low: []; more: 0 }],
+    ]
+  >;
+}
+
+/** What `desolate ports` says of a workspace beside its ports: how many of its listeners
+ *  were not forwarded for a bound's sake (each bound by its number), and how many of its
+ *  connections out were refused (link.connections, in daemon.ts). */
+const notesOf = (
+  left: { more: number; past: number },
+  refused: { count: number; at: string; most: number },
+) => [
+  ...(left.more > 0
+    ? [
+        `${left.more} more listener${left.more === 1 ? " is" : "s are"} not forwarded: a compose service's past the first 256 (workspace/bridge.ts)`,
+      ]
+    : []),
+  ...(left.past > 0
+    ? [
+        `${left.past} more listener${left.past === 1 ? " is" : "s are"} not forwarded: past the first ${FORWARDS_MOST} of a workspace`,
+      ]
+    : []),
+  ...(refused.count > 0
+    ? [
+        `${refused.count} connection${refused.count === 1 ? "" : "s"} out ${refused.count === 1 ? "was" : "were"} refused, the last at ${refused.at}: ${refused.most} are carried to its proxy at once and as many more may wait their turn (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`,
+      ]
+    : []),
+];
+
+declare namespace notesOf {
+  /** nothing left out and nothing refused: nothing said */
+  export type None = Expect<
+    Invoke<typeof notesOf, [left: { more: 0; past: 0 }, refused: { count: 0; at: ""; most: 48 }]>,
+    "=",
+    []
+  >;
+  /** each bound by its number, and the setting to change, as a person would type it */
+  export type Said = Expect<
+    Invoke<
+      typeof notesOf,
+      [left: { more: 44; past: 1 }, refused: { count: 3; at: "2026-11-21T06:00:00.000Z"; most: 48 }]
+    >,
+    "=",
+    [
+      "44 more listeners are not forwarded: a compose service's past the first 256 (workspace/bridge.ts)",
+      "1 more listener is not forwarded: past the first 256 of a workspace",
+      "3 connections out were refused, the last at 2026-11-21T06:00:00.000Z: 48 are carried to its proxy at once and as many more may wait their turn (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+    ]
+  >;
+}
 
 declare namespace editorTokenOf {
   /** a token is 48 hex and nothing else: it is built into an address the dashboard shows */
@@ -1565,7 +1658,24 @@ declare namespace listenersFrom {
       ]
     >,
     "=",
-    [5173, 8080]
+    { listeners: [5173, 8080]; low: [80, 1023]; past: 0 }
+  >;
+  /** past FORWARDS_MOST, the rest are counted, not taken */
+  export type Past = Expect<
+    Invoke<
+      typeof shown,
+      [
+        value: Invoke<
+          typeof listenersFrom,
+          [
+            ports: Invoke<typeof portRange, [from: 2000, count: 300]>,
+            ours: Invoke<typeof setOf, [items: []]>,
+          ]
+        >,
+      ]
+    >,
+    "matches",
+    { low: []; past: 44 }
   >;
 }
 
@@ -1749,7 +1859,13 @@ declare namespace editorAddress {
 }
 
 /** `desolate ports`: each workspace's forwarded ports, and those it cannot have, with why. */
-const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
+const portsView = <
+  E extends Routable & {
+    reserved: ReadonlySet<number>;
+    low?: readonly number[];
+    notes?: readonly string[];
+  },
+>(
   workspaces: E[],
   hostHeld: { has(port: number): boolean },
   rawOwner: { get(port: number): string | undefined },
@@ -1780,7 +1896,12 @@ const portsView = <E extends Routable & { reserved: ReadonlySet<number> }>(
             port,
             why: `listening in the workspace, but a program on this Mac holds port ${port} (${holderOf(port)}): not forwarded, and the workspace's address on port ${port} reaches that program instead. Run it on another port`,
           })),
+        ...(entry.low ?? []).map((port) => ({
+          port,
+          why: `listening in the workspace, below ${PORTS.min}: not forwarded (below ${PORTS.min} a port is this Mac's system's). Run it on a port from ${PORTS.min} up`,
+        })),
       ],
+      notes: [...(entry.notes ?? [])],
     }))
     .sort((a, b) => a.workspace.localeCompare(b.workspace));
 
@@ -1797,7 +1918,15 @@ declare namespace portsView {
             workspaces: [
               Invoke<
                 typeof ws,
-                [at: "dev/w2", listening: [5173, 3000], more: { reserved: [5432] }]
+                [
+                  at: "dev/w2",
+                  listening: [5173, 3000],
+                  more: {
+                    reserved: [5432];
+                    low: [80];
+                    notes: ["1 more listener is not forwarded: past the first 256 of a workspace"];
+                  },
+                ]
               >,
               Invoke<typeof ws, [at: "dev/w1", listening: [5432, 5173]]>,
             ],
@@ -1817,6 +1946,7 @@ declare namespace portsView {
           { port: 5432; url: "http://dev-w1-HEX.localhost:5432" },
         ];
         reserved: [];
+        notes: [];
       },
       {
         workspace: "dev/w2";
@@ -1827,7 +1957,12 @@ declare namespace portsView {
             port: 3000;
             why: "listening in the workspace, but a program on this Mac holds port 3000 (colima, pid 812): not forwarded, and the workspace's address on port 3000 reaches that program instead. Run it on another port";
           },
+          {
+            port: 80;
+            why: "listening in the workspace, below 1024: not forwarded (below 1024 a port is this Mac's system's). Run it on a port from 1024 up";
+          },
         ];
+        notes: ["1 more listener is not forwarded: past the first 256 of a workspace"];
       },
     ]
   >;
@@ -1842,6 +1977,7 @@ export {
   greetingGoes,
   inboundRoute,
   listenersFrom,
+  notesOf,
   pagesRoute,
   portsView,
   rawOwnerFor,
@@ -1849,5 +1985,6 @@ export {
   reservedFor,
   spokeAsBrowser,
   tokenEpochOf,
+  unforwardedOf,
 };
 export type { Checkouts, Heard, Routable };
