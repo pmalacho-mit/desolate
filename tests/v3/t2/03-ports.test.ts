@@ -672,12 +672,13 @@ else {
     assert.ok(await until(() => past() !== undefined, 20_000), JSON.stringify(ports()));
     const one = ports().find((w) => w.workspace === "web/one")!;
     // What it took of the workspace's listeners: those forwarded, and those a program on this
-    // machine holds. Not a port kept taken for another workspace, nor one below 1024 (the
-    // workspace's own report): counted, they made 257.
+    // machine holds. Not a port kept taken for another workspace (counted, they made 257),
+    // nor one below 1024 (the workspace's own report).
     const forwarded =
       one.forwarded.length +
-      one.reserved.filter((r) => /^listening in the workspace/.test(r.why)).length;
-    assert.ok(forwarded <= 256, `at most 256 taken: ${forwarded}`);
+      one.reserved.filter((r) => r.port >= 1024 && /^listening in the workspace/.test(r.why))
+        .length;
+    assert.ok(forwarded <= 256, `at most 256 taken: ${forwarded}: ${JSON.stringify(one)}`);
     assert.ok(Number(past()) >= 300 - 256, `the rest counted: ${past()}`);
     assert.deepEqual(
       ports().find((w) => w.workspace === "web/two")?.notes,
