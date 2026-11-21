@@ -118,10 +118,12 @@ const HEAD_MOST = 16 * 1024;
 
 /** The proxy's answer to the CONNECT, as far as it has come: more to read, too much without
  *  an end, a refusal with the proxy's reason, or open, its own bytes ending at `bodyAt`. The
- *  reason is its whole line (it was cut at 300 characters), as UTF-8, made safe to show. */
+ *  reason is its whole line (it was cut at 300 characters), as UTF-8, made safe to show. A
+ *  503 is `busy`: the link's room is full for now (host/daemon.ts), which a program may try
+ *  again, unlike a refused destination (403). */
 export const proxyAnswer = (
   answer: Buffer,
-): "more" | "too much" | { refused: string } | { bodyAt: number } => {
+): "more" | "too much" | { refused: string; busy?: true } | { bodyAt: number } => {
   const end = answer.indexOf("\r\n\r\n");
   if (end < 0 ? answer.length > HEAD_MOST : end > HEAD_MOST) return "too much";
   if (end < 0) return "more";
@@ -130,7 +132,10 @@ export const proxyAnswer = (
     const reason = /\r\nX-Desolate-Reason: ([^\r\n]*)/i.exec(
       answer.subarray(0, end).toString("utf8"),
     )?.[1];
-    return { refused: reason ? printable(reason) : "the proxy refused this destination" };
+    return {
+      refused: reason ? printable(reason) : "the proxy refused this destination",
+      ...(/^HTTP\/1\.[01] 503 /.test(status) ? { busy: true as const } : {}),
+    };
   }
   return { bodyAt: end + 4 };
 };
@@ -194,6 +199,18 @@ declare namespace proxyAnswer {
           >,
         ],
         expected: { refused: "no" },
+      ],
+      /** a 503, the link's room full for now, is said to be so */
+      [
+        args: [
+          answer: Invoke<
+            typeof bytes,
+            [
+              text: "HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: full\r\nContent-Length: 0\r\n\r\n",
+            ]
+          >,
+        ],
+        expected: { refused: "full"; busy: true },
       ],
       /** the whole line, however long, in the UTF-8 the proxy writes, and only made safe */
       [
@@ -278,9 +295,15 @@ export const serve = (link: Link, port: number, scheme: "http" | "https", host =
       if (read === "too much") return close();
       upstream.off("data", onAnswer);
       if ("refused" in read) {
-        // The proxy's refusal, with its reason, reaches a plain-HTTP client as text.
+        // The proxy's refusal, with its reason, reaches a plain-HTTP client as text; a link
+        // that is full for now as such (503, which a program may retry), not as forbidden.
         upstream.destroy();
-        return refuse(client, http, "403 Forbidden", read.refused);
+        return refuse(
+          client,
+          http,
+          read.busy ? "503 Service Unavailable" : "403 Forbidden",
+          read.refused,
+        );
       }
       open = true;
       const rest = answer.subarray(read.bodyAt);

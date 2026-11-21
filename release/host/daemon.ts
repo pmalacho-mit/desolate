@@ -218,6 +218,9 @@ const SERVER_FIRST_MS = 400;
  *  that has waited longest goes, not the newest: a program of another user's opening silent
  *  sockets could otherwise lock the person out (decisions.md, the audit of 2026-11-16). */
 const SILENT_MOST = 512;
+/** How long a refused connection out is given to read its answer and close (openLink): a
+ *  workspace's relay reads it at once. */
+const REFUSED_MS = 5000;
 
 /** The most of one answer from the root's state service this host reads: a hard bound
  *  against the root's user, whose service parses what domains send (decisions.md, "the
@@ -957,7 +960,15 @@ const serve = async () => {
       waiting.delete(client);
     }
   };
-  const log = (line: string) => fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
+  // A line that cannot be written (the disk full, no file descriptor left) is lost, not the
+  // daemon: it is called from inside the handlers of every workspace's connections.
+  const log = (line: string) => {
+    try {
+      fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
+    } catch {
+      // nothing to say it to
+    }
+  };
 
   const pipe = (client: Socket, upstream: Duplex, head: Buffer) => {
     const close = () => {
@@ -1274,6 +1285,22 @@ const serve = async () => {
     // ports`. (It was refused at 64 with no word anywhere, and a parallel install saw resets.)
     let carried = 0;
     const queue = new Set<() => void>();
+    // A refused connection is answered and let go: what it sends is read and dropped, and it
+    // is destroyed if it has not closed in REFUSED_MS. At most linkMost are being answered at
+    // once, and past that one is destroyed: a workspace that held its refused connections
+    // open would otherwise hold a descriptor and a buffer of this daemon's for each.
+    let answering = 0;
+    const refuse = (client: Socket) => {
+      if (answering >= linkMost) return void client.destroy();
+      answering += 1;
+      const timer = setTimeout(() => client.destroy(), REFUSED_MS);
+      client.once("close", () => {
+        answering -= 1;
+        clearTimeout(timer);
+      });
+      client.resume();
+      client.end(linkRefusal(linkMost));
+    };
     const turn = () => {
       for (const next of queue) {
         if (carried >= linkMost) return;
@@ -1293,7 +1320,7 @@ const serve = async () => {
             `link ${entry.vm}: refused a connection out (${refused.count} so far): ${linkMost} were carried and ${linkMost} waiting (link.connections)`,
           );
         }
-        return void client.end(linkRefusal(linkMost));
+        return refuse(client);
       }
       const go = () => {
         if (client.destroyed || entry.proxy === null) return void client.destroy();
@@ -1327,22 +1354,28 @@ const serve = async () => {
       // that opens with this workspace's token is carried; without a token, none is. Until
       // it has proved it is the workspace's, a connection is nobody's: at most linkMost are
       // in their handshake at once (shared/link.ts gives each ten seconds), and past that
-      // one is closed with no word, since it is not known to be the workspace's to tell.
-      let proving = 0;
+      // the one that has been at it longest is closed with no word, since it is not known
+      // to be the workspace's to tell. The longest, not the newest: another user's program
+      // holding linkMost silent ones would otherwise keep the workspace off its link, for as
+      // long as it liked; this way it must open linkMost within the guest's own handshake.
+      const proving = new Set<Socket>();
       const tcp = createServer((client) => {
         client.on("error", () => client.destroy());
-        if (!token || entry.proxy === null || proving >= linkMost) return client.destroy();
-        proving += 1;
-        let proved = false;
-        const done = () => {
-          if (!proved) ((proved = true), (proving -= 1));
-        };
-        client.once("close", done);
-        void acceptLink(client, token).then((rest) => {
-          done();
-          if (rest === null || entry.proxy === null) return client.destroy();
-          toProxy(client, rest);
-        });
+        if (!token || entry.proxy === null) return client.destroy();
+        if (proving.size >= linkMost) {
+          const longest = proving.values().next().value!;
+          proving.delete(longest);
+          longest.destroy();
+        }
+        proving.add(client);
+        client.once("close", () => proving.delete(client));
+        void acceptLink(client, token)
+          .then((rest) => {
+            proving.delete(client);
+            if (rest === null || entry.proxy === null) return client.destroy();
+            toProxy(client, rest);
+          })
+          .catch(() => client.destroy());
       });
       // If something else holds the port (it was free a moment, and another program took
       // it), keep trying while the workspace is ours: the guest will not talk to what does
