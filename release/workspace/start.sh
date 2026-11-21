@@ -61,7 +61,9 @@ if ! alive /run/desolate/wsd.pid; then
   setsid runuser -u "$USER_NAME" -- node --disable-warning=ExperimentalWarning "$HERE/wsd.ts" >>/var/lib/desolate/wsd.log 2>&1 </dev/null &
   echo $! >/run/desolate/wsd.pid
 fi
-for _ in $(seq 1 100); do [ -S /run/desolate/wsd.sock ] && break; sleep 0.1; done
+# Its socket, for as long as it is starting: it is this VM's own program, so it is waited for
+# while it lives, and not past its end (the host bounds the whole of start.sh).
+until [ -S /run/desolate/wsd.sock ] || ! alive /run/desolate/wsd.pid; do sleep 0.1; done
 [ -S /run/desolate/wsd.sock ] || { echo "start.sh: the workspace daemon did not start; see /var/lib/desolate/wsd.log" >&2; tail -5 /var/lib/desolate/wsd.log >&2; exit 1; }
 echo "workspace services: up"
 # The VM's own docker daemon: for the project's devcontainer (devcontainer.ts) and for
