@@ -9,11 +9,17 @@
 // much was left out, and where the whole of it is.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { keptAt, notKept, repeat } from "../.harness/shared-text.ts";
+import type { keptAt, newlinesThen, notKept, repeat } from "../.harness/shared-text.ts";
 
 /** Controls, format characters (bidirectional overrides, zero-width), private-use and
- *  unassigned code points, and the line and paragraph separators. */
-const UNSAFE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu;
+ *  unassigned code points, half of a surrogate pair, and the line and paragraph separators.
+ *  Then the marks and letters that show nothing and are not format characters: the
+ *  combining grapheme joiner, the Hangul and Mongolian fillers, and the variation selectors
+ *  past the sixteen (U+E0100 on), which no text needs and which carry hidden bytes. The first
+ *  sixteen choose how a character looks (U+FE0F: as an emoji), so one is kept after a
+ *  character; a run of them is the same smuggling, and from the second on they are unsafe. */
+const UNSAFE =
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
 
 /** The most of a text printable passes when its caller names no bound: a bound against a
  *  flood (a megabyte of status would fill a terminal's scrollback and a page's memory), not
@@ -34,7 +40,13 @@ const safe = (
   instead: string,
   tabs: boolean,
 ): { text: string; cut: boolean } => {
-  const text = String(value ?? "");
+  let text: string;
+  try {
+    text = String(value ?? "");
+  } catch {
+    // An object of another's whose toString is not a function (JSON can say so).
+    text = "?";
+  }
   const chars = [
     ...text
       .slice(0, max * 4)
@@ -67,6 +79,13 @@ declare namespace printable {
       /** one spelling of each character (NFC) */
       [args: [value: "cafe\u0301"], expected: "caf\u00e9"],
       [args: [value: 42], expected: "42"],
+      /** what shows nothing and is no format character: half of a pair, a filler, a run of
+       *  variation selectors (one, after a character, chooses how it looks, and stays) */
+      [args: [value: "a\ud800b"], expected: "a?b"],
+      [args: [value: "a\u3164b\u034fc"], expected: "a?b?c"],
+      [args: [value: "\u2764\ufe0f ok"], expected: "\u2764\ufe0f ok"],
+      [args: [value: "x\ufe00\ufe01\ufe02"], expected: "x\ufe00??"],
+      [args: [value: "x\u{e0100}\u{e0101}"], expected: "x??"],
     ]
   >;
   /** a cut is said: text over the bound ends in the mark, which counts toward the bound;
@@ -121,10 +140,15 @@ declare namespace printableLines {
 }
 
 /** The last `lines` lines of a program's output, and how many lines came before them.
- *  The newlines that end the output are not lines of it. Nothing is made safe here: that is
- *  printable's, and `failure` does both. */
+ *  A line ends in a newline or a carriage return and a newline (what a terminal's program
+ *  writes); the line ends that end the output are not lines of it. Nothing is made safe
+ *  here: that is printable's, and `failure` does both. */
 export const tail = (text: string, lines: number): { text: string; before: number } => {
-  const all = text.replace(/\n+$/, "").split("\n");
+  // (By hand, not by a pattern anchored at the end: that is quadratic on a long run of
+  // newlines that something follows, and the output is another's.)
+  let end = text.length;
+  while (end > 0 && (text[end - 1] === "\n" || text[end - 1] === "\r")) end--;
+  const all = end === 0 ? [] : text.slice(0, end).split(/\r?\n/);
   const kept = lines < 1 ? [] : all.slice(-lines);
   return { text: kept.join("\n"), before: all.length - kept.length };
 };
@@ -147,7 +171,23 @@ declare namespace tail {
       [args: [text: "a\n\nb\n\n\n", lines: 2], expected: { text: "\nb"; before: 1 }],
       [args: [text: "", lines: 3], expected: { text: ""; before: 0 }],
       [args: [text: "a\nb", lines: 0], expected: { text: ""; before: 2 }],
+      [args: [text: "", lines: 0], expected: { text: ""; before: 0 }],
+      /** a program on a terminal ends its lines in CR LF: one line end, not a line of "\r" */
+      [
+        args: [text: "x\r\nfatal: denied\r\n\r\n", lines: 1],
+        expected: { text: "fatal: denied"; before: 1 },
+      ],
     ]
+  >;
+  /** in time that grows with the output, not its square: a long run of blank lines that
+   *  something follows (a quadratic trim took minutes on a megabyte of them) */
+  export type Linear = Expect<
+    Invoke<
+      typeof tail,
+      [text: Invoke<typeof newlinesThen, [count: 1000000, text: "fatal"]>, lines: 1]
+    >,
+    "=",
+    { text: "fatal"; before: 1000000 }
   >;
 }
 
@@ -241,8 +281,13 @@ export const forTerminal = (line: string): string => {
   if (first === "{" || first === "[" || first === '"') {
     try {
       JSON.parse(line);
+      // Each UTF-16 unit of it, so that a character past U+FFFF is escaped whole.
       return line.replace(UNSAFE, (c) =>
-        c === "\n" || c === "\t" ? c : `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+        c === "\n" || c === "\t"
+          ? c
+          : [...Array(c.length).keys()]
+              .map((i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, "0")}`)
+              .join(""),
       );
     } catch {
       /* not JSON: a line of text that starts with a bracket */
@@ -268,6 +313,8 @@ declare namespace forTerminal {
       [args: [line: '[{"dir":"x\u009b31m"}]'], expected: '[{"dir":"x\\u009b31m"}]'],
       [args: [line: '{"m":"\u202eevil"}'], expected: '{"m":"\\u202eevil"}'],
       [args: [line: "[not json \u001b[2J"], expected: "[not json ?[2J"],
+      /** a character past U+FFFF is escaped as its pair, so the JSON says the same */
+      [args: [line: '{"m":"\u{e0041}"}'], expected: '{"m":"\\udb40\\udc41"}'],
     ]
   >;
 }

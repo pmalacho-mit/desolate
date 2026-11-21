@@ -205,3 +205,235 @@ export const contended = async (
   }
   return { entered, overlapped: most > 1 };
 };
+
+/** On a share, a waiter frozen at the worst moment. A share lock is left by a dead holder
+ *  (its beat stopped). The first waiter takes the right to move it away, and finds it still
+ *  the dead holder's; then its whole process stops (`freezeMs`, as a VM paused) just before
+ *  it moves it. A second waiter, meanwhile, takes the first's right for dead (nothing beats
+ *  in a right), clears the dead lock and takes the lock. The first wakes and moves what is
+ *  in the lock's place. Answers, in order, who was inside and when; and what is left beside
+ *  the lock. (Paced so that `missed` beats are 400 ms.) */
+export const frozenHeir = async (
+  dir: string,
+  freezeMs: number,
+): Promise<{ order: string[]; left: string[] }> => {
+  leftWithABeat(dir, false);
+  const log = `${dir}.log`;
+  const dead = "fedcba9876543210fedcba9876543210";
+  const taker = (name: string, freeze: boolean) =>
+    spawn(
+      process.execPath,
+      [
+        ...NODE,
+        `import { createRequire, syncBuiltinESMExports } from "node:module";
+         const fs = createRequire(import.meta.url)("node:fs");
+         const [dir, log, name, freeze, freezeMs, holdMs] = process.argv.slice(1);
+         if (freeze === "1") {
+           const rename = fs.renameSync;
+           let once = true;
+           fs.renameSync = (from, to, ...rest) => {
+             if (once && from === dir && to.includes(".gone-")) {
+               once = false;
+               Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(freezeMs));
+             }
+             return rename(from, to, ...rest);
+           };
+           syncBuiltinESMExports();
+         }
+         const { withLock } = await import(${JSON.stringify(LOCK_TS)});
+         await withLock(dir, async () => {
+           fs.appendFileSync(log, name + " in\\n");
+           await new Promise((resolve) => setTimeout(resolve, Number(holdMs)));
+           fs.appendFileSync(log, name + " out\\n");
+         }, { scope: "share" }, { pollMs: 10, beatMs: 40, missed: 10 });`,
+        dir,
+        log,
+        name,
+        freeze ? "1" : "0",
+        String(freezeMs),
+        String(freezeMs + 1000),
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  const ended = (child: ReturnType<typeof spawn>) =>
+    new Promise<void>((resolve, reject) => {
+      let stderr = "";
+      child.stderr!.on("data", (chunk) => (stderr += chunk));
+      child.on("close", (status) =>
+        status === 0 ? resolve() : reject(new Error(`a taker failed (${status}): ${stderr}`)),
+      );
+    });
+  const first = taker("first", true);
+  const firstEnded = ended(first);
+  for (let waited = 0; !fs.existsSync(`${dir}.heir-${dead}`); waited += 5) {
+    if (waited > 10_000) throw new Error("the first waiter never took the right");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  await Promise.all([firstEnded, ended(taker("second", false))]);
+  const order = fs.readFileSync(log, "utf8").trim().split("\n");
+  fs.rmSync(log);
+  return { order, left: fs.readdirSync(path.dirname(dir)).sort() };
+};
+
+/** A process holds the lock `dir` (written by hand, naming itself with its true start: a
+ *  live holder), and then, not waiting, takes it once while opening the holder file fails
+ *  (EMFILE: no descriptor left), and once more after. What each taking did: "taken", or
+ *  the refusal's message (its own pid said as "<this one>"). */
+export const holderUnreadable = (dir: string): string[] => {
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { createRequire, syncBuiltinESMExports } from "node:module";
+       const fs = createRequire(import.meta.url)("node:fs");
+       const path = createRequire(import.meta.url)("node:path");
+       const dir = process.argv[1];
+       const { startOf, withLock } = await import(${JSON.stringify(LOCK_TS)});
+       fs.mkdirSync(dir);
+       fs.writeFileSync(path.join(dir, "holder"), JSON.stringify({
+         id: "0123456789abcdef0123456789abcdef", pid: process.pid, host: "this-machine",
+         since: "2026-11-20T21:04:05.000Z", start: startOf(process.pid) }));
+       const open = fs.openSync;
+       let failing = true;
+       fs.openSync = (file, ...rest) => {
+         if (failing && file === path.join(dir, "holder"))
+           throw Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
+         return open(file, ...rest);
+       };
+       syncBuiltinESMExports();
+       const said = [];
+       for (const _ of [1, 2]) {
+         try {
+           await withLock(dir, async () => {}, { wait: false });
+           said.push("taken");
+         } catch (error) {
+           said.push(error.message.replace("process " + process.pid + " ", "process <this one> "));
+         }
+         failing = false;
+       }
+       process.stdout.write(JSON.stringify(said));`,
+      dir,
+    ],
+    { encoding: "utf8" },
+  );
+  if (ran.status !== 0) throw new Error(`the holder failed: ${ran.stderr}`);
+  return JSON.parse(ran.stdout) as string[];
+};
+
+/** In the lock's place, a link that leads nowhere (anyone who can write the folder can put
+ *  one there). */
+export const danglingLinkAt = (dir: string) => {
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  fs.symlinkSync(path.join(path.dirname(dir), "nowhere"), dir);
+};
+
+/** Another side, on a share, does what it can to the lock's folder: it puts a link in the
+ *  lock being made (`<dir>.new-<id>/holder`, in the moment after its directory appears)
+ *  that leads to a file of the taker's; or it leaves in the lock's place a directory that is
+ *  no lock, holding a link to a folder of the taker's. The taker takes the lock: did it (or
+ *  why not)? Are the taker's file and folder as they were, and what is left beside it? */
+export const hostileFolder = (
+  dir: string,
+  does: "link in the lock being made" | "a directory with a link in it",
+): { took: boolean | string; untouched: boolean; left: string[] } => {
+  const folder = path.dirname(dir);
+  fs.mkdirSync(folder, { recursive: true });
+  const victim = fs.mkdtempSync(path.join(path.dirname(folder), "victim-"));
+  fs.writeFileSync(path.join(victim, "notes.txt"), "the person's");
+  if (does === "a directory with a link in it") {
+    fs.mkdirSync(dir);
+    fs.symlinkSync(victim, path.join(dir, "sub"));
+    fs.writeFileSync(path.join(dir, "junk"), "");
+  }
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { createRequire, syncBuiltinESMExports } from "node:module";
+       const fs = createRequire(import.meta.url)("node:fs");
+       const [dir, victim, does] = process.argv.slice(1);
+       if (does === "link in the lock being made") {
+         const mkdir = fs.mkdirSync;
+         fs.mkdirSync = (made, ...rest) => {
+           const answer = mkdir(made, ...rest);
+           if (String(made).startsWith(dir + ".new-")) fs.symlinkSync(victim + "/notes.txt", made + "/holder");
+           return answer;
+         };
+         syncBuiltinESMExports();
+       }
+       const { withLock } = await import(${JSON.stringify(LOCK_TS)});
+       let took = false;
+       try {
+         await withLock(dir, async () => { took = true; }, { wait: false });
+       } catch (error) {
+         took = error.message.replace(new RegExp("'[^']*[.]new-[0-9a-f]+/"), "'<the lock being made>/");
+       }
+       process.stdout.write(JSON.stringify(took));`,
+      dir,
+      victim,
+      does,
+    ],
+    { encoding: "utf8" },
+  );
+  if (ran.status !== 0) throw new Error(`the taker failed: ${ran.stderr}`);
+  const untouched = fs.readFileSync(path.join(victim, "notes.txt"), "utf8") === "the person's";
+  fs.rmSync(victim, { recursive: true, force: true });
+  const left = fs
+    .readdirSync(folder)
+    .map((name) => name.replace(/-[0-9a-f]{16,32}$/, "-<id>"))
+    .sort();
+  return { took: JSON.parse(ran.stdout) as boolean | string, untouched, left };
+};
+
+/** Another side makes the lock's place a link to a live lock beside it (`<dir>` leads to
+ *  `<live>`, held by this process), or puts there a lock whose right names itself (a holder
+ *  that is dead, and a right `<dir>.heir-<id>` naming the same id). This process then takes
+ *  `<dir>`, not waiting, with a time limit: what came of it ("taken", a refusal's message,
+ *  or "stuck" when it did not answer in time), and is the live lock still its holder's? */
+export const misleadingLock = (
+  dir: string,
+  does: "link to a live lock" | "a right that names itself",
+): { came: string; liveIntact: boolean } => {
+  const folder = path.dirname(dir);
+  fs.mkdirSync(folder, { recursive: true });
+  const live = path.join(folder, "live.lock");
+  const holder = (pid: number, start: string | null) =>
+    JSON.stringify({ id: "0123456789abcdef0123456789abcdef", pid, host: "h", since: "s", start });
+  fs.mkdirSync(live);
+  fs.writeFileSync(path.join(live, "holder"), holder(process.pid, startOf(process.pid)));
+  if (does === "link to a live lock") fs.symlinkSync(live, dir);
+  else {
+    const dead = JSON.stringify({
+      id: "fedcba9876543210fedcba9876543210",
+      pid: 2 ** 31 - 2,
+      host: "h",
+      since: "s",
+      start: "x",
+    });
+    for (const at of [dir, `${dir}.heir-fedcba9876543210fedcba9876543210`]) {
+      fs.mkdirSync(at);
+      fs.writeFileSync(path.join(at, "holder"), dead);
+    }
+  }
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { withLock } from ${JSON.stringify(LOCK_TS)};
+       let came = "taken";
+       try {
+         await withLock(process.argv[1], async () => {}, { wait: false });
+       } catch (error) {
+         came = error.message;
+       }
+       process.stdout.write(came);`,
+      dir,
+    ],
+    { encoding: "utf8", timeout: 5000 },
+  );
+  const liveIntact =
+    fs.existsSync(path.join(live, "holder")) &&
+    JSON.parse(fs.readFileSync(path.join(live, "holder"), "utf8")).pid === process.pid;
+  return { came: ran.status === null ? "stuck" : ran.stdout || ran.stderr, liveIntact };
+};
