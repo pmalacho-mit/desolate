@@ -396,7 +396,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     if (!signedIn)
       return json(res, 401, {
         error:
-          "open the approval page at the address `desolate approve --web` prints, on this Mac's terminal: it carries this stack's token",
+          "this browser is not signed in to the approval page. On the Mac, `desolate ui --open` signs it in to every page (`desolate approve --web` prints this page's address alone)",
       });
     // Below, every request is this page's own script's: the same origin, said by the browser.
     if (String(req.headers["sec-fetch-site"] ?? "") !== "same-origin")
@@ -411,7 +411,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       if (!credential)
         return json(res, 401, {
           error:
-            "open the approval page at the address `desolate approve --web` prints once: its cookie opens this page too",
+            "this browser is not signed in to the approval page. On the Mac, `desolate ui --open` signs it in to every page, this one too",
         });
       if (req.method === "GET" && url.pathname === "/editor-defaults/get")
         return json(res, 200, { settings: await ops.get() });
@@ -439,7 +439,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       if (!credential)
         return json(res, 401, {
           error:
-            "open the approval page at the address `desolate approve --web` prints once: its cookie opens the secrets too",
+            "this browser is not signed in to the approval page, which keeps the secrets. On the Mac, `desolate ui --open` signs it in to every page, this one too",
         });
       const domain = url.searchParams.get("domain") ?? "";
       if (req.method === "GET" && url.pathname === "/secrets/list") {

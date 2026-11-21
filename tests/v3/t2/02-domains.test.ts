@@ -432,6 +432,36 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     assert.equal(stack.quiet("rm", "nests-dev/env-check").code, 0);
   });
 
+  it("a main checkout only behind the remote's is brought up to it on start; one with work of its own is not", () => {
+    // A domain's first workspace takes each repository's main checkout, which nothing else
+    // moves: it came up days behind, before the app existed (dogfooding, 2026-11-20).
+    assert.equal(stack.quiet("domain", "create", "catchup").code, 0);
+    assert.equal(stack.quiet("domain", "catchup", "add", "--repo", "acme/consumer").code, 0);
+    assert.equal(stack.quiet("up", "catchup").code, 0);
+    const head = () =>
+      inWs("catchup/w1", "cd /workspaces/acme/consumer && git rev-parse HEAD").stdout.trim();
+    const merged = stack
+      .forge("commit", "acme/consumer", "main", "CATCHUP.md", "merged on the forge\n")
+      .trim();
+    assert.equal(stack.quiet("fetch", "acme/consumer").code, 0);
+    assert.notEqual(head(), merged, "before: the checkout is behind");
+    assert.equal(stack.quiet("stop", "catchup/w1").code, 0);
+    const started = stack.quiet("start", "catchup/w1");
+    assert.equal(started.code, 0, started.stderr);
+    assert.equal(head(), merged, "started again, it is at the remote's");
+    // CONTROL: a commit of its own there, and the remote moves on: it stays where the person
+    // left it, their commit and all.
+    const mine = inWs(
+      "catchup/w1",
+      "cd /workspaces/acme/consumer && git -c user.name=p -c user.email=p@example.invalid commit -q --allow-empty -m mine && git rev-parse HEAD",
+    ).stdout.trim();
+    stack.forge("commit", "acme/consumer", "main", "LATER.md", "later\n");
+    assert.equal(stack.quiet("fetch", "acme/consumer").code, 0);
+    assert.equal(stack.quiet("stop", "catchup/w1").code, 0);
+    assert.equal(stack.quiet("start", "catchup/w1").code, 0);
+    assert.equal(head(), mine, "a branch with a commit of its own is not moved");
+  });
+
   it("the transcript reads as reviewed", () => {
     stack.checkTranscript("t2-02-domains");
   });

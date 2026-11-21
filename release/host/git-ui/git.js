@@ -45,7 +45,7 @@ const start = async () => {
   if (!answer.ok) {
     status.textContent = body.error || `HTTP ${answer.status}`;
     note(answer.status === 401
-      ? "This browser has not opened the git terminal's own address yet. On the Mac, run:\n\n    desolate git --open\n\nonce: it carries this stack's token, and gives this browser the cookie it needs. After that, Open in git on the dashboard opens it."
+      ? "This browser is not signed in to the git terminal. On the Mac, run:\n\n    desolate ui --open\n\nonce: it signs this browser in to every page (the dashboard, this one, the approval page) until the browser quits. (desolate ui --link prints the link, for another browser.)"
       : `The shell did not start: ${body.error || `HTTP ${answer.status}`}`);
     return;
   }
