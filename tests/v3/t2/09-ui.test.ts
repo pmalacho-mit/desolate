@@ -35,6 +35,9 @@ const http = (
     body?: unknown;
     cookie?: string | null;
     key?: string | null;
+    /** How long the socket is open and silent before the request goes on it, as a
+     *  browser's preconnected socket is. */
+    silentMs?: number;
   } = {},
 ): Promise<Answer> =>
   new Promise((resolve) => {
@@ -44,25 +47,34 @@ const http = (
     let data = "";
     socket.setTimeout(20_000, () => socket.destroy());
     socket.on("connect", () =>
-      socket.write(
-        [
-          `${method} ${pathAndQuery} HTTP/1.1`,
-          `Host: ${options.host ?? HOST}:${port}`,
-          ...((options.cookie === undefined ? cookie : options.cookie)
-            ? [`Cookie: ${options.cookie ?? cookie}`]
-            : []),
-          // The page's key goes with the page's own cookie, as its script sends it.
-          ...((options.key === undefined ? (options.cookie === undefined ? key : "") : options.key)
-            ? [`X-Desolate-Key: ${options.key ?? key}`]
-            : []),
-          ...(options.headers ?? []),
-          ...(payload
-            ? ["Content-Type: application/json", `Content-Length: ${Buffer.byteLength(payload)}`]
-            : []),
-          "Connection: close",
-          "",
-          payload,
-        ].join("\r\n"),
+      setTimeout(
+        () =>
+          socket.write(
+            [
+              `${method} ${pathAndQuery} HTTP/1.1`,
+              `Host: ${options.host ?? HOST}:${port}`,
+              ...((options.cookie === undefined ? cookie : options.cookie)
+                ? [`Cookie: ${options.cookie ?? cookie}`]
+                : []),
+              // The page's key goes with the page's own cookie, as its script sends it.
+              ...((
+                options.key === undefined ? (options.cookie === undefined ? key : "") : options.key
+              )
+                ? [`X-Desolate-Key: ${options.key ?? key}`]
+                : []),
+              ...(options.headers ?? []),
+              ...(payload
+                ? [
+                    "Content-Type: application/json",
+                    `Content-Length: ${Buffer.byteLength(payload)}`,
+                  ]
+                : []),
+              "Connection: close",
+              "",
+              payload,
+            ].join("\r\n"),
+          ),
+        options.silentMs ?? 0,
       ),
     );
     // `ms` is when the whole answer had arrived (its Content-Length), as a browser sees
@@ -460,6 +472,22 @@ describe("T2 section 4.8: the root UI", () => {
       "control: nothing above stopped it",
     );
     assert.equal((await state()).stack?.isolated, false, "nor changed what the host said");
+  });
+
+  it("a browser's socket that is silent a while before its request is served, on every page of the port", async () => {
+    // Chrome opens sockets ahead of the requests it expects, and sends one on it later. The
+    // pages' port closed a socket silent for 400 ms, and the page it was opened for failed.
+    const now = await http("GET", "/state");
+    assert.equal(now.status, 200, "control: the same request, sent at once, is answered");
+    const later = await http("GET", "/state", { silentMs: 1500 });
+    assert.equal(later.status, 200, later.body);
+    assert.deepEqual(JSON.parse(later.body).stack, JSON.parse(now.body).stack);
+    // The approval page and the git terminal are on the same port, behind the same wait:
+    // without their cookies they refuse, but they answer (a closed socket is status 0).
+    for (const host of ["desolate-approve.localhost", "desolate-git.localhost"]) {
+      const answer = await http("GET", "/", { host, cookie: null, key: null, silentMs: 1500 });
+      assert.notEqual(answer.status, 0, `${host}: answered, not closed`);
+    }
   });
 
   it("budgets: state at once, a status change within a second, a click acknowledged within 100 ms", async () => {

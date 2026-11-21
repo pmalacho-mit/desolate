@@ -243,6 +243,7 @@ export const FEATURES: Feature[] = [
       "release/shared/link.ts",
       "release/shared/sniff.ts",
       "release/host/held-ports.ts",
+      "release/host/forward.ts",
     ],
     tests: ["t2/03-ports", "t2/05-egress", "t3/01-boundaries", "t3/02-dev-stack"],
     docs: [
