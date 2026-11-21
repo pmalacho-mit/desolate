@@ -77,4 +77,87 @@ approvals    http://desolate-approve.localhost:31591/?tkn=<token>
 to sign this browser in to every page at once: desolate ui --open (or --link, to print the link)
 [exit 0]
 
+## a long branch, counted and paged
+
+$ desolate review web acme/app long
+acme/app  long  at <commit>, against origin/main
+a push would send 250 commit(s): 250 files changed, 250 insertions(+)
+  <id>  commit 250
+  <id>  commit 249
+  <id>  commit 248
+  <id>  commit 247
+  <id>  commit 246
+  <id>  commit 245
+  <id>  commit 244
+  <id>  commit 243
+  <id>  commit 242
+  <id>  commit 241
+  <id>  commit 240
+  <id>  commit 239
+  <id>  commit 238
+  <id>  commit 237
+  <id>  commit 236
+  <id>  commit 235
+  <id>  commit 234
+  <id>  commit 233
+  <id>  commit 232
+  <id>  commit 231
+  <id>  commit 230
+  <id>  commit 229
+  <id>  commit 228
+  <id>  commit 227
+  <id>  commit 226
+  <id>  commit 225
+  <id>  commit 224
+  <id>  commit 223
+  <id>  commit 222
+  <id>  commit 221
+  ... and 220 more commits (every one: in the dashboard, or with git in `desolate root shell`)
+  f1.txt
+  f10.txt
+  f100.txt
+  f101.txt
+  f102.txt
+  f103.txt
+  f104.txt
+  f105.txt
+  f106.txt
+  f107.txt
+  f108.txt
+  f109.txt
+  f11.txt
+  f110.txt
+  f111.txt
+  f112.txt
+  f113.txt
+  f114.txt
+  f115.txt
+  f116.txt
+  f117.txt
+  f118.txt
+  f119.txt
+  f12.txt
+  f120.txt
+  f121.txt
+  f122.txt
+  f123.txt
+  f124.txt
+  f125.txt
+  f126.txt
+  f127.txt
+  f128.txt
+  f129.txt
+  f13.txt
+  f130.txt
+  f131.txt
+  f132.txt
+  f133.txt
+  f134.txt
+  ... and 210 more files (every one: in the dashboard, or with git in `desolate root shell`)
+read the diff: desolate review web acme/app long --diff
+  or in the dashboard: http://desolate.localhost:31591/?review&domain=web&repo=acme%2Fapp&branch=long
+  or with git, in `desolate root shell`
+to push exactly this: desolate push web acme/app long --expect <commit>
+[exit 0]
+
 ## delete from the dashboard

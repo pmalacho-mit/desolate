@@ -6,6 +6,10 @@
 # what a VM is, is decided by what the host starts in it, never by the image.
 #
 #   DESOLATE_IMAGE_KIND=vm|container   container: no kernel, no cloud-init (the fake backend)
+#   DESOLATE_IMAGE_EDITOR=none         leave the editor server out, and say so in the image
+#                                      (build.sh --no-editor: a builder with no route to
+#                                      GitHub's releases and no editor to stage). Without it,
+#                                      an editor that cannot be had fails the provisioning.
 #   /opt/desolate-stage/               optional pre-fetched tools (see "stage" below), for a
 #                                      builder with no route to nodejs.org or GitHub
 set -euo pipefail
@@ -13,6 +17,8 @@ export DEBIAN_FRONTEND=noninteractive LC_ALL=C
 # Quiet and repeatable: no service restarts offered after each apt step, no npm notices.
 export NEEDRESTART_SUSPEND=1 NPM_CONFIG_UPDATE_NOTIFIER=false
 KIND=${DESOLATE_IMAGE_KIND:-vm}
+EDITOR_SERVER=${DESOLATE_IMAGE_EDITOR:-}
+[ -z "$EDITOR_SERVER" ] || [ "$EDITOR_SERVER" = none ] || { echo "provision: DESOLATE_IMAGE_EDITOR is none or unset, not '$EDITOR_SERVER'" >&2; exit 64; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$HERE/../pins.env"
@@ -25,9 +31,28 @@ esac
 say() { printf '==> %s\n' "$*"; }
 pin() { eval "printf '%s' \"\${$1_$ARCH:-}\""; }
 # fetch <url> <sha256> <dest>: download and verify, or refuse.
+# A download has no time limit: it takes what the link takes, and whoever started the
+# provisioning decides how long that may be. What ends it is a link that has stopped: no
+# connection within 30 s, or nothing received for 60 s (curl: under 1 byte a second for 60).
+# Those are the only timers, both against a remote server, and neither counts time in which
+# bytes arrive. (Before: the editor server's download ended after 600 s however it was going,
+# and on a slow link that built an image with no editor, without a word; node's had no bound
+# at all, and a link that stopped held the provisioning for as long as its caller allowed.)
+# A download that did not finish is tried again, four times in all, and each time that is
+# said (on stderr, which the host shows): a passing fault passes, and one that is there four
+# times running is for whoever is provisioning to see.
 fetch() {
   [ -n "$2" ] || { echo "provision: no checksum pinned for $1; refusing to fetch it unverified" >&2; exit 1; }
-  curl -fsSL -o "$3" "$1"
+  local try code
+  for try in 1 2 3 4; do
+    rm -f "$3"
+    code=0
+    curl -fsSL --connect-timeout 30 --speed-limit 1 --speed-time 60 -o "$3" "$1" || code=$?
+    [ "$code" != 0 ] || break
+    echo "provision: $1 did not come (try $try of 4; curl ended with $code: 28 is a link that stopped, 6 and 7 no route to it)" >&2
+    [ "$try" = 4 ] || sleep 2
+  done
+  [ "$code" = 0 ] || { rm -f "$3"; return 1; }
   echo "$2  $3" | sha256sum -c - >/dev/null || { echo "provision: checksum mismatch for $1" >&2; rm -f "$3"; exit 1; }
 }
 
@@ -112,22 +137,28 @@ say "editor server (VSCodium $VSCODIUM_VERSION)"
 if [ ! -x /opt/desolate/editor/bin/codium-server ]; then
   if [ -d "$STAGE/editor/bin" ]; then
     mkdir -p /opt/desolate && cp -a "$STAGE/editor" /opt/desolate/editor
+  elif [ "$EDITOR_SERVER" = none ]; then
+    # Asked for (build.sh --no-editor: the agent's sandbox, which has no route to the release).
+    # The image is usable for everything but P1's editor, and says so, with how to have one:
+    # nothing may claim an editor that is not there. (workspace/editor.sh shows this file.)
+    mkdir -p /opt/desolate
+    echo "this image was built without the editor server (image/build.sh --no-editor, or DESOLATE_IMAGE_EDITOR=none). To have it: build the image again where github.com can be reached, or with --editor-from <a directory holding VSCodium's server, $VSCODIUM_VERSION>" >/opt/desolate/EDITOR-MISSING
+    echo "    NOT INSTALLED: the editor server, as asked (DESOLATE_IMAGE_EDITOR=none)"
   else
     url="https://github.com/VSCodium/vscodium/releases/download/$VSCODIUM_VERSION/vscodium-reh-web-linux-$ARCH-$VSCODIUM_VERSION.tar.gz"
-    [ -n "$(pin VSCODIUM_SHA256)" ] || { echo "provision: no checksum pinned for the editor server" >&2; exit 1; }
-    if curl -fsSL -m 600 -o /tmp/reh.tar.gz "$url"; then
-      # It came: then it must be the pinned one. A wrong checksum is a failure, never a skip.
-      echo "$(pin VSCODIUM_SHA256)  /tmp/reh.tar.gz" | sha256sum -c - >/dev/null || { echo "provision: checksum mismatch for $url" >&2; rm -f /tmp/reh.tar.gz; exit 1; }
-      mkdir -p /opt/desolate/editor && tar -xz -C /opt/desolate/editor -f /tmp/reh.tar.gz && rm -f /tmp/reh.tar.gz
-      rm -f /opt/desolate/EDITOR-MISSING
-    else
-      # No route to the release (the agent's sandbox). The image is still usable for everything
-      # but P1's editor, and says so: nothing may claim an editor that is not there.
-      mkdir -p /opt/desolate && echo "the editor server could not be fetched when this image was built" >/opt/desolate/EDITOR-MISSING
-      echo "    NOT INSTALLED: could not download $url"
-    fi
+    # It comes, and is the pinned one, or the provisioning fails and says what to do. An image
+    # is never made without its editor by a download that failed: only by being asked (above).
+    fetch "$url" "$(pin VSCODIUM_SHA256)" /tmp/reh.tar.gz || {
+      if [ "$KIND" = container ]; then how="docker build --build-arg DESOLATE_IMAGE_EDITOR=none ... for an image without one"
+      else how="image/build.sh --editor-from <dir>, or --no-editor for an image without one"; fi
+      echo "provision: no editor server, so no image. Run this again when github.com can be reached (on a Mac: desolate bootstrap). A builder that cannot reach it: $how." >&2
+      exit 1
+    }
+    mkdir -p /opt/desolate/editor && tar -xz -C /opt/desolate/editor -f /tmp/reh.tar.gz && rm -f /tmp/reh.tar.gz
   fi
 fi
+# (An image provisioned again, now with its editor, no longer says it has none.)
+[ ! -x /opt/desolate/editor/bin/codium-server ] || rm -f /opt/desolate/EDITOR-MISSING
 
 say "git: system settings a domain clone needs (section 4.2)"
 git lfs install --system >/dev/null

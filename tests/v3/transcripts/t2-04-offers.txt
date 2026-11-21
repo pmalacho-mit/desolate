@@ -81,6 +81,10 @@ desolate: no person confirmed the push, so nothing was pushed
   fix: run it from a terminal of your own, on the host
 [exit 78]
 
+## the reviewer's account: paged, diffs on demand
+
+## the reviewer's account: no deadline
+
 ## refusals before and at the prompt
 
 $ desolate push dev acme/widgets issue/12 --expect <commit>
@@ -262,6 +266,8 @@ desolate: acme/consumer is not pushable: the root holds no write key for it
 
 ## a hostile domain repository
 
+## a domain with many branches
+
 ## a delivery to another domain
 
 ## a pushed branch, squash-merged on the forge
@@ -296,3 +302,10 @@ $ desolate branches dev
 [exit 0]
 
 ## git fetch and git push in a workspace
+
+## an offer of 2,001 LFS objects
+
+$ desolate exec dev/w1 --checkout acme/widgets -- desolate offer
+offered acme/widgets lfs/many at <id>, with 2001 LFS object(s).
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.
+[exit 0]

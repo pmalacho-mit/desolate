@@ -26,7 +26,7 @@ describe("T1 the secrets page's bounds are the TypeScript's", () => {
     assert.match(page, /file\.size > ENV_MAX/, "and refuses by it");
   });
 
-  it("the name it takes is the root's rule, and its hint says the same numbers", () => {
+  it("the name it takes is the root's rule, and its hint says the same numbers", async () => {
     const html = read("host/approve-ui/secrets.html");
     const pattern = /<input name="name" required pattern="([^"]+)"/.exec(html)?.[1];
     assert.ok(pattern, "the name's input has a pattern");
@@ -52,8 +52,11 @@ describe("T1 the secrets page's bounds are the TypeScript's", () => {
       ),
     );
     assert.equal(SECRET_NAME_RULE.source, "^[A-Z][A-Z0-9_-]{7,63}$");
-    assert.ok(
-      read("root/proxy/secret-store.ts").includes(`const NAME = /${SECRET_NAME_RULE.source}/;`),
+    // (The store's own rule, exported since limits 10: compared as the rule it is.)
+    const { PLACEHOLDER } = await import("../../../release/root/proxy/secret-store.ts");
+    assert.equal(
+      PLACEHOLDER.source,
+      SECRET_NAME_RULE.source,
       "the root's store takes the same names",
     );
     assert.ok(

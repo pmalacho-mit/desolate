@@ -16,6 +16,7 @@ import { connect } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { Repo } from "../shared/names.ts";
+import { APPROVAL } from "./keyring.ts";
 import { clonePath, PUSHER } from "./layout.ts";
 import { packFor } from "./review-client.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -30,10 +31,12 @@ import type { attemptsThat } from "../.harness/root-retry.ts";
 
 type Failed = { error: string; moved: boolean };
 
-/** One push handed over: the header line, then each file's bytes; the pusher's answer. */
+/** One push handed over: the header line, then each file's bytes; the pusher's answer. What
+ *  it says it is doing before it answers (`{"progress": ...}` lines) goes to `say`. */
 const handOver = (
   header: Record<string, unknown>,
   files: string[],
+  say: (line: string) => void,
 ): Promise<Record<string, unknown>> =>
   new Promise((resolve, reject) => {
     const socket = connect(PUSHER.control);
@@ -53,12 +56,16 @@ const handOver = (
     socket.on("error", (error: NodeJS.ErrnoException) => (failure = error));
     socket.on("data", (chunk) => {
       answer += chunk.toString();
-      const end = answer.indexOf("\n");
-      if (end < 0) return;
-      try {
-        finish(JSON.parse(answer.slice(0, end)) as Record<string, unknown>);
-      } catch {
-        finish(new Error("the pusher's answer was not JSON"));
+      for (let end; !done && (end = answer.indexOf("\n")) >= 0;) {
+        let line: Record<string, unknown>;
+        try {
+          line = JSON.parse(answer.slice(0, end)) as Record<string, unknown>;
+        } catch {
+          return finish(new Error("the pusher's answer was not JSON"));
+        }
+        answer = answer.slice(end + 1);
+        if (typeof line.progress === "string") say(line.progress);
+        else finish(line);
       }
     });
     socket.on("close", () =>
@@ -78,12 +85,14 @@ const handOver = (
     });
   });
 
-/** The pusher is one push per process (pusher.ts): a moment between pushes, it is starting.
- *  Asked again only when the push never reached it: one that did may have claimed the
- *  approval (and each approval is pushed once). */
+/** The pusher is one push per process (pusher.ts): a moment between pushes, it is starting,
+ *  or busy with the push before. Asked again only when the push never reached it: one that
+ *  did may have claimed the approval (and each approval is pushed once). For as long as the
+ *  approval can still be claimed (keyring.ts, APPROVAL.lifeMs): after that, asking again is
+ *  asking with an approval that is gone. */
 const RETRY = new Set(["ENOENT", "ECONNREFUSED"]);
 const withPusher = async <T>(attempt: () => Promise<T & { busy?: unknown }>): Promise<T> => {
-  for (const until = Date.now() + 60_000; ;) {
+  for (const until = Date.now() + APPROVAL.lifeMs; ;) {
     try {
       const result = await attempt();
       if (result.busy !== true || Date.now() > until) return result;
@@ -163,11 +172,13 @@ declare namespace withPusher {
  *  approval names, whatever this sends; what this sends is what makes that possible, and the
  *  pusher takes nothing else: the pack desolate's reviewer made of the approved commits (its
  *  digest is in the approval), and of the LFS objects those commits point to, the ones this
- *  clone holds. */
+ *  clone holds. Copying the pack from the reviewer is on the approval's clock (keyring.ts,
+ *  APPROVAL): the pack is known only from the approval. `say` is told how far the pusher is. */
 export const send = async (
   repo: Repo,
   approval: string,
   push: { pack: string },
+  say: (line: string) => void,
 ): Promise<Failed | null> => {
   const clone = clonePath(repo);
   const work = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-send-"));
@@ -206,12 +217,12 @@ export const send = async (
       lfs.push({ oid, size: fs.statSync(file).size });
       files.push(file);
     }
-    if (lfs.length > 0) process.stderr.write(`uploading ${lfs.length} LFS object(s)\n`);
     files.push(pack);
     const reply = await withPusher(() =>
       handOver(
         { op: "push", approval, pack: fs.statSync(pack).size, lfs, lfsListed: made.lfs },
         files,
+        say,
       ),
     );
     if (reply.ok === true) return null;

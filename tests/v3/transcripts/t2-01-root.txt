@@ -285,3 +285,25 @@ $ desolate frobnicate
 desolate: desolate has no command 'frobnicate'
   fix: desolate help
 [exit 64]
+
+## patience: a slow root that says what it is doing, and one that says nothing
+
+$ desolate fetch acme/widgets
+fetched acme/widgets: 1 branch(es), 1 LFS object(s) in the mirror.
+still fetching: 1 of 6
+still fetching: 2 of 6
+still fetching: 3 of 6
+still fetching: 4 of 6
+still fetching: 5 of 6
+still fetching: 6 of 6
+[exit 0]
+
+$ desolate fetch acme/widgets
+desolate: the root said nothing for 3 seconds while asked 'repo.fetch': the call was given up. 'repo.fetch' may have run, or be running still
+  fix: desolate doctor; then look before asking again. (How long the root may be silent is the setting root.silentSeconds: DESOLATE_ROOT_SILENT_SECONDS=<seconds>)
+[exit 1]
+
+$ desolate fetch acme/widgets
+fetched acme/widgets: 1 branch(es), 1 LFS object(s) in the mirror.
+fetching acme/widgets with the read key
+[exit 0]

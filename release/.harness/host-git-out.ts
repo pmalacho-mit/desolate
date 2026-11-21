@@ -18,6 +18,26 @@ export const leave = (name: string, text: string) => {
   ready();
   fs.writeFileSync(path.join(outBox(), name), text);
 };
+/** A file of `bytes` bytes the git VM wrote in its out-box, with nothing in it (sparse: a
+ *  file over a bound is not written out to test the bound). */
+export const leaveSparse = (name: string, bytes: number) => {
+  ready();
+  fs.writeFileSync(path.join(outBox(), name), "");
+  fs.truncateSync(path.join(outBox(), name), bytes);
+};
+/** A push's request for `id` as the git VM's helper writes it, adding `lfs` LFS objects
+ *  (named 0, 1, 2, ... as 64 hex characters). */
+export const leavePush = (id: string, lfs: number) =>
+  leave(
+    `${id}.json`,
+    JSON.stringify({
+      repo: "acme/web",
+      branch: "fix/login",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      forced: false,
+      lfs: Array.from({ length: lfs }, (_, i) => i.toString(16).padStart(64, "0")),
+    }),
+  );
 /** A link the git VM made in its out-box, to a file of the host's (a path under the home). */
 export const leaveLink = (name: string, target: string) => {
   ready();

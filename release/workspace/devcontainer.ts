@@ -44,13 +44,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
 import { parse as parseJsonc } from "../shared/jsonc.ts";
+import { over, PORTS } from "../shared/limits.ts";
 import { devHostname } from "../shared/names.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
+import { printable } from "../shared/text.ts";
 import { urlRules } from "./git-urls.ts";
+import { requester, saying } from "../shared/step.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { projectWith } from "../.harness/workspace-files.ts";
+import type { projectWith, specWithSettingsOf } from "../.harness/workspace-files.ts";
 
 export const STATE = "/run/desolate/devcontainer.json";
 export type State =
@@ -124,17 +127,39 @@ declare namespace locate {
   >;
 }
 
-/** customizations.vscode.settings: the project's own editor settings, which the editor's
- *  Machine settings take (editor-settings.ts), as VS Code's Dev Containers does. An object of
- *  at most 64 KiB as JSON, or nothing. */
-export const settingsOf = (spec: Record<string, unknown>): Record<string, unknown> | undefined => {
+/** The most of a project's editor settings the state holds, in bytes of JSON. They are
+ *  repository content, kept in the devcontainer's state, and that file is read whole by
+ *  everything that asks about the devcontainer: the workspace's daemon every few seconds, its
+ *  port bridge every second, the editor's start. 64 KiB is many times a settings file a
+ *  person wrote (VS Code's own defaults, all of them, are about that), and little to read
+ *  that often. */
+const SETTINGS_BYTES = 64 * 1024;
+
+/** customizations.vscode.settings as the spec has them: an object, or nothing. */
+const settingsIn = (spec: Record<string, unknown>): Record<string, unknown> | undefined => {
   const vscode = (spec.customizations as { vscode?: { settings?: unknown } } | undefined)?.vscode;
   const settings = vscode?.settings;
-  if (typeof settings !== "object" || settings === null || Array.isArray(settings))
-    return undefined;
-  return JSON.stringify(settings).length <= 65_536
-    ? (settings as Record<string, unknown>)
-    : undefined;
+  return typeof settings !== "object" || settings === null || Array.isArray(settings)
+    ? undefined
+    : (settings as Record<string, unknown>);
+};
+const settingsBytes = (settings: Record<string, unknown>) =>
+  Buffer.byteLength(JSON.stringify(settings));
+
+/** customizations.vscode.settings: the project's own editor settings, which the editor's
+ *  Machine settings take (editor-settings.ts), as VS Code's Dev Containers does. An object of
+ *  at most SETTINGS_BYTES as JSON, or nothing (`settingsLeftOut` then says so). */
+export const settingsOf = (spec: Record<string, unknown>): Record<string, unknown> | undefined => {
+  const settings = settingsIn(spec);
+  return settings && settingsBytes(settings) <= SETTINGS_BYTES ? settings : undefined;
+};
+
+/** What the devcontainer's note says of settings that were too large to take, or null. */
+export const settingsLeftOut = (spec: Record<string, unknown>): string | null => {
+  const settings = settingsIn(spec);
+  return settings && settingsBytes(settings) > SETTINGS_BYTES
+    ? `${over("its customizations.vscode.settings", SETTINGS_BYTES, settingsBytes(settings), "bytes", "desolate gives the editor")}, so the editor has none of them`
+    : null;
 };
 
 declare namespace settingsOf {
@@ -150,6 +175,26 @@ declare namespace settingsOf {
     Invoke<typeof settingsOf, [spec: { customizations: { vscode: { settings: ["no"] } } }]>,
     "=",
     undefined
+  >;
+}
+
+declare namespace settingsLeftOut {
+  /** settings that are taken, and a spec with none: nothing to say */
+  export type Taken = Table<
+    typeof settingsLeftOut,
+    [
+      [
+        args: [spec: { customizations: { vscode: { settings: { "files.autoSave": "off" } } } }],
+        expected: null,
+      ],
+      [args: [spec: { image: "node:22" }], expected: null],
+    ]
+  >;
+  /** settings over the bound are not taken, and the note says so, with both sizes */
+  export type TooLarge = Expect<
+    Invoke<typeof settingsLeftOut, [spec: Invoke<typeof specWithSettingsOf, [bytes: 200000]>]>,
+    "=",
+    "its customizations.vscode.settings is 195 KiB, over the 64 KiB desolate gives the editor, so the editor has none of them"
   >;
 }
 
@@ -561,31 +606,54 @@ declare namespace overrideOf {
   >;
 }
 
+/** One `forwardPorts` entry, read: another compose service's port to carry (`forward`), an
+ *  entry that cannot be carried, with why (`leftOut`), or one that needs nothing (null: a
+ *  bare number, or the primary service's own name, whose every listener is mirrored
+ *  already). `taken`: the ports earlier entries have, by service. */
+const forwardOf = (
+  entry: unknown,
+  service: unknown,
+  taken: ReadonlyMap<number, string>,
+): { forward: { port: number; host: string } } | { leftOut: string } | null => {
+  if (typeof entry !== "string" || /^\d+$/.test(entry)) return null;
+  // The name becomes a host to connect to inside the service's network: one DNS label's
+  // worth of plain characters, and nothing else.
+  const match = /^([A-Za-z0-9][A-Za-z0-9._-]{0,62}):(\d{1,5})$/.exec(entry);
+  const shown = `"${printable(entry, 80)}"`;
+  if (!match) return { leftOut: `${shown} (not a service's name and a port)` };
+  const [host, port] = [match[1]!, Number(match[2])];
+  if (host === service || host === "localhost" || host === "127.0.0.1") return null;
+  if (port > PORTS.max) return { leftOut: `${shown} (${port} is not a port)` };
+  // The number becomes a listener in the VM, which runs as the workspace's user.
+  if (port < PORTS.min)
+    return { leftOut: `${shown} (below ${PORTS.min}: use a port from ${PORTS.min} up)` };
+  const first = taken.get(port);
+  if (first !== undefined)
+    return first === host ? null : { leftOut: `${shown} (${port} is ${first}'s here)` };
+  return { forward: { port, host } };
+};
+
+const forwardsRead = (spec: Record<string, unknown>) => {
+  const taken = new Map<number, string>();
+  const leftOut: string[] = [];
+  for (const entry of Array.isArray(spec.forwardPorts) ? spec.forwardPorts : []) {
+    const read = forwardOf(entry, spec.service, taken);
+    if (read && "forward" in read) taken.set(read.forward.port, read.forward.host);
+    else if (read) leftOut.push(read.leftOut);
+  }
+  return { forwards: [...taken].map(([port, host]) => ({ port, host })), leftOut };
+};
+
 /** `forwardPorts` entries that name another compose service (`db:5432`): what bridge.ts
  *  carries there. A bare number, or the primary service's own name, needs nothing: every
  *  listener of the primary service is mirrored already. */
-export const forwardsOf = (spec: Record<string, unknown>): { port: number; host: string }[] => {
-  const out = new Map<number, string>();
-  for (const entry of Array.isArray(spec.forwardPorts) ? spec.forwardPorts : []) {
-    const match =
-      typeof entry === "string"
-        ? /^([A-Za-z0-9][A-Za-z0-9._-]{0,62}):(\d{1,5})$/.exec(entry)
-        : null;
-    if (!match) continue;
-    const [host, port] = [match[1]!, Number(match[2])];
-    if (
-      port < 1024 ||
-      port > 65535 ||
-      host === spec.service ||
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      out.has(port)
-    )
-      continue;
-    out.set(port, host);
-  }
-  return [...out].map(([port, host]) => ({ port, host }));
-};
+export const forwardsOf = (spec: Record<string, unknown>): { port: number; host: string }[] =>
+  forwardsRead(spec).forwards;
+
+/** The `forwardPorts` entries that are not carried, each with why, for the devcontainer's
+ *  note: every one of them, since the person wrote each expecting a port. */
+export const forwardsLeftOut = (spec: Record<string, unknown>): string[] =>
+  forwardsRead(spec).leftOut;
 
 declare namespace forwardsOf {
   /** `service:port` entries for the other services; a bare number, or the primary service's
@@ -634,6 +702,44 @@ declare namespace forwardsOf {
   >;
 }
 
+declare namespace forwardsLeftOut {
+  /** nothing to say of entries that are carried, or that need nothing */
+  export type None = Expect<
+    Invoke<
+      typeof forwardsLeftOut,
+      [
+        spec: {
+          service: "app";
+          forwardPorts: [3000, "3001", "db:5432", "app:80", "localhost:9000"];
+        },
+      ]
+    >,
+    "=",
+    []
+  >;
+  /** each entry that gets no port is named, with why: a privileged port, a number that is no
+   *  port, a second service on a number already given, and text that is not `service:port`
+   *  (shown as text, and no longer than a name is) */
+  export type Named = Expect<
+    Invoke<
+      typeof forwardsLeftOut,
+      [
+        spec: {
+          service: "app";
+          forwardPorts: ["db:5432", "web:80", "db:70000", "replica:5432", "db;id:5432", "db:5432"];
+        },
+      ]
+    >,
+    "=",
+    [
+      '"web:80" (below 1024: use a port from 1024 up)',
+      '"db:70000" (70000 is not a port)',
+      '"replica:5432" (5432 is db\'s here)',
+      '"db;id:5432" (not a service\'s name and a port)',
+    ]
+  >;
+}
+
 /** svcnet.ts in the primary service, as the VM's user, with the editor's node (a glibc
  *  program, as the editor's server is). Kept if one already answers. */
 const startSvcnet = async (id: string): Promise<boolean> => {
@@ -666,7 +772,21 @@ const startSvcnet = async (id: string): Promise<boolean> => {
   return false;
 };
 
+/** How long the VM's docker daemon gets to answer, once asked: it starts in a second or two
+ *  (measured on the M1), and 90 seconds is what it has always been given. Counted by the
+ *  clock: it was once counted in sleeps between probes that may each take 20 seconds. */
+const DOCKER_WAIT_MS = 90_000;
+
+/** How long `devcontainer up` may say nothing before it is taken as stuck: not how long it
+ *  may take (docs/v3/limits.md, R4). A first image on a slow link, or a long build, runs for
+ *  as long as docker and the build keep reporting, and the host's person sees that it is
+ *  running. An hour is what the whole of it was once given, so nothing that came up before
+ *  is stopped now: a project command that is silent that long (postCreateCommand) is rare,
+ *  and one stuck on a prompt is the usual reason for silence. */
+const UP_QUIET_MS = 3_600_000;
+
 const main = async () => {
+  const gone = requester();
   const name = process.argv[2] ?? "";
   const plan = readJson<WorkspacePlan | null>(`/desolate/inbox/workspaces/${name}.json`, null);
   const done = (state: State) => {
@@ -702,19 +822,23 @@ const main = async () => {
       config,
     });
   }
-  for (
-    let waited = 0;
-    (await run("docker", ["info"], { timeoutMs: 20_000 })).code !== 0;
-    waited += 500
-  ) {
-    if (waited > 90_000)
-      return done({
-        state: "failed",
-        why: "the VM's docker daemon is not answering (see /var/lib/desolate/dockerd.log)",
-        config,
-      });
-    await sleep(500);
-  }
+  // The VM's own docker daemon, started a moment ago (start.sh) or by this first command
+  // (systemd's socket). It is in this VM, so how long it gets is a bound, by the clock: a
+  // daemon that has not answered in DOCKER_WAIT_MS is not coming.
+  const began = Date.now();
+  const docker = await saying("waiting for the VM's docker daemon", async () => {
+    while ((await run("docker", ["info"], { timeoutMs: 20_000, signal: gone })).code !== 0) {
+      if (gone.aborted || Date.now() - began > DOCKER_WAIT_MS) return false;
+      await sleep(500);
+    }
+    return true;
+  });
+  if (!docker)
+    return done({
+      state: "failed",
+      why: "the VM's docker daemon is not answering (see /var/lib/desolate/dockerd.log)",
+      config,
+    });
   const home = os.homedir();
   fs.mkdirSync(`${home}/.desolate-editor`, { recursive: true, mode: 0o700 });
   const instance = /^dsl-([a-z0-9]{1,12})-/.exec(plan.vm)?.[1];
@@ -743,20 +867,24 @@ const main = async () => {
     path.basename(config).startsWith(".") ? ".devcontainer-lock.json" : "devcontainer-lock.json",
   );
   const noLockfile = fs.existsSync(lockfile) ? [] : ["--no-lockfile"];
-  const up = await run(
-    "devcontainer",
-    [
-      "up",
-      "--workspace-folder",
-      checkout.path,
-      "--config",
-      config,
-      "--override-config",
-      override,
-      ...noLockfile,
-      ...(changed ? ["--remove-existing-container"] : []),
-    ],
-    { timeoutMs: 3_600_000, env: { ...process.env, DOCKER_BUILDKIT: "1" } },
+  const up = await saying(
+    `bringing up the devcontainer of ${checkout.repo} (its image, its features, its own commands)`,
+    () =>
+      run(
+        "devcontainer",
+        [
+          "up",
+          "--workspace-folder",
+          checkout.path,
+          "--config",
+          config,
+          "--override-config",
+          override,
+          ...noLockfile,
+          ...(changed ? ["--remove-existing-container"] : []),
+        ],
+        { idleMs: UP_QUIET_MS, signal: gone, env: { ...process.env, DOCKER_BUILDKIT: "1" } },
+      ),
   );
   fs.writeFileSync(path.join(dir, "up.log"), `${up.stderr}\n${up.stdout}`);
   let result: {
@@ -789,9 +917,11 @@ const main = async () => {
       /\s+/g,
       " ",
     );
+    // Each part is bounded (and a cut is marked) so that the last one, where all of it is,
+    // always fits in what the host will show of a VM's line (shared/text.ts, SAFE_MOST).
     return done({
       state: "failed",
-      why: `${summary.slice(0, 160)}${cause ? ` (${cause.replace(/\s+/g, " ").slice(0, 240)})` : ""} (the whole log: ${dir}/up.log in the workspace)`,
+      why: `${printable(summary, 1000)}${cause ? ` (${printable(cause.replace(/\s+/g, " "), 2000)})` : ""} (the whole log: ${dir}/up.log in the workspace)`,
       config,
     });
   }
@@ -880,7 +1010,7 @@ const main = async () => {
       "-c",
       "env -0 2>/dev/null || env",
     ],
-    { timeoutMs: 120_000 },
+    { timeoutMs: 120_000, signal: gone },
   );
   const execEnv = path.join(dir, "exec-env.json");
   fs.rmSync(execEnv, { force: true });
@@ -898,7 +1028,13 @@ const main = async () => {
       { mode: 0o600 },
     );
   }
+  const settingsNote = settingsLeftOut(spec);
+  const forwardsNote = forwardsLeftOut(spec);
   const notes = [
+    ...(settingsNote ? [settingsNote] : []),
+    ...(compose && forwardsNote.length
+      ? [`forwardPorts entries that are not forwarded: ${forwardsNote.join(", ")}`]
+      : []),
     ...(lfsMissing
       ? [
           "this repository keeps files in Git LFS and the container has no git-lfs, so committing them fails there; add the feature ghcr.io/devcontainers/features/git-lfs:1 to its devcontainer.json",
@@ -923,10 +1059,8 @@ const main = async () => {
     compose,
     extensions: extensionsOf(spec),
     ...(settingsOf(spec) ? { settings: settingsOf(spec) } : {}),
-    image: (compose
-      ? `service ${String(spec.service)}`
-      : String(spec.image ?? image ?? "built")
-    ).slice(0, 120),
+    // Whole: what shows it fits it (the host bounds what a VM says, and marks a cut).
+    image: compose ? `service ${String(spec.service)}` : String(spec.image ?? image ?? "built"),
     ...(bridged ? { bridge: SVCNET, forwards: forwardsOf(spec) } : {}),
     ...(notes.length ? { note: notes.join("; ") } : {}),
   });

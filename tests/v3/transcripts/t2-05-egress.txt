@@ -46,6 +46,8 @@ dev: any public host is reachable (open). Its workspaces still reach nothing int
   internal addresses it may reach: <forge>
 [exit 0]
 
+## the link's bound
+
 ## addresses of the VM's own
 
 ## per-domain network rules
@@ -84,6 +86,8 @@ to allow them:
   desolate domain dev net allow other.example.test loop.example.test
 Read the list before you allow it: a workspace chooses what it asks for.
 [exit 0]
+
+## what to allow, past a page
 
 ## down, and back
 

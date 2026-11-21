@@ -10,6 +10,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
+import { printable } from "../shared/text.ts";
+import { because } from "./failures.ts";
 import { guest, paths } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -131,9 +133,9 @@ export const applyTo = async (vm: string): Promise<string> => {
     );
     return done.code === 0
       ? "applied"
-      : `not applied: ${(done.stderr || done.stdout).trim().slice(-200)}`;
+      : because("not applied", "editor-defaults", done.stderr || done.stdout);
   } catch (error) {
-    return `not applied: ${(error as Error).message.slice(0, 200)}`;
+    return `not applied: ${printable((error as Error).message)}`;
   }
 };
 

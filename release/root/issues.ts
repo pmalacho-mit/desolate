@@ -67,7 +67,7 @@ export const offer = (
   if (waiting.length >= LIMIT.waiting)
     return {
       ok: false,
-      error: `${domain} already has ${waiting.length} issues waiting for the person`,
+      error: `${domain} already has ${waiting.length} issues waiting for the person, the most a domain may have waiting (${LIMIT.waiting})`,
       fix: "wait for them to be published or rejected",
     };
   const workspace =
