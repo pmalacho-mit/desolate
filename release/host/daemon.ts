@@ -14,7 +14,7 @@
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
 import { printable } from "../shared/text.ts";
-import { execFile, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as os from "node:os";
 import type { Size } from "../shared/size.ts";
@@ -51,7 +51,6 @@ import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
 import { sniffSocket } from "../shared/sniff.ts";
-import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
@@ -189,6 +188,22 @@ const codeOf = () => {
   return hash.digest("hex").slice(0, 16);
 };
 const CODE = codeOf();
+
+/** How long a client that has said nothing yet is held, on a forwarded port or the pages',
+ *  before it is closed: as long as an HTTP server waits for a request's head (node's own,
+ *  `headersTimeout`, is a minute). An idle bound against a browser (R4): one that
+ *  preconnects a socket says its request on it within this, or closes it itself (Chrome lets
+ *  an unused socket go after 10 s). */
+const SILENT_MS = 60_000;
+/** On a port known to speak without a name (forward.ts, rawPortsOf), how long a client's
+ *  silence takes to mean that its server speaks first (a database's greeting): a client of
+ *  such a protocol says nothing at all, so a short wait is a decision, not a cut. */
+const SERVER_FIRST_MS = 400;
+/** The most clients held silent at once, on every forwarded port and the pages' together:
+ *  each is a socket of this daemon's, which carries every workspace. When full, the one
+ *  that has waited longest goes, not the newest: a program of another user's opening silent
+ *  sockets could otherwise lock the person out (decisions.md, the audit of 2026-11-16). */
+const SILENT_MOST = 512;
 
 /** How many connections one workspace's link may have open at once. */
 const LINK_CONNECTIONS = 64;
@@ -733,6 +748,19 @@ const serve = async () => {
   // Ports whose protocol carries no name: the known ones and the person's (forward.ts).
   const knownRaw = rawPortsOf();
   const waiting = new Set<Socket>();
+  /** What a client says first, once it has (shared/sniff.ts), held among the waiting. */
+  const heard = async (client: Socket, quietMs: number) => {
+    if (waiting.size >= SILENT_MOST) {
+      const oldest = waiting.values().next().value;
+      if (oldest) (waiting.delete(oldest), oldest.destroy());
+    }
+    waiting.add(client);
+    try {
+      return await sniffSocket(client, quietMs);
+    } finally {
+      waiting.delete(client);
+    }
+  };
   const log = (line: string) => fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
 
   const pipe = (client: Socket, upstream: Duplex, head: Buffer) => {
@@ -766,25 +794,13 @@ const serve = async () => {
     client.on("error", () => client.destroy());
     // Routed by the name in the first bytes, and only by it. On a port not known to speak a
     // protocol with no name, a client that has said nothing yet (a browser's preconnected
-    // socket, `nc -z`) is waited for, up to two minutes, and closed if it stays silent: it is
+    // socket, `nc -z`) is waited for (SILENT_MS), and closed if it stays silent: it is
     // never piped anywhere before it names a workspace. (It once was: first taken for a
     // nameless protocol, then, briefly, sent to the one workspace listening on the port,
     // where the browser's request, sent on that socket later, arrived whatever its Host,
     // with the cookies of the workspace it named: found by the audit of 2026-11-16.)
     const raw = knownRaw.has(port);
-    // At most 512 waiting at once, and when full the longest-waiting goes, not the newest: a
-    // program of another user's opening silent sockets could otherwise lock the person out.
-    if (waiting.size >= 512) {
-      const oldest = waiting.values().next().value;
-      if (oldest) (waiting.delete(oldest), oldest.destroy());
-    }
-    waiting.add(client);
-    let sniffedHead: { sniffed: Sniffed; head: Buffer; undecided?: boolean };
-    try {
-      sniffedHead = await sniffSocket(client, raw ? 400 : 60_000);
-    } finally {
-      waiting.delete(client);
-    }
+    const sniffedHead = await heard(client, raw ? SERVER_FIRST_MS : SILENT_MS);
     const { head } = sniffedHead;
     // Where it goes is decided by inboundRoute, from what it said and nothing else.
     const owner = rawOwner.get(port);
@@ -881,7 +897,10 @@ const serve = async () => {
   );
   const onPagesClient = (client: Socket) => {
     client.on("error", () => client.destroy());
-    void sniffSocket(client, 400).then(({ sniffed, head }) => {
+    // Waited for as on any other port: no protocol here is one whose server speaks first, so
+    // a browser's preconnected socket is held until it says which page it wants (it was
+    // closed after 400 ms, and the page it was opened for then failed to load).
+    void heard(client, SILENT_MS).then(({ sniffed, head }) => {
       const route = pagesRoute(sniffed, entries.values());
       if (route.to === "git") {
         client.setTimeout(30 * 60_000, () => client.destroy());
