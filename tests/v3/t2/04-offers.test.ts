@@ -721,11 +721,13 @@ echo "$c1 $c2 $c3 $c4"`);
     );
     // Offered though git cannot read the last commit's committer (the line continuing it): the
     // squash names the author for both, and leaves the extra lines behind.
-    assert.equal(saidChain.squash?.count, 4);
+    // (A new branch squashes from where it leaves main: the two commits of the tests above
+    // this one too.)
+    assert.equal(saidChain.squash?.count, 6);
     assert.equal(saidChain.squash?.committer, "chain <chain@example.invalid>");
     assert.equal(
       saidChain.squash?.message,
-      "(no message)\n\nSquashed from 4 commits:\n- (no message)\n- put back\n- with headers\n- hidden\n",
+      "control\n\nSquashed from 6 commits:\n- control\n- stored\n- (no message)\n- put back\n- with headers\n- hidden\n",
     );
     const at = (id: string) => saidChain.eachDiff?.indexOf(`commit ${id}`) ?? -1;
     assert.ok(
