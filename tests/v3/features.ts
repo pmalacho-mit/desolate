@@ -297,7 +297,7 @@ export const FEATURES: Feature[] = [
   },
   {
     id: "stack",
-    what: "the stack itself: bootstrap, the host's daemon and CLI, the root's services, what every side shares",
+    what: "the stack itself: bootstrap, the host's daemon and CLI, the root's services, its settings, what every side shares",
     code: [
       "release/cli.sh",
       "release/completion.bash",
@@ -311,6 +311,7 @@ export const FEATURES: Feature[] = [
       "release/host/stack.ts",
       "release/host/daemon.ts",
       "release/host/cli.ts",
+      "release/host/settings.ts",
       "release/host/paths.ts",
       "release/host/carry.ts",
       "release/host/status.ts",
