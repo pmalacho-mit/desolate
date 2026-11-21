@@ -96,7 +96,18 @@ const rawPushWaiting = async (spec: string, name: string) => {
     if (!waiting) await sleep(250);
   }
   assert.ok(waiting, said());
-  return { said, stop: () => inRootClone(`kill -TERM -- -$(cat ${log}.pid)`) };
+  const ps = () =>
+    inRootClone(
+      `echo pid $(cat ${log}.pid); ps -eo pid,pgid,sid,stat,args | grep -v ' ps -eo' | grep -E 'git|node' ; ls -l /var/lib/desolate/approvals/ 2>&1; cat /var/lib/desolate/approvals/*.json 2>&1 | cut -c1-80`,
+    );
+  return {
+    said,
+    stop: () => {
+      const killed = inRootClone(`kill -TERM -- -$(cat ${log}.pid) 2>&1; echo kill=$?`);
+      return `${killed.stdout}${killed.stderr}`;
+    },
+    ps: () => `${ps().stdout}${ps().stderr}`,
+  };
 };
 /** Waits until nothing is waiting for the person on the host (or a few seconds pass). */
 const nothingWaits = async () => {
@@ -306,8 +317,11 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     //    as it is waited for; none comes, and stopped, it takes its request with it.
     const raw = await rawPushWaiting(`${commit}:refs/heads/issue/12`, "automation-push");
     assert.match(raw.said(), /needs your approval, given on the host, outside every VM/);
-    raw.stop();
-    assert.ok(await nothingWaits(), "stopped, it is no longer waiting on the host");
+    const killed = raw.stop();
+    assert.ok(
+      await nothingWaits(),
+      `stopped, it is no longer waiting on the host\n${killed}\n${raw.ps()}\n${raw.said()}`,
+    );
     assert.equal(forgeRefs("acme/widgets")["issue/12"], undefined);
     // 3. Skipping desolate's hook: straight to the remote's own address, around desolate's
     //    helper and its hook. This user has no way to a write key at all (the pusher does).
@@ -1126,8 +1140,11 @@ echo "$c1 $c2 $c3 $c4"`);
       /signature is not the host approver's/,
       "control: outstanding while its asker waits",
     );
-    def.stop();
-    assert.ok(await nothingWaits(), "stopped, it is no longer listed on the host");
+    const killedDef = def.stop();
+    assert.ok(
+      await nothingWaits(),
+      `stopped, it is no longer listed on the host\n${killedDef}\n${def.ps()}\n${def.said()}`,
+    );
     const hostKey = createPrivateKey(
       fs.readFileSync(path.join(stack.home, "approver", "key"), "utf8"),
     );
