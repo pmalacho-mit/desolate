@@ -2,7 +2,8 @@
 // desolate hands the devcontainer CLI looks like (workspace/devcontainer.ts): pure functions.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { hostArgv } from "../../../release/shared/actions.ts";
+import { actionRefusal, ARGUMENT, CREATE, hostArgv } from "../../../release/shared/actions.ts";
+import { commandOf, LIMIT as SPAWN } from "../../../release/shared/spawn.ts";
 import { parse as parseJsonc } from "../../../release/shared/jsonc.ts";
 import { extensionsOf, forwardsOf, overrideOf } from "../../../release/workspace/devcontainer.ts";
 
@@ -69,6 +70,39 @@ describe("T1 the dashboard's requests to the host", () => {
     // passed on, and never dropped from a domain made without the title the person typed.
     assert.equal(hostArgv("domain.create", { domain: "dev", title: "--help" }), null);
     assert.equal(hostArgv("domain.create", { domain: "dev", title: "a\x1b[2Jb" }), null);
+    // Past an argument's bound, or not text: refused, and said, never left out (until
+    // 2026-11-21 a title of 201 characters made the domain without it, and 15 long names in
+    // `repos` made it with no repositories: the independent review of #187).
+    const long = { domain: "dev", title: "t".repeat(201) };
+    assert.equal(hostArgv("domain.create", long), null);
+    assert.equal(
+      actionRefusal("domain.create", long),
+      "its title is 201 characters, over the 200 allowed",
+    );
+    assert.equal(hostArgv("domain.create", { domain: "dev", title: ["--help"] }), null);
+    assert.equal(
+      actionRefusal("domain.create", { domain: "dev", title: 123 }),
+      "its title is not text",
+    );
+    assert.equal(hostArgv("workspace.up", { domain: "dev", workspace: "w".repeat(201) }), null);
+    // The control: 20 repositories of the longest names, as many as one Create takes, are taken.
+    const repos = Array.from(
+      { length: CREATE.repos },
+      (_, i) => `${"o".repeat(98)}${String(i).padStart(2, "0")}/${"r".repeat(100)}`,
+    );
+    assert.equal(
+      hostArgv("domain.create", { domain: "dev", repos: repos.join(",") })?.filter(
+        (w) => w === "--repo",
+      ).length,
+      20,
+    );
+    // Every command a workspace may sign fits the argument that carries it, as JSON, at its
+    // longest: each character escaped (six), in as many words as it may have.
+    const worst = Array.from({ length: SPAWN.words }, (_, i) =>
+      "\u0001".repeat(i < 4 ? SPAWN.word : 0),
+    );
+    assert.equal(commandOf(worst), worst);
+    assert.ok(JSON.stringify(worst).length <= ARGUMENT.command, `${JSON.stringify(worst).length}`);
     // The control: a title that is one is passed on, as the person typed it.
     assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "the web app" }), [
       "domain",

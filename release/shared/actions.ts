@@ -4,7 +4,7 @@
 // never runs a command line the root VM wrote.
 import { over } from "./limits.ts";
 import { characters, isSlug, parseRepo } from "./names.ts";
-import { parseSigned } from "./spawn.ts";
+import { LIMIT as SPAWN, parseSigned } from "./spawn.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -19,13 +19,27 @@ type Args = Record<string, string | undefined>;
 export const CREATE = { repos: 20, title: 80 } as const;
 const TITLE = new RegExp(`^[\\x20-\\x7e]{1,${CREATE.title}}$`);
 /** How long one argument of a host action may be, in characters (code points). R7: the
- *  root's ordinary user writes them, and the host parses them. A spawn's command and
- *  checkouts are the long ones, the JSON of what shared/spawn.ts's LIMIT bounds (65,536
- *  characters of words, with room for JSON's quotes and escapes); every other argument is a
- *  name, a size or a title. */
-export const ARGUMENT = { command: 200_000, checkouts: 8_000, other: 200 } as const;
+ *  root's ordinary user writes them, and the host parses them; one that is not text, or is
+ *  longer, refuses the action (never left out of it). A spawn's command is the JSON of what
+ *  shared/spawn.ts's LIMIT bounds: each character at JSON's longest escape (`\u0001`, six)
+ *  and each word's quotes and comma, so that every command a workspace may sign can be
+ *  carried. Its checkouts are 16 of `<owner/repo>=worktree:<branch>` (ASCII, at most 411
+ *  each), as JSON. Create's repos are 20 names of at most 201, comma-separated. Every other
+ *  argument is a name, a size or a title. */
+export const ARGUMENT = {
+  command: SPAWN.total * 6 + SPAWN.words * 3 + 2,
+  checkouts: 8_000,
+  repos: CREATE.repos * 202,
+  other: 200,
+} as const;
 const argumentMost = (key: string) =>
-  key === "command" ? ARGUMENT.command : key === "checkouts" ? ARGUMENT.checkouts : ARGUMENT.other;
+  key === "command"
+    ? ARGUMENT.command
+    : key === "checkouts"
+      ? ARGUMENT.checkouts
+      : key === "repos"
+        ? ARGUMENT.repos
+        : ARGUMENT.other;
 /** Within its bound: `length` (UTF-16 units) is never fewer than the characters, so only a
  *  long one is counted. */
 const fits = (key: string, value: string) =>
@@ -146,8 +160,12 @@ export const hostArgv = (kind: unknown, args: unknown): string[] | null => {
   )
     return null;
   const clean: Args = {};
-  for (const [key, value] of Object.entries(args as Record<string, unknown>))
-    if (typeof value === "string" && fits(key, value)) clean[key] = value;
+  // (Absent is absent: a key whose value is undefined was not given.)
+  for (const [key, value] of Object.entries(args as Record<string, unknown>)) {
+    if (value === undefined) continue;
+    if (typeof value !== "string" || !fits(key, value)) return null;
+    clean[key] = value;
+  }
   return HOST_ACTIONS[kind]!(clean);
 };
 
@@ -162,6 +180,7 @@ export const actionRefusal = (kind: unknown, args: unknown): string | null => {
   if (typeof args !== "object" || args === null) return "it was asked with no arguments";
   const given = args as Record<string, unknown>;
   for (const [key, value] of Object.entries(given)) {
+    if (value === undefined) continue;
     if (typeof value !== "string") return `its ${printable(key, 40)} is not text`;
     if (!fits(key, value))
       return over(`its ${printable(key, 40)}`, argumentMost(key), characters(value), "characters");
@@ -169,8 +188,8 @@ export const actionRefusal = (kind: unknown, args: unknown): string | null => {
   if (kind === "domain.create") {
     const title = typeof given.title === "string" ? given.title : "";
     if (title && (!TITLE.test(title) || title.startsWith("-")))
-      return title.length > CREATE.title
-        ? over("the title", CREATE.title, title.length, "characters")
+      return characters(title) > CREATE.title
+        ? over("the title", CREATE.title, characters(title), "characters")
         : "a title is plain letters, digits, spaces and punctuation (ASCII), and does not start with -";
     const repos = typeof given.repos === "string" && given.repos ? given.repos.split(",") : [];
     if (repos.length > CREATE.repos)

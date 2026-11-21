@@ -783,9 +783,13 @@ export const keepApart = (rows: PlanRow[], others: string[] = []): PlanRow[] => 
     const contained = (name: string) => rest().some((o) => o !== name && o.includes(name));
     const clashes = (name: string) => rest().some((o) => overlap(o, name));
     if (!contained(base)) continue;
+    // The number goes inside the name's bound: a name at its longest is cut to make room
+    // (until 2026-11-21 it went past it, and the root refused the name: review of #187).
+    const numbered = (n: number) =>
+      `${base.slice(0, SECRET_NAME.most - String(n).length - 1).replace(/-+$/, "")}-${n}`;
     let n = 1;
-    while (clashes(`${base}-${n}`)) n++;
-    row.name = `${base}-${n}`;
+    while (clashes(numbered(n))) n++;
+    row.name = numbered(n);
   }
   return out;
 };
@@ -830,5 +834,23 @@ declare namespace keepApart {
     >,
     "matches",
     [{ name: "API-KEY-SECRET-1" }]
+  >;
+  /** a name at its longest is cut to make room for its number: never past 64, which the
+   *  root would refuse */
+  export type Longest = Expect<
+    Invoke<
+      typeof keepApart,
+      [
+        rows: [
+          Row<
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX_TOKEN",
+            "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX-TOKEN"
+          >,
+        ],
+        others: ["XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX-TOKEN2"],
+      ]
+    >,
+    "matches",
+    [{ name: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX-TOKE-1" }]
   >;
 }

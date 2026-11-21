@@ -136,6 +136,34 @@ const toGroup = (group: number, how: NodeJS.Signals): boolean => {
   }
 };
 
+/** What is kept of one stream: its bytes, in one buffer that doubles as it fills and never
+ *  past `most`, made text once at the end. Bytes, so that a bound in bytes counts bytes
+ *  (R8), and a character whose bytes two writes split is one character, not two broken ones.
+ *  One buffer, so that a program writing a byte at a time costs a byte for each, not an
+ *  object for each (a list of chunks held 141 bytes for every byte kept: the independent
+ *  review of #187). */
+const kept = (most: number) => {
+  let buffer = Buffer.alloc(0);
+  let size = 0;
+  return {
+    /** false, and nothing kept, when the chunk would take it past `most` */
+    add: (chunk: Buffer): boolean => {
+      if (size + chunk.length > most) return false;
+      if (size + chunk.length > buffer.length) {
+        const grown = Buffer.allocUnsafe(
+          Math.min(most, Math.max(size + chunk.length, buffer.length * 2, 4096)),
+        );
+        buffer.copy(grown, 0, 0, size);
+        buffer = grown;
+      }
+      chunk.copy(buffer, size);
+      size += chunk.length;
+      return true;
+    },
+    text: () => buffer.toString("utf8", 0, size),
+  };
+};
+
 export const run = (
   command: string,
   args: string[],
@@ -153,25 +181,27 @@ export const run = (
       } catch (error) {
         return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
       }
-    const child = spawn(command, args, {
-      env: options.env ?? process.env,
-      cwd: options.cwd,
-      stdio: ["pipe", file ?? "pipe", options.inheritStderr ? "inherit" : "pipe"],
-      detached: grouped,
-    });
-    // The child has its own copy of the file's descriptor now.
-    if (file !== undefined) fs.closeSync(file);
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, {
+        env: options.env ?? process.env,
+        cwd: options.cwd,
+        stdio: ["pipe", file ?? "pipe", options.inheritStderr ? "inherit" : "pipe"],
+        detached: grouped,
+      });
+    } catch (error) {
+      // (An argument node will not pass, as one holding a NUL: said as a program not run.)
+      return resolve({ code: 127, stdout: "", stderr: (error as Error).message });
+    } finally {
+      // The child has its own copy of the file's descriptor now, or there is no child.
+      if (file !== undefined) fs.closeSync(file);
+    }
     const group = grouped ? child.pid : undefined;
-    // Kept as bytes, and made text once at the end (R8: a bound in bytes counts bytes; and a
-    // character whose bytes two chunks split is one character, not two broken ones).
-    const out: Buffer[] = [];
-    const err: Buffer[] = [];
-    const kept = { out: 0, err: 0 };
+    const max = options.maxBytes ?? RUN_MAX;
+    const out = kept(max);
+    const err = kept(max);
     let told = "";
-    const text = () => ({
-      stdout: Buffer.concat(out).toString(),
-      stderr: Buffer.concat(err).toString() + told,
-    });
+    const text = () => ({ stdout: out.text(), stderr: err.text() + told });
     let timer: NodeJS.Timeout | undefined;
     let idle: NodeJS.Timeout | undefined;
     // Ended by us, once, for one reason, which the answer's stderr ends with; and then never
@@ -211,21 +241,18 @@ export const run = (
       if (group) groups.delete(group);
       signal?.removeEventListener("abort", cancel);
     };
-    const max = options.maxBytes ?? RUN_MAX;
     let over = false;
     const tooMuch = () => {
       over = true;
       end(`\n(more than ${max} bytes of output: stopped)`);
     };
-    const keep = (into: Buffer[], stream: "out" | "err") => (chunk: Buffer) => {
+    const keep = (into: ReturnType<typeof kept>) => (chunk: Buffer) => {
       idle?.refresh();
       if (over) return;
-      if (kept[stream] + chunk.length > max) return tooMuch();
-      kept[stream] += chunk.length;
-      into.push(chunk);
+      if (!into.add(chunk)) return tooMuch();
     };
-    child.stdout?.on("data", keep(out, "out"));
-    child.stderr?.on("data", keep(err, "err"));
+    child.stdout?.on("data", keep(out));
+    child.stderr?.on("data", keep(err));
     child.on("error", (error) => {
       done();
       const { stdout, stderr } = text();
@@ -309,7 +336,14 @@ declare namespace run {
   export type ToAFile = Expect<
     Invoke<typeof toFile, [script: "echo kept-in-the-file; echo err >&2; exit 2"]>,
     "=",
-    { code: 2; stdout: ""; stderr: "err\n"; file: "kept-in-the-file\n" }
+    { code: 2; stdout: ""; stderr: "err\n"; file: "kept-in-the-file\n"; open: "as before" }
+  >;
+  /** an argument node will not pass (a NUL): an answer, a program not run, and the file's
+   *  descriptor closed, never a throw */
+  export type NotPassed = Expect<
+    Invoke<typeof toFile, [script: "echo hi", also: ["a\u0000b"]]>,
+    "matches",
+    { code: 127; stdout: ""; file: ""; open: "as before" }
   >;
   /** to /dev/null: only the exit code is wanted, and no output is held, however much (the
    *  control, TooMuch: the same program kept is stopped at its bound) */
