@@ -13,6 +13,9 @@ Ticket 3 of the limits effort (#175). The keyring, the pusher and the wait for a
 | `desolate push`'s challenge (`push.ts prepare`) | 120 s (`CHALLENGE.lifeMs`): nobody holds it, since `prepare` exits before the host asks the person | the person's answer at the host's prompt, or 120 s |
 | an approval, before the pusher claims it | while whoever asked holds its connection (the raw push's, or `push.ts run`'s `approve` with `hold: true`), and at most 120 s (`APPROVAL.lifeMs`) | the claim; that connection closing; or 120 s |
 | a claimed approval | while the pusher's connection to the keyring (the claim) is open | the push ends (the pusher closes it) or the pusher dies (the kernel does). No 35 minutes |
+| the root's user handing the claimed push to the pusher | until `handOverBy(bytes)`: 120 s and as long again as its bytes take at 10 MiB/s (a 2 GiB pack: 5 min 25 s), and no 60 s without a byte | refused: the push is not made |
+| the forge's report after the whole pack went out | ssh's keepalive (45 s on a dead link), and at most 30 min (`REPORT_MS`) | reported as uncertain ("may have reached the remote") |
+| a raw push whose caller passes no `signal` (ops.ts `git.push`, the remote helper, until their tickets do) | at most 20 min (`UNSAID_MS`): the git VM's push helper's own wait | "whoever asked for this push stopped waiting" |
 | its signatures | 8 (`APPROVAL.uses`) | a ninth is refused, and said so in the audit |
 | an LFS upload, the pack going to the forge | as long as they move | nothing moved for 60 s (`IDLE_MS`, the one idle bound); after the pack, ssh's keepalive (45 s on a dead link) |
 | a push's lock on its repository (`push.ts run`) | while the process holding it lives (`shared/lock.ts`, `wait: false`) | that process ends. No 5 minutes |
@@ -33,17 +36,17 @@ Ticket 3 of the limits effort (#175). The keyring, the pusher and the wait for a
 | root/pusher.ts:72 | `lfs: 5 * 1024 ** 3` | 4, hard, named | `FORGE.lfsObjectBytes`, refused with `over(...)` naming the object |
 | root/pusher.ts:74 | `advertised` 64 MiB | 4, hard (forge input) | kept, with its reason |
 | root/pusher.ts:75, 744 | `idleMs` 60 s (receiving from the root's user) | 4, the one idle timer | `IDLE_MS`, now also the bound on the forge taking LFS bytes and the pack |
-| root/pusher.ts:963 | `git lfs push`, `timeoutMs: 1_800_000` | 1 + idle (R4) | no total. `uploadWatched` reads git-lfs's own progress file (`GIT_LFS_PROGRESS`), stops it when nothing moved for `IDLE_MS`, and says every 10 s "uploading: 3 of 40 LFS object(s) up, 1.2 GiB of 4.0 GiB" to whoever handed the push over |
-| root/pusher.ts:989 | receive-pack ssh, `1_800_000` then SIGKILL | 1 + idle (R4) | no total. Each chunk of the pack must be taken by the forge within `IDLE_MS`; "sending the pack: X of Y" every 10 s; after the pack, ssh's keepalive (`ServerAliveCountMax=3` now written out: 45 s on a dead link) |
+| root/pusher.ts:963 | `git lfs push`, `timeoutMs: 1_800_000` | 1 + idle (R4) | no total. `uploadWatched` reads git-lfs's own progress file (`GIT_LFS_PROGRESS`), stops it when nothing moved for `IDLE_MS` while bytes are left to send (once all are sent, the forge storing them is git-lfs's own timeouts' to bound), and says every 10 s "uploading: 3 of 40 LFS object(s) up, 1.2 GiB of 4.0 GiB" to whoever handed the push over |
+| root/pusher.ts:989 | receive-pack ssh, `1_800_000` then SIGKILL | 1 + idle (R4) | no total while the pack goes: each chunk must be taken by the forge within `IDLE_MS`; "sending the pack: X of Y" every 10 s. After the pack, the forge checks it saying nothing: ssh's keepalive (`ServerAliveCountMax=3` now written out: 45 s on a dead link), and the old 30 minutes kept for that one wait (`REPORT_MS`), against a forge that answers keepalives and never reports |
 | root/pusher.ts:100 | event error `.slice(0, 300)` | 1, eliminate | gone: the text is the pusher's own, each part already bounded |
 | root/pusher.ts:373, 379, 458 | forge texts `.slice(0, 200)` | keep a bound, mark the cut | `printable(…, 200)`: made safe and cut with `…` |
 | root/pusher.ts:986, 1010; :969 | ssh's and git-lfs's last lines | keep | `tail` and `printable`: git-lfs's error says how many earlier lines it leaves out |
 | root/pusher.ts:212, 214; :479; :808; :1051 | ssh connect/keepalive; 5 s for the report after a failure; id echo; one push per process | keep | unchanged (ServerAliveCountMax written out) |
 | root/keyring.ts:166, 409 | `CHALLENGE.lifeMs` 120 s | 1 for raw pushes; 4 for the rest | a held challenge has no clock; one nobody holds (`desolate push`) keeps 120 s, exported, its reason said. See "A held challenge" |
 | root/keyring.ts:166, 180 | `outstanding: 32` | 4, hard | kept; a held challenge dropped for a newer one now tells its asker, which says so ("more than 32 were waiting at once") instead of waiting on |
-| root/keyring.ts:161, 445 | `APPROVAL.lifeMs` 120 s, approval to claim | 4, hard, kept | see "Why the unclaimed approval keeps a clock". `desolate push` now copies the pack before it files the approval, so that copy is off the clock; send.ts asks a busy or starting pusher again for exactly this long (was its own 60 s) |
+| root/keyring.ts:161, 445 | `APPROVAL.lifeMs` 120 s, approval to claim | 4, hard, kept | see "Why the unclaimed approval keeps a clock". send.ts asks a busy or starting pusher again for exactly this long (was its own 60 s) |
 | root/keyring.ts:161, 600 | `uses: 8` | 4, hard | kept, with where 8 comes from: one for receive-pack, one per `git-lfs-authenticate` (once, then once per token lifetime: 600 s on the T2 forge). A ninth is refused with its own message and audit reason |
-| root/keyring.ts:157, 822 | `CLAIMED_MS` 35 min | 1, eliminate | gone: the claim is the pusher's connection |
+| root/keyring.ts:157, 822 | `CLAIMED_MS` 35 min | 1 for how long the claim lives; 4 for the hand-over | the claim is the pusher's connection. What the 35 minutes also bounded, the root's user's hand-over of the claimed push to the pusher, is now `handOverBy(bytes)` (pusher.ts): derived from what the person approved |
 | root/keyring.ts:653 | audit `last` 50/500 | not done | `ops.ts` (ticket 5) and the host read its shape; paging it is a change on both sides. Left |
 | root/keyring.ts:941, 962 | `bytes: 4096` | 4, hard | kept |
 | root/keyring.ts:941, 952 | `concurrent: 16` | 4, hard | kept, for connections that hold nothing. A connection that holds a challenge or an approval leaves the count: what bounds those is what they hold (32 challenges; approvals, each a person's signature), so 16 waiting pushes cannot fill the socket |
@@ -80,17 +83,68 @@ moved in the meantime. The person approved that exact push, so what lands is wha
 but they may by then have decided against it, and the host has no way to take an approval
 back. Two minutes keeps that window to the moment the person is still looking.
 
-What it costs: a raw push learns which pack (the commit's, or its squash's) only from the
-approval, so it copies the pack from the reviewer (`send.ts`, `packFor`) on that clock. A
-local copy from the reviewer's socket; on a slow disk, a pack near 2 GiB could run it out, and
-the push is then refused as "no live approval", for the person to approve again.
+What it costs: the pack is known only from the approval (the commit's, or its squash's), so
+it is copied from the reviewer (`send.ts`, `packFor`) on that clock, in both flows, as before.
+A local copy from the reviewer's socket; on a slow disk, a pack near 2 GiB could run it out,
+and the push is then refused as "no live approval", for the person to approve again. (A first
+version copied it before filing the approval in `desolate push`: the review below found that
+put the copy on the challenge's clock instead, which the person's time at the prompt has
+already used.)
 
-**Proposed, not done** (the larger change): take the unclaimed approval off every clock, as the
-claim is, by (1) giving the host a way to withdraw an approval it signed (the page's Refuse,
-after the fact, reaching the keyring), and (2) having the pusher claim on a first line before
-the root's user copies the pack, then take the pack under the idle bound. With (1), an
-approval held by its asker for as long as it waits is the person's to end, and the clock
-protects nothing.
+The same reasoning holds past the claim. The pusher claims the approval as soon as it reads
+the push's header, before the root's user has handed it a byte of the pack: the claim stops
+the approval's clock, and the 35 minutes it used to have are gone. So the hand-over has a time
+of its own, `handOverBy(bytes)`: the approval's two minutes, and as long again as the bytes
+take at 10 MiB/s from the root VM's own disk (far below any it has). The bytes are the
+person's to know: the LFS objects' sizes are in the list they approved, and the pack is at
+most `FORGE.packBytes`. Uploading to the forge, which is remote, has no total: it ends when it
+stops moving.
+
+**Proposed, not done** (the larger change): take the approval off every clock, by giving the
+host a way to withdraw an approval it signed (the page's Refuse, after the fact, reaching the
+keyring: the root's user carries the request, so the withdrawal must be signed by the host
+too, or it could be withheld). With that, an approval held by its asker for as long as it
+waits is the person's to end, and neither the two minutes nor `handOverBy` protects anything.
+
+## The adversarial review
+
+A fresh reviewer, given the diff and the threat model (the root VM's ordinary user is the
+attacker; the keyring, the reviewer and the pusher each trusted for its own job), found:
+
+1. **A claimed approval could be kept with no limit** (a weakening): the pusher claims on the
+   header, and the root's user could then send a byte every 59 s and land the push days later.
+   Fixed: `handOverBy` (above); T1 tries a trickle that never pauses for long, beside one that
+   ends in its time.
+2. **A raw push whose caller passes no signal waited for ever** (ops.ts `git.push` after the
+   git VM gave up at 20 minutes; a remote helper left behind by a git killed alone). Fixed for
+   now with `UNSAID_MS`, 20 minutes, the git VM helper's own wait; the signal itself is asked
+   of tickets 5 and 4 below.
+3. **Connections that stopped holding stayed uncounted** (DoS): hold, have it dropped, keep the
+   connection; a loop of that grew the keyring's descriptors without end. Fixed: a connection
+   that stops holding anything is counted again (`settle`); T1 fills the socket with sixteen
+   held requests (a seventeenth is answered), drops them, and the next is refused.
+4. **`desolate push` copied the pack on the challenge's clock** (a regression of the first
+   version of this change): reverted to filing the approval first.
+5. **The pusher's early "request too large" answer kept the connection and its 4 MiB**: now
+   the buffer is dropped and the connection ended after the answer.
+6. `ask()` dropped its error listener after the answer: a reset while closing would have been
+   an unhandled error in rootd. Fixed.
+7. A spent nonce refused for a missing write key left its raw push waiting: its waiter is now
+   told.
+8. The idle bound could stop an upload whose bytes were all sent while the forge stored them;
+   and the wait for the report had no total. Fixed: no idle bound once all bytes are sent; the
+   report keeps the old 30 minutes.
+9. Nits: a bad line on a held connection now stops what follows it. The summary is no longer
+   cut at the root (16 KiB at most, the file's bound): fitting it is the page's (ticket 2) and
+   the dashboard's (ticket 4).
+
+It found sound: the connection count (never negative or doubled), release on end and on close
+(idempotent), a claim taken once, signatures only for a claimed approval, the holder moving to
+the pusher at the claim, every flow's approval ending no later than before without `revoke`,
+the lines told on a held connection (the keyring's own; the asker is the same user as the
+attacker, who learns nothing new from them), progress lines, the 4 MiB header (the reviewer's
+largest list, ~13k objects, is an argv of ~870 KB, under ARG_MAX), and a stalled upload's
+whole process group ended.
 
 ## Measured
 
@@ -107,14 +161,19 @@ protects nothing.
 
 - T1 `tests/v3/t1/keyring-hold.test.ts`: a held challenge outstanding a day later, beside an
   unheld one that is not (the control); the asker's connection closing drops it (control:
-  outstanding while open); 32 more drop it, and its asker is told.
+  outstanding while open); 32 more drop it, and its asker is told; sixteen held requests do
+  not fill the socket (a seventeenth connection is answered), and once dropped, their
+  connections, left open, count again (the next is refused).
+- T1 `pusher.test.ts`, the hand-over: a trickle still going at its time is refused though it
+  never paused for long; the control, one that ends in its time, is taken whole.
 - T1 `tests/v3/t1/pusher.test.ts`: an upload that keeps moving runs past the idle bound and
   says how far it is (the control); one that stops moving is stopped, with where it stood; a
   forge that stops taking the pack is given up on, one that takes it slowly is not.
 - T1 `approvals.test.ts` and `pendingIn`'s in-source tests: a request listed a day after it
   was asked while its asker lives (the control), not listed when its asker has ended, when its
   pid is now another process's, or when it names none.
-- T2 `04-offers`: a raw push stopped with Ctrl-C (SIGINT to its process group) leaves the
+- T2 `04-offers`: a raw push stopped as a closed terminal stops it (SIGTERM to its process
+  group: a background job of a shell with no job control ignores Ctrl-C's SIGINT) leaves the
   host's list, and the keyring refuses the answer to it even signed with the approver's key
   (the control: while it waited, an answer was refused only for its signature); an approval
   the pusher is done with allows nothing more (the control: the push it allowed just before),
