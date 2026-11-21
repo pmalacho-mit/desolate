@@ -7,11 +7,17 @@
 // long it has run. `timeoutMs`, a total, is for the callers not yet moved to those.
 import { spawn } from "node:child_process";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Configure,
+  Expect,
+  Invoke,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { never, throwsUntil, trueOnCall } from "../.harness/shared-probe.ts";
 import type {
   abortedIn,
   answerWhenItsRunnerEnds,
+  answerWithAnEscapee,
   leftRunning,
   nestedLeftRunning,
   outlivesItsRunner,
@@ -76,21 +82,28 @@ let guarded = false;
 const guard = () => {
   if (guarded) return;
   guarded = true;
-  const endAll = () => {
+  const endAll = (how: NodeJS.Signals) => {
     for (const [pid, said] of groups) {
       said(STOPPING);
-      try {
-        // At once: a process that is exiting cannot wait for them.
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        /* ended already */
-      }
+      toGroup(pid, how);
     }
   };
-  process.on("exit", endAll);
+  // Exiting: at once, since a process that is exiting cannot wait for them.
+  process.on("exit", () => endAll("SIGKILL"));
+  // Told to end: as a run is ended, told first and killed ENDING_MS later (or once they are
+  // gone, if sooner), so that what they run in groups of their own is ended too.
+  let ending: Promise<void> | undefined;
+  const endAllInTurn = () =>
+    (ending ??= (async () => {
+      endAll("SIGTERM");
+      for (const by = Date.now() + ENDING_MS; groups.size > 0 && Date.now() < by;)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      endAll("SIGKILL");
+      ending = undefined;
+    })());
   for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    const told = () => {
-      endAll();
+    const told = async () => {
+      await endAllInTurn();
       if (process.listenerCount(name) > 1) return;
       process.removeListener(name, told);
       process.kill(process.pid, name);
@@ -141,16 +154,25 @@ export const run = (
       return true;
     };
     if (group) groups.set(group, said);
+    let closed = false;
     const end = (why: string) => {
       if (!said(why)) return;
+      if (!group) return void child.kill("SIGKILL");
       // The group: the program and everything it started (a negative pid is a group). Told
       // to end first, so that what it runs in groups of its own is ended too; then killed.
-      if (group && toGroup(group, "SIGTERM"))
-        setTimeout(() => toGroup(group, "SIGKILL"), ENDING_MS).unref();
-      else child.kill("SIGKILL");
+      // What escaped the group (a daemon's own session) may still hold the pipes: they are
+      // let go then too, so that the answer does not wait on it.
+      toGroup(group, "SIGTERM");
+      setTimeout(() => {
+        toGroup(group, "SIGKILL");
+        if (closed) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, ENDING_MS).unref();
     };
     const cancel = () => end(CANCELLED);
     const done = () => {
+      closed = true;
       if (timer) clearTimeout(timer);
       if (idle) clearTimeout(idle);
       if (group) groups.delete(group);
@@ -312,6 +334,25 @@ declare namespace run {
    *  a `sleep` with a signal of its own is cancelled from outside, and the `sleep` goes too
    *  (it is told to end before it is killed, and ends its own groups) */
   export type EndsWhatItsRunnerRuns = Expect<Invoke<typeof nestedLeftRunning>, "=", false>;
+  /** and when its runner is told to end, a runner it runs is told so too, before either is
+   *  killed: so what that one runs ends as well (here two deep: a node that runs a node that
+   *  runs a `sleep`, each with a signal; the outermost is sent SIGTERM) */
+  export type EndsWhatItRunsWhenTold = Expect<
+    Invoke<typeof outlivesItsRunner, [grouped: true, nested: true]>,
+    "=",
+    false
+  >;
+  /** what left its group (a daemon, in a session of its own) is not reached, and does not
+   *  hold the answer either: it holds the run's output open, and the answer comes within
+   *  ENDING_MS of the end all the same */
+  export type AnswersThoughAnEscapeeHoldsItsPipes = Configure<
+    { timeout: 15_000 },
+    Expect<
+      Invoke<typeof answerWithAnEscapee, [idleMs: 300]>,
+      "=",
+      { code: 128; stderr: "\n(nothing from it for 300 ms: stopped)"; soon: true }
+    >
+  >;
   /** a run its runner ended, as that runner was told to end, says so (where the runner
    *  listens for the signal itself, and lives on to read the answer) */
   export type SaysItsRunnerEnded = Expect<

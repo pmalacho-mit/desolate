@@ -274,3 +274,56 @@ export const frozenHeir = async (
   fs.rmSync(log);
   return { order, left: fs.readdirSync(path.dirname(dir)).sort() };
 };
+
+/** A process holds the lock `dir` (written by hand, naming itself with its true start: a
+ *  live holder), and then, not waiting, takes it once while opening the holder file fails
+ *  (EMFILE: no descriptor left), and once more after. What each taking did: "taken", or
+ *  the refusal's message (its own pid said as "<this one>"). */
+export const holderUnreadable = (dir: string): string[] => {
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { createRequire, syncBuiltinESMExports } from "node:module";
+       const fs = createRequire(import.meta.url)("node:fs");
+       const path = createRequire(import.meta.url)("node:path");
+       const dir = process.argv[1];
+       const { startOf, withLock } = await import(${JSON.stringify(LOCK_TS)});
+       fs.mkdirSync(dir);
+       fs.writeFileSync(path.join(dir, "holder"), JSON.stringify({
+         id: "0123456789abcdef0123456789abcdef", pid: process.pid, host: "this-machine",
+         since: "2026-11-20T21:04:05.000Z", start: startOf(process.pid) }));
+       const open = fs.openSync;
+       let failing = true;
+       fs.openSync = (file, ...rest) => {
+         if (failing && file === path.join(dir, "holder"))
+           throw Object.assign(new Error("EMFILE: too many open files"), { code: "EMFILE" });
+         return open(file, ...rest);
+       };
+       syncBuiltinESMExports();
+       const said = [];
+       for (const _ of [1, 2]) {
+         try {
+           await withLock(dir, async () => {}, { wait: false });
+           said.push("taken");
+         } catch (error) {
+           said.push(error.message.replace("process " + process.pid + " ", "process <this one> "));
+         }
+         failing = false;
+       }
+       process.stdout.write(JSON.stringify(said));`,
+      dir,
+    ],
+    { encoding: "utf8" },
+  );
+  if (ran.status !== 0) throw new Error(`the holder failed: ${ran.stderr}`);
+  return JSON.parse(ran.stdout) as string[];
+};
+
+/** In the lock's place, a link that leads nowhere (anyone who can write the folder can put
+ *  one there). */
+export const danglingLinkAt = (dir: string) => {
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  fs.symlinkSync(path.join(path.dirname(dir), "nowhere"), dir);
+};
