@@ -38,7 +38,8 @@ const inside = async (ms) => {
   try { fs.writeFileSync(DIR + "/inside", name, { flag: "wx" }); } catch { log("overlap"); }
   log("in");
   await new Promise((resolve) => setTimeout(resolve, ms));
-  if (fs.readFileSync(DIR + "/inside", "utf8") === name) fs.rmSync(DIR + "/inside");
+  // (Gone already when the other, inside with it, left first: only without the lock.)
+  try { if (fs.readFileSync(DIR + "/inside", "utf8") === name) fs.rmSync(DIR + "/inside"); } catch {}
   log("out");
 };
 const share = { scope: "share", waiting: (holder) => log("waiting for " + holder.host) };
