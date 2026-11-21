@@ -1952,12 +1952,25 @@ const serve = async () => {
     let spawning: string | null = null;
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
+    // In order, and the end until the root answers: a line landing after the end would mark
+    // it running again, and an end that was lost left it running on the page for ever (T2 19).
+    let sent: Promise<unknown> = Promise.resolve();
     const report = (lines: string[], done?: number) =>
-      rootHttp("POST", "/host/progress", {
-        id: action.id,
-        lines,
-        ...(done === undefined ? {} : { done: true, code: done }),
-      }).catch(() => {});
+      (sent = sent.then(async () => {
+        const body = {
+          id: action.id,
+          lines,
+          ...(done === undefined ? {} : { done: true, code: done }),
+        };
+        while (
+          !(await rootHttp("POST", "/host/progress", body).then(
+            () => true,
+            () => false,
+          )) &&
+          done !== undefined
+        )
+          await sleep(2000);
+      }));
     if (!argv) return void report(["the host does not do that"], 64);
     // A workspace's own request (spawn, close): run only if the workspace it names signed it,
     // with the key only it and this host have (shared/spawn.ts says why not the root's word).

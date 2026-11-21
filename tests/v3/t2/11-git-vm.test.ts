@@ -350,7 +350,9 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
   });
 
   it("a link in the out-box is not followed: the host neither reads, moves nor writes what it names", async () => {
-    // A file of the person's on the Mac, and a request whose bundle is a link to it.
+    // A file of the person's on the Mac, and a request whose bundle is a link to it. The
+    // request is written whole, by a rename, as the git VM's own are: a plain `>` was read
+    // half written, and answered "not JSON".
     const canary = path.join(stack.work, "canary.txt");
     fs.writeFileSync(canary, "the person's file\n");
     const id = "aaaaaaaaaaaaaaaa";
@@ -364,7 +366,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const planted = stack.inVm(gitVm(), [
       "bash",
       "-c",
-      `cd /desolate/out && ln -s ${canary} ${id}.bundle && ln -s ${canary} ${id}.${"c".repeat(64)}.lfs && printf '%s' '${request}' > ${id}.json && ln -s ${canary} /desolate/answers/${id}.json 2>/dev/null; echo planted`,
+      `cd /desolate/out && ln -s ${canary} ${id}.bundle && ln -s ${canary} ${id}.${"c".repeat(64)}.lfs && printf '%s' '${request}' > ${id}.json.part && mv ${id}.json.part ${id}.json && ln -s ${canary} /desolate/answers/${id}.json 2>/dev/null; echo planted`,
     ]);
     assert.match(planted.stdout, /planted/);
     let answer = "";
@@ -725,7 +727,9 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.match(made.stdout, /MADE/, made.stdout + made.stderr);
     let out = "";
     // (Until the root has the branch with its commit: it can see `harmless` made and not yet
-    // committed on, the same commit as main, and say 0. Seen once in 163.)
+    // committed on, the same commit as main, and say 0. Seen once in 163.) Waiting on F5
+    // (#211): wsd's watch notes the branches it reads after a sync, not those it wrote, so a
+    // commit made during the sync is written out only at the next change, and this says 0.
     for (let i = 0; i < 40 && !/beyond dev's main: 1 commit/.test(out); i++) {
       const asked = stack.desolate(
         "review",

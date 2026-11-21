@@ -171,10 +171,11 @@ describe("T1 a kept service is started again, more slowly while it keeps failing
     const ran = kept("always", "exit 3", 9);
     assert.deepEqual(ran.pauses, ["1", "2", "4", "8", "16", "32", "60", "60", "60"]);
     assert.equal(ran.ended, "9", "each failure counted, for start.sh to see");
-    // The line the T2 tests and the person read in the service's log.
+    // The line the T2 tests and the person read in the service's log. (How long the service
+    // ran is the machine's: a busy one took 1 s to start `exit 3`.)
     assert.match(
       ran.log,
-      /^svc: ended with 3 at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ, 0 s after it started \(the next start waits 1 s\); starting it again$/m,
+      /^svc: ended with 3 at \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ, \d+ s after it started \(the next start waits 1 s\); starting it again$/m,
     );
     assert.match(ran.log, /\(the next start waits 60 s\); starting it again$/m);
   });

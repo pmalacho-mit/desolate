@@ -116,8 +116,9 @@ const lfsStore = (dir: string, oid: string) =>
  *  work and not a wait on a peer, and it is quiet, so there is no silence to time either. Nor
  *  is it ended when whoever asked goes away: it writes the clone every domain of the
  *  repository shares, and git killed mid-write leaves its ref locks behind, which stop every
- *  fetch after it (found by the review of this change). It runs until it is done. */
-export const fetchDomain = async (domain: string, repo: Repo) => {
+ *  fetch after it (found by the review of this change). It runs until it is done. Gives
+ *  back what the helper said (what it dropped or refused). */
+export const fetchDomain = async (domain: string, repo: Repo): Promise<string> => {
   const fetch = () => git(clonePath(repo), ["fetch", "--quiet", "--prune", domain]);
   // rootd imports as a domain writes, and a review imports too: two at once in one clone
   // can meet on a ref's lock, and the later one tries again, a little later each time (the
@@ -135,6 +136,7 @@ export const fetchDomain = async (domain: string, repo: Repo) => {
     throw new Error(
       `could not bring ${domain}'s branches of ${repo.owner}/${repo.name} into the root clone: ${failure(result.stderr.trim(), 6, () => null)}`,
     );
+  return result.stderr;
 };
 
 /** Each checkout of a workspace against the remote: the commits its HEAD has that no branch of
