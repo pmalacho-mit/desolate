@@ -79,7 +79,9 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
   desolate agent start <domain>/<workspace> [--name <n>] [--checkout <repo>] -- <command...>
                                                                  any program kept running in a workspace (a dev server,
                                                                  a watcher, a coding agent), with its terminal; no tmux
-  desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   your terminal on it; Ctrl-] detaches
+  desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   attach: your terminal on it; Ctrl-] detaches
+  desolate agent log <domain>/<workspace> [--all | --lines <n> | --since <10m|date>]   what it printed
+  desolate agent stop <domain>/<workspace> [--kill]              Ctrl-C, then asks; --kill ends it at once
   desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
 
 Hearing about it, and scripting it:
@@ -711,11 +713,14 @@ const main = async (argv: string[]): Promise<number> => {
     const dash = rest.indexOf("--");
     const own = dash >= 0 ? rest.slice(0, dash) : rest;
     const command = dash >= 0 ? rest.slice(dash + 1) : [];
-    const { values, positionals } = flags(own, {
-      name: { type: "string" },
-      checkout: { type: "string" },
-    });
     const agents = await import("./agent.ts");
+    // Each verb's own flags (host/agent.ts's FLAGS); before a verb, any of them.
+    const { values, positionals } = flags(
+      own,
+      own[0] && own[0] in agents.FLAGS
+        ? agents.FLAGS[own[0] as keyof typeof agents.FLAGS]
+        : Object.assign({}, ...Object.values(agents.FLAGS)),
+    );
     const [sub, where] = positionals;
     if (sub === "start")
       await agents.start(
@@ -732,8 +737,18 @@ const main = async (argv: string[]): Promise<number> => {
       return agents.attach(where, { name: values.name as string | undefined });
     else if (sub === "list") await agents.list(where, out, values.json === true);
     else if (sub === "stop")
-      await agents.stop(where, { name: values.name as string | undefined }, out);
-    else if (sub === "log") await agents.log(where, { name: values.name as string | undefined });
+      await agents.stop(
+        where,
+        { name: values.name as string | undefined, kill: values.kill === true },
+        out,
+      );
+    else if (sub === "log")
+      await agents.log(where, {
+        name: values.name as string | undefined,
+        all: values.all === true,
+        lines: values.lines as string | undefined,
+        since: values.since as string | undefined,
+      });
     else
       refuse(
         "desolate agent what?",
