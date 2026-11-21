@@ -2,7 +2,8 @@
 // (root/rootctl.ts serve): the host holds its input open until the answer (host/stack.ts),
 // so its end of input is the asker gone, though a half-open socket reports it as 'end'
 // only. Driven on the real service, with `git.push` as the git VM's withdrawn push asks it:
-// its bundle never comes, so it waits five seconds for it unless it is ended.
+// its bundle never comes, so it waits five seconds for it unless it is ended. The root takes
+// such pushes one at a time (root/ops.ts), so a withdrawn one's work ends before the next's.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
@@ -84,5 +85,14 @@ describe("the root's CLI service and whoever asked", () => {
     assert.equal(reply.ok, false);
     assert.match(reply.error ?? "", /ENOENT/);
     assert.ok(ms >= 4500, `answered after ${ms} ms`);
+  });
+  it("one push at a time: a withdrawn one asked behind another ends only after it", async () => {
+    // (The first test is its control: alone, a withdrawn push is answered at once.)
+    const first = push(false);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const { reply, ms } = await push(true);
+    assert.equal(reply.error, "whoever asked went away");
+    assert.ok(ms >= 4000, `answered after ${ms} ms, before the push ahead of it ended`);
+    await first;
   });
 });

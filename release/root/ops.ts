@@ -56,6 +56,9 @@ import type {
 } from "../.harness/root-state.ts";
 
 type Log = (line: string) => void;
+
+/** The git VM's push the root is working on, if any: they are taken one at a time. */
+let gitPushes: Promise<void> = Promise.resolve();
 /** `signal`: whoever asked went away (rootctl's service: the host closed the connection). */
 export type Op = (
   args: Record<string, unknown>,
@@ -405,7 +408,8 @@ export const ops: Record<string, Op> = {
   /** A `git push` made in the git VM (host/git-vm.ts), handed over by the host: its bundle
    *  is checked like a domain's (intake.ts), taken in, and pushed as a raw push is, after
    *  the person's approval on the host. Returns what the person waiting should read. Whoever
-   *  asked going away (the git VM's push withdrawn: `signal`) ends it at whichever step. */
+   *  asked going away (the git VM's push withdrawn: `signal`) ends it at the next step that
+   *  takes the signal, and at the latest before its line goes on the approval page. */
   async "git.push"(args, _log, signal) {
     const repo = repoOf(args.repo);
     const branch = String(args.branch ?? "");
@@ -420,7 +424,14 @@ export const ops: Record<string, Op> = {
       throw new Error("git.push names a branch, a commit, and a bundle the host left");
     const bundle = path.join(GIT_IN, file);
     const said: string[] = [];
+    // One at a time: the host hands over the next as soon as a withdrawn one's call ends, and
+    // what that one began here (not every step before the approval takes the signal) ends
+    // before the next begins.
+    const ahead = gitPushes;
+    let leave = () => {};
+    gitPushes = new Promise<void>((resolve) => (leave = resolve));
     try {
+      await ahead;
       // (The host has just written it; a share can be a moment behind on vz.)
       for (let i = 0; i < 20 && !fs.existsSync(bundle) && !signal?.aborted; i++)
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -432,7 +443,7 @@ export const ops: Record<string, Op> = {
       const why = await bundleRefusal(bundle, gitDir, signal);
       if (why) return { pushed: false, error: `the root refused the push's bundle: ${why}`, said };
       // One ref, of the shape the git VM's helper makes: what it names is checked below.
-      const heads = (await gitIn(clone, ["bundle", "list-heads", bundle])).stdout
+      const heads = (await gitIn(clone, ["bundle", "list-heads", bundle], { signal })).stdout
         .split("\n")
         .filter(Boolean)
         .map((line) => line.split(" "));
@@ -506,12 +517,11 @@ export const ops: Record<string, Op> = {
           const id = `${repo.owner}/${repo.name}`;
           if (!domains.domain(slug).repos.includes(id))
             return { pushed: false, error: `${id} is not in the domain '${slug}'`, said };
-          const delivered = await gitIn(clone, [
-            "push",
-            "--porcelain",
-            slug,
-            `${commit}:refs/heads/${branch}`,
-          ]);
+          const delivered = await gitIn(
+            clone,
+            ["push", "--porcelain", slug, `${commit}:refs/heads/${branch}`],
+            { signal },
+          );
           if (delivered.code !== 0)
             return {
               pushed: false,
@@ -538,6 +548,7 @@ export const ops: Record<string, Op> = {
       }
     } finally {
       fs.rmSync(bundle, { force: true });
+      leave();
     }
   },
   /** The approval page's Refuse: the waiting push is taken off the list, and the `git push`

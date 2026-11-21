@@ -36,7 +36,7 @@ import type { Repo } from "../shared/names.ts";
 import { vmSize } from "../shared/size.ts";
 import { passInward, sizeBeforeStart } from "./settings.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
-import { backend, rootctl } from "./stack.ts";
+import { backend, rootctl, rootctlBrief } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome, readState, writeState } from "../.harness/home.ts";
@@ -187,9 +187,7 @@ export const ensureGitClone = async (repo: Repo) => {
   // to it (its workspaces see root/<branch>). (A domain named like a remote already here is
   // reached through `root` alone.)
   const domainList = (
-    await rootctl<{ slug: string; repos: string[] }[]>("domain.list", {}, { quiet: true }).catch(
-      () => [],
-    )
+    await rootctlBrief<{ slug: string; repos: string[] }[]>("domain.list").catch(() => [])
   )
     .filter(
       (d) => d.repos.includes(id) && isSlug(d.slug) && d.slug !== "origin" && d.slug !== "root",
@@ -404,7 +402,7 @@ const fetchedAt = new Map<string, number>();
  *  handed to the root, and the answer left where the git VM reads it. Once whoever asked has
  *  gone (shared/git-out-box.ts: they leave `<id>.gone`), nothing more is begun for them, and
  *  the call to the root is ended with what it waits on there (a push's line on the approval
- *  page): how long it may take is theirs alone (R4). */
+ *  page). No clock of this layer's ends it: the root's silence does (host/stack.ts). */
 const take = async (
   id: string,
   log: (line: string) => void,
@@ -413,7 +411,11 @@ const take = async (
   const asker = new AbortController();
   const gone = path.join(paths.gitOut, named(id).gone);
   const looking = setInterval(() => {
-    if (fs.lstatSync(gone, { throwIfNoEntry: false })) asker.abort();
+    try {
+      if (fs.lstatSync(gone, { throwIfNoEntry: false })) asker.abort();
+    } catch {
+      /* what the git VM does to its out-box (a chmod) must not stop the daemon */
+    }
   }, 500);
   try {
     return await takeOne(id, log, announce, asker.signal);
@@ -876,9 +878,8 @@ declare namespace take {
 
 /** Watch what the git VM leaves: one request at a time (a git VM cannot crowd the root, or
  *  the approval page), and the next only when the call for the last has ended. Its asker
- *  going ends that call, and what it runs in the root with it (root/ops.ts, `git.push`): so a
- *  git VM that asks and withdraws again and again holds one call to the root at a time.
- *  (The host daemon runs this.) */
+ *  going ends that call at once; the root then ends what it began before it begins the next
+ *  (root/ops.ts, `git.push`). (The host daemon runs this.) */
 export const watchGitOut = (
   log: (line: string) => void,
   announce: (fields: Record<string, unknown>) => void = () => {},
