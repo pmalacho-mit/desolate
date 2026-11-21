@@ -361,6 +361,11 @@ What the approval page shows, and the two choices it may add:
   though, so a file one commit added and a later one took out again is in the history. The
   page lists those files, and **Show each commit whole** shows every commit on its own:
   who wrote it, when, its whole message and its diff.
+- **Nothing is cut.** A long list shows a page and a **Show more** for the rest; a long
+  diff, a page and **Show more of it**. Every warning, and every file that changes what runs
+  on the forge, is shown before you approve. A large push takes the reviewer a while: the
+  page says what it is doing ("packing (1,200 of 8,000), 2 min") and waits as long as you
+  do. Approve arms once it has said what the push sends.
 - **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
   the last commit's files, on what the branch builds on, with a message listing every
   commit. Nothing that was in between reaches the remote. The workspace's branch still has

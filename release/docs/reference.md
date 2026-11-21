@@ -25,7 +25,11 @@ reaches the forge. A push the reviewer cannot describe cannot be approved.
 
 What the page and the terminal show of it, all from the reviewer: the commits, the net
 change, files a commit changed and a later one changed back (which the net change does not
-show), each commit whole (who wrote it, when, its whole message, its diff; the first 50),
+show), each commit whole (who wrote it, when, its whole message, its diff), a page at a
+time and none of it cut: every warning, every file that changes what runs on the forge, the
+squash's whole message; on the page, the rest of a list or a diff on asking. While the
+reviewer works, both say what it is doing, and wait for as long as you do (Ctrl-C, or
+Refuse),
 and a warning for anything a commit carries that is not shown (a header other than git's
 four, a signature, an encoding). The two choices:
 - **Squashed into one commit** (`desolate push ... --squash`, `desolate approve --squash`,
