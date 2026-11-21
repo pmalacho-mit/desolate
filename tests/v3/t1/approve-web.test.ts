@@ -75,6 +75,8 @@ const account = (extra: Record<string, unknown> = {}) => ({
   remote: null,
   ...extra,
 });
+let rootMoved = () => {};
+const waitsEnded: string[] = [];
 let slow = "";
 /** The branch whose account names another pack each time it is asked (`changing`). */
 let changing = "";
@@ -156,6 +158,20 @@ before(async () => {
     handler(
       {
         pending: async () => listed,
+        // The root's wait for its list to change (root/approvals.ts, pendingAfter): woken by
+        // `rootMoved`, and ended with its asker (`waitsEnded`).
+        waitPending: async (since, signal) => {
+          for (;;) {
+            const tag = `list:${listed.map((w) => w.message).join("\n")}`;
+            if (tag !== since || signal.aborted) return { tag, pending: listed };
+            await new Promise<void>((resolve) => {
+              rootMoved = resolve;
+              signal.addEventListener("abort", () => (waitsEnded.push(since), resolve()), {
+                once: true,
+              });
+            });
+          }
+        },
         summary: (asked, signal) => reviewer(asked, signal),
         approve: async (m) => void approved.push(m),
         refuse: async (m) => void refused.push(m),
@@ -202,7 +218,7 @@ const call = (
         res.on("data", (chunk) => (text += chunk));
         res.on("end", () => {
           // What the page was last given for each push: its click names that account.
-          if (url === "/pending" && res.statusCode === 200)
+          if (url.startsWith("/pending") && res.statusCode === 200)
             for (const p of (JSON.parse(text) as { pending: { nonce: string; shown?: string }[] })
               .pending)
               if (p.shown) lastShown.set(p.nonce, p.shown);
@@ -213,6 +229,42 @@ const call = (
     req.on("error", reject);
     req.end(body);
   });
+
+/** A request the page holds open (/pending?since=): its answer, whether it has come, and a
+ *  way to go away, as a closed tab does. */
+const held = (url: string) => {
+  const answer = { done: false, body: null as null | Record<string, unknown> };
+  let gone = () => {};
+  const asked = new Promise<void>((resolve) => {
+    const req = request(
+      {
+        host: "127.0.0.1",
+        port,
+        method: "GET",
+        path: url,
+        headers: { host: `${NAME}:31599`, ...asPage() },
+      },
+      (res) => {
+        let text = "";
+        res.on("data", (chunk) => (text += chunk));
+        res.on("end", () => {
+          answer.done = true;
+          answer.body = JSON.parse(text) as Record<string, unknown>;
+          for (const p of (answer.body.pending ?? []) as { nonce: string; shown?: string }[])
+            if (p.shown) lastShown.set(p.nonce, p.shown);
+          resolve();
+        });
+      },
+    );
+    req.on("error", () => resolve());
+    gone = () => req.destroy();
+    req.end();
+  });
+  return { answer, asked, gone };
+};
+const tagNow = async () =>
+  (JSON.parse((await call("GET", "/pending", asPage())).body) as { tag: string }).tag;
+const moment = (ms = 150) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const lastShown = new Map<string, string>();
 let cookie = "";
@@ -557,6 +609,94 @@ describe("T1 the approval page", () => {
       approved.length = 0;
       listed = [{ message, at: "2026-11-12T00:00:00Z" }];
     }
+  });
+
+  it("a page that waits is answered when the reviewer has said, and that answer's account signs", async () => {
+    const slowPush = { ...push, branch: "issue/19", nonce: "9".repeat(32) };
+    const slowMessage = formatApproval(slowPush);
+    slow = slowPush.branch;
+    listed = [{ message: slowMessage, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    try {
+      await listedNow();
+      const waiting = held(`/pending?since=${await tagNow()}`);
+      await moment();
+      assert.equal(waiting.answer.done, false, "nothing new: the answer waits");
+      release();
+      await waiting.asked;
+      const [shown] = waiting.answer.body!.pending as { review: Record<string, unknown> }[];
+      assert.ok(shown!.review.account, "the reviewer's account, as soon as it said");
+      const signs = await approve({
+        nonce: slowPush.nonce,
+        token: pushToken(approveToken(), slowMessage),
+        commit: slowPush.commit,
+      });
+      assert.equal(signs.status, 200, signs.body);
+      assert.deepEqual(approved, [
+        signedFor(slowMessage, { commit: slowPush.commit, squashes: null, ...SENDS }),
+      ]);
+    } finally {
+      slow = "";
+      approved.length = 0;
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
+  it("the root's user swaps the text under a page that waits: the page is told, and its click for what it drew signs nothing", async () => {
+    const drawn = { ...push, branch: "issue/20", nonce: "a".repeat(32) };
+    const drawnMessage = formatApproval(drawn);
+    const swappedMessage = formatApproval({ ...drawn, commit: "b".repeat(40) });
+    approved.length = 0;
+    try {
+      listed = [{ message: drawnMessage, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      const shownDrawn = lastShown.get(drawn.nonce)!;
+      const waiting = held(`/pending?since=${await tagNow()}`);
+      await moment();
+      assert.equal(waiting.answer.done, false);
+      listed = [{ message: swappedMessage, at: "2026-11-12T00:00:00Z" }];
+      rootMoved();
+      await waiting.asked;
+      const [told] = waiting.answer.body!.pending as { token: string; commit: string }[];
+      assert.equal(told!.commit, "b".repeat(40), "the page is told of the text the root lists now");
+      assert.equal(told!.token, pushToken(approveToken(), swappedMessage));
+      const stale = await approve({
+        nonce: drawn.nonce,
+        token: pushToken(approveToken(), drawnMessage),
+        commit: drawn.commit,
+        shown: shownDrawn,
+      });
+      assert.equal(stale.status, 409, stale.body);
+      assert.deepEqual(approved, [], "nothing signed for what the page drew before");
+      // CONTROL: the text the page is shown now, once its account is, signs: that one.
+      await listedNow();
+      const control = await approve({
+        nonce: drawn.nonce,
+        token: pushToken(approveToken(), swappedMessage),
+        commit: "b".repeat(40),
+      });
+      assert.equal(control.status, 200, control.body);
+      assert.deepEqual(approved, [
+        signedFor(swappedMessage, { commit: "b".repeat(40), squashes: null, ...SENDS }),
+      ]);
+    } finally {
+      approved.length = 0;
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
+  it("a wait lives as long as the page's request: the root's wait ends when the page goes", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    await listedNow();
+    waitsEnded.length = 0;
+    const waiting = held(`/pending?since=${await tagNow()}`);
+    await moment();
+    assert.equal(waiting.answer.done, false, "control: nothing new, so the page waits");
+    assert.deepEqual(waitsEnded, [], "and so does the root");
+    waiting.gone();
+    await moment();
+    assert.equal(waitsEnded.length, 1, "the root's wait ended with the page's request");
+    assert.equal(waiting.answer.done, false);
   });
 
   it("a body over its bound is refused as too large, not as not JSON", async () => {

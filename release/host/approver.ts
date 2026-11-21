@@ -204,6 +204,8 @@ export const sign = async (
           // which wraps a long one. A name in another script is shown as itself.
           ...summary.map((line) => `  ${printable(line, Infinity)}`.trimEnd()),
           "              (desolate's reviewer, in the root)",
+          // The push again, under what may be a long account: what the answer below is for.
+          `  push        ${push.repo} ${push.branch} ${push.commit}${push.squashes ? " (squashed)" : ""}${replaces ? ", replacing the remote's" : ""}`,
         ]
       : []),
     "",
