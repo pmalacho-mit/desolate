@@ -1,8 +1,11 @@
 // How the root runs git. Only ever in a repository the root owns: a mirror or a root clone
 // (P4). There is no function here that takes a path into a domain.
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { run } from "../shared/run.ts";
 import type { RunOptions, RunResult } from "../shared/run.ts";
+import { failure } from "../shared/text.ts";
 import { parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { readJson } from "../shared/json.ts";
@@ -16,6 +19,7 @@ import type {
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { theOnlyFileIn } from "../.harness/root-mirrors.ts";
 import type {
   emptyRoot,
   linkIn,
@@ -115,8 +119,20 @@ export const sshCommand = (repo: Repo, role: "read" | "write") =>
     "StrictHostKeyChecking=yes",
     "-o",
     `UserKnownHostsFile=${KNOWN_HOSTS}`,
+    // Three bounds on a peer that is remote (limits.md, R4), each ssh's own to keep, and
+    // each about silence, never about how long the work takes. Twenty seconds to connect:
+    // the forge answers a TCP connection in well under a second from anywhere, and a name
+    // that does not resolve or a port that drops packets is then said, not waited on.
     "-o",
     "ConnectTimeout=20",
+    // And a connection that has gone quiet is asked, every fifteen seconds, whether the
+    // forge is still there: four unanswered and ssh ends, so a fetch or a push over a link
+    // that died ends within a minute, by the program that holds the connection. A forge
+    // that is busy (packing, receiving) still answers these.
+    "-o",
+    "ServerAliveInterval=15",
+    "-o",
+    "ServerAliveCountMax=4",
   ].join(" ");
 
 declare namespace sshCommand {
@@ -133,6 +149,13 @@ declare namespace sshCommand {
       "/acme/app/read.pub -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="
     >,
   ];
+  /** a forge that does not answer is not waited on for ever: twenty seconds to connect, and
+   *  a connection silent for a minute (four questions, fifteen seconds apart) is ended */
+  export type NotForEver = Expect<
+    Read,
+    "endsWith",
+    " -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
+  >;
   /** the write role names the write agent and the write key, which only the pusher reaches */
   export type Write = [
     Expect<
@@ -315,6 +338,112 @@ export const gitInvocation = (dir: string): { args: string[]; env: NodeJS.Proces
   };
 };
 
+/** How long git may say nothing while it talks to the forge before it is taken to have
+ *  stalled (limits.md, R4: an idle bound against a peer that is remote, never a total). A
+ *  fetch is run with `--progress`, so git says something at least once a second while bytes
+ *  arrive or objects are indexed, however slow the link and however large the repository.
+ *  What is silent for longer is the forge preparing a pack before its first line, and one
+ *  very large object being indexed; five minutes is past both, and a fetch that is ended
+ *  starts again from nothing, so the bound errs long. A link that died is ended sooner, by
+ *  ssh itself (sshCommand). `git lfs fetch` is run with its progress forced on
+ *  (GIT_LFS_FORCE_PROGRESS), for the same reason. */
+export const FORGE_IDLE_MS = 5 * 60_000;
+
+/** Where the root keeps the whole of what a program said when a message shows only its end
+ *  (shared/text.ts, `failure`): its own state, which a person reads in the root's terminal.
+ *  The newest are kept, up to 64 MiB in all (what a program says is bounded by run()): the
+ *  message that names one is read within minutes, not months. */
+const FAILURES = path.join(ROOT.state, "failures");
+const FAILURES_MOST = 64 * 1024 * 1024;
+export const keepFailure = (whole: string): string | null => {
+  try {
+    fs.mkdirSync(FAILURES, { recursive: true, mode: 0o700 });
+    const file = path.join(
+      FAILURES,
+      `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}.txt`,
+    );
+    fs.writeFileSync(file, whole, { mode: 0o600 });
+    // Named by their time, so the newest sort last.
+    let kept = 0;
+    for (const name of fs.readdirSync(FAILURES).sort().reverse()) {
+      kept += fs.statSync(path.join(FAILURES, name)).size;
+      if (kept > FAILURES_MOST && path.join(FAILURES, name) !== file)
+        fs.rmSync(path.join(FAILURES, name), { force: true });
+    }
+    return `${file} (in the root)`;
+  } catch {
+    return null;
+  }
+};
+
+/** What a git that failed said, for a message (limits.md, R1): its last `lines` lines on
+ *  one line, and, when that is not all of it, how much came before and where the whole text
+ *  is kept. Progress that git wrote over itself (each update ends in a carriage return) is
+ *  not what it said: only the last state of each line is. */
+export const gitSaid = (result: RunResult, lines = 3): string =>
+  failure(
+    (result.stderr || result.stdout)
+      .split("\n")
+      .map((line) => line.replace(/\r+$/, "").split("\r").pop() ?? "")
+      .join("\n")
+      .trim(),
+    lines,
+    keepFailure,
+  ).replace(/\n/g, " | ");
+
+declare namespace gitSaid {
+  type Fresh = Invoke<typeof emptyRoot>;
+  /** the end of what git said, where it says why; nothing is kept when that is all of it */
+  export type Whole = Expect<
+    Invoke<
+      typeof gitSaid,
+      [
+        result: {
+          code: 128;
+          stdout: "";
+          stderr: "fatal: could not read from remote repository\n\nPlease make sure you have the correct access rights\n";
+        },
+      ]
+    >,
+    "=",
+    "fatal: could not read from remote repository |  | Please make sure you have the correct access rights"
+  >;
+  /** progress git wrote over itself is not lines of the failure: the last state of each is */
+  export type Progress = Expect<
+    Invoke<
+      typeof gitSaid,
+      [
+        result: {
+          code: 128;
+          stdout: "";
+          stderr: "Receiving objects:  10% (1/10)\rReceiving objects:  20% (2/10)\rfatal: early EOF\n";
+        },
+      ]
+    >,
+    "=",
+    "fatal: early EOF"
+  >;
+  /** longer than is shown: the count of what came before, and where the root kept all of it */
+  export type Kept = Given<
+    Fresh,
+    [
+      Expect<
+        Invoke<
+          typeof gitSaid,
+          [result: { code: 1; stdout: ""; stderr: "one\ntwo\nthree\nfour\n" }, lines: 2]
+        >,
+        "matches",
+        "^\\(2 earlier lines not shown; all of it: .*/failures/[0-9TZ-]+-[0-9a-f]{8}\\.txt \\(in the root\\)\\) \\| three \\| four$"
+      >,
+      Expect<
+        Invoke<typeof theOnlyFileIn, [where: "state", dir: "failures"]>,
+        "=",
+        "one\ntwo\nthree\nfour"
+      >,
+    ]
+  >;
+}
+
 export const gitOk = async (
   dir: string,
   args: string[],
@@ -322,9 +451,7 @@ export const gitOk = async (
 ): Promise<string> => {
   const result = await git(dir, args, options);
   if (result.code !== 0)
-    throw new Error(
-      `git ${args.join(" ")} failed in ${dir}: ${(result.stderr || result.stdout).trim().slice(-1500)}`,
-    );
+    throw new Error(`git ${args.join(" ")} failed in ${dir}: ${gitSaid(result, 10)}`);
   return result.stdout;
 };
 
