@@ -7,9 +7,21 @@
 // long it has run. `timeoutMs`, a total, is for the callers not yet moved to those.
 import { spawn } from "node:child_process";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Configure,
+  Expect,
+  Invoke,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { never, throwsUntil, trueOnCall } from "../.harness/shared-probe.ts";
-import type { abortedIn, leftRunning, outlivesItsRunner } from "../.harness/shared-run.ts";
+import type {
+  abortedIn,
+  answerWhenItsRunnerEnds,
+  answerWithAnEscapee,
+  leftRunning,
+  nestedLeftRunning,
+  outlivesItsRunner,
+} from "../.harness/shared-run.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = {
@@ -42,37 +54,76 @@ export const RUN_MAX = 192 * 1024 * 1024;
  *  it went away. */
 const CANCELLED = "\n(cancelled)";
 
+/** What the answer's stderr ends with when the program was ended because the process that
+ *  ran it is ending. */
+const STOPPING = "\n(stopped: the program that ran it is ending)";
+
+/** How long a program told to end (SIGTERM) has to end what it started, before it and its
+ *  group are killed (SIGKILL). A program that itself runs programs in groups of their own
+ *  (with `signal`, here) ends those groups when it is told to end, and cannot when it is
+ *  killed: killed at once, its own children were left running. Two seconds is a program
+ *  ending its children and exiting, not one finishing its work, and a cancelled program
+ *  that ignores the request is still gone in two seconds. */
+export const ENDING_MS = 2_000;
+
 /** A program run with `signal` or `idleMs` is ended with everything it started: it runs in a
- *  process group of its own, and the group is killed whole. (Killed alone, a `runuser` left
+ *  process group of its own, and the group is ended whole. (Killed alone, a `runuser` left
  *  its node and that node's git running, and a shell leaves what it started holding the
- *  pipes this waits on: the independent review of #169.) A group of its own has no terminal:
- *  such a program cannot ask the person anything there, and the terminal's Ctrl-C does not
- *  reach it. So what would have ended it with this process still does: these are the groups
- *  now running, and they are killed when this process exits or is told to (the signals a
+ *  pipes this waits on: the independent review of #169.) What leaves the group (a program
+ *  that makes a session of its own, as a daemon does) is not reached: no process group is.
+ *  A group of its own has no terminal: such a program cannot ask the person anything there,
+ *  and the terminal's Ctrl-C does not reach it. So what would have ended it with this
+ *  process still does: these are the groups now running, each with what marks its run as
+ *  ended and why, and they are killed when this process exits or is told to (the signals a
  *  terminal and a supervisor send). Where nothing else listens for the signal, this process
  *  then ends by it, as it would have had nothing listened. */
-const groups = new Set<number>();
+const groups = new Map<number, { said: (why: string) => boolean; end: (why: string) => void }>();
 let guarded = false;
 const guard = () => {
   if (guarded) return;
   guarded = true;
-  const endAll = () => {
-    for (const pid of groups)
-      try {
-        process.kill(-pid, "SIGKILL");
-      } catch {
-        /* ended already */
+  // Exiting: at once, since a process that is exiting cannot wait for them.
+  process.on("exit", () => {
+    for (const [pid, run] of groups) {
+      run.said(STOPPING);
+      toGroup(pid, "SIGKILL");
+    }
+  });
+  // Told to end: as a run is ended, told first and killed ENDING_MS later (or once they are
+  // gone, if sooner), so that what they run in groups of their own is ended too.
+  let ending: Promise<void> | undefined;
+  const endAllInTurn = () =>
+    (ending ??= (async () => {
+      // Each ended as its run ends it: told, killed later, its pipes let go.
+      for (const run of groups.values()) run.end(STOPPING);
+      for (const by = Date.now() + ENDING_MS; groups.size > 0 && Date.now() < by;)
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      // (A run begun meanwhile, as by a handler of the same signal, is killed with the rest,
+      // and says why.)
+      for (const [pid, run] of groups) {
+        run.said(STOPPING);
+        toGroup(pid, "SIGKILL");
       }
-  };
-  process.on("exit", endAll);
+      ending = undefined;
+    })());
   for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    const told = () => {
-      endAll();
+    const told = async () => {
+      await endAllInTurn();
       if (process.listenerCount(name) > 1) return;
       process.removeListener(name, told);
       process.kill(process.pid, name);
     };
     process.on(name, told);
+  }
+};
+
+/** Sends `how` to the process group `group`; false when there is none left. */
+const toGroup = (group: number, how: NodeJS.Signals): boolean => {
+  try {
+    process.kill(-group, how);
+    return true;
+  } catch {
+    return false;
   }
 };
 
@@ -93,27 +144,42 @@ export const run = (
       detached: grouped,
     });
     const group = grouped ? child.pid : undefined;
-    if (group) groups.add(group);
     let stdout = "";
     let stderr = "";
     let timer: NodeJS.Timeout | undefined;
     let idle: NodeJS.Timeout | undefined;
-    // Ended by us, once, for one reason, which the answer's stderr ends with.
+    // Ended by us, once, for one reason, which the answer's stderr ends with; and then never
+    // a success, whatever the program's own exit (it may have exited 0 and left what it
+    // started holding its pipes).
     let ended = false;
-    const end = (why: string) => {
-      if (ended) return;
+    const said = (why: string) => {
+      if (ended) return false;
       ended = true;
       stderr += why;
-      try {
-        // A negative pid is the process group: the program and everything it started.
-        if (group) process.kill(-group, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
+      return true;
     };
+    let closed = false;
+    const end = (why: string) => {
+      if (!said(why)) return;
+      if (!group) return void child.kill("SIGKILL");
+      // The group: the program and everything it started (a negative pid is a group). Told
+      // to end first, so that what it runs in groups of its own is ended too; then killed.
+      // What escaped the group (a daemon's own session) may still hold the pipes: they are
+      // let go then too, so that the answer does not wait on it.
+      // (No group left to tell: none to kill later either, since its id may be another's by
+      // then.)
+      const told = toGroup(group, "SIGTERM");
+      setTimeout(() => {
+        if (told) toGroup(group, "SIGKILL");
+        if (closed) return;
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }, ENDING_MS).unref();
+    };
+    if (group) groups.set(group, { said, end });
     const cancel = () => end(CANCELLED);
     const done = () => {
+      closed = true;
       if (timer) clearTimeout(timer);
       if (idle) clearTimeout(idle);
       if (group) groups.delete(group);
@@ -143,7 +209,7 @@ export const run = (
     });
     child.on("close", (code, killed) => {
       done();
-      resolve({ code: code ?? (killed ? 128 : 1), stdout, stderr });
+      resolve({ code: ended ? 128 : (code ?? (killed ? 128 : 1)), stdout, stderr });
     });
     if (options.timeoutMs)
       timer = setTimeout(
@@ -233,6 +299,16 @@ declare namespace run {
     "=",
     { code: 128; stdout: "started\n"; stderr: "\n(cancelled)" }
   >;
+  /** ended by us is never a success, though the program itself exited 0: here a shell that
+   *  exits at once, leaving a `sleep` that holds its output open and says nothing */
+  export type EndedIsNotASuccess = Expect<
+    Invoke<
+      typeof run,
+      [command: "sh", args: ["-c", "sleep 30 & exit 0"], options: { idleMs: 300 }]
+    >,
+    "=",
+    { code: 128; stdout: ""; stderr: "\n(nothing from it for 300 ms: stopped)" }
+  >;
   /** asked for by someone already gone: never started */
   export type CancelledBefore = Expect<
     Invoke<
@@ -261,6 +337,50 @@ declare namespace run {
     Expect<Invoke<typeof outlivesItsRunner, [grouped: true]>, "=", false>,
     Expect<Invoke<typeof outlivesItsRunner, [grouped: false]>, "=", true>,
   ];
+  /** and a runner that is itself run, and cancelled, ends what it runs: a program that runs
+   *  a `sleep` with a signal of its own is cancelled from outside, and the `sleep` goes too
+   *  (it is told to end before it is killed, and ends its own groups) */
+  export type EndsWhatItsRunnerRuns = Expect<Invoke<typeof nestedLeftRunning>, "=", false>;
+  /** and when its runner is told to end, a runner it runs is told so too, before either is
+   *  killed: so what that one runs ends as well (here two deep: a node that runs a node that
+   *  runs a `sleep`, each with a signal; the outermost is sent SIGTERM) */
+  export type EndsWhatItRunsWhenTold = Expect<
+    Invoke<typeof outlivesItsRunner, [grouped: true, nested: true]>,
+    "=",
+    false
+  >;
+  /** what left its group (a daemon, in a session of its own) is not reached, and does not
+   *  hold the answer either: it holds the run's output open, and the answer comes within
+   *  ENDING_MS of the end all the same */
+  export type AnswersThoughAnEscapeeHoldsItsPipes = Configure<
+    { timeout: 15_000 },
+    Expect<
+      Invoke<typeof answerWithAnEscapee, [idleMs: 300]>,
+      "=",
+      { code: 128; stderr: "\n(nothing from it for 300 ms: stopped)"; soon: true }
+    >
+  >;
+  /** a run its runner ended, as that runner was told to end, says so (where the runner
+   *  listens for the signal itself, and lives on to read the answer) */
+  export type SaysItsRunnerEnded = Expect<
+    Invoke<typeof answerWhenItsRunnerEnds>,
+    "=",
+    { code: 128; stdout: ""; stderr: "\n(stopped: the program that ran it is ending)" }
+  >;
+  /** and says so soon, though what its program started left the group and holds its pipes */
+  export type SaysItsRunnerEndedThoughAnEscapee = Configure<
+    { timeout: 15_000 },
+    Expect<
+      Invoke<typeof answerWhenItsRunnerEnds, [escapee: true]>,
+      "=",
+      {
+        code: 128;
+        stdout: "";
+        stderr: "\n(stopped: the program that ran it is ending)";
+        soon: true;
+      }
+    >
+  >;
 }
 
 /** run(), but a failure is an exception carrying the child's stderr. */

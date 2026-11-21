@@ -5,6 +5,9 @@
 /** `text`, `count` times over: a megabyte of it stands in for a flood. */
 export const repeat = (text: string, count: number): string => text.repeat(count);
 
+/** `count` newlines, then `text`: blank lines a program wrote before it said something. */
+export const newlinesThen = (count: number, text: string): string => "\n".repeat(count) + text;
+
 /** A keeper that kept the whole text at `path`. */
 export const keptAt = (path: string) => (): string | null => path;
 
