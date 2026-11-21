@@ -192,16 +192,26 @@ describe("T1 a kept service is started again, more slowly while it keeps failing
   });
 });
 
-describe("T1 shellcheck on the recipes and the completion (run.sh's list has the rest)", () => {
+describe("T1 shellcheck on the shell around the stack", () => {
+  // The recipes and the completion are in no other list. The root's and the image's scripts
+  // are in run.sh's too: here as well, so that running this file where shellcheck is (a test
+  // workspace) checks every script this file is about.
   const have = spawnSync("shellcheck", ["--version"]).status === 0;
   it("finds no warning", { skip: have ? false : "shellcheck is not installed here" }, () => {
-    const recipes = fs
-      .readdirSync(path.join(RELEASE, "recipes"))
-      .filter((file) => file.endsWith(".sh"))
-      .map((file) => path.join(RELEASE, "recipes", file));
+    const scripts = (dir: string) =>
+      fs
+        .readdirSync(path.join(RELEASE, dir))
+        .filter((file) => file.endsWith(".sh"))
+        .map((file) => path.join(RELEASE, dir, file));
     const ran = spawnSync(
       "shellcheck",
-      ["-S", "warning", "-s", "bash", ...recipes, path.join(RELEASE, "completion.bash")],
+      [
+        ...["-S", "warning", "-s", "bash", ...scripts("recipes"), ...scripts("image")],
+        ...["root/start.sh", "root/kept.sh", "root/proxy-user.sh", "completion.bash"].map((file) =>
+          path.join(RELEASE, file),
+        ),
+        path.resolve(RELEASE, "../tests/v3/forge/gh.sh"),
+      ],
       { encoding: "utf8" },
     );
     assert.equal(ran.status, 0, ran.stdout + ran.stderr);
