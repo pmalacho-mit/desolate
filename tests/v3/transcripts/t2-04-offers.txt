@@ -106,7 +106,8 @@ desolate: this push needs your confirmation.
   onto        none: the remote has no issue/12 yet
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         1 object(s), only those its commits point to
-  sends       1 commit(s) the remote does not have, 2 file(s), 1 LFS object(s) with them
+  sends       1 commit(s) the remote does not have, 2 file(s)
+              1 LFS object(s) with them, 49 KiB
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: yes
 desolate: not confirmed
@@ -124,7 +125,8 @@ desolate: this push needs your confirmation.
   onto        none: the remote has no issue/12 yet
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         1 object(s), only those its commits point to
-  sends       1 commit(s) the remote does not have, 2 file(s), 1 LFS object(s) with them
+  sends       1 commit(s) the remote does not have, 2 file(s)
+              1 LFS object(s) with them, 49 KiB
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: issue/12
 uploading 1 LFS object(s)
@@ -147,16 +149,24 @@ desolate: this push needs your confirmation.
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         0 object(s), only those its commits point to
   sends       2 commit(s) the remote does not have, squashed into one, 1 file(s)
+  as          A Person <person@example.invalid>
+  committer   A Person <person@example.invalid>
+              authored <time>, committed <time>
+  message     add notes
+
+              Squashed from 2 commits:
+              - add notes
+              - tidy up
               (desolate's reviewer, in the root)
 Type the branch name (squash-me) to push, or anything else to refuse: squash-me
 pushed acme/widgets squash-me at <commit>: 2 commit(s) squashed into one.
-The workspace's squash-me still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace (what you committed since is kept, on top):
-  git fetch && git rebase --autostash --onto origin/squash-me <commit> squash-me
+desolate (on the Mac): the workspace's squash-me still has the commits that were squashed, so its next push would replace the remote's squash-me. To carry on from the squash, run this in the workspace (what you committed since is kept, on top; what you have not committed is put back):
+  git fetch && git rebase --rebase-merges --autostash --onto origin/squash-me <commit> squash-me
 [exit 0]
 
 $ desolate push dev acme/widgets squash-me --expect <commit>
 desolate: this push REPLACES the remote's squash-me, which is the squash of <id>, a commit of this branch, pushed before. Nothing was signed
-  fix: to build on the squash, run `git fetch && git rebase --autostash --onto origin/squash-me <commit> squash-me` in the workspace, then push again. To replace it instead: desolate push dev acme/widgets squash-me --expect <commit> --replace
+  fix: to build on the squash, run `git fetch && git rebase --rebase-merges --autostash --onto origin/squash-me <commit> squash-me` in the workspace, then push again. To replace it instead: desolate push dev acme/widgets squash-me --expect <commit> --replace
 [exit 1]
 
 $ desolate push dev acme/widgets squash-me --expect <commit>    # at a terminal; the person types: squash-me
@@ -170,7 +180,7 @@ desolate: this push needs your confirmation.
   sends       1 commit(s) the remote does not have, 1 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (squash-me) to push, or anything else to refuse: squash-me
-pushed acme/widgets squash-me at <commit> (2 commit(s)).
+pushed acme/widgets squash-me at <commit> (1 commit(s)).
 [exit 0]
 
 $ desolate push dev acme/widgets squash-me --expect <commit>
@@ -187,7 +197,8 @@ desolate: this push needs your confirmation.
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         0 object(s), only those its commits point to
   REPLACES    the remote's squash-me: it does not build on it, and the commits only the remote has are dropped
-  sends       2 commit(s) the remote does not have, 1 file(s); 1 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
+  sends       2 commit(s) the remote does not have, 1 file(s)
+  between     1 more file(s) its commits change that the net change does not show: each commit is pushed, so what they held is in the history (--squash pushes only the net change)
               (desolate's reviewer, in the root)
 Type 'replace squash-me' to replace it, or anything else to refuse: squash-me
 desolate: not confirmed
@@ -204,7 +215,8 @@ desolate: this push needs your confirmation.
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
   LFS         0 object(s), only those its commits point to
   REPLACES    the remote's squash-me: it does not build on it, and the commits only the remote has are dropped
-  sends       2 commit(s) the remote does not have, 1 file(s); 1 more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change
+  sends       2 commit(s) the remote does not have, 1 file(s)
+  between     1 more file(s) its commits change that the net change does not show: each commit is pushed, so what they held is in the history (--squash pushes only the net change)
               (desolate's reviewer, in the root)
 Type 'replace squash-me' to replace it, or anything else to refuse: replace squash-me
 pushed acme/widgets squash-me at <commit> (2 commit(s)).
@@ -229,8 +241,8 @@ desolate: this push needs your confirmation.
   commit      <commit>
   onto        none: the remote has no raw-push yet
   pack        <id>, 1 KiB  (made by desolate's reviewer: nothing else is sent)
-  LFS         1 object(s), only those its commits point to
-  sends       0 commit(s) the remote does not have, 2 file(s), 1 LFS object(s) with them
+  LFS         0 object(s), only those its commits point to
+  sends       0 commit(s) the remote does not have, 2 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (raw-push) to push, or anything else to refuse: raw-push
 approved; the push waiting in the root continues.
@@ -266,7 +278,7 @@ desolate: this push needs your confirmation.
   sends       1 commit(s) the remote does not have, 1 file(s)
               (desolate's reviewer, in the root)
 Type the branch name (issue/12) to push, or anything else to refuse: issue/12
-pushed acme/widgets issue/12 at <commit> (2 commit(s)).
+pushed acme/widgets issue/12 at <commit> (1 commit(s)).
 [exit 0]
 
 $ desolate branches dev

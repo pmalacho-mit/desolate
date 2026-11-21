@@ -665,7 +665,7 @@ const reviewedLines = (s: Summary, squashed: boolean): string[] => {
             .replace(/\n$/, "")
             .split("\n")
             .slice(0, 12)
-            .map((line, i) => `${i === 0 ? "message     " : "            "}${line}`),
+            .map((line, i) => `${i === 0 ? "message     " : "            "}${line}`.trimEnd()),
           ...(square.message.split("\n").length > 13 ? ["            (and more lines)"] : []),
         ]
       : []),
