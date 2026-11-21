@@ -609,6 +609,23 @@ Every setting there is (T1 checks that this table names exactly those):
 | `root.memoryMiB` | `DESOLATE_ROOT_MEMORY_MIB` | on the Mac | an eighth of this Mac's memory, 2 to 4 GiB | the root VM's memory |
 | `git.cpus` | `DESOLATE_GIT_CPUS` | on the Mac | 2 | the git VM's CPUs |
 | `git.memoryMiB` | `DESOLATE_GIT_MEMORY_MIB` | on the Mac | 1.5 GiB | the git VM's memory |
+| `git.shells` | `DESOLATE_GIT_SHELLS` | on the Mac | 6 | git terminal shells open at once, a tab reading each or not: each is a bash in the git VM |
+| `git.scrollbackLines` | `DESOLATE_GIT_SCROLLBACK_LINES` | on the Mac | 5000 | lines the git terminal's browser tab keeps to scroll back through |
+| `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly (QEMU without KVM) |
+| `root.silentSeconds` | `DESOLATE_ROOT_SILENT_SECONDS` | on the Mac | 900 | how long a call to the root VM may hear nothing from it (no progress, no answer) before it is given up |
+| `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | an eighth of this Mac's memory at about 85 MB each, 16 to 256 | connections out of one workspace carried to its proxy at once; as many more wait, and past those one is refused |
+| `forward.rawPorts` | `DESOLATE_RAW_PORTS` | on the Mac | none | ports, besides the databases' and queues' own, where a workspace's server speaks first and its protocol carries no name |
+| `spawn.memoryPercent` | `DESOLATE_SPAWN_MEMORY_PERCENT` | on the Mac | 85 | how much of this Mac's memory the running workspaces may be given before a workspace's own request for another is refused |
+| `agent.logMiB` | `DESOLATE_AGENT_LOG_MIB` | on the Mac | a twentieth of the workspace's disk | the most of an agent's output its log keeps: past it the oldest is dropped, and the log says so |
+| `events.kept` | `DESOLATE_EVENTS_KEPT` | on the Mac | 500 | the last events the host daemon holds for `desolate events --replay <n>` |
+| `doctor.ports` | `DESOLATE_DOCTOR_PORTS` | on the Mac | 3000, 3001, 4200, 5000, 5173, 5174, 8000, 8080, 8888 | the ports `desolate doctor` checks for a program of this Mac's holding them |
+| `root.landedCheckMinutes` | `DESOLATE_ROOT_LANDED_CHECK_MINUTES` | in the root VM | 15 | how often the root fetches a repository with a push still waiting to land, to see its pull request merged |
+| `proxy.auditMiB` | `DESOLATE_PROXY_AUDIT_MIB` | in the root VM | 1/256 of the root VM's disk | how much of each domain's audit log the root VM keeps: what `net log` and `net recommend` read |
+| `secrets.heldMiB` | `DESOLATE_SECRETS_HELD_MIB` | in the root VM | 256 | how much of one request or response a secrets proxy holds in memory to put a secret in or take one out; past it a body streams (a domain's own: `desolate domain <d> net hold`) |
+| `reviewer.packThreads` | `DESOLATE_REVIEWER_PACK_THREADS` | in the root VM | the root VM's CPUs | threads the reviewer packs a push with (git's `pack.threads`) |
+| `reviewer.packWindowMiB` | `DESOLATE_REVIEWER_PACK_WINDOW_MIB` | in the root VM | 256 | memory each packing thread may hold of the objects it compares (git's `pack.windowMemory`) |
+| `reviewer.bigFileMiB` | `DESOLATE_REVIEWER_BIG_FILE_MIB` | in the root VM | 64 | the size from which a file goes into a push's pack without a search for deltas (git's `core.bigFileThreshold`) |
+| `reviewer.keptPacksMiB` | `DESOLATE_REVIEWER_KEPT_PACKS_MIB` | in the root VM | a share of the root VM's disk | disk the packs the reviewer keeps for pushes may take in all: past it the oldest go, never one an account still names |
 
 The root's and the git VM's sizes are never set above what this Mac has; their disk is the
 base image's, 30 GiB.

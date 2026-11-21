@@ -196,11 +196,7 @@ const NOT_TUNABLES = new Set([
 ]);
 const TUNABLES_NOT_YET_MOVED = new Set([
   "DESOLATE_APPROVER", // limits 02 (host/approver.ts)
-  "DESOLATE_APPROVAL_WAIT_MS", // limits 03 (root/raw-push.ts)
-  "DESOLATE_LANDED_CHECK_MS", // limits 06 (root/rootd.ts)
   "DESOLATE_TEMPLATES", // limits 08 (host/workspaces.ts)
-  "DESOLATE_RAW_PORTS", // limits 09 (host/daemon.ts)
-  "DESOLATE_DOCTOR_PORTS", // limits 11 (host/bootstrap.ts)
   "DESOLATE_EDITOR_PORT", // limits 15 (shared/names.ts)
   "DESOLATE_BROWSER", // host/cli.ts, outside any ticket's lines: a setting to come
 ]);
@@ -212,6 +208,9 @@ const COMPUTED_READS = new Set([
   "host/settings.ts",
   "root/proxy/manage.ts",
   "host/workspaces.ts",
+  // Passes the reviewer's own settings, and nothing else of root's environment, on to the
+  // reviewer's process (limits 01): each name is a registered setting's variable.
+  "root/review-ask.ts",
 ]);
 
 /** Each `process.env` read of a DESOLATE_ name in `text`, and whether one is computed. */

@@ -608,10 +608,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
   // Not a check (nothing of desolate's is wrong): ports a dev server often uses that a program
   // on this Mac holds, where a workspace's server would not be forwarded (held-ports.ts).
   const { heldPorts, portsToCheck } = await import("./held-ports.ts");
-  const held = await heldPorts(
-    portsToCheck(process.env.DESOLATE_DOCTOR_PORTS),
-    path.join(paths.state, "daemon.pid"),
-  );
+  const held = await heldPorts(portsToCheck(), path.join(paths.state, "daemon.pid"));
   // Not a check either: where the whole text of the last failure is, of those a refusal
   // showed the end of (failures.ts).
   const last = lastFailure();

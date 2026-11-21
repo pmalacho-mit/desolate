@@ -58,7 +58,7 @@ export const DOCTOR_PORTS = define({
 
 /** The ports doctor looks at: the setting's (DOCTOR_PORTS). The argument is not read: the
  *  registry reads the variable (bootstrap.ts still passes it; it can stop). */
-export const portsToCheck = (_variable?: string): number[] => valueOf(DOCTOR_PORTS);
+export const portsToCheck = (): number[] => valueOf(DOCTOR_PORTS);
 
 declare namespace portsToCheck {
   /** the common ones by default; none, or a list, when asked */
