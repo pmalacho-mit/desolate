@@ -113,20 +113,19 @@ const lfsStore = (dir: string, oid: string) =>
 
 /** Bring a domain's branches into the root clone: `git fetch <domain>`, by the helper. It
  *  has no timer of its own (docs/v3/limits.md, R4): it reads a bundle from a share, which is
- *  work and not a wait on a peer, and it is quiet, so there is no silence to time either. It
- *  runs until it is done, or until `signal` says whoever asked for it went away. */
-export const fetchDomain = async (domain: string, repo: Repo, signal?: AbortSignal) => {
-  const fetch = () => git(clonePath(repo), ["fetch", "--quiet", "--prune", domain], { signal });
+ *  work and not a wait on a peer, and it is quiet, so there is no silence to time either. Nor
+ *  is it ended when whoever asked goes away: it writes the clone every domain of the
+ *  repository shares, and git killed mid-write leaves its ref locks behind, which stop every
+ *  fetch after it (found by the review of this change). It runs until it is done. */
+export const fetchDomain = async (domain: string, repo: Repo) => {
+  const fetch = () => git(clonePath(repo), ["fetch", "--quiet", "--prune", domain]);
   // rootd imports as a domain writes, and a review imports too: two at once in one clone
   // can meet on a ref's lock, and the later one tries again, a little later each time (the
   // lock is held for as long as one ref takes to write).
   let result = await fetch();
   for (
     let tries = 0;
-    result.code !== 0 &&
-    !signal?.aborted &&
-    /\.lock\b|cannot lock/i.test(result.stderr) &&
-    tries < 5;
+    result.code !== 0 && /\.lock\b|cannot lock/i.test(result.stderr) && tries < 5;
     tries++
   ) {
     await new Promise((resolve) => setTimeout(resolve, 300 + 300 * tries));
@@ -787,7 +786,7 @@ const targetOf = async (
     refuse(`${id} is not in the domain '${domain}'`, `desolate domain ${domain} show`);
   if (!isBranch(branch)) refuse(`'${String(branch)}' is not a branch`, `desolate offers ${domain}`);
   const record = recordOf(repo);
-  if (fetch) await fetchDomain(domain, repo, signal);
+  if (fetch) await fetchDomain(domain, repo);
   const clone = clonePath(repo);
   const commit = (
     await git(clone, ["rev-parse", "--verify", "--quiet", `refs/remotes/${domain}/${branch}`])
@@ -1083,8 +1082,11 @@ export const diffPage = async (
   if (cut < all.length) {
     const line = all.lastIndexOf(10, cut - 1);
     if (line >= 0) cut = line + 1;
-    // No line ends in the page: cut between two characters, not inside one.
-    else while (cut > 1 && (all[cut]! & 0xc0) === 0x80) cut -= 1;
+    // No line ends in the page: cut between two characters, not inside one. A character is
+    // at most 4 bytes, so at most 3 are given back: bytes that are not UTF-8 at all (a run of
+    // continuation bytes, which a branch can hold) are cut where the page ends, and a page is
+    // never one byte (found by the review of this change).
+    else for (let back = 0; back < 3 && cut > 1 && (all[cut]! & 0xc0) === 0x80; back++) cut -= 1;
   }
   return {
     text: all.subarray(0, cut).toString("utf8"),
@@ -1149,6 +1151,20 @@ declare namespace diffPage {
       { text: "éz\n"; from: 4; next: null; total: 8 }
     >,
   ];
+  /** bytes that are not UTF-8 (a run of continuation bytes, from a branch): at most three
+   *  are given back, so a page is never a byte (control: é above is given back one) */
+  export type NotUtf8 = Expect<
+    Invoke<
+      typeof diffPage,
+      [
+        bytes: [Invoke<typeof repeated, [text: "\u0080", count: 10]>],
+        from: 0,
+        most: { bytes: 6; lines: 9 },
+      ]
+    >,
+    "=",
+    { text: "\ufffd\ufffd\ufffd"; from: 0; next: 3; total: 10 }
+  >;
   /** a place past the end, from whoever asked: the empty page at the end */
   export type Past = Expect<
     Invoke<typeof diffPage, [bytes: ["+a\n"], from: 40]>,

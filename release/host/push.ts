@@ -304,6 +304,11 @@ export const review = async (
       const end: number = d.next === null ? text.length : text.lastIndexOf("\n") + 1;
       if (end > 0) out(printableLines(text.slice(0, end)).replace(/\n$/, ""));
       carried = text.slice(end);
+      // (One line longer than a page is printed as it comes, so nothing grows here.)
+      if (carried.length > d.text.length) {
+        out(printableLines(carried));
+        carried = "";
+      }
       at = d.next;
     }
   } else {

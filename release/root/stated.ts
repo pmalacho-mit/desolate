@@ -1490,7 +1490,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
   }
   // A review (root/offers.ts): what a branch would send, then more of its lists and its
   // diff, a page at a time, as the person reads. None has a timer here: git runs for as long
-  // as the page waits, and is ended when the page goes away (the review closed, the tab).
+  // as the page waits, and what only reads is ended when the page goes away (the review
+  // closed, the tab). The fetch a review starts with is not: it writes the shared clone.
   const reviews: Record<
     string,
     (
