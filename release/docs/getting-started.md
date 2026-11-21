@@ -248,6 +248,15 @@ and 443 ([what that means for registries and builds](reference.md)).
   Nothing reached GitHub yet: that is step 7, from the root, and only once you approve it.
   (`desolate offer` in the workspace does the same.)
 
+  **The error at the end is expected.** `git push` reports the branch as rejected, and exits
+  with an error, on purpose. If git counted it as pushed, it would record `origin/<branch>`,
+  and `git status`, the editor and every other tool would then say GitHub has a branch it
+  does not have. The editor's Publish Branch and Sync show a red "Can't push refs to remote.
+  Try running Pull first" dialog for the same reason, and the button still says Publish
+  Branch afterwards. Close the dialog: the branch was offered. Show Command Output has the
+  `offered ... at ...` line, and the dashboard lists the branch. Pushing again only offers it
+  again (the newer offer replaces the older one), so it does no harm, but there is no need.
+
 Every commit on every branch reaches the root within seconds, offered or not; offering says
 "this one is ready".
 
@@ -470,6 +479,10 @@ Then, on GitHub, delete the deploy keys titled `desolate read (host ...)` and
 - **Something in a workspace cannot reach a host**: that is usually the point. Its requests,
   and why each was refused, are in `desolate net log you--app`; `desolate domain you--app net
   allow <host>` lets one through.
+- **The editor says "Can't push refs to remote"** after Publish Branch or Sync, or `git push`
+  ends with `! [remote rejected] ... (offered to the root, not pushed ...)`: the branch was
+  offered, which is all a workspace can do. Review and push it from the dashboard. See
+  [step 5](#5-work-in-it).
 - **A push was refused at approval**, or timed out: a `git push` waits for you for as long as
   it runs (stop it, and it is off the approval page); `desolate push` waits two minutes for
   your answer at its prompt. Run it again.
