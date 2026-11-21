@@ -12,6 +12,7 @@ import type { Repo } from "../shared/names.ts";
 import { git } from "./git.ts";
 import { ask } from "./keyring-client.ts";
 import { clonePath, REVIEWER } from "./layout.ts";
+import { BUNDLE_REF } from "./reviewer-git.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Call,
@@ -114,19 +115,27 @@ export const submitForReview = async (repo: Repo, commit: string): Promise<strin
     try {
       await git(clone, ["update-ref", ref, commit]);
       const bundle = path.join(work, "review.bundle");
-      const made = await git(
-        clone,
-        [
-          "bundle",
-          "create",
-          "--quiet",
-          bundle,
-          ref,
-          "--remotes=origin",
-          ...have.map((id) => `^${id}`),
-        ],
-        { timeoutMs: 1_800_000 },
-      );
+      // The clone's view of the remote's branches that the reviewer lacks, of those it takes
+      // (BUNDLE_REF): one it does not take is left out, and the account says some branches
+      // were not sent, rather than the whole push going without one. On stdin: a remote of
+      // many branches is many.
+      const holds = new Set(have);
+      const remotes = (
+        await git(clone, [
+          "for-each-ref",
+          "--format=%(objectname) %(refname)",
+          "refs/remotes/origin",
+        ])
+      ).stdout
+        .split("\n")
+        .map((line) => line.split(" ") as [string, string])
+        .filter(([id, name]) => !holds.has(id) && BUNDLE_REF.test(name ?? ""))
+        .map(([, name]) => name);
+      // No deadline (R4): the first bundle of a repository is its whole history, and the
+      // push it is for waits for it.
+      const made = await git(clone, ["bundle", "create", "--quiet", bundle, "--stdin"], {
+        input: [ref, ...remotes, ...have.map((id) => `^${id}`)].join("\n") + "\n",
+      });
       if (made.code !== 0)
         return /empty bundle/i.test(made.stderr)
           ? null

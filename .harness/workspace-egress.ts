@@ -75,3 +75,14 @@ export const throughEgress = async (
     fs.rmSync(file, { force: true });
   }
 };
+
+/** `text` as the UTF-8 bytes the proxy writes (a string goes out of node as UTF-8). */
+export const utf8 = (text: string) => Buffer.from(text, "utf8");
+/** A refusal whose reason is `length` x's. */
+export const repeatedReason = (length: number) =>
+  Buffer.from(
+    `HTTP/1.1 403 Forbidden\r\nX-Desolate-Reason: ${"x".repeat(length)}\r\n\r\n`,
+    "latin1",
+  );
+/** `length` x's. */
+export const xs = (length: number) => "x".repeat(length);

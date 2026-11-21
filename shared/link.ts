@@ -109,10 +109,20 @@ declare namespace parseLink {
   >;
 }
 
+/** How long the handshake may take, at each end (R7: the peer is across a VM's boundary, and
+ *  a socket held open saying nothing would hold the link's place). It is a few short lines
+ *  on a local socket, before any work: ten seconds is a host or a VM badly loaded, not one
+ *  slow at something; past it, the caller says the link is not answering. */
+export const HANDSHAKE_MS = 10_000;
+
 /** The guest's end, on a connected socket: true once the host has proved itself and the
  *  guest has answered; the socket is then the link. false (and the socket destroyed) for
  *  anything else: the token is never sent. */
-export const open = async (socket: Socket, token: string, timeoutMs = 10_000): Promise<boolean> => {
+export const open = async (
+  socket: Socket,
+  token: string,
+  timeoutMs = HANDSHAKE_MS,
+): Promise<boolean> => {
   if (!TOKEN.test(token)) throw new Error("a link token is 32 hex characters");
   const guestNonce = randomBytes(16).toString("hex");
   socket.write(`${PREFIX}${guestNonce}\n`);
@@ -176,7 +186,7 @@ declare namespace open {
 export const accept = async (
   socket: Socket,
   token: string,
-  timeoutMs = 10_000,
+  timeoutMs = HANDSHAKE_MS,
 ): Promise<Buffer | null> => {
   const fail = () => {
     socket.destroy();

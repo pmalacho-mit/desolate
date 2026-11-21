@@ -11,7 +11,8 @@ import * as path from "node:path";
 import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
 const parseRepoName = (value: string) => (parseRepo(value) ? value : null);
 import { writeJson } from "../shared/json.ts";
-import { git as gitIn, repoOf, writeKnownHosts } from "./git.ts";
+import { git as gitIn, gitSaid, repoOf, writeKnownHosts } from "./git.ts";
+import * as limits from "../shared/limits.ts";
 import { bundleRefusal } from "./intake.ts";
 import { pushCommit } from "./raw-push.ts";
 import type { Forge } from "./git.ts";
@@ -55,10 +56,27 @@ import type {
 } from "../.harness/root-state.ts";
 
 type Log = (line: string) => void;
-export type Op = (args: Record<string, unknown>, log: Log) => Promise<unknown>;
+/** `signal`: whoever asked went away (rootctl's service: the host closed the connection). */
+export type Op = (
+  args: Record<string, unknown>,
+  log: Log,
+  signal?: AbortSignal,
+) => Promise<unknown>;
 
-/** The largest LFS object a push may carry: what the host takes from the git VM. */
-const LFS_MOST = 5 * 1024 ** 3;
+/** A .gitrepo, read to find which repository and branch a vendored dependency names: a few
+ *  lines of text (git-subrepo writes seven). Its first 4 KiB are read and the rest is not
+ *  looked at (R7: a hard bound on the commit's content, which is not the root's): the two
+ *  lines taken from it are at its top. */
+const GITREPO_READ = 4096;
+
+/** How many entries of the egress log `desolate net log` asks for when it names none: the
+ *  newest, a terminal's screenful and more. `last` asks for another number. */
+const NET_LOG_LAST = 100;
+
+/** How long doctor waits on each local `sudo -n` it asks (P6: asked, not assumed): sudo with
+ *  -n never prompts, and answers in milliseconds; ten seconds is a system in trouble. One
+ *  that did not answer is never read as the answer a check hopes for. */
+const ASKED_MS = 10_000;
 
 export const ops: Record<string, Op> = {
   async ping() {
@@ -95,8 +113,8 @@ export const ops: Record<string, Op> = {
       anonymous: args.anonymous === true,
     });
   },
-  async "repo.fetch"(args, log) {
-    return repos.fetch(repoOf(args.repo), log);
+  async "repo.fetch"(args, log, signal) {
+    return repos.fetch(repoOf(args.repo), log, signal);
   },
   async "repo.list"() {
     return repos.list();
@@ -231,7 +249,10 @@ export const ops: Record<string, Op> = {
   async "net.log"(args) {
     return proxy.auditLog({
       domain: typeof args.domain === "string" ? args.domain : undefined,
-      last: Number(args.last) || 100,
+      last:
+        Number.isInteger(Number(args.last)) && Number(args.last) > 0
+          ? Number(args.last)
+          : NET_LOG_LAST,
     });
   },
 
@@ -315,11 +336,25 @@ export const ops: Record<string, Op> = {
       .split("\0")
       .filter(Boolean);
     const out = [];
-    const dirs = records.map((record) => record.slice(0, -"/.gitrepo".length));
     // A file is the innermost dependency's: a subrepo vendored inside another is its own.
-    const ownerOf = (file: string) =>
-      dirs.filter((d) => file.startsWith(`${d}/`)).sort((a, b) => b.length - a.length)[0];
-    for (const record of records.slice(0, 200)) {
+    // Each file's owner is found once, by its own directories, innermost first: the lists
+    // are a commit's, and a commit can hold many thousands of each (a lookup of every file
+    // against every dependency held the root's service for hours).
+    const dirs = new Set(records.map((record) => record.slice(0, -"/.gitrepo".length)));
+    const filesOf = new Map<string, string[]>();
+    for (const file of changed) {
+      const parts = file.split("/");
+      for (let i = parts.length - 1; i > 0; i--) {
+        const dir = parts.slice(0, i).join("/");
+        if (!dirs.has(dir)) continue;
+        if (!filesOf.has(dir)) filesOf.set(dir, []);
+        if (file !== `${dir}/.gitrepo`) filesOf.get(dir)!.push(file);
+        break;
+      }
+    }
+    // Every dependency, and every file of each: what the host shows is a count of them, and
+    // a count of a cut list is not one (R2). (Each list is a commit's, bounded by its tree.)
+    for (const record of records) {
       const dir = record.slice(0, -"/.gitrepo".length);
       // A path is the commit's to name, and it is printed (desolate suede changed, the
       // recipe): one a terminal would act on, or that hides what it is, is not a dependency
@@ -327,7 +362,7 @@ export const ops: Record<string, Op> = {
       if (printable(dir, 400) !== dir) continue;
       const text = (await gitIn(clone, ["cat-file", "blob", `${to}:${record}`])).stdout.slice(
         0,
-        4096,
+        GITREPO_READ,
       );
       const remote = /^\s*remote\s*=\s*(\S+)/m.exec(text)?.[1] ?? "";
       const branch = /^\s*branch\s*=\s*(\S+)/m.exec(text)?.[1] ?? "release";
@@ -341,7 +376,7 @@ export const ops: Record<string, Op> = {
         dir,
         remote: id,
         branch: isBranch(branch) ? branch : "release",
-        files: changed.filter((f) => ownerOf(f) === dir && f !== record).slice(0, 2000),
+        files: filesOf.get(dir) ?? [],
       });
     }
     return out;
@@ -418,7 +453,7 @@ export const ops: Record<string, Op> = {
       if (fetched.code !== 0)
         return {
           pushed: false,
-          error: `the root could not take the push in: ${fetched.stderr.trim().split("\n").pop() ?? ""}`,
+          error: `the root could not take the push in: ${gitSaid(fetched)}`,
           said,
         };
       try {
@@ -439,7 +474,22 @@ export const ops: Record<string, Op> = {
           const from = path.join(GIT_IN, `${file.slice(0, 16)}.lfs`, oid);
           const to = path.join(gitDir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
           fs.mkdirSync(path.dirname(to), { recursive: true });
-          const why = takeHashed(from, to, oid, LFS_MOST);
+          // No larger than the forge stores (the git VM's out-box on the host is checked
+          // against the same bound), said as that bound.
+          const size = fs.lstatSync(from, { throwIfNoEntry: false })?.size ?? 0;
+          if (size > limits.FORGE.lfsObjectBytes)
+            return {
+              pushed: false,
+              error: limits.over(
+                `the LFS object ${oid.slice(0, 12)}`,
+                limits.FORGE.lfsObjectBytes,
+                size,
+                "bytes",
+                "the forge stores",
+              ),
+              said,
+            };
+          const why = takeHashed(from, to, oid, limits.FORGE.lfsObjectBytes);
           if (why)
             return { pushed: false, error: `the LFS object ${oid.slice(0, 12)}: ${why}`, said };
         }
@@ -459,7 +509,7 @@ export const ops: Record<string, Op> = {
           if (delivered.code !== 0)
             return {
               pushed: false,
-              error: `not delivered: ${delivered.stderr.trim().split("\n").pop() ?? ""}`,
+              error: `not delivered: ${gitSaid(delivered)}`,
               said,
             };
           said.push(
@@ -560,13 +610,16 @@ export const ops: Record<string, Op> = {
       "desolate bootstrap",
     );
     // Asked, not assumed (P6): this user runs everything here that reads a domain's data.
-    const sudo = spawnSync("sudo", ["-n", "true"], { stdio: "ignore", timeout: 10_000 });
+    // (A sudo that did not answer refused nothing: it is not taken for a refusal.)
+    const sudo = spawnSync("sudo", ["-n", "true"], { stdio: "ignore", timeout: ASKED_MS });
     add(
       "root: the root's own user cannot become root",
-      sudo.status !== 0,
-      sudo.status !== 0
-        ? "sudo refuses it"
-        : "`sudo -n true` succeeds: a bug in a proxy or in git would reach the write keys",
+      sudo.status !== null && sudo.status !== 0,
+      sudo.status === null
+        ? `\`sudo -n true\` did not answer in ${ASKED_MS / 1000} s: not known to be refused`
+        : sudo.status !== 0
+          ? "sudo refuses it"
+          : "`sudo -n true` succeeds: a bug in a proxy or in git would reach the write keys",
       "desolate bootstrap (root/start.sh removes the rule)",
     );
     // What root (start.sh) and the keyring run: node, and every directory on root's PATH.
@@ -617,7 +670,7 @@ export const ops: Record<string, Op> = {
     for (const member of members) {
       const groups = spawnSync("sudo", ["-n", "-u", member, "id", "-G"], {
         encoding: "utf8",
-        timeout: 10_000,
+        timeout: ASKED_MS,
       });
       if (groups.status !== 0) {
         wrong.push(`${member}: the root's user cannot start a program as it`);
@@ -630,24 +683,24 @@ export const ops: Record<string, Op> = {
         .filter((group) => group !== own && mine.has(group));
       if (shared.length > 0)
         wrong.push(`${member} shares the root's user's group(s) ${shared.join(", ")}`);
-      if (
-        spawnSync("sudo", ["-n", "-u", member, "test", "-x", "/desolate/root"], { timeout: 10_000 })
-          .status === 0
-      )
-        wrong.push(`${member} can reach the shares`);
+      // Whether `member` can do what `test` asks; one that did not answer is no "no", and is
+      // said as that.
+      const can = (...test: string[]) => {
+        const asked = spawnSync("sudo", ["-n", "-u", member, "test", ...test], {
+          timeout: ASKED_MS,
+        });
+        if (asked.status === null)
+          wrong.push(
+            `${member}: \`test ${test.join(" ")}\` did not answer in ${ASKED_MS / 1000} s`,
+          );
+        return asked.status === 0;
+      };
+      if (can("-x", "/desolate/root")) wrong.push(`${member} can reach the shares`);
       for (const other of domainDirs) {
         if (proxyUserOf(other) === member) continue;
         if (
-          spawnSync(
-            "sudo",
-            ["-n", "-u", member, "test", "-r", `${ROOT.proxies}/domains/${other}`],
-            { timeout: 10_000 },
-          ).status === 0 ||
-          spawnSync(
-            "sudo",
-            ["-n", "-u", member, "test", "-x", `${ROOT.proxies}/domains/${other}`],
-            { timeout: 10_000 },
-          ).status === 0
+          can("-r", `${ROOT.proxies}/domains/${other}`) ||
+          can("-x", `${ROOT.proxies}/domains/${other}`)
         )
           wrong.push(`${member} can reach the domain ${other}'s directory`);
       }

@@ -17,6 +17,9 @@ const post = async (path, body) => {
   return value;
 };
 const csv = (text) => text.split(",").map((part) => part.trim()).filter(Boolean);
+// The most a .env may be, in bytes: host/env-import.ts's ENV_MAX, which the Mac checks again.
+// A copy, since a page cannot import the TypeScript: T1 (secrets-page.test.ts) checks they agree.
+const ENV_MAX = 65536;
 
 const show = (secrets) => {
   const list = $("list");
@@ -144,7 +147,7 @@ $("plan").addEventListener("click", async () => {
 $("env-file").addEventListener("change", async () => {
   const file = $("env-file").files[0];
   if (!file) return;
-  if (file.size > 65536) { $("plan-said").textContent = "that file is over 64 KiB: not a .env"; return; }
+  if (file.size > ENV_MAX) { $("plan-said").textContent = `that file is ${file.size} bytes, over the ${ENV_MAX} (64 KiB) a .env may be: not a .env`; return; }
   $("env").value = await file.text();
   $("plan").click();
 });

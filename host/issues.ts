@@ -14,13 +14,16 @@ import * as path from "node:path";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { digestOf, draftOf, issueUrl } from "../shared/issues.ts";
 import { readJson, writeJson } from "../shared/json.ts";
+import { withLock } from "../shared/lock.ts";
 import { isSlug } from "../shared/names.ts";
-import type { Issue } from "../shared/issues.ts";
+import type { Draft, Issue } from "../shared/issues.ts";
 import { printable, printableLines } from "../shared/text.ts";
+import { because } from "./failures.ts";
 import { paths } from "./paths.ts";
-import { rootctl } from "./stack.ts";
+import { rootctl, rootctlBrief } from "./stack.ts";
 import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome } from "../.harness/home.ts";
+import type { publishLeftByACrash, publishUnderWay, refusedAs } from "../.harness/host-issues.ts";
 import type { errorOf, fakeGh, ghCalls } from "../.harness/host-gh.ts";
 import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
@@ -36,38 +39,18 @@ export const publish = async (issue: Issue): Promise<string> => {
   // Once, whatever the page, the terminal or a retry after a failure that was not one: the
   // text's digest, recorded before gh runs and kept with its page after (audit, 2026-11-16:
   // a publish reported failed invited a second issue). One publish at a time, under one lock
-  // (a lock a crash left is taken back after ten minutes).
+  // held by the process publishing (shared/lock.ts): one that crashed leaves it to the next
+  // at once, and one still waiting on gh keeps it however long gh takes.
+  return withLock(path.join(paths.state, "issues-publish.lock"), () => publishOnce(draft, issue), {
+    wait: false,
+    busy: (holder) =>
+      `not published: another issue is being published right now (process ${holder.pid}, since ${holder.since}), from another page or terminal: try again in a moment`,
+  });
+};
+
+const publishOnce = async (draft: Draft, issue: Issue): Promise<string> => {
   const digest = digestOf(draft);
   const record = path.join(paths.state, "issues-published.json");
-  const lock = path.join(paths.state, "issues-publish.lock");
-  try {
-    fs.mkdirSync(lock);
-  } catch {
-    if (Date.now() - fs.statSync(lock).mtimeMs < 10 * 60_000)
-      throw new Error(
-        "not published: another issue is being published right now, from another page or terminal: try again in a moment",
-      );
-    // A stale lock is taken by renaming it aside, which only one of two can do (third review:
-    // removing it then making it let both through).
-    const aside = `${lock}.stale-${process.pid}`;
-    try {
-      fs.renameSync(lock, aside);
-    } catch {
-      throw new Error(
-        "not published: another issue is being published right now: try again in a moment",
-      );
-    }
-    // What was renamed may be a fresh lock, made by another that took the stale one a moment
-    // before (final review): put back, and this one waits.
-    if (Date.now() - fs.statSync(aside).mtimeMs < 10 * 60_000) {
-      fs.renameSync(aside, lock);
-      throw new Error(
-        "not published: another issue is being published right now: try again in a moment",
-      );
-    }
-    fs.rmSync(aside, { recursive: true, force: true });
-    fs.mkdirSync(lock);
-  }
   const forget = () => {
     const { [digest]: _, ...rest } = readJson<Record<string, string>>(record, {});
     writeJson(record, rest);
@@ -79,15 +62,11 @@ export const publish = async (issue: Issue): Promise<string> => {
       // Published already: the root is told again (it may not have taken it), and that is all.
       const page = issueUrl(draft.repo, known);
       if (page) {
-        await rootctl(
-          "issue.done",
-          { id: issue.id, url: page, digest },
-          { quiet: true, timeoutMs: 30_000 },
-        ).catch(() => {});
+        await rootctlBrief("issue.done", { id: issue.id, url: page, digest }).catch(() => {});
         return page;
       }
       throw new Refusal(
-        `not published again: an earlier attempt at this exact issue did not say how it ended (${printable(known, 120)})`,
+        `not published again: an earlier attempt at this exact issue did not say how it ended (${printable(known)})`,
         `look for it on GitHub (${draft.repo}); if it is not there, remove its line from ${record}, then publish again`,
       );
     }
@@ -129,7 +108,7 @@ export const publish = async (issue: Issue): Promise<string> => {
     if (ran.status !== 0) {
       forget();
       throw new Error(
-        `gh did not create it: ${printable((ran.stderr || ran.stdout || "").trim(), 400)}${/label/i.test(ran.stderr ?? "") ? " (a label must exist in the repository first)" : ""}`,
+        `${because("gh did not create it", "gh-issue-create", ran.stderr || ran.stdout || "")}${/label/i.test(ran.stderr ?? "") ? " (a label must exist in the repository first)" : ""}`,
       );
     }
     const where = issueUrl(draft.repo, (ran.stdout ?? "").trim().split("\n").pop());
@@ -141,19 +120,14 @@ export const publish = async (issue: Issue): Promise<string> => {
       throw new Error(
         `gh created it, but answered with no page of ${draft.repo}'s: look on GitHub (it will not be published again)`,
       );
-    await rootctl(
-      "issue.done",
-      { id: issue.id, url: where, digest },
-      { quiet: true, timeoutMs: 30_000 },
-    ).catch((error: Error) => {
+    await rootctlBrief("issue.done", { id: issue.id, url: where, digest }).catch((error: Error) => {
       throw new Error(
-        `published as ${where}, but the root did not take it: ${printable(error.message, 200)} (publishing it again only tells the root again)`,
+        `published as ${where}, but the root did not take it: ${printable(error.message)} (publishing it again only tells the root again)`,
       );
     });
     return where;
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
-    fs.rmSync(lock, { recursive: true, force: true });
   }
 };
 declare namespace publish {
@@ -215,6 +189,40 @@ declare namespace publish {
       Invoke<typeof rootAnswers, [answers: { "issue.done": {} }]>,
       Invoke<typeof fakeGh, [stdout: "https://github.com/acme/web/issues/7\n", status: 0]>,
       Invoke<typeof publish, [issue: Issue]>,
+    ],
+    [
+      Expect<Invoke<typeof publish, [issue: Issue]>, "=", "https://github.com/acme/web/issues/7">,
+      Expect<Invoke<typeof ghCalls>["length"], "=", 1>,
+    ]
+  >;
+  /** one at a time: while another publish is under way (its process alive, however long gh
+   *  takes it) this one is refused, and gh is not run */
+  export type OneAtATime = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "issue.done": {} }]>,
+      Invoke<typeof fakeGh, [stdout: "https://github.com/acme/web/issues/7\n", status: 0]>,
+      Invoke<typeof publishUnderWay>,
+    ],
+    [
+      Expect<
+        Invoke<typeof refusedAs, [publish: typeof publish, issue: Issue]>,
+        "=",
+        "not published: another issue is being published right now (process <pid>, since 2026-11-21T08:00:00.000Z), from another page or terminal: try again in a moment"
+      >,
+      Expect<Invoke<typeof ghCalls>["length"], "=", 0>,
+    ]
+  >;
+  /** the control: a publish that crashed holding the lock holds nothing, at once (not after
+   *  ten minutes, as when the lock was judged by its age) */
+  export type AfterACrash = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "issue.done": {} }]>,
+      Invoke<typeof fakeGh, [stdout: "https://github.com/acme/web/issues/7\n", status: 0]>,
+      Invoke<typeof publishLeftByACrash>,
     ],
     [
       Expect<Invoke<typeof publish, [issue: Issue]>, "=", "https://github.com/acme/web/issues/7">,
@@ -308,11 +316,10 @@ declare namespace publish {
 }
 
 export const refuseIssue = async (issue: Issue) => {
-  await rootctl(
-    "issue.done",
-    { id: issue.id, refused: "not published: you said not now, on the Mac" },
-    { quiet: true, timeoutMs: 30_000 },
-  );
+  await rootctlBrief("issue.done", {
+    id: issue.id,
+    refused: "not published: you said not now, on the Mac",
+  });
 };
 
 const waiting = async () =>

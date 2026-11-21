@@ -45,7 +45,12 @@ import { carriesCredential, cookieValue, signedInPage } from "../shared/page-key
 import { paths, RELEASE_DIR } from "./paths.ts";
 import { signins } from "./signin.ts";
 import type { SecretOps } from "./domains.ts";
+import { ENV_MAX } from "./env-import.ts";
 import type { Choice } from "./env-import.ts";
+import { over } from "../shared/limits.ts";
+import { printable } from "../shared/text.ts";
+import type { Account, AccountLine, AccountRequest, DiffPage } from "../shared/review-account.ts";
+import type { Listed } from "../shared/listed.ts";
 import type { PlanRow } from "../shared/envfile.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
@@ -53,6 +58,7 @@ import type { mint } from "./signin.ts";
 import type {
   approved,
   ask,
+  askedCount,
   quiet,
   secretsSet,
   waiting,
@@ -97,6 +103,13 @@ const cookieName = (token: string) =>
 export const pushToken = (token: string, message: string) =>
   createHmac("sha256", Buffer.from(token, "hex")).update(`approve\n${message}`).digest("hex");
 const digestOf = (message: string) => createHash("sha256").update(message).digest("hex");
+/** The token over the very account the page was given for a push's text: an approval names
+ *  it, so what is signed is that account and no other, even if the host has since been given
+ *  another for the same text (the push left the list and came back, and was asked again). */
+export const shownToken = (token: string, message: string, account: unknown) =>
+  createHmac("sha256", Buffer.from(token, "hex"))
+    .update(`account\n${digestOf(message)}\n${digestOf(JSON.stringify(account))}`)
+    .digest("hex");
 /** An issue's own token: over its id and every word the page showed (shared/issues.ts). An
  *  issue the root lists with other words by the time of the click no longer matches. */
 export const issueToken = (token: string, issue: Issue) =>
@@ -175,52 +188,23 @@ const STATIC: Record<string, [string, string]> = {
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],
 };
 
-/** What a push would send, as the reviewer in the root computed it: shown as data. */
-export type Summary = {
-  ok: boolean;
-  error?: string;
-  waiting?: boolean;
-  warnings?: string[];
-  commits?: { commit: string; subject: string; author: string }[];
-  more?: number;
-  files?: { path: string; added: number; removed: number; binary?: boolean; sensitive?: boolean }[];
-  moreFiles?: number;
-  base?: string | null;
-  remote?: string | null;
-  fastForward?: boolean | null;
-  /** The commit of this branch the remote's is a squash of (root/reviewer.ts). */
-  squashedFrom?: string;
-  lfs?: number;
-  diff?: string;
-  diffCut?: boolean;
-  /** What the push sends (root/reviewer.ts, `prepare`): put in the text the person signs. */
-  sends?: { pack: string; size: number; lfs: string[] };
-  /** The same push squashed into one commit, when it has two or more. */
-  squash?: {
-    commit: string;
-    parent: string | null;
-    count: number;
-    message: string;
-    author?: string;
-    committer?: string;
-    dates?: string;
-    sends: { pack: string; size: number; lfs: string[] };
-  };
-  /** Files a commit changes that the net change does not list: changed, then put back. */
-  between?: { path: string; sensitive?: boolean }[];
-  moreBetween?: number;
-  eachDiff?: string;
-  eachDiffCut?: boolean;
-  eachDiffWhy?: string;
-};
+/** What the page is given of desolate's reviewer's account of a push (shared/review-account.ts):
+ *  all of it but its key, which names it to the reviewer and is the host's to keep. */
+export type Shown = Omit<Account, "key">;
+/** Where desolate's reviewer is with a push, as the page is told: still working (what it said
+ *  it is doing, and for how long), its account, or why it has none. */
+export type Review =
+  | { working: { phase: string; done?: number; of?: number; seconds: number } }
+  | { account: Shown }
+  | { error: string };
 export type Waiting = { message: string; at: string };
-const SUMMARY = { deadlineMs: 90_000, keepMs: 120_000 } as const;
 export type Backend = {
   /** Pushes waiting for a person, as the root lists them (the root's word: only the
    *  message is used, and it is parsed here). */
   pending: () => Promise<Waiting[]>;
-  /** What the push would send, from the reviewer. */
-  summary: (push: PushApproval) => Promise<Summary>;
+  /** A question to desolate's reviewer, and its answer as it streams: what it is doing, then
+   *  the one answer (shared/review-account.ts). It works for as long as `signal` holds. */
+  summary: (request: AccountRequest, signal: AbortSignal) => AsyncIterable<AccountLine>;
   /** Sign the approval text (the challenge with what the reviewer says the push sends:
    *  shared/approval.ts, signedFor) and give the signature to the keyring. */
   approve: (signed: string) => Promise<void>;
@@ -235,8 +219,6 @@ export type Backend = {
   refuseIssue: (issue: Issue) => Promise<void>;
   /** A domain's secrets, for /secrets (domains.ts secretOps): absent, the page has none. */
   secrets?: SecretOps;
-  /** A .env into a domain's secrets (env-import.ts), for /secrets's Import: the plan (no
-   *  value in it), and the import, which answers the .env with names in place of values. */
   /** Every editor's default settings (editor-defaults.ts), for /editor-defaults. */
   editorDefaults?: {
     get: () => Promise<Record<string, unknown>>;
@@ -244,6 +226,8 @@ export type Backend = {
       settings: Record<string, unknown>,
     ) => Promise<{ settings: Record<string, unknown>; running: number; applied: number }>;
   };
+  /** A .env into a domain's secrets (env-import.ts), for /secrets's Import: the plan (no
+   *  value in it), and the import, which answers the .env with names in place of values. */
   envImport?: {
     plan: (domain: string, text: string) => Promise<PlanRow[]>;
     apply: (
@@ -254,47 +238,253 @@ export type Backend = {
   };
 };
 
-const readBody = (req: IncomingMessage, limit = 4096): Promise<string | null> =>
+// What a request's body may be, in bytes. Each is a hard bound against whatever can reach this
+// port (R7): the page's own script sends far less, and a body over it is refused as that.
+/** A click (/approve, /refuse, /issue): a nonce, a token, a commit and a word or two. */
+const CLICK_BYTES = 4096;
+/** A secret's value, in bytes: one line, as the terminal takes one (readSecretLine). */
+const SECRET_BYTES = 64 * 1024;
+/** What JSON makes of one byte at worst: `\u0000`. */
+const ESCAPED = 6;
+/** Room beside a value or a .env for the rest of the request (a name, its hosts, choices). */
+const BESIDE = 16 * 1024;
+/** /secrets/set and the editor defaults: a value (or the defaults, of the same 64 KiB:
+ *  editor-defaults.ts), JSON-escaped, and the rest. */
+const SECRET_BODY_BYTES = ESCAPED * SECRET_BYTES + BESIDE;
+/** /secrets/import/: a whole .env (env-import.ts, ENV_MAX), JSON-escaped, and the rest. */
+const IMPORT_BODY_BYTES = ESCAPED * ENV_MAX + BESIDE;
+
+/** A request's body, as text; or, past `limit` bytes, the sentence that says so (the rest is
+ *  not read); null if the request failed. */
+const readBody = (req: IncomingMessage, limit: number): Promise<string | { over: string } | null> =>
   new Promise((resolve) => {
-    let body = "";
+    const chunks: Buffer[] = [];
+    let size = 0;
     req.on("data", (chunk: Buffer) => {
-      body += chunk.toString("utf8");
-      if (body.length > limit) {
-        resolve(null);
-        req.destroy();
+      size += chunk.length;
+      if (size > limit) {
+        // Read no more of it: the refusal is answered, and then the connection is closed.
+        req.pause();
+        req.removeAllListeners("data");
+        resolve({ over: over("the request", limit, size, "bytes", "this page takes") });
+        return;
       }
+      chunks.push(chunk);
     });
-    req.on("end", () => resolve(body));
+    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     req.on("error", () => resolve(null));
   });
+/** A request's body as JSON: the object, or the answer that refuses it (too large, not JSON). */
+const jsonBody = async (
+  req: IncomingMessage,
+  res: ServerResponse,
+  limit: number,
+): Promise<{ asked: Record<string, unknown> } | { status: number; error: string }> => {
+  const body = await readBody(req, limit);
+  if (body !== null && typeof body === "object") {
+    res.once("finish", () => req.destroy());
+    return { status: 413, error: body.over };
+  }
+  try {
+    const asked: unknown = JSON.parse(body ?? "");
+    if (typeof asked === "object" && asked !== null && !Array.isArray(asked))
+      return { asked: asked as Record<string, unknown> };
+  } catch {
+    /* said below */
+  }
+  return { status: 400, error: "not JSON" };
+};
+
+const isSends = (v: unknown): v is Account["sends"] => {
+  const sends = v as Partial<Account["sends"]> | null;
+  return (
+    typeof sends === "object" &&
+    sends !== null &&
+    typeof sends.pack === "string" &&
+    /^[0-9a-f]{64}$/.test(sends.pack) &&
+    Number.isSafeInteger(sends.size) &&
+    Array.isArray(sends.lfs) &&
+    sends.lfs.every((entry) => typeof entry === "string")
+  );
+};
+/** Each entry of a list, as the page and the terminal read it: its texts are text, its
+ *  counts are counts. (shared/review-account.ts checks a list's shape; its entries are their
+ *  reader's to check.) */
+const ENTRY: Record<"commits" | "files" | "between", (item: Record<string, unknown>) => boolean> = {
+  commits: (c) =>
+    typeof c.commit === "string" && typeof c.subject === "string" && typeof c.author === "string",
+  files: (f) =>
+    typeof f.path === "string" && Number.isSafeInteger(f.added) && Number.isSafeInteger(f.removed),
+  between: (f) => typeof f.path === "string",
+};
+export const isListed = (v: unknown, list: "commits" | "files" | "between"): boolean => {
+  const listed = v as Partial<Listed<Record<string, unknown>>> | null;
+  return (
+    typeof listed === "object" &&
+    listed !== null &&
+    Array.isArray(listed.items) &&
+    listed.items.every((item) => typeof item === "object" && item !== null && ENTRY[list](item)) &&
+    Number.isSafeInteger(listed.total) &&
+    Number.isSafeInteger(listed.from)
+  );
+};
+/** The reviewer's account, if it is one in every part that is signed or counted: what it
+ *  sends (and its squash's), its lists, its warnings. Else why not, as the reviewer's error.
+ *  (The reviewer is root's; this is what makes a mistake in it a refusal, never a signature
+ *  over a pack named by nothing.) The terminal's prompt reads it so too (push.ts). */
+export const checkedAccount = (value: unknown): { account: Account } | { error: string } => {
+  const a = value as Partial<Account> | null;
+  const squash = a?.squash;
+  if (
+    typeof a !== "object" ||
+    a === null ||
+    typeof a.key !== "string" ||
+    !Array.isArray(a.warnings) ||
+    !a.warnings.every((w) => typeof w === "string") ||
+    !isListed(a.commits, "commits") ||
+    !isListed(a.files, "files") ||
+    !isListed(a.between, "between") ||
+    (a.base !== null && typeof a.base !== "string") ||
+    !isSends(a.sends) ||
+    ![true, false, null].includes(a.fastForward as boolean | null) ||
+    (squash !== undefined &&
+      (typeof squash !== "object" ||
+        squash === null ||
+        typeof squash.commit !== "string" ||
+        !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(squash.commit) ||
+        typeof squash.message !== "string" ||
+        (squash.parent !== null && typeof squash.parent !== "string") ||
+        ![squash.author, squash.committer, squash.dates].every((t) => typeof t === "string") ||
+        !isSends(squash.sends)))
+  )
+    return { error: "the reviewer's account of the push is not one desolate can read" };
+  return { account: a as Account };
+};
+
+// How much of the reviewer the page asks for. Hard bounds against the root's ordinary user,
+// which lists the pushes waiting and can list as many as it likes (R7): each push listed is a
+// question to the reviewer, a process in the root and on this Mac, and an account held here.
+/** Questions answered at once: the rest wait their turn, and say so. A person reads one push
+ *  at a time; four is room for a push from each of a few places at once. */
+const ASKING_MOST = 4;
+/** Pushes the page keeps an account of: past it, a push is listed and said to wait. Far more
+ *  than a person has waiting; at the account's own bound (8 MiB a line) it is 256 MiB. */
+const LISTED_MOST = 32;
+
+/** The one answer to a question asked of the reviewer, past what it says while it works. */
+const answerOf = async (lines: AsyncIterable<AccountLine>): Promise<AccountLine | null> => {
+  for await (const line of lines) if (!("progress" in line)) return line;
+  return null;
+};
+/** A signal that fires with `signal`, or when this answer's connection closes first (whoever
+ *  asked went away): a question to the reviewer is ended with either. */
+const whileAsked = (res: ServerResponse, signal: AbortSignal): AbortSignal => {
+  const gone = new AbortController();
+  res.once("close", () => gone.abort());
+  return AbortSignal.any([signal, gone.signal]);
+};
 
 export const handler = (backend: Backend, log: (line: string) => void) => {
-  // What the reviewer said of each text, by the text's own digest: a text listed again under
-  // the same nonce is another push, with a summary of its own. Asked once per text, in the
-  // background, with a deadline: a slow reviewer never holds up the list.
-  const summaries = new Map<string, { at: number; value: Summary | null; listed?: boolean }>();
-  const summaryOf = (push: PushApproval, message: string): Summary => {
-    const key = digestOf(message);
-    for (const [k, entry] of summaries)
-      if (Date.now() - entry.at > SUMMARY.keepMs && entry.value) summaries.delete(k);
-    const known = summaries.get(key);
-    if (known)
-      return known.value ?? { ok: false, waiting: true, error: "the reviewer is working it out" };
-    const entry: { at: number; value: Summary | null } = { at: Date.now(), value: null };
-    summaries.set(key, entry);
-    const deadline = new Promise<Summary>((resolve) =>
-      setTimeout(
-        () => resolve({ ok: false, error: "the reviewer did not answer in time" }),
-        SUMMARY.deadlineMs,
-      ).unref(),
+  // What the reviewer says of each text, by the text's own digest: a text listed again under
+  // the same nonce is another push, with an account of its own. Asked once per text, in the
+  // background, for as long as the text is listed (R4: no deadline here; the person waits, or
+  // refuses). When the root no longer lists it, the question is dropped, and the reviewer
+  // stops; until then, its answer is kept: the page signs only what it was given to show.
+  type Asking = {
+    stop: AbortController;
+    since: number;
+    progress: { phase: string; done?: number; of?: number } | null;
+    answer: { account: Account } | { error: string } | null;
+    /** The page was given the answer (/pending): from here it may be signed. */
+    listed: boolean;
+  };
+  const reviews = new Map<string, Asking>();
+  /** Questions not yet asked, first come first asked, and how many are being answered. */
+  const queued: (() => void)[] = [];
+  let answering = 0;
+  const next = () => {
+    while (answering < ASKING_MOST && queued.length) queued.shift()!();
+  };
+  const askingOf = (push: PushApproval, message: string): Asking => {
+    const known = reviews.get(digestOf(message));
+    if (known) return known;
+    const asking: Asking = {
+      stop: new AbortController(),
+      since: Date.now(),
+      progress: { phase: "waiting for another push's account" },
+      answer: null,
+      listed: false,
+    };
+    reviews.set(digestOf(message), asking);
+    const request = {
+      op: "account" as const,
+      repo: push.repo,
+      branch: push.branch,
+      commit: push.commit,
+      onto: push.onto,
+    };
+    const ask = async () => {
+      if (asking.stop.signal.aborted) return;
+      answering += 1;
+      asking.progress = null;
+      try {
+        for await (const line of backend.summary(request, asking.stop.signal)) {
+          if ("progress" in line) asking.progress = line.progress;
+          else
+            return void (asking.answer =
+              "account" in line
+                ? checkedAccount(line.account)
+                : "error" in line
+                  ? { error: line.error }
+                  : { error: "the reviewer answered another question than the one asked" });
+        }
+        if (!asking.stop.signal.aborted) asking.answer = { error: "the reviewer gave no answer" };
+      } catch (error) {
+        asking.answer = { error: (error as Error).message };
+      } finally {
+        answering -= 1;
+        next();
+      }
+    };
+    queued.push(() => void ask());
+    next();
+    return asking;
+  };
+  /** What the page is told of a push's account, now. */
+  const reviewOf = (asking: Asking): Review => {
+    if (!asking.answer)
+      return {
+        working: {
+          ...(asking.progress ?? { phase: "starting" }),
+          seconds: Math.floor((Date.now() - asking.since) / 1000),
+        },
+      };
+    if ("error" in asking.answer) return { error: asking.answer.error };
+    const { key: _key, ...shown } = asking.answer.account;
+    return { account: shown };
+  };
+  /** The push a page names (its nonce and the token it was given for its very text), as the
+   *  root lists it now, with the reviewer's account the page was given; or the answer that
+   *  refuses the request. */
+  const shownPush = async (
+    nonce: string,
+    given: string,
+    token: string,
+  ): Promise<{ account: Account; asking: Asking } | { status: number; error: string }> => {
+    if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given))
+      return { status: 403, error: "not a push this page showed" };
+    const waiting = (await backend.pending().catch(() => [] as Waiting[])).find(
+      (w) => parseApproval(w.message)?.nonce === nonce,
     );
-    void Promise.race([backend.summary(push), deadline])
-      .catch((error: Error): Summary => ({ ok: false, error: error.message }))
-      .then((value) => {
-        entry.value = value;
-        entry.at = Date.now();
-      });
-    return { ok: false, waiting: true, error: "the reviewer is working it out" };
+    if (!waiting || !sameSecret(given, pushToken(token, waiting.message)))
+      return {
+        status: 410,
+        error: "that push is no longer waiting, or is not the one this page showed",
+      };
+    const asking = reviews.get(digestOf(waiting.message));
+    if (!asking?.listed || !asking.answer || !("account" in asking.answer))
+      return { status: 404, error: "the page has not been given the reviewer's account of it" };
+    return { account: asking.answer.account, asking };
   };
   return async (req: IncomingMessage, res: ServerResponse) => {
     // This name only, this origin only: a page on any other name is refused before anything.
@@ -421,9 +611,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 415, { error: "JSON only" });
       if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
         return json(res, 403, { error: "a request from another origin" });
+      const body = await jsonBody(req, res, SECRET_BODY_BYTES);
+      if (!("asked" in body)) return json(res, body.status, { error: body.error });
       try {
-        const asked = JSON.parse((await readBody(req, 70_000)) ?? "") as { settings?: unknown };
-        const done = await ops.set(asked.settings as Record<string, unknown>);
+        const done = await ops.set(body.asked.settings as Record<string, unknown>);
         log(`editor defaults page: ${Object.keys(done.settings).length} setting(s) saved`);
         return json(res, 200, done);
       } catch (error) {
@@ -456,16 +647,13 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 415, { error: "JSON only" });
       if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
         return json(res, 403, { error: "a request from another origin" });
-      let asked: Record<string, unknown>;
-      try {
-        // (An import carries a whole .env, of at most 64 KiB, as JSON: room for its escapes.)
-        asked = JSON.parse(
-          (await readBody(req, url.pathname.startsWith("/secrets/import/") ? 200_000 : 70_000)) ??
-            "",
-        ) as Record<string, unknown>;
-      } catch {
-        return json(res, 400, { error: "not JSON" });
-      }
+      const body = await jsonBody(
+        req,
+        res,
+        url.pathname.startsWith("/secrets/import/") ? IMPORT_BODY_BYTES : SECRET_BODY_BYTES,
+      );
+      if (!("asked" in body)) return json(res, body.status, { error: body.error });
+      const asked = body.asked;
       if (!isSlug(asked.domain)) return json(res, 400, { error: "which domain?" });
       const name = String(asked.name ?? "");
       const list = (value: unknown) =>
@@ -474,7 +662,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         if (url.pathname === "/secrets/set") {
           const value = String(asked.value ?? "");
           // One line, as the terminal takes it (readSecretLine): no line breaks inside.
-          if (!value || /[\r\n]/.test(value) || value.length > 65_536)
+          if (!value || /[\r\n]/.test(value) || Buffer.byteLength(value) > SECRET_BYTES)
             return json(res, 400, { error: "a value is one line, of at most 64 KiB" });
           const listed = await ops.set(asked.domain, {
             name,
@@ -524,19 +712,51 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     }
 
     if (req.method === "GET" && url.pathname === "/pending") {
+      let listed: Waiting[];
+      try {
+        listed = await backend.pending();
+      } catch (error) {
+        // (Nothing is dropped for a list that could not be had: the pushes may all still wait.)
+        return json(res, 502, {
+          error: `the root's list of pushes waiting could not be had: ${printable((error as Error).message)}`,
+        });
+      }
+      // A text the root no longer lists is a push that is gone (approved, refused, or given
+      // up): its question to the reviewer is dropped, and so is what it answered.
+      const now = new Set(listed.map((w) => digestOf(w.message)));
+      for (const [digest, asking] of reviews)
+        if (!now.has(digest)) {
+          asking.stop.abort();
+          reviews.delete(digest);
+        }
       const out = [];
-      for (const waiting of await backend.pending().catch(() => [] as Waiting[])) {
+      for (const waiting of listed) {
         const push = parseApproval(waiting.message);
         if (!push) continue;
+        // Past the most this page keeps an account of, a push is listed, and not asked about.
+        if (!reviews.has(digestOf(waiting.message)) && reviews.size >= LISTED_MOST) {
+          out.push({
+            nonce: push.nonce,
+            repo: push.repo,
+            branch: push.branch,
+            commit: push.commit,
+            onto: push.onto,
+            token: pushToken(token, waiting.message),
+            review: {
+              error: `over ${LISTED_MOST} pushes are waiting, more than this page asks the reviewer about at once: refuse the ones that are not yours, and this one is asked about then`,
+            },
+          });
+          continue;
+        }
         // Everything shown is the parsed text and the reviewer's account; the root's user's own
-        // words about a push are not shown at all.
-        // The diff stays here until asked for (/diff): not in a list polled every second.
-        const { diff, eachDiff, ...summary } = summaryOf(push, waiting.message);
+        // words about a push are not shown at all. A diff, and the rest of a long list, are
+        // asked for when the person wants them (/diff, /page): not in a list polled every second.
+        const asking = askingOf(push, waiting.message);
+        const review = reviewOf(asking);
         // The page is given this account now: from here it may be signed.
-        const given = summaries.get(digestOf(waiting.message));
-        // (An account that says the reviewer could not describe it is shown too: the click is
+        // (An account that says the reviewer could not describe it is given too: the click is
         // then refused for that, not for an account not shown.)
-        if (given?.value) given.listed = true;
+        if (!("working" in review)) asking.listed = true;
         out.push({
           nonce: push.nonce,
           repo: push.repo,
@@ -544,11 +764,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           commit: push.commit,
           onto: push.onto,
           token: pushToken(token, waiting.message),
-          summary: {
-            ...summary,
-            hasDiff: diff !== undefined,
-            hasEachDiff: eachDiff !== undefined,
-          },
+          review,
+          ...("account" in review
+            ? { shown: shownToken(token, waiting.message, review.account) }
+            : {}),
         });
       }
       return json(res, 200, { pending: out });
@@ -566,12 +785,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 415, { error: "JSON only" });
       if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
         return json(res, 403, { error: "a request from another origin" });
-      let asked: { id?: unknown; token?: unknown; do?: unknown };
-      try {
-        asked = JSON.parse((await readBody(req)) ?? "") as typeof asked;
-      } catch {
-        return json(res, 400, { error: "not JSON" });
-      }
+      const body = await jsonBody(req, res, CLICK_BYTES);
+      if (!("asked" in body)) return json(res, body.status, { error: body.error });
+      const asked = body.asked;
       const given = String(asked.token ?? "");
       if (!/^[0-9a-f]{64}$/.test(given))
         return json(res, 403, { error: "not an issue this page showed" });
@@ -599,49 +815,64 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 502, { error: (error as Error).message });
       }
     }
-    // The diff of a push this page showed: named by its nonce and the token the page was given
-    // for its very text, as an approval is.
-    if (req.method === "GET" && url.pathname === "/diff") {
-      const nonce = url.searchParams.get("nonce") ?? "";
-      const given = url.searchParams.get("token") ?? "";
-      if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given))
-        return json(res, 403, { error: "not a push this page showed" });
-      const waiting = (await backend.pending().catch(() => [] as Waiting[])).find(
-        (w) => parseApproval(w.message)?.nonce === nonce,
+    // More of the account of a push this page showed (the next page of a list), and its diff
+    // (the net change, a file's, a commit's whole), a page at a time: named by its nonce and
+    // the token the page was given for its very text, as an approval is, and asked of the
+    // reviewer under the key of the account the page was given. Asked for as long as the page
+    // waits for it and the push is listed (R4).
+    if (req.method === "GET" && (url.pathname === "/page" || url.pathname === "/diff")) {
+      const shown = await shownPush(
+        url.searchParams.get("nonce") ?? "",
+        url.searchParams.get("token") ?? "",
+        token,
       );
-      if (!waiting || !sameSecret(given, pushToken(token, waiting.message)))
-        return json(res, 410, {
-          error: "that push is no longer waiting, or is not the one this page showed",
-        });
-      const shown = summaries.get(digestOf(waiting.message))?.value;
-      if (!shown?.ok) return json(res, 404, { error: "the reviewer has not worked it out yet" });
-      // `each`: every commit's own diff, for what was changed in between.
-      if (url.searchParams.get("each") === "1")
+      if (!("account" in shown)) return json(res, shown.status, { error: shown.error });
+      const from = Number(url.searchParams.get("from") ?? "0");
+      if (!Number.isSafeInteger(from) || from < 0)
+        return json(res, 400, { error: "from where? A place in it: 0, or more" });
+      const key = shown.account.key;
+      const list = url.searchParams.get("list") ?? "";
+      const file = url.searchParams.get("file");
+      const commit = url.searchParams.get("commit") ?? "";
+      let request: AccountRequest;
+      if (url.pathname === "/page") {
+        if (list !== "commits" && list !== "files" && list !== "between")
+          return json(res, 400, { error: "which list? commits, files or between" });
+        request = { op: "page", key, list, from };
+      } else if (file !== null) request = { op: "diff", key, of: { file }, from };
+      else if (url.searchParams.has("commit")) {
+        if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(commit))
+          return json(res, 400, { error: "not a commit" });
+        request = { op: "diff", key, of: { commit }, from };
+      } else request = { op: "diff", key, of: "net", from };
+      const answer = await answerOf(
+        backend.summary(request, whileAsked(res, shown.asking.stop.signal)),
+      ).catch((error: Error): AccountLine => ({ error: error.message }));
+      if (res.destroyed) return;
+      if (answer === null) return json(res, 410, { error: "that push is no longer waiting" });
+      if ("error" in answer) return json(res, 502, { error: answer.error });
+      if (
+        request.op === "page" &&
+        "page" in answer &&
+        isListed((answer.page as Record<string, unknown>)[request.list], request.list)
+      )
         return json(res, 200, {
-          diff: shown.eachDiff ?? null,
-          cut: shown.eachDiffCut === true,
-          ...(shown.eachDiffWhy ? { why: shown.eachDiffWhy } : {}),
+          page: (answer.page as Record<string, Listed<unknown>>)[request.list],
         });
-      return json(res, 200, { diff: shown.diff ?? null, cut: shown.diffCut === true });
+      if (request.op === "diff" && "diff" in answer)
+        return json(res, 200, { diff: answer.diff satisfies DiffPage });
+      return json(res, 502, {
+        error: "the reviewer answered another question than the one asked",
+      });
     }
     if (req.method === "POST" && (url.pathname === "/approve" || url.pathname === "/refuse")) {
       if (!/^application\/json(;|$)/.test(String(req.headers["content-type"] ?? "")))
         return json(res, 415, { error: "JSON only" });
       if (req.headers.origin !== `http://${APPROVE_HOSTNAME}:${editorHostPort()}`)
         return json(res, 403, { error: "a request from another origin" });
-      const body = await readBody(req);
-      let asked: {
-        nonce?: unknown;
-        token?: unknown;
-        commit?: unknown;
-        squash?: unknown;
-        replace?: unknown;
-      };
-      try {
-        asked = JSON.parse(body ?? "") as typeof asked;
-      } catch {
-        return json(res, 400, { error: "not JSON" });
-      }
+      const body = await jsonBody(req, res, CLICK_BYTES);
+      if (!("asked" in body)) return json(res, body.status, { error: body.error });
+      const asked = body.asked;
       const nonce = String(asked.nonce ?? "");
       const given = String(asked.token ?? "");
       if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given))
@@ -653,7 +884,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       );
       const push = waiting ? parseApproval(waiting.message) : null;
       if (!waiting || !push)
-        return json(res, 410, { error: "that push is no longer waiting (each waits two minutes)" });
+        return json(res, 410, {
+          error: "that push is no longer waiting: approved elsewhere, refused, or given up",
+        });
       if (!sameSecret(given, pushToken(token, waiting.message)))
         return json(res, 409, {
           error:
@@ -663,12 +896,12 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 409, { error: "that is not the commit this push names" });
       // What is signed: the challenge, with what the reviewer says the push sends (it made the
       // pack, and the pusher sends no other). No account of it, no approval.
-      // (As the page was shown it, or, if this daemon has not asked yet, asked now.)
       // Only an account the page was given (/pending listed it): what is signed is what the
       // person could read, never one asked for at the click (the independent review of #165's
       // fix: a button armed while the reviewer was still working signed what came after).
-      const entry = summaries.get(digestOf(waiting.message));
-      const reviewed = entry?.listed ? entry.value : null;
+      const entry = reviews.get(digestOf(waiting.message));
+      const reviewed =
+        entry?.listed && entry.answer && "account" in entry.answer ? entry.answer.account : null;
       let signed = "";
       if (url.pathname === "/approve") {
         // (Two refusals, told apart: the page has not shown an account yet, or the reviewer
@@ -678,9 +911,21 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
             error:
               "the page has not shown desolate's reviewer's account of this push yet, so it cannot be approved: nothing was signed. Look at it, then approve",
           });
-        if (!reviewed?.ok || !reviewed.sends)
+        // The very account the page showed: the click names it (`shown`, from /pending).
+        if (
+          reviewed &&
+          !sameSecret(
+            String(asked.shown ?? ""),
+            shownToken(token, waiting.message, (reviewOf(entry!) as { account: Shown }).account),
+          )
+        )
           return json(res, 409, {
-            error: `desolate's reviewer could not say what this push would send (${String(reviewed?.error ?? "no answer").slice(0, 300)}), so it cannot be approved: nothing was signed`,
+            error:
+              "that is not the account of this push the page has now: it changed, so nothing was signed; look at it again",
+          });
+        if (!reviewed)
+          return json(res, 409, {
+            error: `desolate's reviewer could not say what this push would send (${printable(entry?.answer && "error" in entry.answer ? entry.answer.error : "no answer")}), so it cannot be approved: nothing was signed`,
           });
         // A push that replaces the remote's branch, only when the page said so and the
         // person confirmed that, apart from Approve (approve.js: the branch's name, typed).
@@ -693,9 +938,21 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           return json(res, 409, { error: "there is nothing to squash: it is one commit" });
         signed = signedFor(
           waiting.message,
+          // (Named one by one: what the reviewer says a push sends names its pack and LFS
+          // objects, never the commit.)
           asked.squash === true
-            ? { commit: reviewed.squash!.commit, squashes: push.commit, ...reviewed.squash!.sends }
-            : { commit: push.commit, squashes: null, ...reviewed.sends },
+            ? {
+                commit: reviewed.squash!.commit,
+                squashes: push.commit,
+                pack: reviewed.squash!.sends.pack,
+                lfs: reviewed.squash!.sends.lfs,
+              }
+            : {
+                commit: push.commit,
+                squashes: null,
+                pack: reviewed.sends.pack,
+                lfs: reviewed.sends.lfs,
+              },
         );
       }
       try {
@@ -1389,12 +1646,58 @@ declare namespace handler {
               commit: "0123456789abcdef0123456789abcdef01234567";
               onto: null;
               token: Invoke<typeof pushToken, [token: Token, message: Push]>;
-              summary: { ok: false; waiting: true; hasDiff: false };
+              review: { working: { phase: "starting"; seconds: 0 } };
             },
           ];
         };
       }
     >
+  >;
+  /** a reviewer asked about four pushes at once, and no more: the fifth waits its turn, and
+   *  says so (the root's user can list as many as it likes) */
+  export type FourAtOnce = Given<
+    HasToken,
+    [
+      Expect<
+        Invoke<
+          typeof ask,
+          [
+            handler: Invoke<
+              typeof handler,
+              [
+                backend: Invoke<
+                  typeof waiting,
+                  [
+                    messages: [
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/1\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000001\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/2\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000002\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/3\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000003\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/4\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000004\n",
+                      "desolate push approval v2\nrepo: acme/web\nbranch: fix/5\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00000000000000000000000000000005\n",
+                    ],
+                  ]
+                >,
+                log: typeof quiet,
+              ]
+            >,
+            request: { method: "GET"; url: "/pending"; headers: Script },
+          ]
+        >,
+        "matches",
+        {
+          json: {
+            pending: [
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "starting" } } },
+              { review: { working: { phase: "waiting for another push's account" } } },
+            ];
+          };
+        }
+      >,
+      Expect<Invoke<typeof askedCount>, "=", 4>,
+    ]
   >;
   /** no cookie: nothing; the cookie alone, from the page's own origin (what a program on another
    *  port of this name is sent): nothing; the cookie and key without the browser's same-origin
@@ -1469,14 +1772,23 @@ declare namespace handler {
     lfs: [];
   };
   type Reviewed = {
-    ok: true;
+    key: "k1";
+    warnings: [];
+    commits: { items: []; total: 2; from: 0 };
+    files: { items: []; total: 0; from: 0 };
+    between: { items: []; total: 0; from: 0 };
     fastForward: null;
+    base: null;
+    remote: null;
     sends: Sends;
     squash: {
       commit: "5555555555555555555555555555555555555555";
       parent: null;
       count: 2;
       message: "Fix it\n";
+      author: "A <a@example.com>";
+      committer: "A <a@example.com>";
+      dates: "";
       sends: {
         pack: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
         size: 90;
@@ -1486,7 +1798,10 @@ declare namespace handler {
   };
   type ReviewedPage = Invoke<
     typeof handler,
-    [backend: Invoke<typeof waiting, [messages: [Push], summary: Reviewed]>, log: typeof quiet]
+    [
+      backend: Invoke<typeof waiting, [messages: [Push], says: [{ account: Reviewed }]]>,
+      log: typeof quiet,
+    ]
   >;
   /** The click on Approve, as the page's script sends it. */
   type Click = {

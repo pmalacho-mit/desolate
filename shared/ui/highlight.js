@@ -10,6 +10,8 @@
 "use strict";
 const DesolateHighlight = (() => {
   const WAIT_MS = 2500;
+  // Past these a diff is shown plain. (`bytes` is counted as `length` counts, in UTF-16
+  // units: about a megabyte of code; the name is kept for what it bounds.)
   const MOST = { bytes: 1024 * 1024, lines: 40_000 };
   const BY_EXTENSION = {
     py: "python", pyi: "python", ts: "typescript", mts: "typescript", cts: "typescript", tsx: "tsx", js: "javascript", mjs: "javascript", cjs: "javascript",

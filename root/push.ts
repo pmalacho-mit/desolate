@@ -7,8 +7,9 @@
 //       this push. Prints one JSON object.
 //   node push.ts run <same arguments> --message <base64> --signature <base64>
 //       the challenge, signed by the host's approver. The keyring files the approval if
-//       the signature verifies; then LFS objects go up, then the commit; then the approval
-//       is revoked. The write key signs none of it without that approval.
+//       the signature verifies, held by this process until the pusher claims it; then LFS
+//       objects go up, then the commit; the approval goes when the pusher is done. The write
+//       key signs none of it without that approval.
 //
 // Nothing here can make the signature: the approver's key is not in this VM (P2).
 import * as fs from "node:fs";
@@ -17,7 +18,8 @@ import { parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
-import { ask } from "./keyring-client.ts";
+import { withLock } from "../shared/lock.ts";
+import { ask, hold } from "./keyring-client.ts";
 import { git } from "./git.ts";
 import { clonePath, KEYRING, ROOT } from "./layout.ts";
 import { offersOf, review, withdraw } from "./offers.ts";
@@ -176,7 +178,7 @@ export const refusePush = (
       `review it again (${again}), then push with --expect ${r.commit}`,
       EXIT.expectMismatch,
     );
-  if (r.commits.length === 0) refuse(`${branch} has nothing the remote lacks`, again);
+  if (r.commits.total === 0) refuse(`${branch} has nothing the remote lacks`, again);
 };
 
 declare namespace refusePush {
@@ -186,7 +188,11 @@ declare namespace refusePush {
     commit: "0123456789abcdef0123456789abcdef01234567";
     pushable: true;
     isDefault: false;
-    commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+    commits: {
+      items: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+      total: 1;
+      from: 0;
+    };
   };
   /** the commit the person reviewed, on a branch that is not the default, with something to send */
   export type Passes = Expect<
@@ -218,7 +224,7 @@ declare namespace refusePush {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: false;
               isDefault: false;
-              commits: [];
+              commits: { items: []; total: 0; from: 0 };
             },
             domain: "acme",
             branch: "fix",
@@ -279,7 +285,7 @@ declare namespace refusePush {
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
               isDefault: false;
-              commits: [];
+              commits: { items: []; total: 0; from: 0 };
             },
             domain: "acme",
             branch: "fix",
@@ -308,7 +314,11 @@ declare namespace refusePush {
             commit: "0123456789abcdef0123456789abcdef01234567";
             pushable: true;
             isDefault: true;
-            commits: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+            commits: {
+              items: [{ commit: "0123456789abcdef0123456789abcdef01234567"; subject: "fix" }];
+              total: 1;
+              from: 0;
+            };
           },
           domain: "acme",
           branch: "main",
@@ -454,7 +464,7 @@ const main = async () => {
     });
     if (reply.ok !== true)
       refuse(String(reply.error ?? "the keyring gave no challenge"), "desolate doctor");
-    const summary = `${r.commits.length} commit(s), ${r.stat || "no file changes"}${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s)` : ""}`;
+    const summary = `${r.commits.total} commit(s), ${r.stat || "no file changes"}${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s)` : ""}`;
     process.stdout.write(
       JSON.stringify({
         repo: r.repo,
@@ -470,40 +480,47 @@ const main = async () => {
 
   refuseOtherApproval(message, r, domain, branch);
 
+  // One push to a repository at a time, held by this process for as long as it pushes: a
+  // lock whose holder is gone is taken, one whose holder lives is never (shared/lock.ts).
   const lock = path.join(ROOT.state, "push-locks", r.repo.replace("/", "--"));
-  fs.mkdirSync(path.dirname(lock), { recursive: true });
-  try {
-    fs.mkdirSync(lock);
-  } catch {
-    if (Date.now() - fs.statSync(lock).mtimeMs < 300_000)
-      refuse(`another push to ${r.repo} is in progress`, "try again in a moment", EXIT.busy);
-    fs.rmSync(lock, { recursive: true, force: true });
-    fs.mkdirSync(lock);
-  }
-  let approval: string | null = null;
   // What goes: the approved commit (the reviewed one, or its squash) onto what the remote had.
   const signed = parseSigned(message)!;
-  try {
-    const filed = await ask(KEYRING.control, { op: "approve", message, signature });
-    if (filed.ok !== true)
-      throw new Refusal(
-        `the keyring did not accept the approval (${String(filed.error)}), so nothing was pushed`,
-        "desolate doctor, then push again",
-        EXIT.unconfirmed,
-      );
-    approval = String(filed.id);
-    const failed = await send(repo, approval, { pack: signed.pack });
-    if (failed)
-      throw new Refusal(
-        failed.error,
-        failed.moved
-          ? `the remote's ${branch} has moved: desolate fetch ${r.repo}, then rebase in the workspace and offer again`
-          : "try the push again; desolate doctor",
-      );
-  } finally {
-    if (approval) await ask(KEYRING.control, { op: "revoke", id: approval }).catch(() => {});
-    fs.rmSync(lock, { recursive: true, force: true });
-  }
+  await withLock(
+    lock,
+    async () => {
+      // The approval is held by this connection until the pusher claims it: it goes with this
+      // process if the push never began.
+      const held = await hold(KEYRING.control, { op: "approve", message, signature, hold: true });
+      try {
+        if (held.answer.ok !== true)
+          throw new Refusal(
+            `the keyring did not accept the approval (${String(held.answer.error)}), so nothing was pushed`,
+            "desolate doctor, then push again",
+            EXIT.unconfirmed,
+          );
+        const failed = await send(repo, String(held.answer.id), { pack: signed.pack }, (line) =>
+          process.stderr.write(`${line}\n`),
+        );
+        if (failed)
+          throw new Refusal(
+            failed.error,
+            failed.moved
+              ? `the remote's ${branch} has moved: desolate fetch ${r.repo}, then rebase in the workspace and offer again`
+              : "try the push again; desolate doctor",
+          );
+      } finally {
+        await held.release();
+      }
+    },
+    {
+      wait: false,
+      busy: (holder) =>
+        `another push to ${r.repo} is in progress (process ${holder.pid}, since ${holder.since})`,
+    },
+  ).catch((error: Error & { holder?: unknown }) => {
+    if (error.holder) refuse(error.message, "try again when it is done", EXIT.busy);
+    throw error;
+  });
   const base =
     offersOf(domain).find((o) => o.repo === r.repo && o.branch === branch)?.base ?? r.defaultBranch;
   const link = afterPush({ repo: r.repo, branch, commit: signed.commit, base }, (line) =>
@@ -524,7 +541,7 @@ const main = async () => {
           }))
         ).stdout.trim(),
       ) || null
-    : r.commits.length;
+    : r.commits.total;
   const commits = sent ? `${sent} commit(s)` : "its commits";
   const lfs = signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : "";
   process.stdout.write(

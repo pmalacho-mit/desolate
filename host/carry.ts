@@ -11,7 +11,9 @@
 // root VM as root: decisions.md 5.3), and it lasts from `destroy` to the next `bootstrap`.
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { formatBytes } from "../shared/limits.ts";
 import { isSlug } from "../shared/names.ts";
+import { because } from "./failures.ts";
 import { paths } from "./paths.ts";
 import { backend, ROOT_VM } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -31,6 +33,27 @@ type Out = (line: string) => void;
 export const KEPT_DIR = path.join(paths.home, "root-kept");
 export const KEPT = path.join(KEPT_DIR, "root-state.tgz");
 
+/** Part of an archive, which a `destroy` stopped halfway (Ctrl-C, a crash) left: it holds
+ *  part of the root's keys and is a copy of nothing, so it goes, at the start of a destroy and
+ *  of a bootstrap. */
+export const dropPartial = () => fs.rmSync(`${KEPT}.partial`, { force: true });
+
+/** Whether a file begins as gzip's output does (RFC 1952: 1f 8b): tar's archive, and not
+ *  some other text a root that ran no tar printed. */
+const isGzip = (file: string) => {
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const head = Buffer.alloc(2);
+      return fs.readSync(fd, head, 0, 2, 0) === 2 && head[0] === 0x1f && head[1] === 0x8b;
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+};
+
 /** The root's own directories that hold what must survive. Not kept: what start.sh makes
  *  again (its code and layout stamps, so the services restart on what was put back),
  *  sockets, and the list of proxies that were running (rootd starts them again). */
@@ -46,31 +69,44 @@ const EXCLUDE = [
  *  VM (nothing to keep). Throws when there is one and its state could not be read: the
  *  caller must not remove a root whose keys it could not keep. */
 export const keepRootState = async (out: Out): Promise<boolean> => {
+  dropPartial();
   const b = backend();
   const info = await b.info(ROOT_VM);
   if (info.status === "missing") return false;
   if (info.status === "suspended") await b.resume(ROOT_VM);
   else if (info.status !== "running") await b.start(ROOT_VM);
-  const script = `set -o pipefail; cd / && tar ${EXCLUDE.map((e) => `--exclude='${e}'`).join(" ")} -czf - $(for d in ${DIRS.join(" ")}; do [ -d "/$d" ] && echo "$d"; done) | base64 -w0`;
-  const taken = await b.exec(ROOT_VM, ["bash", "-c", script], { root: true, timeoutMs: 600_000 });
-  if (taken.code !== 0 || !/^[A-Za-z0-9+/=]+$/.test(taken.stdout.trim()))
-    throw new Error(
-      `the root's keys and secrets could not be read out of it: ${(taken.stderr || taken.stdout).trim().slice(-300)}`,
-    );
-  const bytes = Buffer.from(taken.stdout.trim(), "base64");
+  const script = `cd / && tar ${EXCLUDE.map((e) => `--exclude='${e}'`).join(" ")} -czf - $(for d in ${DIRS.join(" ")}; do [ -d "/$d" ] && echo "$d"; done)`;
   fs.mkdirSync(KEPT_DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(KEPT_DIR, 0o700);
   const partial = `${KEPT}.partial`;
-  fs.writeFileSync(partial, bytes, { mode: 0o600 });
+  // The archive goes from tar to the file as it comes, so it is whatever size the root's
+  // state is (it once came back as one base64 string, which run() stops at 192 MiB). No
+  // timer (R4): it reads the root's own disk, and the person who ran `destroy` is waiting.
+  const taken = await b.exec(ROOT_VM, ["bash", "-c", script], { root: true, stdoutTo: partial });
+  const size = fs.existsSync(partial) ? fs.statSync(partial).size : 0;
+  const failed =
+    taken.code !== 0
+      ? because(
+          "the root's keys and secrets could not be read out of it",
+          "root-state-out",
+          taken.stderr,
+        )
+      : !isGzip(partial)
+        ? `the root's keys and secrets could not be read out of it: what it gave (${size} bytes) is not an archive${taken.stderr.trim() ? `: ${because("tar said", "root-state-out", taken.stderr)}` : ""}`
+        : null;
+  if (failed) {
+    fs.rmSync(partial, { force: true });
+    throw new Error(failed);
+  }
   fs.renameSync(partial, KEPT);
   out(
-    `  = kept the root's keys, registry, secrets and network rules (${(bytes.length / 1024).toFixed(0)} KiB, ${path.relative(paths.home, KEPT)}): the next bootstrap puts them back`,
+    `  = kept the root's keys, registry, secrets and network rules (${formatBytes(size)}, ${path.relative(paths.home, KEPT)}): the next bootstrap puts them back`,
   );
   return true;
 };
 
 declare namespace keepRootState {
-  /** what the root printed (base64 of the archive) is kept as the archive, and said */
+  /** what the root's tar wrote is kept as the archive, byte for byte, and its size said */
   export type Kept = Given<
     [
       Invoke<typeof emptyHome>,
@@ -78,7 +114,7 @@ declare namespace keepRootState {
       Call<
         Mocked<typeof backend>,
         "mockReturnValue",
-        [value: Invoke<typeof rootVm, [status: "stopped", code: 0, stdout: "YXJjaGl2ZQ==\n"]>]
+        [value: Invoke<typeof rootVm, [status: "stopped", code: 0, stdout: "\u001f\u008barchive"]>]
       >,
     ],
     Expect<
@@ -87,9 +123,9 @@ declare namespace keepRootState {
       {
         returned: true;
         lines: [
-          "  = kept the root's keys, registry, secrets and network rules (0 KiB, root-kept/root-state.tgz): the next bootstrap puts them back",
+          "  = kept the root's keys, registry, secrets and network rules (1 KiB, root-kept/root-state.tgz): the next bootstrap puts them back",
         ];
-        kept: "archive";
+        kept: "\u001f\u008barchive";
       }
     >
   >;
@@ -111,8 +147,8 @@ declare namespace keepRootState {
     >
   >;
   /** a root whose state could not be read throws: the caller must not remove a root whose
-   *  keys it could not keep. Even when tar's exit was 0, an answer that is not base64 is not
-   *  an archive */
+   *  keys it could not keep. Even when tar's exit was 0, an answer that is not gzip's is not
+   *  an archive; and nothing half-written is left as if it were one */
   export type Unreadable = [
     Given<
       [
@@ -163,7 +199,7 @@ declare namespace keepRootState {
         Invoke<typeof carried, [command: typeof keepRootState, args: []]>,
         "matches",
         {
-          threw: "the root's keys and secrets could not be read out of it: tar: removing leading '/'";
+          threw: "the root's keys and secrets could not be read out of it: what it gave (25 bytes) is not an archive";
           kept: null;
         }
       >
@@ -189,6 +225,7 @@ const domainsOnHost = () => {
  *  has keys is the truth, and the archive is left where it is, and said. Returns whether
  *  anything was put back; the caller restarts the root's services then. */
 export const restoreRootState = async (out: Out, rootHoldsKeys: boolean): Promise<boolean> => {
+  dropPartial();
   if (!fs.existsSync(KEPT)) return false;
   if (rootHoldsKeys) {
     out(
@@ -208,23 +245,28 @@ export const restoreRootState = async (out: Out, rootHoldsKeys: boolean): Promis
       );
       if (made.code !== 0)
         throw new Error(
-          `the domain ${domain}'s proxies' user could not be made: ${(made.stderr || made.stdout).trim().slice(-300)}`,
+          because(
+            `the domain ${domain}'s proxies' user could not be made`,
+            "proxy-user",
+            made.stderr || made.stdout,
+          ),
         );
     }
   };
   await users();
   const put = await b.exec(
     ROOT_VM,
-    [
-      "bash",
-      "-c",
-      "set -o pipefail; base64 -d | tar -C / --same-owner -xzf - && rm -f /var/lib/desolate-root/code",
-    ],
-    { root: true, input: fs.readFileSync(KEPT).toString("base64"), timeoutMs: 600_000 },
+    ["bash", "-c", "tar -C / --same-owner -xzf - && rm -f /var/lib/desolate-root/code"],
+    // From the file as tar takes it, under no timer, as it was taken out.
+    { root: true, stdinFrom: KEPT },
   );
   if (put.code !== 0)
     throw new Error(
-      `the kept state could not be put into the new root (it is still at ${KEPT}): ${(put.stderr || put.stdout).trim().slice(-300)}`,
+      because(
+        `the kept state could not be put into the new root (it is still at ${KEPT})`,
+        "root-state-in",
+        put.stderr || put.stdout,
+      ),
     );
   await users();
   fs.rmSync(KEPT, { force: true });

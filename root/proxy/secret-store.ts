@@ -20,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Refusal, refuse } from "../../shared/exit.ts";
+import { isSlug } from "../../shared/names.ts";
 import { normalizeName } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import { proxyUserOf } from "./as-proxy.ts";
@@ -42,9 +43,13 @@ export const SECRETS_DIR = `${ROOT.proxies}/secrets`;
 export const storeFile = (domain: string) => path.join(SECRETS_DIR, `${domain}.json`);
 export const indexFile = (domain: string) => path.join(SECRETS_DIR, `${domain}.index.json`);
 
-const NAME = /^[A-Z][A-Z0-9_-]{7,63}$/;
+/** A secret's placeholder name: what a workspace sends in the value's place, and what the
+ *  secrets proxy looks for in its requests. A hard bound against nothing but ordinary text:
+ *  a name under 8 characters would match words a request carries by chance, and 64 is room
+ *  for a prefix, a service and a purpose (MYAPP-OPENAI-KEY). secrets_addon.py repeats it, and
+ *  T1 checks that it does (tests/v3/t1/proxy.test.ts). */
+export const PLACEHOLDER = /^[A-Z][A-Z0-9_-]{7,63}$/;
 const HEADER = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
-const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 const hostPattern = (text: string): string => {
   const wildcard = text.startsWith("*.");
@@ -74,7 +79,7 @@ export const change = (
   const name = String(input.name ?? "");
   if (op === "set") {
     const usage = `desolate domain ${domain} secret set <NAME> --hosts <host>[,<host>...] [--headers <header>[,...]]   (the value on stdin)`;
-    if (!NAME.test(name))
+    if (!PLACEHOLDER.test(name))
       refuse(
         `'${name}' is not a placeholder name`,
         "8 to 64 of A-Z, 0-9, _ and -, starting with a letter: for example MYAPP-OPENAI-KEY. It is what workspaces send in place of the value",
@@ -539,7 +544,7 @@ const main = async () => {
       "secret-store.ts runs as root, from the host's own way in",
       "desolate domain <d> secret ...",
     );
-  if (!domain || !SLUG.test(domain))
+  if (!domain || !isSlug(domain))
     refuse(`'${domain ?? ""}' is not a domain`, "desolate domain <d> secret ...");
   const group = spawnSync("id", ["-g", proxyUserOf(domain!)], { encoding: "utf8" });
   if (group.status !== 0)
@@ -575,7 +580,7 @@ const main = async () => {
   // subscription token for every domain, set once). Then checked like any set.
   if (op === "copy") {
     const from = String(input.from ?? "");
-    if (!SLUG.test(from) || from === domain)
+    if (!isSlug(from) || from === domain)
       refuse(
         `'${from}' is not another domain`,
         `desolate domain ${domain} secret copy <NAME> --from <domain>`,
