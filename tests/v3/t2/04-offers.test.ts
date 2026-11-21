@@ -1348,7 +1348,7 @@ echo "$c1 $c2 $c3 $c4"`);
         },
       }),
     );
-    fs.symlinkSync("/etc/passwd", path.join(sync, "zz-evil.bundle"));
+    fs.symlinkSync("/etc/passwd", path.join(sync, "zz-link.bundle"));
     fs.writeFileSync(path.join(sync, "zy-garbage.bundle"), "this is not a bundle");
     const lied = inRootClone(
       "git fetch dev 2>&1; git for-each-ref --format='%(refname)' refs/remotes/dev refs/desolate; ls /desolate/root/acme/widgets/.git/refs/remotes/dev",
@@ -1363,12 +1363,12 @@ echo "$c1 $c2 $c3 $c4"`);
     // what it pointed at is never opened, and the person is told something was dropped.
     assert.match(
       lied.stdout,
-      /dropped from dev's outbox: the bundle zz-evil\.bundle is not a plain file/,
+      /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/,
       lied.stdout,
     );
     assert.ok(
-      !fs.existsSync(path.join(sync, "zz-evil.bundle")) &&
-        fs.lstatSync(path.join(sync, "zz-evil.bundle"), { throwIfNoEntry: false }) === undefined,
+      !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
+        fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
       "the link itself is gone from the outbox",
     );
     assert.match(

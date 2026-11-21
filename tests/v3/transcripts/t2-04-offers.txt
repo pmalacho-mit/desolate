@@ -262,6 +262,8 @@ desolate: acme/consumer is not pushable: the root holds no write key for it
 
 ## a hostile domain repository
 
+## a domain with many branches
+
 ## a delivery to another domain
 
 ## a pushed branch, squash-merged on the forge
