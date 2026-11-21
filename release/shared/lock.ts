@@ -267,6 +267,20 @@ const holderOf = (text: string | null): Entry => {
   return NOBODY;
 };
 
+const MADE = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL;
+/** `file` opened, never through a link, with the mode `mode` whatever the umask: a lock is
+ *  open to every taker, since one that cannot read a holder takes it for nobody's. */
+const opened = (file: string, flags: number, mode: number): number => {
+  const fd = fs.openSync(file, flags | fs.constants.O_NOFOLLOW, mode);
+  try {
+    if ((fs.fstatSync(fd).mode & 0o777) !== mode) fs.fchmodSync(fd, mode);
+    return fd;
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+};
+
 /** `entry` made a lock at `at`, whole: the directory it is; or null when a lock is there
  *  already. Made beside its place and renamed into it: the rename fails onto a directory
  *  with anything in it, and that is the whole of the exclusion. What a lock holds is no
@@ -277,15 +291,12 @@ const put = (at: string, entry: Entry, filled?: (fresh: string) => void): string
   fs.mkdirSync(fresh);
   let is: string | null;
   try {
-    // Open to every taker whatever the umask: one that cannot read a holder takes it for
-    // nobody's (holderFile).
-    fs.chmodSync(fresh, 0o755);
+    fs.closeSync(opened(fresh, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY, 0o755));
     // Made, never opened: a link another side put there in the moment since the mkdir is
     // not followed (O_EXCL fails on any name that is there, a link that leads nowhere too),
     // and the taking fails, saying so: another is at the lock's own making.
-    const fd = fs.openSync(path.join(fresh, "holder"), "wx");
+    const fd = opened(path.join(fresh, "holder"), MADE, 0o644);
     try {
-      fs.fchmodSync(fd, 0o644);
       fs.writeSync(fd, JSON.stringify(entry));
     } finally {
       fs.closeSync(fd);
@@ -487,8 +498,7 @@ const clear = (
  *  the process busy (a `spawnSync`, a long parse) does not stop the beat; it ends with the
  *  process, which is the point. Answers once the first beat is written. */
 const startBeat = async (file: string, everyMs: number): Promise<() => Promise<void>> => {
-  const fd = fs.openSync(file, "wx");
-  fs.fchmodSync(fd, 0o644);
+  const fd = opened(file, MADE, 0o644);
   const worker = new Worker(
     // (getBuiltinModule: the same text is a script or a module, whichever this process
     // takes evaluated code for.)

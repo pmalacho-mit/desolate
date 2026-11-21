@@ -110,9 +110,13 @@ describe(
       }[];
       for (const w of list.find((d) => d.domain === "dev")!.workspaces) vms[w.workspace] = w.vm;
       assert.ok(vms.one && vms.two && vms.one !== vms.two, "two VMs");
-      const wrote = stack.inVm(vms.one!, ["bash", "-c", `mkdir -p ${DIR} && cat > ${DIR}/taker.mjs`], {
-        input: TAKER,
-      });
+      const wrote = stack.inVm(
+        vms.one!,
+        ["bash", "-c", `mkdir -p ${DIR} && cat > ${DIR}/taker.mjs`],
+        {
+          input: TAKER,
+        },
+      );
       assert.equal(wrote.code, 0, wrote.stderr);
       assert.equal(inVm("two", `test -f ${DIR}/taker.mjs && echo seen`).stdout.trim(), "seen");
     });
@@ -145,9 +149,7 @@ describe(
       stack.step("one VM holds the lock, busy; the other waits");
       inVm("one", `rm -f ${DIR}/inside`);
       start("one", "holder", "hold");
-      await until("the holder is in", 60_000, () =>
-        logOf("two", "holder").stdout.includes("in"),
-      );
+      await until("the holder is in", 60_000, () => logOf("two", "holder").stdout.includes("in"));
       start("two", "waiter", "wait");
       await until("the waiter waits, naming the holder's VM", 60_000, () =>
         logOf("one", "waiter").stdout.includes("waiting for"),
@@ -164,9 +166,7 @@ describe(
       const killed = inVm("one", `kill -9 "$(cat ${DIR}/holder.pid)" && echo killed`);
       assert.equal(killed.stdout.trim(), "killed", killed.stderr);
       const at = Date.now();
-      await until("the waiter goes in", 60_000, () =>
-        /^in$/m.test(logOf("two", "waiter").stdout),
-      );
+      await until("the waiter goes in", 60_000, () => /^in$/m.test(logOf("two", "waiter").stdout));
       const took = Date.now() - at;
       assert.ok(took < 30_000, `taken over ${took} ms after the kill: one window and a look`);
       assert.match(logOf("two", "waiter").stdout, /done/);
@@ -180,7 +180,11 @@ describe(
       socket.on("error", () => {});
       await new Promise((resolve) => socket.once("connect", resolve));
       await sleep(3000);
-      assert.equal(closedAt, 0, "control: a carried connection stays open while its workspace is up");
+      assert.equal(
+        closedAt,
+        0,
+        "control: a carried connection stays open while its workspace is up",
+      );
       const answer = await new Promise<string>((resolve, reject) => {
         const daemon = net.connect(path.join(stack.home, "state", "daemon.sock"));
         let text = "";

@@ -1563,22 +1563,26 @@ const serve = async () => {
       client.once("close", () => queue.delete(go));
     };
     // Every connection the link took, so that its workspace's going ends them: closing a
-    // server only stops it taking more, and a stopped workspace's downloads went on.
+    // server only stops it taking more, and a stopped workspace's downloads went on. One
+    // taken after (a listener not yet closed) is ended at once.
     const clients = new Set<Socket>();
+    let gone = false;
     const took = (client: Socket) => {
+      client.on("error", () => client.destroy());
+      if (gone) return false;
       clients.add(client);
       client.once("close", () => clients.delete(client));
-      client.on("error", () => client.destroy());
+      return true;
     };
     const carry = (client: Socket) => {
-      took(client);
-      if (entry.proxy === null) return client.destroy();
+      if (!took(client) || entry.proxy === null) return client.destroy();
       toProxy(client, Buffer.alloc(0));
     };
     const server = createServer(carry);
     server.on("error", (error) => log(`link ${entry.vm}: ${error.message}`));
     server.listen(socket, () => fs.chmodSync(socket, 0o666));
     entry.link = () => {
+      gone = true;
       server.close();
       for (const client of clients) client.destroy();
     };
@@ -1596,8 +1600,7 @@ const serve = async () => {
       // for as long as it liked (it was 64, the link's own bound, and closed the newest).
       const proving = new Set<Socket>();
       const tcp = createServer((client) => {
-        took(client);
-        if (!token || entry.proxy === null) return client.destroy();
+        if (!took(client) || !token || entry.proxy === null) return client.destroy();
         if (proving.size >= PROVING_MOST) {
           const longest = proving.values().next().value!;
           proving.delete(longest);
