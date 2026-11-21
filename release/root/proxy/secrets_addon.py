@@ -50,7 +50,24 @@ log = logging.getLogger("desolate-secrets")
 
 SETTINGS_PATH = os.environ.get("DESOLATE_SECRETS", "/var/lib/desolate/secrets/unset.json")
 POLICY_PATH = os.environ.get("DESOLATE_POLICY", "/var/lib/desolate/proxy/policy/unset.json")
-AUDIT_PATH = os.environ.get("DESOLATE_AUDIT", "/var/lib/desolate/proxy-out/unset/audit.log")
+# The domain's audit log: a directory of files every proxy of the domain writes, by the rule
+# of root/proxy/audit.ts (its AUDIT, which T1 checks this repeats): append to the newest,
+# begin the next by an exclusive create when the newest is over its share, unlink the oldest
+# past AUDIT_FILES. No writer renames a file another is writing.
+AUDIT_DIR = os.environ.get("DESOLATE_AUDIT", "/var/lib/desolate-proxies/out/unset")
+AUDIT_PREFIX, AUDIT_SUFFIX, AUDIT_FILES = "audit-", ".log", 4
+AUDIT_FILE = re.compile(r"audit-([1-9][0-9]{0,15})\.log")
+
+
+def _audit_budget() -> int:
+    """The domain's budget, in bytes (proxy.auditMiB, as the root started this proxy)."""
+    try:
+        return max(1, int(os.environ.get("DESOLATE_PROXY_AUDIT_MIB", ""))) * 1024 * 1024
+    except ValueError:
+        return 128 * 1024 * 1024
+
+
+AUDIT_SHARE = max(1, _audit_budget() // AUDIT_FILES)
 # The domain's handoff token: this proxy listens on the root VM's loopback, where any user of
 # that VM can connect, so it takes a tunnel only from what can read this file (its domain's
 # proxies: root/proxy/as-proxy.ts). Read once; unreadable or malformed, nothing is let in.
@@ -68,7 +85,14 @@ def _read_token() -> str:
 
 LINK_TOKEN = _read_token()
 
+# A secret's placeholder name: root/proxy/secret-store.ts's PLACEHOLDER, which T1 checks this
+# repeats. A short one would match ordinary text.
 SECRET_NAME = re.compile(r"[A-Z][A-Z0-9_-]{7,63}")
+# A workspace's name, as proxy.ts says it: shared/names.ts's SLUG, which T1 checks this repeats.
+WORKSPACE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+# How much of a request's path goes in the audit log, in characters: the path is the
+# workspace's, and the route is what a person reads in `net log`.
+ROUTE_CHARS = 200
 HEADER_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 GLOB_META = re.compile(r"[*?\[\]]")
 # The one wildcard shape that pins a destination: a leading "*." over at least two labels.
@@ -97,6 +121,8 @@ class DesolateSecrets:
         self._policy_mtime = None
         # client connection id -> what proxy.ts said when it opened the tunnel
         self.tunnels = {}
+        # the audit file this writer appends to (0: look for the newest)
+        self._audit_n = 0
 
     # ---------------------------------------------------------------- settings
     def _maybe_reload(self):
@@ -239,18 +265,68 @@ class DesolateSecrets:
         tunnel = self.tunnels.get(flow.client_conn.id, {})
         entry = {"time": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z", "domain": self.domain,
                  "workspace": tunnel.get("workspace", "?"), "host": host, "port": 443, "verdict": verdict,
-                 "method": flow.request.method, "route": flow.request.path.split("?", 1)[0][:200]}
+                 "method": flow.request.method, "route": flow.request.path.split("?", 1)[0][:ROUTE_CHARS]}
         if secrets:
             entry["secrets"] = sorted(secrets)   # names, never values
         if reason:
             entry["reason"] = reason
+        self._audit_write(json.dumps(entry) + "\n")
+
+    def _audit_newest(self):
         try:
-            # At most 64 MiB, then the last 64 MiB as audit.log.1: a workspace sending requests
-            # refused here, as fast as it can, must not fill the root's disk (audit, 2026-11-20).
-            if os.path.exists(AUDIT_PATH) and os.path.getsize(AUDIT_PATH) > 64 * 1024 * 1024:
-                os.replace(AUDIT_PATH, AUDIT_PATH + ".1")
-            with open(AUDIT_PATH, "a") as handle:
-                handle.write(json.dumps(entry) + "\n")
+            numbers = [int(m.group(1)) for m in map(AUDIT_FILE.fullmatch, os.listdir(AUDIT_DIR)) if m]
+        except OSError:
+            return 0
+        return max(numbers, default=0)
+
+    def _audit_begin(self, n):
+        """Begins file `n` if no writer has (an exclusive create), and lets go what is past the
+        budget: the files numbered n - AUDIT_FILES and before, and the two from before the
+        series (audit.log, audit.log.1), which count as 0."""
+        try:
+            os.close(os.open(os.path.join(AUDIT_DIR, f"{AUDIT_PREFIX}{n}{AUDIT_SUFFIX}"),
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644))
+        except OSError:
+            pass                         # another writer began it first: it is there
+        try:
+            names = os.listdir(AUDIT_DIR)
+        except OSError:
+            return
+        for name in names:
+            match = AUDIT_FILE.fullmatch(name)
+            older = int(match.group(1)) if match else 0 if name in ("audit.log", "audit.log.1") else None
+            if older is not None and older <= n - AUDIT_FILES:
+                try:
+                    os.unlink(os.path.join(AUDIT_DIR, name))
+                except OSError:
+                    pass
+
+    def _audit_write(self, line):
+        """A line that cannot be written (a full disk) is lost, and logged: a workspace sending
+        requests refused here, as fast as it can, must not fill the root's disk, and the
+        request is decided as it was (audit, 2026-11-20)."""
+        try:
+            for _ in range(2):
+                if self._audit_n == 0:
+                    self._audit_n = self._audit_newest()
+                    if self._audit_n == 0:
+                        self._audit_n = 1
+                        self._audit_begin(1)
+                try:
+                    # Never made here: a file another writer let go is not begun again.
+                    fd = os.open(os.path.join(AUDIT_DIR, f"{AUDIT_PREFIX}{self._audit_n}{AUDIT_SUFFIX}"),
+                                 os.O_WRONLY | os.O_APPEND)
+                except FileNotFoundError:
+                    self._audit_n = 0
+                    continue
+                try:
+                    os.write(fd, line.encode())
+                    if os.fstat(fd).st_size > AUDIT_SHARE:
+                        self._audit_n += 1
+                        self._audit_begin(self._audit_n)
+                finally:
+                    os.close(fd)
+                return
         except OSError as error:
             log.error(f"cannot write the audit log: {error}")
 
@@ -282,7 +358,7 @@ class DesolateSecrets:
             del flow.request.headers["x-desolate-token"]
             workspace = flow.request.headers.get("x-desolate-workspace", "")
             host = flow.request.headers.get("x-desolate-host", "").lower()
-            if not re.fullmatch(r"[a-z0-9-]{1,80}", workspace) or not host or flow.request.port != 443:
+            if not WORKSPACE_NAME.fullmatch(workspace) or not host or flow.request.port != 443:
                 return self._block(flow, 403, "this proxy is reached only through a workspace's own proxy")
             self.tunnels[flow.client_conn.id] = {"workspace": workspace, "host": host}
         except Exception:

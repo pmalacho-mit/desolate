@@ -18,6 +18,7 @@ import { refuse } from "../../shared/exit.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
 import { ROOT } from "../layout.ts";
 import { inbox } from "../outbox.ts";
+import { auditDir, auditEnv } from "./audit.ts";
 import { indexFile, storeFile } from "./secret-store.ts";
 import type { Indexed } from "./secret-store.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -341,7 +342,8 @@ export const ensure = async (domain: string): Promise<Running | null> => {
       HOME: confdir(domain),
       DESOLATE_SECRETS: storeFile(domain),
       DESOLATE_POLICY: path.join(proxyDomainDir(domain), "policy.json"),
-      DESOLATE_AUDIT: path.join(proxyOutDir(domain), "audit.log"),
+      DESOLATE_AUDIT: auditDir(domain),
+      ...auditEnv(),
       DESOLATE_LINK_TOKEN: linkTokenFile(domain),
     },
     log,

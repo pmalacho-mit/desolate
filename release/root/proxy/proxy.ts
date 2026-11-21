@@ -24,11 +24,15 @@ import * as fs from "node:fs";
 import { connect, createServer, isIP } from "node:net";
 import type { Socket } from "node:net";
 import { readJson } from "../../shared/json.ts";
+import { isSlug } from "../../shared/names.ts";
+import { valueOf } from "../../shared/settings.ts";
 import { normalizeName, sniffSocket } from "../../shared/sniff.ts";
+import { printable } from "../../shared/text.ts";
 import type { Sniffed } from "../../shared/sniff.ts";
 import { ROOT } from "../layout.ts";
 import type { Running } from "./secrets.ts";
-import { listenerUid } from "./as-proxy.ts";
+import { listenerUid, proxyOutDir, VM_NAME } from "./as-proxy.ts";
+import { AUDIT_MIB, auditWriter } from "./audit.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -42,11 +46,10 @@ const running = Boolean(
 if (
   running &&
   process.argv[1]?.endsWith("proxy.ts") &&
-  (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(domain ?? "") ||
+  (!isSlug(domain) ||
     !(socketArg ?? "").startsWith(`${ROOT.proxies}/out/${domain}/`) ||
-    !/^[a-z0-9-]{1,60}\.sock$/.test(
-      (socketArg ?? "").slice(`${ROOT.proxies}/out/${domain}/`.length),
-    ))
+    !(socketArg ?? "").endsWith(".sock") ||
+    !VM_NAME.test((socketArg ?? "").slice(`${ROOT.proxies}/out/${domain}/`.length, -5)))
 ) {
   console.error(
     "proxy.ts: usage: proxy.ts <its socket, in its domain's out/> <domain> <workspace>",
@@ -56,7 +59,6 @@ if (
 // What it reads is its domain's directory, and what it writes is its domain's proxies' own
 // (as-proxy.ts; it runs as that domain's proxies' user).
 const DOMAIN_DIR = `${ROOT.proxies}/domains/${domain}`;
-const AUDIT = `${ROOT.proxies}/out/${domain}/audit.log`;
 export type Policy = { mode: "open" | "enforce"; hosts: string[]; internal: string[] };
 const policy = (): Policy => ({
   mode: "open",
@@ -65,25 +67,35 @@ const policy = (): Policy => ({
   ...readJson<Partial<Policy>>(`${DOMAIN_DIR}/policy.json`, {}),
 });
 
-// At most 64 MiB, then the last 64 MiB as audit.log.1; and a write that fails (a full disk)
-// is not a throw in a connection's handler, which stopped the whole proxy, every workspace of
-// the domain then without a network (audit, 2026-11-20).
-let audited = -1;
-const audit = (entry: Record<string, unknown>) => {
-  try {
-    if (audited < 0) audited = fs.statSync(AUDIT, { throwIfNoEntry: false })?.size ?? 0;
-    if (audited > 64 * 1024 * 1024) {
-      fs.renameSync(AUDIT, `${AUDIT}.1`);
-      audited = 0;
-    }
-    const line =
-      JSON.stringify({ time: new Date().toISOString(), domain, workspace, ...entry }) + "\n";
-    fs.appendFileSync(AUDIT, line);
-    audited += Buffer.byteLength(line);
-  } catch {
-    /* the connection is still decided as it was; only its line is lost */
-  }
-};
+// Its lines go to the domain's log, which every proxy of the domain writes (audit.ts): kept
+// to the budget the root started it with.
+const write = running
+  ? auditWriter(proxyOutDir(domain!), valueOf(AUDIT_MIB) * 1024 * 1024)
+  : () => {};
+const audit = (entry: Record<string, unknown>) =>
+  write({ time: new Date().toISOString(), domain, workspace, ...entry });
+
+/** Bounds on what a workspace says, which reaches a refusal's header and the audit log. A
+ *  workspace is not trusted (R7), and each is the size of what holds it: */
+export const ASKED = {
+  /** A CONNECT request, in bytes: its line and headers. The longest name DNS has is 253, and
+   *  a client adds a few headers; 8 KiB is what most servers take for a request's head. */
+  headBytes: 8192,
+  /** How long a workspace may take to finish asking, in ms: a client that has not sent its
+   *  request in ten seconds holds nothing open here. */
+  headMs: 10_000,
+  /** How long its first bytes may take, under an allowlist, in ms: the TLS hello or the HTTP
+   *  request a client sends as soon as its tunnel is up. Until they come the connection is
+   *  held, unchecked and carrying nothing. */
+  firstBytesMs: 10_000,
+  /** A reason, in characters, in the X-Desolate-Reason header of a refusal: reasons carry a
+   *  name the workspace chose. The longest of ours is under 400 with a name of 253 in it;
+   *  512 leaves room for a connection's error after it, inside the head a client reads. */
+  reasonChars: 512,
+  /** A name or a target as the workspace sent it, in characters, in a reason or the log: a
+   *  hostname is 253 at most, and 100 is more than one a person reads as a name. */
+  nameChars: 100,
+} as const;
 
 /** Addresses a workspace must never be carried to: this machine, the LAN, link-local,
  *  carrier NAT, cloud metadata, multicast, and anything that is not a public unicast IPv4. */
@@ -165,7 +177,7 @@ declare namespace hostAllowed {
 
 const answer = (client: Socket, status: string, reason: string) =>
   client.end(
-    `HTTP/1.1 ${status}\r\nX-Desolate-Reason: ${reason.replace(/[\r\n]/g, " ").slice(0, 300)}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
+    `HTTP/1.1 ${status}\r\nX-Desolate-Reason: ${printable(reason.replace(/[\r\n]/g, " "), ASKED.reasonChars)}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
   );
 
 /** What a workspace asked to reach, from the first line it sent: a hostname (never an address
@@ -403,7 +415,7 @@ export const namedOtherwise = (sniffed: Sniffed, host: string): string | null =>
     return `a connection to ${host} must name it (TLS server name or Host)`;
   return sniffed.name === host.toLowerCase()
     ? null
-    : `a connection checked for ${host} named ${sniffed.name.slice(0, 100)}`;
+    : `a connection checked for ${host} named ${printable(sniffed.name, ASKED.nameChars)}`;
 };
 
 declare namespace namedOtherwise {
@@ -440,7 +452,7 @@ declare namespace namedOtherwise {
 const handle = async (client: Socket, head: string) => {
   const { host, target, port, refused } = destinationOf(head);
   const refuse = (reason: string) => {
-    audit({ host: host ?? target.slice(0, 100), port, verdict: "refused", reason });
+    audit({ host: host ?? printable(target, ASKED.nameChars), port, verdict: "refused", reason });
     answer(client, "403 Forbidden", reason);
   };
   if (refused || !host)
@@ -481,7 +493,7 @@ const handle = async (client: Socket, head: string) => {
     // Under an allowlist, the name in its first bytes too (namedOtherwise). (The secrets
     // proxy checks its own: the server name must be the host, there.)
     if (rules.mode === "enforce" && !viaSecrets) {
-      const { sniffed, head: first } = await sniffSocket(client, 10_000);
+      const { sniffed, head: first } = await sniffSocket(client, ASKED.firstBytesMs);
       const why = namedOtherwise(sniffed, host);
       if (why) {
         audit({ host, port, address, verdict: "refused", reason: why });
@@ -591,12 +603,11 @@ if (running && socketArg) {
   }
   createServer((client) => {
     client.on("error", () => client.destroy());
-    // A client that does not finish asking in ten seconds holds nothing open.
-    client.setTimeout(10_000, () => client.destroy());
+    client.setTimeout(ASKED.headMs, () => client.destroy());
     let head = "";
     const onData = (chunk: Buffer) => {
       head += chunk.toString("latin1");
-      if (head.length > 8192) return client.destroy();
+      if (head.length > ASKED.headBytes) return client.destroy();
       if (!head.includes("\r\n\r\n")) return;
       client.off("data", onData);
       client.setTimeout(0);

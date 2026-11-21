@@ -4,7 +4,11 @@ import { connect } from "node:net";
 import * as path from "node:path";
 import { refuse } from "../../shared/exit.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
+import { listed, PAGE } from "../../shared/listed.ts";
+import type { Listed } from "../../shared/listed.ts";
+import { isSlug } from "../../shared/names.ts";
 import { normalizeName } from "../../shared/sniff.ts";
+import { printable } from "../../shared/text.ts";
 import { ROOT } from "../layout.ts";
 import {
   alive,
@@ -14,7 +18,10 @@ import {
   proxyOutDir,
   spawnAsProxy,
   stopProxy,
+  VM_NAME,
 } from "./as-proxy.ts";
+import { auditDir, auditDomains, auditEnv, auditLines } from "./audit.ts";
+import { hostAllowed } from "./proxy.ts";
 import type { Policy } from "./proxy.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke, Throws } from "../../../suede.nests/dsl.import.meta.vitest.ts";
@@ -46,7 +53,7 @@ export const start = async (
   domain: string,
   workspace: string,
 ): Promise<{ socket: string }> => {
-  if (!/^[a-z0-9-]{1,60}$/.test(vm)) throw new Error("not a VM name");
+  if (!VM_NAME.test(vm)) throw new Error("not a VM name");
   const existing = readJson<Running | null>(file(vm), null);
   if (existing && alive(existing.pid) && typeof existing.socket === "string")
     return { socket: existing.socket };
@@ -54,7 +61,10 @@ export const start = async (
   fs.mkdirSync(path.join(DIR, "running"), { recursive: true });
   const socket = path.join(proxyOutDir(domain), `${vm}.sock`);
   const log = fs.openSync(path.join(DIR, "proxy.log"), "a");
-  const env: Record<string, string> = { PATH: process.env.PATH ?? "/usr/bin:/bin" };
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? "/usr/bin:/bin",
+    ...auditEnv(),
+  };
   for (const key of ["DESOLATE_ROOT_STATE", "DESOLATE_ROOT_DOMAINS", "DESOLATE_ROOT_SYS"])
     if (process.env[key]) env[key] = process.env[key]!;
   const child = spawnAsProxy(
@@ -242,63 +252,64 @@ declare namespace setPolicy {
 
 /** What the domain has been reaching, against its allowlist: v2's `proxy recommend`. With
  *  the network open, this is the list to allow before enforcing; enforced, it is what was
- *  refused for not being on the list. Only names: nothing here is acted on. */
-export const recommend = (domain: string) => {
+ *  refused for not being on the list. Only names: nothing here is acted on. Every line the
+ *  domain's log keeps is counted, read as a stream; each list is whole, with its count, and
+ *  the host shows a page of it (R2). */
+export const recommend = async (domain: string) => {
   const rules = policy(domain);
-  const listed = (host: string) =>
-    rules.hosts.some((pattern) =>
-      pattern.startsWith("*.")
-        ? host.endsWith(pattern.slice(1)) && host.length > pattern.length - 1
-        : host === pattern,
-    );
   const reached = new Map<string, number>();
   const refused = new Map<string, number>();
-  for (const entry of auditLog({ domain, last: 100_000 })) {
+  for await (const entry of auditLines(auditDir(domainOf(domain)))) {
+    if (entry.domain !== domain) continue;
     const host = typeof entry.host === "string" ? normalizeName(entry.host) : null;
-    if (!host || listed(host)) continue;
+    if (!host || hostAllowed(host, rules.hosts)) continue;
     if (entry.verdict === "allowed") reached.set(host, (reached.get(host) ?? 0) + 1);
     else if (entry.verdict === "refused" && /allowlist/.test(String(entry.reason ?? "")))
       refused.set(host, (refused.get(host) ?? 0) + 1);
   }
-  const rank = (map: Map<string, number>) =>
-    [...map]
+  const rank = (map: Map<string, number>): Listed<{ host: string; count: number }> => {
+    const all = [...map]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([host, count]) => ({ host, count }));
+    return listed(all, 0, all.length);
+  };
   return { mode: rules.mode, listed: rules.hosts, reached: rank(reached), refused: rank(refused) };
 };
 
+/** A domain the host named: a slug, or nothing is read (it becomes a path). */
+const domainOf = (domain: string) => {
+  if (!isSlug(domain))
+    refuse(`'${printable(domain, 80)}' is not a domain's name`, "desolate domain list");
+  return domain;
+};
+
 /** What a domain's proxies audited (each domain's log is its proxies' own, in
- *  proxy-out/<domain>): every domain's, or one's, oldest first. A line that is not JSON, or
- *  names another domain than the log it is in, is not believed. */
-export const auditLog = (filter: { domain?: string; last?: number }) => {
-  let domains: string[] = [];
-  try {
-    domains = filter.domain
-      ? [filter.domain]
-      : fs.readdirSync(`${ROOT.proxies}/out`).filter((name) => /^[a-z0-9-]{1,40}$/.test(name));
-  } catch {
-    /* nothing audited yet */
-  }
-  const entries: Record<string, unknown>[] = [];
+ *  proxy-out/<domain>): every domain's, or one's, the last `last` of them (oldest first),
+ *  and how many the log keeps. Read as a stream: what is held is the `last` asked for. A
+ *  line that is not JSON, or names another domain than the log it is in, is not believed. */
+export const auditLog = async (filter: {
+  domain?: string;
+  last?: number;
+}): Promise<Listed<Record<string, unknown>>> => {
+  const last = Math.max(0, Math.floor(Number(filter.last ?? PAGE) || 0));
+  const domains = filter.domain === undefined ? auditDomains() : [domainOf(filter.domain)];
+  let total = 0;
+  let kept: Record<string, unknown>[] = [];
   for (const domain of domains) {
-    let text = "";
-    try {
-      text = fs.readFileSync(path.join(proxyOutDir(domain), "audit.log"), "utf8");
-    } catch {
-      continue;
+    // The last `last` of the domain's, in a ring: the oldest kept is at `seen % last`.
+    const ring: Record<string, unknown>[] = [];
+    let seen = 0;
+    for await (const entry of auditLines(auditDir(domain))) {
+      if (entry.domain !== domain) continue;
+      total++;
+      if (last > 0) ring[seen++ % last] = entry;
     }
-    for (const line of text.trim().split("\n").filter(Boolean)) {
-      try {
-        const entry = JSON.parse(line) as Record<string, unknown>;
-        if (entry.domain === domain) entries.push(entry);
-      } catch {
-        /* not a line a proxy wrote */
-      }
-    }
+    const mine = seen > last ? [...ring.slice(seen % last), ...ring.slice(0, seen % last)] : ring;
+    kept = [...kept, ...mine]
+      .sort((a, b) => String(a.time).localeCompare(String(b.time)))
+      .slice(Math.max(0, kept.length + mine.length - last));
   }
-  return entries
-    .sort((a, b) => String(a.time).localeCompare(String(b.time)))
-    .slice(-(filter.last ?? 100));
+  return { items: kept, total, from: total - kept.length };
 };
 
 declare namespace auditLog {
@@ -320,7 +331,55 @@ declare namespace auditLog {
     Expect<
       Invoke<typeof auditLog, [filter: { domain: "acme" }]>,
       "matches",
-      [{ host: "a.example" }, { host: "b.example" }]
+      { items: [{ host: "a.example" }, { host: "b.example" }]; total: 2; from: 0 }
+    >
+  >;
+  /** the last of them, from every file the log keeps (the ones from before the series
+   *  first), and how many it keeps: the count is of every line, not of the page */
+  export type Last = Given<
+    [
+      Fresh,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "proxies",
+          name: "out/acme/audit.log.1",
+          text: '{"time":"1","domain":"acme","host":"a.example"}\n{"time":"2","domain":"acme","host":"b.example"}\n',
+        ]
+      >,
+      Invoke<
+        typeof writeIn,
+        [
+          where: "proxies",
+          name: "out/acme/audit-1.log",
+          text: '{"time":"3","domain":"acme","host":"c.example"}\n{"time":"4","domain":"acme","host":"d.example"}',
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<typeof auditLog, [filter: { domain: "acme"; last: 3 }]>,
+        "matches",
+        {
+          items: [{ host: "b.example" }, { host: "c.example" }, { host: "d.example" }];
+          total: 4;
+          from: 1;
+        }
+      >,
+      Expect<
+        Invoke<typeof auditLog, [filter: { last: 1 }]>,
+        "matches",
+        { items: [{ host: "d.example" }]; total: 4; from: 3 }
+      >,
+    ]
+  >;
+  /** a domain that is not a name is not a path either */
+  export type NotADomain = Given<
+    Fresh,
+    Expect<
+      Invoke<typeof refusalOf, [f: typeof auditLog, args: [filter: { domain: "../acme" }]]>,
+      "matches",
+      { message: "'../acme' is not a domain's name" }
     >
   >;
 }
@@ -355,8 +414,12 @@ declare namespace recommend {
       {
         mode: "enforce";
         listed: ["*.npmjs.org"];
-        reached: [{ host: "pypi.org"; count: 2 }, { host: "github.com"; count: 1 }];
-        refused: [{ host: "evil.example"; count: 1 }];
+        reached: {
+          items: [{ host: "pypi.org"; count: 2 }, { host: "github.com"; count: 1 }];
+          total: 2;
+          from: 0;
+        };
+        refused: { items: [{ host: "evil.example"; count: 1 }]; total: 1; from: 0 };
       }
     >
   >;
