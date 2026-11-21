@@ -98,7 +98,12 @@ const guard = () => {
       for (const run of groups.values()) run.end(STOPPING);
       for (const by = Date.now() + ENDING_MS; groups.size > 0 && Date.now() < by;)
         await new Promise((resolve) => setTimeout(resolve, 20));
-      for (const pid of groups.keys()) toGroup(pid, "SIGKILL");
+      // (A run begun meanwhile, as by a handler of the same signal, is killed with the rest,
+      // and says why.)
+      for (const [pid, run] of groups) {
+        run.said(STOPPING);
+        toGroup(pid, "SIGKILL");
+      }
       ending = undefined;
     })());
   for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {

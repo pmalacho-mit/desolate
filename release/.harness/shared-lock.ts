@@ -385,3 +385,55 @@ export const hostileFolder = (
     .sort();
   return { took: JSON.parse(ran.stdout) as boolean | string, untouched, left };
 };
+
+/** Another side makes the lock's place a link to a live lock beside it (`<dir>` leads to
+ *  `<live>`, held by this process), or puts there a lock whose right names itself (a holder
+ *  that is dead, and a right `<dir>.heir-<id>` naming the same id). This process then takes
+ *  `<dir>`, not waiting, with a time limit: what came of it ("taken", a refusal's message,
+ *  or "stuck" when it did not answer in time), and is the live lock still its holder's? */
+export const misleadingLock = (
+  dir: string,
+  does: "link to a live lock" | "a right that names itself",
+): { came: string; liveIntact: boolean } => {
+  const folder = path.dirname(dir);
+  fs.mkdirSync(folder, { recursive: true });
+  const live = path.join(folder, "live.lock");
+  const holder = (pid: number, start: string | null) =>
+    JSON.stringify({ id: "0123456789abcdef0123456789abcdef", pid, host: "h", since: "s", start });
+  fs.mkdirSync(live);
+  fs.writeFileSync(path.join(live, "holder"), holder(process.pid, startOf(process.pid)));
+  if (does === "link to a live lock") fs.symlinkSync(live, dir);
+  else {
+    const dead = JSON.stringify({
+      id: "fedcba9876543210fedcba9876543210",
+      pid: 2 ** 31 - 2,
+      host: "h",
+      since: "s",
+      start: "x",
+    });
+    for (const at of [dir, `${dir}.heir-fedcba9876543210fedcba9876543210`]) {
+      fs.mkdirSync(at);
+      fs.writeFileSync(path.join(at, "holder"), dead);
+    }
+  }
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { withLock } from ${JSON.stringify(LOCK_TS)};
+       let came = "taken";
+       try {
+         await withLock(process.argv[1], async () => {}, { wait: false });
+       } catch (error) {
+         came = error.message;
+       }
+       process.stdout.write(came);`,
+      dir,
+    ],
+    { encoding: "utf8", timeout: 5000 },
+  );
+  const liveIntact =
+    fs.existsSync(path.join(live, "holder")) &&
+    JSON.parse(fs.readFileSync(path.join(live, "holder"), "utf8")).pid === process.pid;
+  return { came: ran.status === null ? "stuck" : ran.stdout || ran.stderr, liveIntact };
+};

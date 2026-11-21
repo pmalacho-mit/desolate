@@ -60,6 +60,7 @@ import type {
   holderUnreadable,
   hostileFolder,
   leftWithABeat,
+  misleadingLock,
 } from "../.harness/shared-lock.ts";
 
 /** Who holds a lock, as a refusal or a wait says it: the process, the machine it is on (a
@@ -191,6 +192,8 @@ const small = (file: string): string | null => {
   try {
     const bytes = Buffer.alloc(opened.size);
     return bytes.subarray(0, fs.readSync(opened.fd, bytes, 0, opened.size, 0)).toString("utf8");
+  } catch {
+    return null;
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -225,20 +228,30 @@ const read = (at: string): Seen | null => {
     if (tries === 100) return { entry: UNREAD, is };
     // Not a directory (a file, a link, one dangling): no lock of ours, and nobody's.
     if (!is.endsWith(":d")) return { entry: NOBODY, is };
-    try {
-      if (fs.readdirSync(at).length === 0) return null;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (identity(at) !== is) continue;
-      // One no taker may read (ours are open to every taker): nobody's. Any other failure
-      // (no descriptor left) is a holder not read just now.
-      const nobodys =
-        code === "ENOENT" || code === "ENOTDIR" || code === "EACCES" || code === "EPERM";
-      return { entry: nobodys ? NOBODY : UNREAD, is };
-    }
+    // Its holder first, as `same` reads it, so the two never disagree about one lock.
     const text = holderFile(path.join(at, "holder"));
+    let entry = text === undefined ? UNREAD : holderOf(text);
+    // No holder: an empty directory is no lock (a rename replaces it); one that holds other
+    // things, or that no taker may list (ours are open to all), is nobody's.
+    if (text === null && emptyDir(at)) entry = EMPTY;
     if (identity(at) !== is) continue;
-    return { entry: text === undefined ? UNREAD : holderOf(text), is };
+    return entry === EMPTY ? null : { entry, is };
+  }
+};
+
+const EMPTY: Entry = { id: "empty", pid: 0, host: "", since: "", start: null };
+/** Whether the directory `at` holds nothing, by its first entry alone (a directory of a
+ *  million names put there is not listed); false when it cannot be listed. */
+const emptyDir = (at: string): boolean => {
+  try {
+    const listing = fs.opendirSync(at);
+    try {
+      return listing.readSync() === null;
+    } finally {
+      listing.closeSync();
+    }
+  } catch {
+    return false;
   }
 };
 
@@ -328,13 +341,20 @@ const away = (at: string, seen: Seen) => {
       );
     throw error;
   }
-  if (!same(gone, seen))
+  if (!same(gone, seen)) {
     try {
       fs.renameSync(gone, at);
-      return;
     } catch {
-      /* the place is taken again: below */
+      /* the place is taken again: what was moved is left where it is, beside the lock */
     }
+    return;
+  }
+  // What is nobody's is not reached into (a link there leads anywhere): a file or a link is
+  // unlinked itself, and a directory left beside the lock, as it was moved.
+  if (seen.entry === NOBODY) {
+    if (!seen.is.endsWith(":d")) unlinked(gone);
+    return;
+  }
   removed(gone);
 };
 
@@ -375,6 +395,8 @@ const removed = (dir: string) => {
  *  holder file that cannot be read just now is no evidence against it). */
 const same = (at: string, seen: Seen): boolean => {
   if (identity(at) !== seen.is) return false;
+  // A file or a link in the lock's place is known by what it is, not by what it leads to.
+  if (!seen.is.endsWith(":d")) return seen.entry === NOBODY;
   const text = holderFile(path.join(at, "holder"));
   // Nobody's: still nobody's (not a lock of ours made since, given the same inode).
   if (seen.entry === NOBODY) return text !== undefined && holderOf(text) === NOBODY;
@@ -450,8 +472,14 @@ const clear = (
   at: string,
   seen: Seen,
   is: (at: string, entry: Entry) => Is,
+  depth = 0,
 ): boolean => {
-  const right = `${dir}.heir-${seen.entry.id}`;
+  // Heirs of heirs, each dead: a few deep is a crash on a crash; more (or a right that names
+  // itself) is another side's making, and is looked at again in a moment, not followed.
+  if (depth > 4) return false;
+  // Named after what it is the right to (a lock, or a right), so that the right to clear a
+  // right is never the right itself, whatever id the holders name.
+  const right = `${at}.heir-${seen.entry.id}`;
   const heir = me();
   const mine = put(right, heir);
   if (mine !== null) {
@@ -463,7 +491,9 @@ const clear = (
     return true;
   }
   const other = read(right);
-  return other !== null && is(right, other.entry) === "dead" && clear(dir, right, other, is);
+  return (
+    other !== null && is(right, other.entry) === "dead" && clear(dir, right, other, is, depth + 1)
+  );
 };
 
 /** The beat of a share lock: a thread that writes a count into the lock's `beat` file,
@@ -602,7 +632,7 @@ export const withLock = async <T>(
     const state = is(dir, holder);
     // Cleared: look again at once; unless what was there is there still (it could not be
     // moved), which is looked at again in a moment like any lock that is held.
-    if (state === "dead" && clear(dir, dir, seen, is) && !same(dir, seen)) continue;
+    if (state === "dead" && clear(dir, dir, seen, is) && identity(dir) !== seen.is) continue;
     if (state === "alive") {
       const who: Holder = { pid: holder.pid, host: holder.host, since: holder.since };
       if (options.wait === false)
@@ -910,6 +940,36 @@ declare namespace withLock {
       >
     >,
   ];
+  /** and a place that is not what it says neither stalls a taker nor moves a live lock: a
+   *  link to a live lock is a link (moved away; the lock it led to is untouched), and a
+   *  right that names itself is not followed without end */
+  export type MisleadingLock = Configure<
+    { timeout: 15_000 },
+    [
+      Given<
+        Invoke<typeof emptyScratch>,
+        Expect<
+          Invoke<
+            typeof misleadingLock,
+            [dir: Invoke<typeof scratch, [name: "odd/a.lock"]>, does: "link to a live lock"]
+          >,
+          "=",
+          { came: "taken"; liveIntact: true }
+        >
+      >,
+      Given<
+        Invoke<typeof emptyScratch>,
+        Expect<
+          Invoke<
+            typeof misleadingLock,
+            [dir: Invoke<typeof scratch, [name: "odd/b.lock"]>, does: "a right that names itself"]
+          >,
+          "=",
+          { came: "taken"; liveIntact: true }
+        >
+      >,
+    ]
+  >;
   /** on a share, a holder is alive by its beat: one whose beat goes on is refused to a
    *  taker that will not wait (the control for the next) */
   export type ShareBeating = Given<
