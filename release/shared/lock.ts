@@ -9,7 +9,11 @@
 //   another process since is not taken for the holder.
 // - `share`: the lock is in a folder several VMs see, and one VM cannot see another's
 //   processes. The holder writes a beat into the lock for as long as it lives; the lock is
-//   stale only when the beat has stopped (BEAT, below, is the one number).
+//   stale only when the beat has stopped (BEAT, below, is the one number). A share lock
+//   keeps its takers apart, and belongs in a folder only desolate's own processes write:
+//   a side that writes there can remove it, and node has no openat, so one that swaps a
+//   link in for a lock being made or removed, in the moment it appears, can make a taker
+//   create or unlink files of a lock's names where the link leads (docs/v3/limits.md).
 //
 // How it is exclusive, with nothing but a rename:
 // - Taking: the lock is made complete beside its place (holder written, beat started), then
