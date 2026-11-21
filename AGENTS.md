@@ -125,8 +125,8 @@ TMPDIR=/desolate/scratch/tests DOCKER_HOST=unix:///var/run/docker-host.sock DESO
 - `.devcontainer/setup-test-tools.sh` installed shellcheck, jq, TypeScript and an arm64
   Chromium (Playwright's) when the container was made.
 
-T2 inside a workspace passed **142 of 142** on 2026-11-17 (13 minutes, on the owner's M1),
-under `desolate agent`. No failure is known there: one that appears is yours to look at. Three
+T2 inside a workspace passed **189 of 189** on 2026-11-21 (on the owner's M1). Some tests
+are known to be flaky there (#211 is finding why); any other failure is yours to look at. Three
 that used to fail there were the tests' own (a nested editor taken for a leak, a log read
 before it was written, a diff read before its colours came), and one was desolate's (a
 secrets proxy that was not running, said to be another program's): all fixed.
@@ -137,20 +137,22 @@ terminal (`run.sh`): they play the person themselves.
 
 ## What has been tested, and what has not
 
-As of 2026-11-16, on the owner's M1 Max (macOS, Lima with vz) unless it says otherwise.
+As of 2026-11-21, on the owner's M1 Max (macOS, Lima with vz) unless it says otherwise.
 [`release/docs/reference.md`](release/docs/reference.md) ("What works today") has the full
 table, feature by feature.
 
 **Tested**
 
-- **T1:** all of it, on the Mac (on 2026-11-16: the node tests, and 1,420 in-source tests in
-  99 files) and, earlier, inside a workspace.
-- **T2:** 142 of 142 inside a workspace on 2026-11-17, the way to run it from a Mac
-  ([T2 from a Mac](tests/v3/README.md#t2-from-a-mac-run-it-in-a-desolate-workspace)). Under
-  Colima on the Mac, 123 of 142: every failure in `05`, `07` or `08`, which cannot pass there.
-- **T4** (`tests/v3/run.sh t4`, about 3 minutes, on the Mac), 15 of 15 on 2026-11-17:
+- **T1:** all of it, on the Mac (on 2026-11-21: 291 node tests, and 1,932 in-source tests in
+  119 files) and, earlier, inside a workspace.
+- **T2:** 189 tests in 20 suites, all passing inside a workspace on 2026-11-21, the way to run
+  it from a Mac ([T2 from a Mac](tests/v3/README.md#t2-from-a-mac-run-it-in-a-desolate-workspace)).
+  Under Colima on the Mac (2026-11-17), 123 of the 142 there were then: every failure in `05`,
+  `07` or `08`, which cannot pass there.
+- **T4** (`tests/v3/run.sh t4`, about 5 minutes, on the Mac), 24 of 24 on 2026-11-21:
   read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path
-  between domains, an offer over a real share, the editor, a secret.
+  between domains, an offer over a real share, a share swapped for a link as its VM starts, a
+  push from the real root VM, a spawn from a real VM, the editor, a secret, compose.
 - **Upgrades, by hand on the M1:**
   - `git pull` then `desolate bootstrap` kept every piece of state, and re-provisioned the base
     and root VMs in place.
