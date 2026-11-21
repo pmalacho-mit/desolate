@@ -11,9 +11,10 @@
 # is something a program can choose, and a completion that offers `$(...)`, an option-like
 # word or a control sequence would put it on the person's command line.
 # The rule is shared/names.ts's isSlug, clause for clause. Shell cannot import it, so T1
-# (`scripts`) reads this line and compares the two, name by name.
+# (tests/v3/t1/scripts.test.ts) reads this line and compares the two, name by name. The
+# letters are spelled out: in a UTF-8 locale, [a-z] matches é too (macOS's bash, measured).
 _desolate_home="${DESOLATE_HOME:-$HOME/.desolate}"
-_desolate_slug() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
+_desolate_slug() { [[ $1 =~ ^[0123456789abcdefghijklmnopqrstuvwxyz][-0123456789abcdefghijklmnopqrstuvwxyz]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
 _desolate_domains() {
     local dir name
     for dir in "$_desolate_home"/domains/*/; do

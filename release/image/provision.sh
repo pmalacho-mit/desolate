@@ -17,6 +17,8 @@ export DEBIAN_FRONTEND=noninteractive LC_ALL=C
 # Quiet and repeatable: no service restarts offered after each apt step, no npm notices.
 export NEEDRESTART_SUSPEND=1 NPM_CONFIG_UPDATE_NOTIFIER=false
 KIND=${DESOLATE_IMAGE_KIND:-vm}
+EDITOR_SERVER=${DESOLATE_IMAGE_EDITOR:-}
+[ -z "$EDITOR_SERVER" ] || [ "$EDITOR_SERVER" = none ] || { echo "provision: DESOLATE_IMAGE_EDITOR is none or unset, not '$EDITOR_SERVER'" >&2; exit 64; }
 HERE=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$HERE/../pins.env"
@@ -135,19 +137,21 @@ say "editor server (VSCodium $VSCODIUM_VERSION)"
 if [ ! -x /opt/desolate/editor/bin/codium-server ]; then
   if [ -d "$STAGE/editor/bin" ]; then
     mkdir -p /opt/desolate && cp -a "$STAGE/editor" /opt/desolate/editor
-  elif [ "${DESOLATE_IMAGE_EDITOR:-}" = none ]; then
+  elif [ "$EDITOR_SERVER" = none ]; then
     # Asked for (build.sh --no-editor: the agent's sandbox, which has no route to the release).
     # The image is usable for everything but P1's editor, and says so, with how to have one:
     # nothing may claim an editor that is not there. (workspace/editor.sh shows this file.)
     mkdir -p /opt/desolate
-    echo "this image was built without the editor server (image/build.sh --no-editor). To have it: build the image again where github.com can be reached, or with --editor-from <a directory holding VSCodium's server, $VSCODIUM_VERSION>" >/opt/desolate/EDITOR-MISSING
+    echo "this image was built without the editor server (image/build.sh --no-editor, or DESOLATE_IMAGE_EDITOR=none). To have it: build the image again where github.com can be reached, or with --editor-from <a directory holding VSCodium's server, $VSCODIUM_VERSION>" >/opt/desolate/EDITOR-MISSING
     echo "    NOT INSTALLED: the editor server, as asked (DESOLATE_IMAGE_EDITOR=none)"
   else
     url="https://github.com/VSCodium/vscodium/releases/download/$VSCODIUM_VERSION/vscodium-reh-web-linux-$ARCH-$VSCODIUM_VERSION.tar.gz"
     # It comes, and is the pinned one, or the provisioning fails and says what to do. An image
     # is never made without its editor by a download that failed: only by being asked (above).
     fetch "$url" "$(pin VSCODIUM_SHA256)" /tmp/reh.tar.gz || {
-      echo "provision: no editor server, so no image. Run this again when github.com can be reached (on a Mac: desolate bootstrap). A builder that cannot reach it: image/build.sh --editor-from <dir>, or --no-editor for an image without one." >&2
+      if [ "$KIND" = container ]; then how="docker build --build-arg DESOLATE_IMAGE_EDITOR=none ... for an image without one"
+      else how="image/build.sh --editor-from <dir>, or --no-editor for an image without one"; fi
+      echo "provision: no editor server, so no image. Run this again when github.com can be reached (on a Mac: desolate bootstrap). A builder that cannot reach it: $how." >&2
       exit 1
     }
     mkdir -p /opt/desolate/editor && tar -xz -C /opt/desolate/editor -f /tmp/reh.tar.gz && rm -f /tmp/reh.tar.gz

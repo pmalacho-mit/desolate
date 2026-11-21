@@ -32,6 +32,6 @@ while :; do
   [ "$pause" -le 60 ] || pause=60
   failures=$((failures + 1))
   [ -z "$count" ] || echo "$failures" >"$count"
-  echo "$name: ended with $code at $(date -u +%FT%TZ), $((SECONDS - started)) s after its start; starting it again in $pause s" >&2
+  echo "$name: ended with $code at $(date -u +%FT%TZ), $((SECONDS - started)) s after it started (the next start waits $pause s); starting it again" >&2
   sleep "$pause"
 done

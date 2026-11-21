@@ -16,9 +16,10 @@ set -euo pipefail
 USER_UID=${1:?usage: proxy-user.sh <uid> <domain>}
 DOMAIN=${2:?usage: proxy-user.sh <uid> <domain>}
 # A domain's name is a slug, checked again here, before it is a path: shared/names.ts's
-# isSlug, clause for clause. Shell cannot import it, so T1 (`scripts`) reads this line and
-# compares the two, name by name.
-is_slug() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
+# isSlug, clause for clause. Shell cannot import it, so T1 (tests/v3/t1/scripts.test.ts) reads
+# this line and compares the two, name by name. The letters are spelled out: in a UTF-8
+# locale, [a-z] matches é too (macOS's bash, measured).
+is_slug() { [[ $1 =~ ^[0123456789abcdefghijklmnopqrstuvwxyz][-0123456789abcdefghijklmnopqrstuvwxyz]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
 is_slug "$DOMAIN" || { printf "proxy-user.sh: %q is not a domain name (shared/names.ts: lower-case letters, digits and dashes, 40 at most)\n" "$DOMAIN" >&2; exit 2; }
 USER_NAME=$(getent passwd "$USER_UID" | cut -d: -f1)
 USER_GROUP=$(id -gn "$USER_NAME")

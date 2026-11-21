@@ -76,10 +76,11 @@ done
 
 # New: a workspace and an agent for each, up to --max open at once.
 working=$(grep -c . <<<"$(comm -12 <(sort <<<"$have") <(sort <<<"$open"))" || true)
+waiting=()
 for n in $open; do
   number "$n" || continue
   grep -qxF "$n" <<<"$have" && continue
-  [ "$working" -lt "$max" ] || { echo "--max $max are working: #$n waits for the next pass"; continue; }
+  [ "$working" -lt "$max" ] || { waiting+=("#$n"); continue; }
   # (Values go to jq as --arg, never into its program: a program can read the environment.)
   task=$(gh issue view "$n" --repo "$repo" --json title,body,url | jq -r --arg n "$n" --arg repo "$repo" '"GitHub issue #\($n) of \($repo): \(.title)\n\n\(.body)\n\n(\(.url))"')
   echo "#$n: starting $domain/issue-$n"
@@ -90,3 +91,5 @@ for n in $open; do
   fi
   working=$((working + 1))
 done
+# Those that wait, in one line however many they are (GitHub's order: the newest first).
+[ ${#waiting[@]} -eq 0 ] || echo "--max $max are working: ${#waiting[@]} wait for the next pass (${waiting[*]})"

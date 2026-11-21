@@ -18,8 +18,9 @@ NODE="node --disable-warning=ExperimentalWarning"
 # and gave the user any directory it named, /usr/local/bin included.)
 as_user() { runuser -u "$USER_NAME" -- "$@"; }
 # A domain's name is a slug: shared/names.ts's isSlug, clause for clause. Shell cannot import
-# it, so T1 (`scripts`) reads this line and compares the two, name by name.
-is_slug() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
+# it, so T1 (tests/v3/t1/scripts.test.ts) reads this line and compares the two, name by name.
+# The letters are spelled out: in a UTF-8 locale, [a-z] matches é too (macOS's bash, measured).
+is_slug() { [[ $1 =~ ^[0123456789abcdefghijklmnopqrstuvwxyz][-0123456789abcdefghijklmnopqrstuvwxyz]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
 
 # Lima runs every command from the host over one ssh connection per VM, and sshd allows ten
 # sessions on a connection by default: a workspace's link, the dashboard and desolate's own
