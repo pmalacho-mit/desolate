@@ -150,8 +150,12 @@ export const nestedLeftRunning = async (): Promise<boolean> => {
 };
 
 /** A process runs a `sleep` with run() and a signal, listens for SIGTERM itself (so it lives
- *  on), and is sent SIGTERM: what does its run answer? */
-export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
+ *  on), and is sent SIGTERM: what does its run answer? `escapee`: the program run starts the
+ *  `sleep` (10 s) in a session of its own, holding the run's output, and exits; the answer
+ *  then also says whether it came soon (within twice ENDING_MS), not when the sleep ends. */
+export const answerWhenItsRunnerEnds = async (
+  escapee = false,
+): Promise<{ code: number; stdout: string; stderr: string; soon?: boolean }> => {
   const runner = spawn(
     NODE[0]!,
     [
@@ -159,9 +163,13 @@ export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
       "-e",
       `import { run } from ${JSON.stringify(RUN_TS)};
        process.on("SIGTERM", () => {});
-       const answer = run("sh", ["-c", "exec sleep 30"], { signal: new AbortController().signal });
+       const program = process.argv[1] === "escapee"
+         ? [process.execPath, ["-e", 'require("node:child_process").spawn("sleep", ["10"], { detached: true, stdio: "inherit" }).unref()']]
+         : ["sh", ["-c", "exec sleep 30"]];
+       const answer = run(program[0], program[1], { signal: new AbortController().signal });
        process.stderr.write("running\\n");
        process.stdout.write(JSON.stringify(await answer));`,
+      escapee ? "escapee" : "plain",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -171,8 +179,10 @@ export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
     runner.stderr.on("data", (chunk) => String(chunk).includes("running") && resolve());
     runner.on("close", () => reject(new Error("the runner ended before its program ran")));
   });
-  await sleep(100);
+  await sleep(escapee ? 500 : 100);
+  const told = Date.now();
   runner.kill("SIGTERM");
   await new Promise((resolve) => runner.on("close", resolve));
-  return JSON.parse(out);
+  const answer = JSON.parse(out);
+  return escapee ? { ...answer, soon: Date.now() - told < 2 * ENDING_MS } : answer;
 };

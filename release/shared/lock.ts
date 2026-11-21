@@ -9,7 +9,11 @@
 //   another process since is not taken for the holder.
 // - `share`: the lock is in a folder several VMs see, and one VM cannot see another's
 //   processes. The holder writes a beat into the lock for as long as it lives; the lock is
-//   stale only when the beat has stopped (BEAT, below, is the one number).
+//   stale only when the beat has stopped (BEAT, below, is the one number). A share lock
+//   keeps its takers apart, and belongs in a folder only desolate's own processes write:
+//   a side that writes there can remove it, and node has no openat, so one that swaps a
+//   link in for a lock being made or removed, in the moment it appears, can make a taker
+//   create or unlink files of a lock's names where the link leads (docs/v3/limits.md).
 //
 // How it is exclusive, with nothing but a rename:
 // - Taking: the lock is made complete beside its place (holder written, beat started), then
@@ -58,7 +62,9 @@ import type {
   danglingLinkAt,
   frozenHeir,
   holderUnreadable,
+  hostileFolder,
   leftWithABeat,
+  misleadingLock,
 } from "../.harness/shared-lock.ts";
 
 /** Who holds a lock, as a refusal or a wait says it: the process, the machine it is on (a
@@ -110,7 +116,13 @@ const holderFile = (file: string): string | null | undefined => {
     fd = fs.openSync(file, NOFOLLOW);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" || code === "ELOOP" || code === "ENOTDIR" || code === "EMLINK"
+    // (EACCES: one no taker may read, since ours are open to every taker.)
+    return code === "ENOENT" ||
+      code === "ELOOP" ||
+      code === "ENOTDIR" ||
+      code === "EMLINK" ||
+      code === "EACCES" ||
+      code === "EPERM"
       ? null
       : undefined;
   }
@@ -184,6 +196,8 @@ const small = (file: string): string | null => {
   try {
     const bytes = Buffer.alloc(opened.size);
     return bytes.subarray(0, fs.readSync(opened.fd, bytes, 0, opened.size, 0)).toString("utf8");
+  } catch {
+    return null;
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -210,22 +224,38 @@ type Seen = { entry: Entry; is: string };
  *  replaced, while it was being read is read again (a holder leaving between the listing
  *  and the reading of its holder file was taken for one that named nobody). */
 const read = (at: string): Seen | null => {
-  for (;;) {
+  // (Bounded: a side that swaps the place without end is not waited out here, on the main
+  // thread; it is a holder not read just now, and looked at again in a moment.)
+  for (let tries = 0; ; tries++) {
     const is = identity(at);
     if (is === null) return null;
+    if (tries === 100) return { entry: UNREAD, is };
     // Not a directory (a file, a link, one dangling): no lock of ours, and nobody's.
     if (!is.endsWith(":d")) return { entry: NOBODY, is };
-    try {
-      if (fs.readdirSync(at).length === 0) return null;
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
-      if (identity(at) !== is) continue;
-      return { entry: NOBODY, is };
-    }
+    // Its holder first, as `same` reads it, so the two never disagree about one lock.
     const text = holderFile(path.join(at, "holder"));
+    let entry = text === undefined ? UNREAD : holderOf(text);
+    // No holder: an empty directory is no lock (a rename replaces it); one that holds other
+    // things, or that no taker may list (ours are open to all), is nobody's.
+    if (text === null && emptyDir(at)) entry = EMPTY;
     if (identity(at) !== is) continue;
-    return { entry: text === undefined ? UNREAD : holderOf(text), is };
+    return entry === EMPTY ? null : { entry, is };
+  }
+};
+
+const EMPTY: Entry = { id: "empty", pid: 0, host: "", since: "", start: null };
+/** Whether the directory `at` holds nothing, by its first entry alone (a directory of a
+ *  million names put there is not listed); false when it cannot be listed. */
+const emptyDir = (at: string): boolean => {
+  try {
+    const listing = fs.opendirSync(at);
+    try {
+      return listing.readSync() === null;
+    } finally {
+      listing.closeSync();
+    }
+  } catch {
+    return false;
   }
 };
 
@@ -265,14 +295,26 @@ const holderOf = (text: string | null): Entry => {
 const put = (at: string, entry: Entry, filled?: (fresh: string) => void): string | null => {
   const fresh = `${at}.new-${entry.id}`;
   fs.mkdirSync(fresh, { mode: 0o755 });
+  let is: string | null;
   try {
-    fs.writeFileSync(path.join(fresh, "holder"), JSON.stringify(entry), { mode: 0o644 });
+    // Made, never opened: a link another side put there in the moment since the mkdir is
+    // not followed (O_EXCL fails on any name that is there, a link that leads nowhere too),
+    // and the taking fails, saying so: another is at the lock's own making.
+    fs.writeFileSync(path.join(fresh, "holder"), JSON.stringify(entry), {
+      mode: 0o644,
+      flag: "wx",
+    });
     filled?.(fresh);
-    const is = identity(fresh);
+    is = identity(fresh);
+  } catch (error) {
+    removed(fresh);
+    throw error;
+  }
+  try {
     fs.renameSync(fresh, at);
     return is;
   } catch (error) {
-    fs.rmSync(fresh, { recursive: true, force: true });
+    removed(fresh);
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOTEMPTY" || code === "EEXIST") return null;
     throw error;
@@ -293,25 +335,75 @@ const away = (at: string, seen: Seen) => {
   try {
     fs.renameSync(at, gone);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return;
+    // Something no taker made, that this one may not move (a directory closed to it): no
+    // taker can ever take the lock, and waiting would not change that. Said, as such.
+    if (code === "EACCES" || code === "EPERM")
+      throw new Error(
+        `${path.basename(at)} is in the way: what is there is no lock, and this process may not move it (${code}): ${at}`,
+      );
     throw error;
   }
-  if (!same(gone, seen))
+  if (!same(gone, seen)) {
     try {
       fs.renameSync(gone, at);
-      return;
     } catch {
-      /* the place is taken again: below */
+      /* the place is taken again: what was moved is left where it is, beside the lock */
     }
-  fs.rmSync(gone, { recursive: true, force: true });
+    return;
+  }
+  // What is nobody's is not reached into (a link there leads anywhere): a file or a link is
+  // unlinked itself, and a directory left beside the lock, as it was moved.
+  if (seen.entry === NOBODY) {
+    if (!seen.is.endsWith(":d")) unlinked(gone);
+    return;
+  }
+  removed(gone);
+};
+
+/** `file` unlinked, if it is there (a link: the link, never what it leads to). */
+const unlinked = (file: string) => {
+  try {
+    fs.unlinkSync(file);
+  } catch {
+    /* not there, or not a file of ours */
+  }
+};
+
+/** A lock directory moved out of its place, removed: the two files a lock of ours holds,
+ *  and then the directory, and nothing else. Not a removal of whatever tree is there, which
+ *  walks it (another side's, on a share) and follows a link swapped into it mid-walk:
+ *  every file of the folder it leads to went. A directory that holds anything else is not
+ *  ours, and is left where it was moved, beside the lock, for a person to see. */
+const removed = (dir: string) => {
+  for (const name of ["holder", "beat"])
+    try {
+      fs.unlinkSync(path.join(dir, name));
+    } catch {
+      /* not there, or not ours to remove */
+    }
+  try {
+    fs.rmdirSync(dir);
+  } catch {
+    /* not empty (not ours), or not a directory: a link, a file */
+    try {
+      if (!fs.lstatSync(dir).isDirectory()) fs.unlinkSync(dir);
+    } catch {
+      /* gone already */
+    }
+  }
 };
 
 /** Whether the lock at `at` is the one seen: the same directory, naming the same holder (a
  *  holder file that cannot be read just now is no evidence against it). */
 const same = (at: string, seen: Seen): boolean => {
   if (identity(at) !== seen.is) return false;
-  if (seen.entry === NOBODY) return true;
+  // A file or a link in the lock's place is known by what it is, not by what it leads to.
+  if (!seen.is.endsWith(":d")) return seen.entry === NOBODY;
   const text = holderFile(path.join(at, "holder"));
+  // Nobody's: still nobody's (not a lock of ours made since, given the same inode).
+  if (seen.entry === NOBODY) return text !== undefined && holderOf(text) === NOBODY;
   return text === undefined || holderOf(text).id === seen.entry.id;
 };
 
@@ -384,8 +476,14 @@ const clear = (
   at: string,
   seen: Seen,
   is: (at: string, entry: Entry) => Is,
+  depth = 0,
 ): boolean => {
-  const right = `${dir}.heir-${seen.entry.id}`;
+  // Heirs of heirs, each dead: a few deep is a crash on a crash; more (or a right that names
+  // itself) is another side's making, and is looked at again in a moment, not followed.
+  if (depth > 4) return false;
+  // Named after what it is the right to (a lock, or a right), so that the right to clear a
+  // right is never the right itself, whatever id the holders name.
+  const right = `${at}.heir-${seen.entry.id}`;
   const heir = me();
   const mine = put(right, heir);
   if (mine !== null) {
@@ -397,7 +495,9 @@ const clear = (
     return true;
   }
   const other = read(right);
-  return other !== null && is(right, other.entry) === "dead" && clear(dir, right, other, is);
+  return (
+    other !== null && is(right, other.entry) === "dead" && clear(dir, right, other, is, depth + 1)
+  );
 };
 
 /** The beat of a share lock: a thread that writes a count into the lock's `beat` file,
@@ -406,7 +506,7 @@ const clear = (
  *  the process busy (a `spawnSync`, a long parse) does not stop the beat; it ends with the
  *  process, which is the point. Answers once the first beat is written. */
 const startBeat = async (file: string, everyMs: number): Promise<() => Promise<void>> => {
-  const fd = fs.openSync(file, "w", 0o644);
+  const fd = fs.openSync(file, "wx", 0o644);
   const worker = new Worker(
     // (getBuiltinModule: the same text is a script or a module, whichever this process
     // takes evaluated code for.)
@@ -454,7 +554,9 @@ const pause = (ms: number, signal?: AbortSignal) =>
  *  it, for moments, are others named after it (`<dir>.new-<id>`, `.heir-<id>`, `.gone-<id>`,
  *  `.beat-<id>`): the lock being made, taken over or removed. Whatever sweeps that folder
  *  leaves them, or sweeps only when no taker runs; one left by a process killed in such a
- *  moment is small, and harmless.
+ *  moment is small, and harmless. A directory that was in the lock's place and was not a
+ *  lock (it held other files) is moved aside and left there, as `<dir>.gone-<x>`: it is
+ *  not walked to be removed, since on a share another side may swap a link into it.
  *
  *  - `scope`: how a holder is known to be alive (above). `machine` unless said.
  *  - `wait`: when the lock is held by something alive, wait for it (the default), for as
@@ -510,7 +612,7 @@ export const withLock = async <T>(
       try {
         stop = await startBeat(fresh, pace.beatMs);
       } catch (error) {
-        fs.rmSync(fresh, { force: true });
+        unlinked(fresh);
         throw error;
       }
       let there: string | null;
@@ -520,7 +622,7 @@ export const withLock = async <T>(
         await stop();
         throw error;
       } finally {
-        fs.rmSync(fresh, { force: true });
+        unlinked(fresh);
       }
       if (there !== null) {
         mine = { entry, is: there };
@@ -532,7 +634,9 @@ export const withLock = async <T>(
     }
     const holder = seen.entry;
     const state = is(dir, holder);
-    if (state === "dead" && clear(dir, dir, seen, is)) continue;
+    // Cleared: look again at once; unless what was there is there still (it could not be
+    // moved), which is looked at again in a moment like any lock that is held.
+    if (state === "dead" && clear(dir, dir, seen, is) && identity(dir) !== seen.is) continue;
     if (state === "alive") {
       const who: Holder = { pid: holder.pid, host: holder.host, since: holder.since };
       if (options.wait === false)
@@ -565,11 +669,13 @@ export const withLock = async <T>(
     try {
       clear(dir, dir, mine, is);
     } catch {
-      // The right could not be made (no descriptor left, a full disk): the lock is left
-      // without it, as the one it is. Nobody else holds a live holder's right but on a
-      // share, where it is a waiter that took this holder for dead and moves only it.
-      away(dir, mine);
+      /* below */
     }
+    // Still there: the right could not be made (no descriptor left, a full disk), or what
+    // was in its place was cleared instead (a directory left there, or put there). The lock
+    // is left without it, as the one it is: nobody else holds a live holder's right but on
+    // a share, where it is a waiter that took this holder for dead, and moves only it.
+    if (same(dir, mine)) away(dir, mine);
   }
 };
 
@@ -798,6 +904,74 @@ declare namespace withLock {
         "fetched"
       >,
       Expect<Invoke<typeof scratchFiles, [dir: "locks"]>, "=", []>,
+    ]
+  >;
+  /** what another side puts in a shared lock folder is not followed: a link put into the
+   *  lock being made is not written through (the taking fails, and says so), and a directory in the lock's place holding a link is moved aside, not walked:
+   *  the taker's own files stay as they were. (Before, the first overwrote the file it led
+   *  to; the second, with a link swapped in mid-removal, emptied the folder.) */
+  export type HostileFolder = [
+    Given<
+      Invoke<typeof emptyScratch>,
+      Expect<
+        Invoke<
+          typeof hostileFolder,
+          [
+            dir: Invoke<typeof scratch, [name: "shared/a.lock"]>,
+            does: "link in the lock being made",
+          ]
+        >,
+        "=",
+        {
+          took: "EEXIST: file already exists, open '<the lock being made>/holder'";
+          untouched: true;
+          left: [];
+        }
+      >
+    >,
+    Given<
+      Invoke<typeof emptyScratch>,
+      Expect<
+        Invoke<
+          typeof hostileFolder,
+          [
+            dir: Invoke<typeof scratch, [name: "shared/b.lock"]>,
+            does: "a directory with a link in it",
+          ]
+        >,
+        "=",
+        { took: true; untouched: true; left: ["b.lock.gone-<id>"] }
+      >
+    >,
+  ];
+  /** and a place that is not what it says neither stalls a taker nor moves a live lock: a
+   *  link to a live lock is a link (moved away; the lock it led to is untouched), and a
+   *  right that names itself is not followed without end */
+  export type MisleadingLock = Configure<
+    { timeout: 15_000 },
+    [
+      Given<
+        Invoke<typeof emptyScratch>,
+        Expect<
+          Invoke<
+            typeof misleadingLock,
+            [dir: Invoke<typeof scratch, [name: "odd/a.lock"]>, does: "link to a live lock"]
+          >,
+          "=",
+          { came: "taken"; liveIntact: true }
+        >
+      >,
+      Given<
+        Invoke<typeof emptyScratch>,
+        Expect<
+          Invoke<
+            typeof misleadingLock,
+            [dir: Invoke<typeof scratch, [name: "odd/b.lock"]>, does: "a right that names itself"]
+          >,
+          "=",
+          { came: "taken"; liveIntact: true }
+        >
+      >,
     ]
   >;
   /** on a share, a holder is alive by its beat: one whose beat goes on is refused to a
