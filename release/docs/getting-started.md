@@ -350,6 +350,13 @@ git log --oneline you--app/feature/greet-by-name    # each domain is a remote
 git push origin you--app/feature/greet-by-name:refs/heads/feature/greet-by-name
 ```
 
+A shell in the git terminal stays open when its tab closes (or the laptop sleeps): open the
+terminal again and it offers the shell back, as you left it. `exit` ends one. At most six are
+open at once (the setting `git.shells`, `DESOLATE_GIT_SHELLS`; the lines a tab keeps to scroll
+back through are `git.scrollbackLines`). `git push` and `desolate fetch` wait for as long as
+you do, and say what the host is doing meanwhile; Ctrl-C withdraws a push until it is handed
+to the root, after which you decline it on the approval page.
+
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
 it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes

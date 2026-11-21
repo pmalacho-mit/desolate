@@ -26,6 +26,8 @@ import {
   parseRepo,
 } from "../shared/names.ts";
 import { embedAddress } from "./approve-web.ts";
+import { TERMINAL } from "../shared/limits.ts";
+import { define, valueOf, whole } from "../shared/settings.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { carriesCredential, cookieValue, signedInPage } from "../shared/page-key.ts";
@@ -38,8 +40,36 @@ import type { ask, gitVmDown, noShell, quiet } from "../.harness/host-web.ts";
 
 export const TOKEN_FILE = path.join(paths.state, "git-token");
 const UI = path.join(RELEASE_DIR, "host", "git-ui");
-/** idleMs: a shell with no tab reading it ends after this (a reload opens a new one). */
-const LIMIT = { sessions: 6, input: 64 * 1024, kept: 256 * 1024, idleMs: 30_000 } as const;
+
+/** How many shells may be open at once, a tab reading each or not. A shell whose tab closed
+ *  (by mistake, a laptop's lid, a reload) is not ended: it waits for the page to come back to
+ *  it, and the page offers it when it opens. So the shells counted are the person's own. */
+export const SHELLS = define({
+  name: "git.shells",
+  env: "DESOLATE_GIT_SHELLS",
+  side: "host",
+  default: 6,
+  parse: whole(1, 64),
+  why: "How many git terminal shells may be open at once, a tab reading each or not: each is a bash in the git VM, whose memory they share.",
+});
+/** How many lines the page's terminal keeps to scroll back through. */
+export const SCROLLBACK = define({
+  name: "git.scrollbackLines",
+  env: "DESOLATE_GIT_SCROLLBACK_LINES",
+  side: "host",
+  default: 5000,
+  parse: whole(100, 1_000_000),
+  why: "How many lines the git terminal's browser tab keeps to scroll back through: more costs that tab memory.",
+});
+/** The most typed input one request carries, in base64 characters: the page sends a paste in
+ *  parts of this size (it is told it, below), and git/terminal.py takes a line of it. A
+ *  request's body is at most twice this (the shell's token, and JSON's own). */
+export const INPUT_CHARS = 64 * 1024;
+/** What a shell printed, kept for a tab that comes back to it: the oldest goes first. The
+ *  same as an agent's terminal keeps for its replay (workspace/agent-holder.py). */
+const KEPT_BYTES = 2 * 1024 * 1024;
+/** What the page is told of how to talk to a shell: the bounds above that are its to keep. */
+const forPage = () => ({ input: INPUT_CHARS, scrollback: valueOf(SCROLLBACK) });
 
 export const gitToken = (): string => {
   try {
@@ -141,11 +171,14 @@ const STATIC: Record<string, [string, string]> = {
 type Session = {
   id: string;
   token: string;
+  /** Where it was opened, in the git VM: what the page says of a shell it offers back. */
+  where: string;
   child: ChildProcess;
   kept: Buffer[];
   keptBytes: number;
   streams: Set<ServerResponse>;
   ended: boolean;
+  /** When a tab last read it, or stopped reading it. */
   seen: number;
 };
 
@@ -162,20 +195,18 @@ export const handler = (
   ) => Promise<string | void> = async () => {},
 ) => {
   const sessions = new Map<string, Session>();
-  const reap = setInterval(() => {
-    for (const s of sessions.values())
-      if ((s.ended || s.streams.size === 0) && Date.now() - s.seen > LIMIT.idleMs) {
-        s.child.kill("SIGKILL");
-        sessions.delete(s.id);
-      }
-  }, 5_000);
-  reap.unref();
+  // A shell is forgotten when it has ended and no tab reads what it said last; one nobody
+  // reads stays until a tab comes back to it, or it ends (exit, or the git VM going down).
+  const forget = (s: Session) => {
+    if (s.ended && s.streams.size === 0) sessions.delete(s.id);
+  };
 
   const open = (repo: string, first = "") => {
     const where = parseRepo(repo) ? `${guest.git}/${repo}` : guest.git;
     const s: Session = {
       id: randomBytes(8).toString("hex"),
       token: randomBytes(24).toString("hex"),
+      where,
       child: spawn(["python3", "-I", `${guest.release}/git/terminal.py`, where]),
       kept: [],
       keptBytes: 0,
@@ -191,9 +222,11 @@ export const handler = (
     const out = (raw: Buffer) => {
       const chunk = Buffer.from(filter(raw));
       if (chunk.length === 0) return;
-      s.kept.push(chunk);
-      s.keptBytes += chunk.length;
-      while (s.keptBytes > LIMIT.kept && s.kept.length > 1) s.keptBytes -= s.kept.shift()!.length;
+      // (One chunk larger than all that is kept: its end, which is what a tab shows last.)
+      const keep = chunk.length > KEPT_BYTES ? chunk.subarray(chunk.length - KEPT_BYTES) : chunk;
+      s.kept.push(keep);
+      s.keptBytes += keep.length;
+      while (s.keptBytes > KEPT_BYTES && s.kept.length > 1) s.keptBytes -= s.kept.shift()!.length;
       for (const res of s.streams) res.write(`data: ${chunk.toString("base64")}\n\n`);
     };
     // What readying it said (the branch it is on, and git status), before the shell's prompt.
@@ -204,6 +237,7 @@ export const handler = (
     s.child.on("close", () => {
       s.ended = true;
       for (const res of s.streams) res.end("event: end\ndata: \n\n");
+      forget(s);
     });
     sessions.set(s.id, s);
     log(`git terminal: a shell in ${where}`);
@@ -288,6 +322,16 @@ export const handler = (
     // fragment): to this page's own script, which only the person's browser can load.
     if (req.method === "GET" && url.pathname === "/approvals-frame")
       return json(res, 200, { url: embedAddress() });
+    // The shells no tab reads (their tab closed, or lost its connection), for the page to offer
+    // back: each with its token, as the page that opened it was given it. Only this page's
+    // script can ask, as for a shell's input.
+    if (req.method === "GET" && url.pathname === "/sessions")
+      return json(res, 200, {
+        ...forPage(),
+        left: [...sessions.values()]
+          .filter((s) => !s.ended && s.streams.size === 0)
+          .map((s) => ({ id: s.id, token: s.token, where: s.where, since: s.seen })),
+      });
     const match = /^\/session\/([0-9a-f]{16})\/(stream|input|resize)$/.exec(url.pathname);
     if (req.method === "GET" && match?.[2] === "stream") {
       const s = sessions.get(match[1]!);
@@ -307,6 +351,7 @@ export const handler = (
         clearInterval(beat);
         s.streams.delete(res);
         s.seen = Date.now();
+        forget(s);
       });
       return;
     }
@@ -318,7 +363,7 @@ export const handler = (
     let body = "";
     for await (const chunk of req) {
       body += chunk;
-      if (body.length > LIMIT.input * 2) return json(res, 413, { error: "too much at once" });
+      if (body.length > INPUT_CHARS * 2) return json(res, 413, { error: "too much at once" });
     }
     let asked: Record<string, unknown>;
     try {
@@ -327,11 +372,14 @@ export const handler = (
       return json(res, 400, { error: "not JSON" });
     }
     if (url.pathname === "/session") {
-      const live = [...sessions.values()].filter((s) => !s.ended).length;
-      if (live >= LIMIT.sessions)
+      const live = [...sessions.values()].filter((s) => !s.ended);
+      const most = valueOf(SHELLS);
+      if (live.length >= most) {
+        const left = live.filter((s) => s.streams.size === 0).length;
         return json(res, 429, {
-          error: `${LIMIT.sessions} shells are open already: close a tab (its shell ends half a minute later)`,
+          error: `${live.length} shells are open already, the most at once (the setting ${SHELLS.name}: ${SHELLS.env}). ${left ? `${left} of them no tab is reading: reload this page to go back to one, and exit the shells you are done with.` : "Type exit in one you are done with."}`,
         });
+      }
       const repo = parseRepo(asked.repo) ? String(asked.repo) : null;
       const at =
         repo && isSlug(asked.domain) && isBranch(asked.branch)
@@ -346,7 +394,7 @@ export const handler = (
         });
       }
       const s = open(repo ?? "", said);
-      return json(res, 200, { id: s.id, token: s.token });
+      return json(res, 200, { id: s.id, token: s.token, ...forPage() });
     }
     const s = match ? sessions.get(match[1]!) : undefined;
     if (!s || !sameSecret(String(asked.token ?? ""), s.token))
@@ -355,8 +403,10 @@ export const handler = (
     if (s.ended) return json(res, 410, { error: "the shell ended" });
     if (match![2] === "input") {
       const data = String(asked.data ?? "");
-      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length > LIMIT.input)
-        return json(res, 400, { error: "input is base64, at most 64 KiB at once" });
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(data) || data.length > INPUT_CHARS)
+        return json(res, 400, {
+          error: `input is base64, at most ${INPUT_CHARS} characters a request (the page sends a paste in parts)`,
+        });
       s.child.stdin?.write(`i ${data}\n`);
       return json(res, 200, { ok: true });
     }
@@ -366,11 +416,13 @@ export const handler = (
       !Number.isInteger(cols) ||
       !Number.isInteger(rows) ||
       cols < 1 ||
-      cols > 1000 ||
+      cols > TERMINAL.cols ||
       rows < 1 ||
-      rows > 500
+      rows > TERMINAL.rows
     )
-      return json(res, 400, { error: "a size is whole columns and rows" });
+      return json(res, 400, {
+        error: `a size is whole columns and rows, at most ${TERMINAL.cols} by ${TERMINAL.rows}`,
+      });
     s.child.stdin?.write(`r ${cols} ${rows}\n`);
     return json(res, 200, { ok: true });
   };

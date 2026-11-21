@@ -20,6 +20,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { refuse } from "../shared/exit.ts";
+import { FORGE, formatBytes, over } from "../shared/limits.ts";
+import { failure } from "../shared/text.ts";
+import { isId, named, REQUEST_BYTES } from "../shared/git-out-box.ts";
 import {
   gitVmName,
   isBranch,
@@ -40,6 +43,8 @@ import type {
   inHome,
   leave,
   leaveLink,
+  leavePush,
+  leaveSparse,
   linkInHome,
   outbox,
 } from "../.harness/host-git-out.ts";
@@ -89,6 +94,17 @@ declare namespace gitSpec {
   >;
 }
 
+/** Where the whole of what a step in the git VM said is kept when it failed and only its end
+ *  is shown (text.ts, `failure`): under the host's logs, one file a step, the last failure's. */
+const kept = (step: string) => (whole: string) => {
+  const file = path.join(paths.logs, `git-vm-${step}.txt`);
+  fs.mkdirSync(paths.logs, { recursive: true });
+  fs.writeFileSync(file, whole, { mode: 0o600 });
+  return file;
+};
+/** How much of a failed step's output a refusal shows: where git and bash say why. */
+const SHOWN_LINES = 5;
+
 /** Make the git VM if there is none, start it, and give it its settings. Idempotent. */
 export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
   const b = backend();
@@ -124,16 +140,16 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
   });
   if (provisioned.code !== 0)
     refuse(
-      `the git VM could not be set up: ${(provisioned.stderr || provisioned.stdout).trim().slice(-300)}`,
+      `the git VM could not be set up:\n${failure(provisioned.stderr || provisioned.stdout, SHOWN_LINES, kept("provision"))}`,
       "desolate doctor",
     );
   // Who you are, for your commits: the Mac's own git identity, unless the git VM has one
-  // already (yours to change there: git config --global user.name ...).
+  // already (yours to change there: git config --global user.name ...). It is the person's
+  // own, from their own Mac: nothing bounds its length here, and git takes what it takes.
   const mine = (key: string) =>
     spawnSync("git", ["config", "--global", key], { encoding: "utf8" })
       .stdout.trim()
-      .replace(/[\x00-\x1f\x7f]/g, "")
-      .slice(0, 200);
+      .replace(/[\x00-\x1f\x7f]/g, "");
   const [name, email] = [mine("user.name"), mine("user.email")];
   if (name || email)
     await b.exec(
@@ -151,7 +167,12 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
 };
 
 /** The person's clone of a repository in the git VM: from the mirror, with `root` as a
- *  second remote (what the domains offered), and `origin`'s push going to the host. */
+ *  second remote (what the domains offered), and `origin`'s push going to the host.
+ *
+ *  It runs until it is done: the clone reads a mirror on this Mac (the git VM has no
+ *  network to stall on), a large one takes as long as its size, and whoever asked for it
+ *  (`desolate git`, a tab that says it is starting) is the one waiting. A clone killed part
+ *  of the way was worse than a slow one: its directory was taken for a whole clone after. */
 export const ensureGitClone = async (repo: Repo) => {
   const id = repoId(repo);
   const mirror = guest.mirror(repo);
@@ -205,14 +226,19 @@ export const ensureGitClone = async (repo: Repo) => {
     ...perDomain,
     "git lfs pull >/dev/null 2>&1 || true",
   ].join("\n");
-  const made = await backend().exec(
-    GIT_VM,
-    ["bash", "-c", script, "_", mirror, dir, id, `${guest.rootClones}/${repo.owner}/${repo.name}`],
-    { timeoutMs: 1_800_000 },
-  );
+  const made = await backend().exec(GIT_VM, [
+    "bash",
+    "-c",
+    script,
+    "_",
+    mirror,
+    dir,
+    id,
+    `${guest.rootClones}/${repo.owner}/${repo.name}`,
+  ]);
   if (made.code !== 0)
     refuse(
-      `the git VM could not clone ${id}: ${(made.stderr || made.stdout).trim().slice(-300)}`,
+      `the git VM could not clone ${id}:\n${failure(made.stderr || made.stdout, SHOWN_LINES, kept("clone"))}`,
       `desolate clone ${id} first, if the root has not`,
     );
   return dir;
@@ -225,7 +251,8 @@ export const ensureGitClone = async (repo: Repo) => {
  *  behind, and otherwise left as it is (never moved back, never past work of your own), and
  *  never switched to over uncommitted changes. Its upstream is the remote's branch of that
  *  name, which a push updates: `git status` then says how far ahead it is. What happened,
- *  and `git status`, as text for the terminal. */
+ *  and `git status`, as text for the terminal: all of it (the terminal keeps what it keeps),
+ *  and for as long as it takes (two fetches from this Mac's own disk, and a switch). */
 export const checkoutOffered = async (repo: Repo, domain: string, branch: string) => {
   if (!isSlug(domain) || !isBranch(branch)) return "";
   const dir = `${guest.git}/${repo.owner}/${repo.name}`;
@@ -233,9 +260,9 @@ export const checkoutOffered = async (repo: Repo, domain: string, branch: string
     "set -u",
     'cd "$1" || exit 0',
     'D=$2; B=$3; THEIRS="refs/remotes/$D/$B"',
-    "git fetch --quiet origin 2>&1 | tail -2",
+    "git fetch --quiet origin 2>&1",
     'if ! git remote get-url "$D" >/dev/null 2>&1; then echo "desolate: no remote for the domain $D in this clone yet"; git status; exit 0; fi',
-    'git fetch --quiet "$D" 2>&1 | tail -2',
+    'git fetch --quiet "$D" 2>&1',
     'if ! git rev-parse -q --verify "$THEIRS^{commit}" >/dev/null; then echo "desolate: $D has no branch $B (yet): staying where you are"; git status; exit 0; fi',
     "NOW=$(git symbolic-ref -q --short HEAD || true)",
     'if [ "$NOW" != "$B" ] && [ -n "$(git status --porcelain --untracked-files=no)" ]; then echo "desolate: staying on ${NOW:-a detached HEAD}: it has changes not committed. Commit or stash them, then: git switch $B"; git status; exit 0; fi',
@@ -253,25 +280,24 @@ export const checkoutOffered = async (repo: Repo, domain: string, branch: string
     'if git show-ref -q --verify "refs/remotes/origin/$B"; then git branch -q --set-upstream-to "origin/$B" "$B"; else git branch -q --unset-upstream "$B" 2>/dev/null; git config push.default current; fi',
     "git status",
   ].join("\n");
-  const done = await backend().exec(GIT_VM, ["bash", "-c", script, "_", dir, domain, branch], {
-    timeoutMs: 300_000,
-  });
-  return `${done.stdout}${done.stderr}`.slice(-20_000);
+  const done = await backend().exec(GIT_VM, ["bash", "-c", script, "_", dir, domain, branch]);
+  return `${done.stdout}${done.stderr}`;
 };
 
-// ---------------------------------------------------------------- pushes from the git VM
+// ---------------------------------------------------------------- what the git VM asks
 // The out-box is the git VM's to write: any name in it may be a link, a FIFO, a directory, or
 // a file the git VM still holds open and will change. So the host never follows a name
 // there, never moves a file out of it, and never writes into it: it opens each file without
 // following links, checks it is a plain file of a bounded size, and COPIES what it reads into
 // a file of its own; answers go to a directory only the host writes (read-only to the git VM).
+//
+// The git VM is the person's own git, but what it leaves here is read by the host as input
+// from a VM, so each bound on it is a hard one (docs/v3/limits.md, R7), and each is named
+// where both sides read it: the request's in shared/git-out-box.ts, the pack's and an LFS object's in
+// shared/limits.ts (FORGE: what the forge itself takes, and so what the root's out-box and
+// the pusher hold a push to as well). A request refused by one is answered at once, with
+// that bound and the size that met it: none is left for its asker to wait out.
 const GIT_IN = path.join(paths.rootClones, ".git-in");
-const LIMIT = {
-  request: 64 * 1024,
-  bundle: 2 * 1024 ** 3,
-  lfs: 5 * 1024 ** 3,
-  objects: 2000,
-} as const;
 /** A directory the host made, in a share the root's user can write: a real directory, not
  *  a link it left there, at its name or anywhere on the way to it from the home. A link above
  *  the home is the Mac's own (macOS's /var is one) and is not refused: every push from the git
@@ -325,26 +351,95 @@ declare namespace ownDirectory {
 }
 
 /** The answer the git VM's helper waits for: in the host's own directory. */
-const answerFile = (id: string) => path.join(paths.gitAnswers, `${id}.json`);
+const answerFile = (id: string) => path.join(paths.gitAnswers, named(id).answer);
 const answer = (id: string, value: Record<string, unknown>) => {
   const temp = path.join(paths.gitAnswers, `.${id}.${randomBytes(4).toString("hex")}`);
   fs.writeFileSync(temp, JSON.stringify(value), { mode: 0o644, flag: "wx" });
   fs.renameSync(temp, answerFile(id));
 };
+/** What the host is doing with a request, said to whoever waits for it, as it is done. */
+const note = (id: string, line: string) =>
+  fs.appendFileSync(path.join(paths.gitAnswers, named(id).notes), `${line}\n`, { mode: 0o644 });
 
-/** One request the git VM left: read safely, its files copied where the root reads them,
- *  handed to the root, and the answer left where the git VM reads it. */
+/** Remove a name the git VM left in the out-box: a file or a link, never followed, never a
+ *  directory (which the git VM can make in place of any file). Never throws: whether the
+ *  name is gone now. */
+const drop = (file: string) => {
+  try {
+    fs.unlinkSync(file);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+};
+
+/** A file the git VM left, opened as copy.ts opens one (no link followed, no writer waited
+ *  for) and held to `most` bytes: the open file, or the sentence that refuses it, which names
+ *  the bound and the size when that is why. `what`: the file, as the person knows it;
+ *  `allows`: whose bound it is (limits.ts, `over`). */
+const within = (
+  file: string,
+  most: number,
+  what: string,
+  allows: string,
+): { fd: number; size: number } | { refused: string } => {
+  const opened = openPlain(file, Number.MAX_SAFE_INTEGER);
+  if (!opened) return { refused: `${what} is not a plain file` };
+  if (opened.size <= most) return opened;
+  fs.closeSync(opened.fd);
+  return { refused: over(what, most, opened.size, "bytes", allows) };
+};
+
+/** How long the host's call to the root may run for the git VM: for as long as whoever asked
+ *  waits, which no number here says (R4). rootctl (host/stack.ts) ends a call at 15 minutes
+ *  unless told another number, and cannot yet be told "until it is cancelled": until it can,
+ *  this is the longest its connection to the root is held anyway (socat's `-t 86400` there),
+ *  so no clock of this layer's ends a push its person is still reading. */
+const ROOT_HOLDS_MS = 86_400_000;
+
+const NOT_ONE = "the git VM's request is not one desolate makes";
+/** At most once every few seconds a repository: `desolate fetch` typed twice. */
 const FETCH_GAP_MS = 5000;
 const fetchedAt = new Map<string, number>();
+
+/** One request the git VM left: read safely, its files copied where the root reads them,
+ *  handed to the root, and the answer left where the git VM reads it. Once whoever asked has
+ *  gone (shared/git-out-box.ts: they leave `<id>.gone`), nothing more is begun for them. */
 const take = async (
   id: string,
   log: (line: string) => void,
   announce: (fields: Record<string, unknown>) => void = () => {},
 ) => {
+  try {
+    return await takeOne(id, log, announce);
+  } finally {
+    // Whatever it was answered (or withdrawn), what it left is the host's to remove: every
+    // name of its id's (flat names; a directory among them is left, and is the git VM's).
+    let left: string[] = [];
+    try {
+      left = fs.readdirSync(paths.gitOut);
+    } catch {
+      /* no out-box */
+    }
+    for (const name of left) if (name.startsWith(`${id}.`)) drop(path.join(paths.gitOut, name));
+  }
+};
+const takeOne = async (
+  id: string,
+  log: (line: string) => void,
+  announce: (fields: Record<string, unknown>) => void,
+) => {
   const out = paths.gitOut;
-  const opened = openPlain(path.join(out, `${id}.json`), LIMIT.request);
-  fs.rmSync(path.join(out, `${id}.json`), { force: true });
-  if (!opened) return;
+  const names = named(id);
+  const gone = () =>
+    fs.lstatSync(path.join(out, names.gone), { throwIfNoEntry: false }) !== undefined;
+  const file = path.join(out, names.request);
+  // (Withdrawn before it was taken: nothing was asked.)
+  if (!fs.lstatSync(file, { throwIfNoEntry: false })) return;
+  const opened = within(file, REQUEST_BYTES, "the git VM's request", "the host takes of one");
+  drop(file);
+  if ("refused" in opened)
+    return answer(id, { pushed: false, fetched: false, error: opened.refused });
   let asked: {
     op?: unknown;
     repo?: unknown;
@@ -357,7 +452,9 @@ const take = async (
   try {
     const text = Buffer.alloc(opened.size);
     fs.readSync(opened.fd, text, 0, opened.size, 0);
-    asked = JSON.parse(text.toString("utf8")) as typeof asked;
+    const read: unknown = JSON.parse(text.toString("utf8"));
+    if (typeof read !== "object" || read === null) throw new Error("not an object");
+    asked = read;
   } catch {
     return answer(id, { pushed: false, error: "the git VM's request is not JSON" });
   } finally {
@@ -365,53 +462,61 @@ const take = async (
   }
   const repo = parseRepo(asked.repo);
   // `desolate fetch` in the git VM: the root refreshes the mirror (with its read key), and
-  // the git VM then fetches from it. At most once every few seconds a repository.
+  // the git VM then fetches from it. How long the root's fetch may take is the root's to say
+  // (the forge is its peer): the host adds no clock of its own, and the person waits.
   if (asked.op === "fetch") {
-    if (!repo)
-      return answer(id, {
-        fetched: false,
-        error: "the git VM's request is not one desolate makes",
-      });
+    if (!repo) return answer(id, { fetched: false, error: NOT_ONE });
     const last = fetchedAt.get(repoId(repo)) ?? 0;
     if (Date.now() - last < FETCH_GAP_MS)
       return answer(id, { fetched: true, said: [`${repoId(repo)}: refreshed a moment ago`] });
+    if (gone()) return;
     fetchedAt.set(repoId(repo), Date.now());
+    note(id, `desolate: the root is refreshing ${repoId(repo)} from its remote...`);
     try {
-      await rootctl("repo.fetch", { repo: repoId(repo) }, { quiet: true, timeoutMs: 10 * 60_000 });
+      await rootctl(
+        "repo.fetch",
+        { repo: repoId(repo) },
+        { quiet: true, timeoutMs: ROOT_HOLDS_MS },
+      );
       return answer(id, { fetched: true });
     } catch (error) {
       return answer(id, { fetched: false, error: (error as Error).message });
     }
   }
-  const domain =
-    asked.domain === undefined ? null : isSlug(asked.domain) ? String(asked.domain) : false;
-  if (domain === false)
+  // A delivery to a domain (`git push <domain>`): its workspaces see it, nothing leaves.
+  const domain = asked.domain === undefined ? null : asked.domain;
+  if (domain !== null && !isSlug(domain))
     return answer(id, {
       pushed: false,
       error: "the git VM's request names no domain desolate would make",
     });
+  // (No count of LFS objects: the request's own size is what bounds how many it names.)
   const lfs = Array.isArray(asked.lfs) ? asked.lfs : [];
   if (
     !repo ||
     !isBranch(asked.branch) ||
     !isCommit(asked.commit) ||
-    lfs.length > LIMIT.objects ||
     !lfs.every(isLfsOid) ||
     new Set(lfs).size !== lfs.length
   )
-    return answer(id, { pushed: false, error: "the git VM's request is not one desolate makes" });
+    return answer(id, { pushed: false, error: NOT_ONE });
   ownDirectory(GIT_IN);
   const name = randomBytes(8).toString("hex");
   const bundleTo = path.join(GIT_IN, `${name}.bundle`);
   const lfsTo = path.join(GIT_IN, `${name}.lfs`);
   try {
     // Copied, never moved: the git VM keeps no hold on the root's copy.
-    const bundle = openPlain(path.join(out, `${id}.bundle`), LIMIT.bundle);
-    if (!bundle)
-      return answer(id, {
-        pushed: false,
-        error: "the push's bundle is not a plain file of at most 2 GiB",
-      });
+    const bundle = within(
+      path.join(out, names.bundle),
+      FORGE.packBytes,
+      "the push's bundle",
+      "a push to the forge may carry",
+    );
+    if ("refused" in bundle) return answer(id, { pushed: false, error: bundle.refused });
+    note(
+      id,
+      `desolate: the host is copying the push for the root (${formatBytes(bundle.size)}${lfs.length ? `, and ${lfs.length} LFS object${lfs.length === 1 ? "" : "s"}` : ""})...`,
+    );
     try {
       copyOut(bundle, bundleTo);
     } finally {
@@ -420,13 +525,15 @@ const take = async (
     if (lfs.length) {
       fs.mkdirSync(lfsTo, { mode: 0o700 });
       for (const oid of lfs as string[]) {
+        if (gone()) return;
         // Flat names in the out-box: no directory of the git VM's is ever walked into.
-        const object = openPlain(path.join(out, `${id}.${oid}.lfs`), LIMIT.lfs);
-        if (!object)
-          return answer(id, {
-            pushed: false,
-            error: `the LFS object ${oid.slice(0, 12)} is not a plain file`,
-          });
+        const object = within(
+          path.join(out, names.lfs(oid)),
+          FORGE.lfsObjectBytes,
+          `the LFS object ${oid.slice(0, 12)}`,
+          "the forge stores",
+        );
+        if ("refused" in object) return answer(id, { pushed: false, error: object.refused });
         try {
           if (copyOut(object, path.join(lfsTo, oid)) !== oid)
             return answer(id, {
@@ -438,6 +545,10 @@ const take = async (
         }
       }
     }
+    if (gone())
+      return log(
+        `git VM: the ${domain ? "delivery" : "push"} of ${repoId(repo)} ${String(asked.branch)} was withdrawn where it was asked, before it was handed to the root`,
+      );
     log(
       `git VM: ${domain ? `a delivery to ${domain}` : "a push"} of ${repoId(repo)} ${String(asked.branch)} at ${String(asked.commit)}, handed to the root`,
     );
@@ -447,6 +558,13 @@ const take = async (
       commit: asked.commit,
       ...(domain ? { domain } : {}),
     });
+    note(
+      id,
+      domain
+        ? `desolate: handed to the root, for ${domain}: its workspaces see it as root/${String(asked.branch)} within seconds.`
+        : "desolate: handed to the root. Approve it beside this terminal (in the browser tab), or on the approval page (desolate approve --web). From here Ctrl-C does not withdraw it: decline it there.",
+    );
+    note(id, `  ${repoId(repo)}  ${String(asked.branch)}  ${String(asked.commit)}`);
     const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>(
       "git.push",
       {
@@ -458,16 +576,15 @@ const take = async (
         lfs,
         ...(domain ? { domain } : {}),
       },
-      { quiet: true, timeoutMs: 20 * 60_000 },
+      { quiet: true, timeoutMs: ROOT_HOLDS_MS },
     );
     answer(id, reply);
   } catch (error) {
     answer(id, { pushed: false, error: (error as Error).message });
   } finally {
+    // The host's own copies (its directory): what the git VM left goes in take's finally.
     fs.rmSync(bundleTo, { force: true });
     fs.rmSync(lfsTo, { recursive: true, force: true });
-    for (const leftover of [`${id}.bundle`, ...lfs.map((oid) => `${id}.${String(oid)}.lfs`)])
-      fs.rmSync(path.join(out, leftover), { force: true });
   }
 };
 
@@ -580,8 +697,9 @@ declare namespace take {
       >
     >,
   ];
-  /** a request that is a link (to a file of the host's) is not followed, not read and not
-   *  answered: the link is removed, and what it pointed at is as it was */
+  /** a request that is a link (to a file of the host's) is not followed and not read: the
+   *  link is removed, what it pointed at is as it was, and the asker is told why (in the
+   *  host's own answer box, which the git VM cannot write) */
   export type ALinkIsNotFollowed = Given<
     [
       Invoke<typeof emptyHome>,
@@ -590,7 +708,11 @@ declare namespace take {
       Invoke<typeof take, [id: Id, log: typeof collect]>,
     ],
     [
-      Expect<Invoke<typeof answerTo, [id: Id]>, "=", null>,
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        { pushed: false; fetched: false; error: "the git VM's request is not a plain file" }
+      >,
       Expect<Invoke<typeof outbox>, "=", []>,
       Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">,
     ]
@@ -615,11 +737,107 @@ declare namespace take {
       Expect<
         Invoke<typeof answerTo, [id: Id]>,
         "=",
-        { pushed: false; error: "the push's bundle is not a plain file of at most 2 GiB" }
+        { pushed: false; error: "the push's bundle is not a plain file" }
       >,
       Expect<Invoke<typeof outbox>, "=", []>,
       Expect<Invoke<typeof readState, [name: "ui-token"]>, "=", "the dashboard's">,
     ]
+  >;
+  /** a request over the bound the host reads is answered at once, with the bound and its
+   *  size (it was removed unanswered, and its push waited 20 minutes for nothing) */
+  export type ARequestOverItsBound = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof leaveSparse, [name: "0123456789abcdef.json", bytes: 1048576]>,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof answerTo, [id: Id]>,
+        "=",
+        {
+          pushed: false;
+          fetched: false;
+          error: "the git VM's request is 1.0 MiB, over the 1020 KiB the host takes of one";
+        }
+      >,
+      Expect<Invoke<typeof outbox>, "=", []>,
+    ]
+  >;
+  /** a push adding 1,500 LFS objects is read (over the 64 KiB the host once took, which
+   *  dropped any push of more than about 970): here it goes on to look for its bundle */
+  export type FifteenHundredObjects = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof leavePush, [id: Id, lfs: 1500]>,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    Expect<
+      Invoke<typeof answerTo, [id: Id]>,
+      "=",
+      { pushed: false; error: "the push's bundle is not a plain file" }
+    >
+  >;
+  /** a bundle or an LFS object over what the forge takes: refused with that bound, not as
+   *  "not a plain file" (sparse files: nothing that size is written) */
+  export type OverWhatTheForgeTakes = [
+    Given<
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof leavePush, [id: Id, lfs: 0]>,
+        Invoke<typeof leaveSparse, [name: "0123456789abcdef.bundle", bytes: 2147483649]>,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      [
+        Expect<
+          Invoke<typeof answerTo, [id: Id]>,
+          "=",
+          {
+            pushed: false;
+            error: "the push's bundle is 2147483649 bytes, over the 2147483648 a push to the forge may carry";
+          }
+        >,
+        Expect<Invoke<typeof outbox>, "=", []>,
+      ]
+    >,
+    Given<
+      [
+        Invoke<typeof emptyHome>,
+        Invoke<typeof leavePush, [id: Id, lfs: 1]>,
+        Invoke<typeof leave, [name: "0123456789abcdef.bundle", text: "a bundle"]>,
+        Invoke<
+          typeof leaveSparse,
+          [
+            name: "0123456789abcdef.0000000000000000000000000000000000000000000000000000000000000000.lfs",
+            bytes: 5368709121,
+          ]
+        >,
+        Invoke<typeof take, [id: Id, log: typeof collect]>,
+      ],
+      [
+        Expect<
+          Invoke<typeof answerTo, [id: Id]>,
+          "=",
+          {
+            pushed: false;
+            error: "the LFS object 000000000000 is 5368709121 bytes, over the 5368709120 the forge stores";
+          }
+        >,
+        Expect<Invoke<typeof outbox>, "=", []>,
+      ]
+    >,
+  ];
+  /** whoever asked has gone (Ctrl-C): nothing is copied or handed on, nobody is answered,
+   *  and nothing of theirs is left */
+  export type Withdrawn = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof leavePush, [id: Id, lfs: 0]>,
+      Invoke<typeof leave, [name: "0123456789abcdef.bundle", text: "a bundle"]>,
+      Invoke<typeof leave, [name: "0123456789abcdef.gone", text: ""]>,
+      Invoke<typeof take, [id: Id, log: typeof collect]>,
+    ],
+    [Expect<Invoke<typeof answerTo, [id: Id]>, "=", null>, Expect<Invoke<typeof outbox>, "=", []>]
   >;
   /** an LFS object is taken only if it is what its name says it is */
   export type LfsByItsHash = Given<
@@ -654,7 +872,9 @@ declare namespace take {
 }
 
 /** Watch what the git VM leaves: one request at a time (a git VM cannot crowd the root, or
- *  the approval page). (The host daemon runs this.) */
+ *  the approval page), and the next only when the root is done with the last, even when its
+ *  asker has gone: so a git VM that asks and withdraws again and again holds one call to the
+ *  root, not one each. (The host daemon runs this.) */
 export const watchGitOut = (
   log: (line: string) => void,
   announce: (fields: Record<string, unknown>) => void = () => {},
@@ -662,8 +882,19 @@ export const watchGitOut = (
   for (const dir of [paths.gitOut, paths.gitAnswers])
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   let busy = false;
+  /** Requests whose file could not be removed (the git VM made a directory of that name):
+   *  answered once, and not taken again by this daemon. */
+  const stuck = new Set<string>();
   const scan = () => {
     if (busy) return;
+    // Nothing the git VM leaves may stop the daemon (every page it serves would go with it).
+    try {
+      look();
+    } catch (error) {
+      log(`git VM: the out-box could not be read: ${(error as Error).message}`);
+    }
+  };
+  const look = () => {
     let names: string[] = [];
     try {
       names = fs.readdirSync(paths.gitOut);
@@ -679,7 +910,19 @@ export const watchGitOut = (
     } catch {
       /* nothing there */
     }
-    const id = names.map((file) => /^([0-9a-f]{16})\.json$/.exec(file)?.[1]).find(Boolean);
+    // A name that is none of a request's is nobody's; nor is a withdrawal of a request that
+    // was never taken (or was answered as it went).
+    const there = new Set(names);
+    for (const file of names) {
+      const dot = file.indexOf(".");
+      const of = dot < 0 ? file : file.slice(0, dot);
+      if (!isId(of) || (file === named(of).gone && !there.has(named(of).request)))
+        drop(path.join(paths.gitOut, file));
+    }
+    const id = names
+      .filter((file) => file.endsWith(".json"))
+      .map((file) => file.slice(0, -5))
+      .find((of) => isId(of) && !stuck.has(of));
     if (!id) return;
     busy = true;
     void take(id, log, announce)
@@ -692,9 +935,14 @@ export const watchGitOut = (
         }
       })
       .finally(() => {
+        if (fs.lstatSync(path.join(paths.gitOut, named(id).request), { throwIfNoEntry: false })) {
+          stuck.add(id);
+          log(`git VM: ${named(id).request} in the out-box is not a file: it is not taken again`);
+        }
         busy = false;
-        // One that landed while this was taken: its event came and went.
-        scan();
+        // One that landed while this was taken: its event came and went. (On the next turn:
+        // never in the same one, so no request answered at once can keep the daemon here.)
+        setImmediate(scan);
       });
   };
   // The share's files are the Mac's, so a request the git VM writes is a file event here:
