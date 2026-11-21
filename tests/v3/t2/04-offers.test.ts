@@ -712,10 +712,12 @@ echo "$c1 $c2 $c3 $c4"`);
       false,
       "control: a commit with only git's four headers is not warned of",
     );
-    assert.deepEqual(
-      saidChain.between?.map((f) => f.path),
-      ["README.md?key.env"],
-      "the file with a newline in its name is one file, not two",
+    // (The list has the earlier tests' files too: what matters is this one, whole.)
+    const inBetween = saidChain.between?.map((f) => f.path) ?? [];
+    assert.ok(inBetween.includes("README.md?key.env"), String(inBetween));
+    assert.ok(
+      !inBetween.includes("key.env") && !inBetween.includes("README.md"),
+      `the file with a newline in its name is one file, not two: ${inBetween}`,
     );
     assert.equal(saidChain.squash?.count, 4);
     assert.equal(

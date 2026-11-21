@@ -350,7 +350,11 @@ const submit = async (socket: Socket, repo: Repo, size: number, rest: Buffer) =>
 const remoteOf = async (repo: Repo, dir: string) => {
   const reply = await ask(KEYRING.reviewer, { op: "readkey", repo: repoId(repo) });
   if (reply.ok !== true) throw new Error(String(reply.error ?? "no read key"));
-  const identity = path.join(REVIEWER.home, `read-${randomBytes(6).toString("hex")}.pub`);
+  // In a folder a restart of this service leaves alone: one that cleared the home took the
+  // file from under a summary in flight, and its ls-remote was refused (T2, 2026-11-20).
+  const identities = path.join(REVIEWER.home, "identities");
+  fs.mkdirSync(identities, { recursive: true, mode: 0o700 });
+  const identity = path.join(identities, `read-${randomBytes(6).toString("hex")}.pub`);
   fs.writeFileSync(identity, `${String(reply.pubkey).trim()}\n`, { mode: 0o600 });
   try {
     const f = JSON.parse(fs.readFileSync(PINNED_FORGE.config, "utf8")) as {
@@ -1369,9 +1373,19 @@ const main = async () => {
   // (The summary lock and kept summaries stay: the root's user restarts this service at will,
   // with one connection, and a restart that cleared them undid both, the review of the fixes.)
   for (const name of fs.readdirSync(REVIEWER.home))
-    if (!["repos", "packs", "summaries", "summary.lock"].includes(name))
+    if (!["repos", "packs", "summaries", "summary.lock", "identities"].includes(name))
       fs.rmSync(path.join(REVIEWER.home, name), { recursive: true, force: true });
   prunePacks();
+  // (A summary's identity outlives it only if its process was killed: gone after ten minutes.)
+  try {
+    for (const name of fs.readdirSync(path.join(REVIEWER.home, "identities"))) {
+      const file = path.join(REVIEWER.home, "identities", name);
+      if (Date.now() - (fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0) > 600_000)
+        fs.rmSync(file, { force: true });
+    }
+  } catch {
+    /* none yet */
+  }
   const before = process.umask(0o111);
   // One connection per process: the first closes the door behind it.
   server = createServer({ allowHalfOpen: true }, (socket) => {
