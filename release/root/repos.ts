@@ -3,11 +3,22 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
-import { repoId } from "../shared/names.ts";
+import { isBranch, repoId } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { refuse } from "../shared/exit.ts";
+import { withLock } from "../shared/lock.ts";
 import { downstreamRefusal } from "../shared/suede.ts";
-import { forge, git, gitBare, gitOk, remoteUrl, safeIn, sshCommand } from "./git.ts";
+import {
+  FORGE_IDLE_MS,
+  forge,
+  git,
+  gitBare,
+  gitOk,
+  gitSaid,
+  remoteUrl,
+  safeIn,
+  sshCommand,
+} from "./git.ts";
 import { ask } from "./keyring-client.ts";
 import { clonePath, HOOKS, KEYRING, MIRROR_HOOKS, mirrorPath, REGISTRY, ROOT } from "./layout.ts";
 import { settle } from "./pushed.ts";
@@ -247,14 +258,14 @@ export const downstreamCheck = async (repo: Repo, commit: string): Promise<strin
   return downstreamRefusal((args) => git(clonePath(repo), args), commit, tips);
 };
 
-const fetchNow = async (repo: Repo, log: (line: string) => void) => {
+const fetchNow = async (repo: Repo, log: (line: string) => void, signal?: AbortSignal) => {
   const record = recordOf(repo);
   const mirror = mirrorPath(repo);
   const url = fetchUrl(repo, record);
   if (!fs.existsSync(path.join(mirror, "HEAD"))) {
     fs.mkdirSync(path.dirname(mirror), { recursive: true });
     const made = await gitBare(["init", "--bare", "--quiet", mirror]);
-    if (made.code !== 0) throw new Error(`cannot create the mirror: ${made.stderr.trim()}`);
+    if (made.code !== 0) throw new Error(`cannot create the mirror: ${gitSaid(made)}`);
   }
   await config(mirror, {
     "remote.origin.url": url,
@@ -282,24 +293,39 @@ const fetchNow = async (repo: Repo, log: (line: string) => void) => {
   log(
     `fetching ${repoId(repo)} ${record.anonymous ? "anonymously, over https" : "with the read key"}`,
   );
-  const fetched = await git(mirror, ["fetch", "--prune", "--no-auto-gc", "--quiet", "origin"], {
-    timeoutMs: 600_000,
+  // From the forge, which is remote: however long it takes while bytes come (R4), and ended
+  // when it goes quiet (FORGE_IDLE_MS; `--progress` makes git say something every second
+  // while it works) or when whoever asked goes away (`signal`).
+  const fetched = await git(mirror, ["fetch", "--prune", "--no-auto-gc", "--progress", "origin"], {
+    idleMs: FORGE_IDLE_MS,
+    signal,
   });
   if (fetched.code !== 0)
     refuse(
-      `cannot fetch ${repoId(repo)}: ${fetched.stderr.trim().split("\n").slice(-3).join(" | ")}`,
+      `cannot fetch ${repoId(repo)}: ${gitSaid(fetched)}`,
       record.anonymous
         ? "check the repository is public"
         : `check its read deploy key is registered: desolate keys ${repoId(repo)}`,
     );
 
-  // The remote's default branch becomes the mirror's HEAD, so clones check it out.
+  // The remote's default branch becomes the mirror's HEAD, so clones check it out. A forge
+  // that did not answer this is not a forge with no default branch: the one known before
+  // is kept, and that is said.
   const head = await git(mirror, ["ls-remote", "--symref", "origin", "HEAD"], {
-    timeoutMs: 60_000,
+    idleMs: FORGE_IDLE_MS,
+    signal,
   });
-  const symref = /^ref: refs\/heads\/(\S+)\s+HEAD/m.exec(head.stdout);
-  if (symref) await gitOk(mirror, ["symbolic-ref", "HEAD", `refs/heads/${symref[1]}`]);
-  const defaultBranch = symref ? symref[1]! : null;
+  let defaultBranch: string | null;
+  if (head.code !== 0) {
+    defaultBranch = record.defaultBranch;
+    log(
+      `could not ask ${repoId(repo)} for its default branch (${gitSaid(head, 1)}): ${defaultBranch === null ? "none is known yet" : `kept ${defaultBranch}, as last fetched`}`,
+    );
+  } else {
+    const symref = /^ref: refs\/heads\/(\S+)\s+HEAD/m.exec(head.stdout);
+    defaultBranch = symref && isBranch(symref[1]) ? symref[1] : null;
+  }
+  if (defaultBranch) await gitOk(mirror, ["symbolic-ref", "HEAD", `refs/heads/${defaultBranch}`]);
 
   // LFS: what the branch tips need (question 8's proposal). Older objects on request.
   const heads = (await gitOk(mirror, ["for-each-ref", "--format=%(refname)", "refs/heads"]))
@@ -307,10 +333,16 @@ const fetchNow = async (repo: Repo, log: (line: string) => void) => {
     .filter(Boolean);
   let lfsObjects = 0;
   if (heads.length > 0) {
-    const lfs = await git(mirror, ["lfs", "fetch", "origin", ...heads], { timeoutMs: 600_000 });
+    // As the fetch: bounded by silence, not by time. git-lfs writes its progress only to a
+    // terminal unless told to.
+    const lfs = await git(mirror, ["lfs", "fetch", "origin", ...heads], {
+      idleMs: FORGE_IDLE_MS,
+      signal,
+      env: { GIT_LFS_FORCE_PROGRESS: "1" },
+    });
     if (lfs.code !== 0)
       refuse(
-        `fetched ${repoId(repo)}, but its LFS objects did not come: ${lfs.stderr.trim().split("\n").slice(-2).join(" | ")}`,
+        `fetched ${repoId(repo)}, but its LFS objects did not come: ${gitSaid(lfs)}`,
         `desolate fetch ${repoId(repo)}`,
       );
     try {
@@ -331,18 +363,18 @@ const fetchNow = async (repo: Repo, log: (line: string) => void) => {
   // when the clone last fetched, and the reviewer was sent none of the remote's newer
   // commits, so it could not describe a push after the remote moved (found by T2 04, once a
   // pull request was merged on the forge).
+  // (A local fetch, from the root's own disk: no peer to go quiet, so no bound but whoever
+  // asked.)
   const followed = await git(
     clonePath(repo),
     ["fetch", "--quiet", "--prune", "--no-auto-gc", "origin"],
-    { timeoutMs: 600_000 },
+    { signal },
   );
   if (followed.code !== 0)
-    log(
-      `the root clone of ${repoId(repo)} did not follow the mirror: ${followed.stderr.trim().split("\n").pop() ?? ""}`,
-    );
+    log(`the root clone of ${repoId(repo)} did not follow the mirror: ${gitSaid(followed)}`);
   // A pull request merged since a push: the mirror now shows it (pushed.ts).
   await settle(repoId(repo), (args) => git(mirror, args)).catch((error: Error) =>
-    log(`could not check what landed in ${repoId(repo)}: ${error.message.slice(0, 200)}`),
+    log(`could not check what landed in ${repoId(repo)}: ${error.message}`),
   );
   return {
     repo: repoId(repo),
@@ -372,7 +404,7 @@ export const ensureClone = async (repo: Repo, defaultBranch: string | null): Pro
       mirror,
       clone,
     ]);
-    if (made.code !== 0) throw new Error(`cannot create the root clone: ${made.stderr.trim()}`);
+    if (made.code !== 0) throw new Error(`cannot create the root clone: ${gitSaid(made)}`);
   }
   const record = recordOf(repo);
   await config(clone, {
@@ -406,11 +438,10 @@ export const ensureClone = async (repo: Repo, defaultBranch: string | null): Pro
     await git(clone, ["config", "--unset-all", "core.sshCommand"]);
   }
   if (fresh && defaultBranch) {
-    const out = await git(clone, ["checkout", "--quiet", defaultBranch], { timeoutMs: 600_000 });
+    // (From the mirror, on the root's own disk: as long as it takes.)
+    const out = await git(clone, ["checkout", "--quiet", defaultBranch]);
     if (out.code !== 0)
-      throw new Error(
-        `cannot check out ${defaultBranch} in the root clone: ${out.stderr.trim().slice(-500)}`,
-      );
+      throw new Error(`cannot check out ${defaultBranch} in the root clone: ${gitSaid(out)}`);
   }
   return fresh;
 };
@@ -421,48 +452,25 @@ export const list = () =>
     .sort((a, b) => a.repo.localeCompare(b.repo));
 
 // One fetch of a repository at a time. Two at once (two clicks on the dashboard's Fetch, a
-// push's own fetch beside a person's) raced on the mirror's config and one failed. In this
-// process (the rootctl service) a fetch waits for the one under way; across processes, for a
-// lock directory, which a fetch that died leaves for at most ten minutes.
-const fetching = new Map<string, Promise<unknown>>();
-const FETCH_LOCK_STALE_MS = 10 * 60_000;
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const lockedFetch = async (repo: Repo, log: (line: string) => void) => {
-  const lock = path.join(ROOT.state, "fetch-locks", repoId(repo).replace("/", "--"));
-  fs.mkdirSync(path.dirname(lock), { recursive: true });
-  for (let said = false; ; await sleep(200)) {
-    try {
-      fs.mkdirSync(lock);
-      break;
-    } catch {
-      const age =
-        Date.now() - (fs.statSync(lock, { throwIfNoEntry: false })?.mtimeMs ?? Date.now());
-      if (age > FETCH_LOCK_STALE_MS) fs.rmSync(lock, { recursive: true, force: true });
-      else if (!said) {
-        said = true;
-        log(`waiting for another fetch of ${repoId(repo)} to finish`);
-      }
-    }
-  }
-  try {
-    return await fetchNow(repo, log);
-  } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
-  }
-};
+// push's own fetch beside a person's) raced on the mirror's config and one failed. A lock
+// held by the process that fetches (shared/lock.ts, R5), in this process or another: one
+// whose fetch died is taken at once, and one whose fetch lives is waited for, for as long as
+// that takes, saying so. (It was a directory taken to be left by a dead fetch after ten
+// minutes, whether or not that fetch was alive: a first fetch of a large repository lost
+// its lock to a second, and the two raced again.)
 export const fetch = (
   repo: Repo,
   log: (line: string) => void = () => {},
-): ReturnType<typeof fetchNow> => {
-  const key = repoId(repo);
-  const next = (fetching.get(key) ?? Promise.resolve())
-    .catch(() => {})
-    .then(() => lockedFetch(repo, log));
-  fetching.set(key, next);
-  void next
-    .catch(() => {})
-    .finally(() => {
-      if (fetching.get(key) === next) fetching.delete(key);
-    });
-  return next;
-};
+  signal?: AbortSignal,
+): ReturnType<typeof fetchNow> =>
+  withLock(
+    path.join(ROOT.state, "fetch-locks", repoId(repo).replace("/", "--")),
+    () => fetchNow(repo, log, signal),
+    {
+      waiting: (holder) =>
+        log(
+          `waiting for another fetch of ${repoId(repo)} to finish (process ${holder.pid}, since ${holder.since})`,
+        ),
+      signal,
+    },
+  );

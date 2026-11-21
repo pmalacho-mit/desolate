@@ -20,10 +20,18 @@ import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
 
 export const SOCKET = path.join(ROOT.run, "rootctl", "rootctl.sock");
 
+/** The most one request line may be, in bytes, before the connection is ended (R7: a hard bound on
+ *  what the host's side writes to the socket). A request is an operation's name and its
+ *  JSON arguments: the largest the host sends (a forge's known hosts, a domain's
+ *  environment) is a few KiB, and a mebibyte is past any of them by far while still being
+ *  nothing to hold. */
+const REQUEST_MOST = 1 << 20;
+
 /** One request, answered: shared by the one-shot and the service. */
 const answer = async (
   request: unknown,
   progress: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> => {
   if (!isRecord(request) || typeof request.op !== "string")
     return { ok: false, error: "a request is {op, args}", fix: "", code: 64 };
@@ -33,7 +41,10 @@ const answer = async (
   if (!op)
     return { ok: false, error: `the root has no operation '${request.op}'`, fix: "", code: 64 };
   try {
-    return { ok: true, result: await op(isRecord(request.args) ? request.args : {}, progress) };
+    return {
+      ok: true,
+      result: await op(isRecord(request.args) ? request.args : {}, progress, signal),
+    };
   } catch (error) {
     const refusal = error instanceof Refusal ? error : null;
     return {
@@ -155,9 +166,11 @@ const serve = () => {
       connection.destroy();
     });
     let text = "";
-    connection.on("data", async (chunk) => {
+    let bytes = 0;
+    connection.on("data", async (chunk: Buffer) => {
       text += chunk;
-      if (text.length > 1 << 20) return connection.destroy();
+      bytes += chunk.length;
+      if (bytes > REQUEST_MOST) return connection.destroy();
       const end = text.indexOf("\n");
       if (end < 0) return;
       connection.removeAllListeners("data");
@@ -175,8 +188,14 @@ const serve = () => {
       }
       // Taken: from here the host never asks again the old way (an operation must not run twice).
       connection.write(JSON.stringify({ accepted: true }) + "\n");
-      const reply = await answer(request, (line) =>
-        connection.write(JSON.stringify({ progress: line }) + "\n"),
+      // Whoever asked is waiting on this connection, and how long it waits is its own (R4):
+      // when it goes, what was asked for is ended (an operation that takes the signal).
+      const asker = new AbortController();
+      connection.on("close", () => asker.abort(new Error("whoever asked went away")));
+      const reply = await answer(
+        request,
+        (line) => connection.write(JSON.stringify({ progress: line }) + "\n"),
+        asker.signal,
       );
       connection.end(JSON.stringify({ reply }) + "\n");
     });

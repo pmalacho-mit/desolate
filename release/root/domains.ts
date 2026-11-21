@@ -3,6 +3,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
+import { printable } from "../shared/text.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isSlug, parseRepo, repoId, workspaceVmName } from "../shared/names.ts";
 import { checkoutPath } from "../shared/plan.ts";
@@ -22,6 +23,7 @@ import type {
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
+import type { repeat } from "../.harness/shared-text.ts";
 import type {
   aDomain,
   aWorkspace,
@@ -106,6 +108,10 @@ export const domains = (): Domain[] => {
   }
 };
 
+/** A domain's title, in characters (code points): a few words, shown in a heading of the
+ *  dashboard. The person types it (the host passes it on); 200 is past any heading. */
+const TITLE_MOST = 200;
+
 export const create = (slugArg: unknown, title: unknown) => {
   const slug = slugOf(slugArg, "domain");
   // `origin` and `root` are remote names in every clone; a domain is a remote in the root's.
@@ -113,11 +119,20 @@ export const create = (slugArg: unknown, title: unknown) => {
     refuse(`a domain cannot be called '${slug}'`, "choose another name");
   if (fs.existsSync(file(slug)))
     refuse(`the domain '${slug}' already exists`, `desolate domain ${slug} show`);
+  // A title is shown whole (the dashboard, `desolate domains`): one too long is refused, not
+  // cut where nobody sees.
+  const named = typeof title === "string" ? title.trim() : "";
+  if ([...named].length > TITLE_MOST)
+    refuse(
+      `the title is ${[...named].length} characters, over the ${TITLE_MOST} a domain's title may have`,
+      "give a shorter --title",
+      EXIT.usage,
+    );
   for (const dir of ["repos", "outbox", "inbox", "workspaces"])
     fs.mkdirSync(path.join(domainPath(slug), dir), { recursive: true });
   const value: Domain = {
     slug,
-    title: typeof title === "string" && title.trim() ? title.trim().slice(0, 200) : slug,
+    title: named || slug,
     repos: [],
     createdAt: new Date().toISOString(),
   };
@@ -140,6 +155,37 @@ declare namespace create {
         Invoke<typeof namesIn, [where: "domains", dir: "acme"]>,
         "=",
         ["domain.json", "inbox", "outbox", "repos", "workspaces"]
+      >,
+    ]
+  >;
+  /** a title too long to show is refused, with the bound, and no domain is made; one at the
+   *  bound is kept whole (the control) */
+  export type LongTitle = Given<
+    Fresh,
+    [
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            f: typeof create,
+            args: [slugArg: "acme", title: Invoke<typeof repeat, [text: "é", count: 201]>],
+          ]
+        >,
+        "=",
+        {
+          message: "the title is 201 characters, over the 200 a domain's title may have";
+          fix: "give a shorter --title";
+          code: 64;
+        }
+      >,
+      Expect<Invoke<typeof namesIn, [where: "domains", dir: "."]>, "=", []>,
+      Expect<
+        Invoke<
+          typeof create,
+          [slugArg: "acme", title: Invoke<typeof repeat, [text: "é", count: 200]>]
+        >,
+        "matches",
+        { title: Invoke<typeof repeat, [text: "é", count: 200]> }
       >,
     ]
   >;
@@ -253,13 +299,17 @@ declare namespace setSize {
   >;
 }
 
+/** The most workspaces a domain's own may start (`spawn --max`): a check on a typo, not a
+ *  resource (each workspace is a VM, and the Mac runs out of memory long before this). */
+const SPAWN_MOST = 1000;
+
 export const setSpawn = (slugArg: unknown, maxArg: unknown) => {
   const d = domain(slugOf(slugArg, "domain"));
   // null (or absent): no limit, the default. 0: its workspaces start none.
   const max = maxArg === null || maxArg === undefined ? null : Number(maxArg);
-  if (max !== null && (!Number.isInteger(max) || max < 0 || max > 1000))
+  if (max !== null && (!Number.isInteger(max) || max < 0 || max > SPAWN_MOST))
     refuse(
-      `'${String(maxArg)}' is not a number of workspaces`,
+      `'${printable(maxArg, 40)}' is not a number of workspaces: a whole number from 0 to ${SPAWN_MOST}`,
       `desolate domain ${d.slug} spawn --max 2`,
       EXIT.usage,
     );

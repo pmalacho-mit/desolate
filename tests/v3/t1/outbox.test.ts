@@ -36,10 +36,13 @@ describe(
       fs.writeFileSync(`${dir}/a.bundle`, "x");
       fs.writeFileSync(`${domains}/t1-dom/outbox/requests/r.json`, JSON.stringify({ op: "fetch" }));
       assert.equal(mod.openDir(dir), null);
-      assert.deepEqual(mod.listedRefs("t1-dom", "acme/widgets"), {});
+      assert.deepEqual(mod.refsOf("t1-dom", "acme/widgets"), {
+        refused:
+          "acme/widgets's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one",
+      });
       assert.deepEqual(mod.takeBundles("t1-dom", "acme/widgets"), {
         copies: [],
-        dropped: 0,
+        dropped: [],
         more: false,
       });
       assert.deepEqual(mod.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), []);
@@ -56,6 +59,11 @@ describe(
 describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
   const sync = `${domains}/t1-dom/outbox/sync/acme/widgets`;
   const lfs = `${domains}/t1-dom/outbox/lfs/acme/widgets`;
+  const refs = (repo: string) => {
+    const listed = outbox.refsOf("t1-dom", repo);
+    assert.ok("refs" in listed, JSON.stringify(listed));
+    return listed.refs;
+  };
   before(async () => {
     outbox = await import("../../../release/root/outbox.ts");
     fs.mkdirSync(sync, { recursive: true });
@@ -82,25 +90,65 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
         },
       }),
     );
-    assert.deepEqual(Object.keys(outbox.listedRefs("t1-dom", "acme/widgets")).sort(), [
+    assert.deepEqual(Object.keys(refs("acme/widgets")).sort(), [
       "issue/12",
       "main",
       "refs/heads/main",
     ]);
     assert.deepEqual(
-      outbox.listedRefs("t1-dom", "../../etc"),
-      {},
+      outbox.refsOf("t1-dom", "../../etc"),
+      { refused: "'../../etc' is not a repository" },
       "a repository that is not one lists nothing",
     );
   });
 
-  it("a refs list that is a symlink, or not JSON, lists nothing", () => {
+  it("a refs list that is a symlink, or not JSON, is refused, and said: never taken for an empty one", () => {
     fs.rmSync(`${sync}/refs.json`);
     fs.symlinkSync("/etc/passwd", `${sync}/refs.json`);
-    assert.deepEqual(outbox.listedRefs("t1-dom", "acme/widgets"), {});
+    assert.deepEqual(outbox.refsOf("t1-dom", "acme/widgets"), {
+      refused: "acme/widgets's list of branches (refs.json) is not a plain file",
+    });
     fs.rmSync(`${sync}/refs.json`);
     fs.writeFileSync(`${sync}/refs.json`, "not json");
-    assert.deepEqual(outbox.listedRefs("t1-dom", "acme/widgets"), {});
+    assert.deepEqual(outbox.refsOf("t1-dom", "acme/widgets"), {
+      refused: "acme/widgets's list of branches (refs.json) is not JSON",
+    });
+    fs.rmSync(`${sync}/refs.json`);
+    assert.deepEqual(
+      outbox.refsOf("t1-dom", "acme/widgets"),
+      { refs: {} },
+      "control: no list at all is no branches (nothing synced yet), not a refusal",
+    );
+  });
+
+  it("a refs list is read whole or refused whole: past its bound it is refused by name, never cut", () => {
+    const A = "a".repeat(40);
+    // More than the old cut of 5,000: every one is listed, so git prunes none of them.
+    fs.writeFileSync(
+      `${sync}/refs.json`,
+      JSON.stringify({
+        refs: Object.fromEntries(Array.from({ length: 6000 }, (_, i) => [`b${i}`, A])),
+      }),
+    );
+    assert.equal(Object.keys(refs("acme/widgets")).length, 6000, "control: every branch");
+    // One byte past the bound: refused, with the bound and the size.
+    const over = outbox.REFS_BYTES + 1;
+    const head = JSON.stringify({ refs: { main: A }, pad: "" });
+    fs.writeFileSync(
+      `${sync}/refs.json`,
+      head.slice(0, -2) + "x".repeat(over - head.length) + head.slice(-2),
+    );
+    assert.equal(fs.statSync(`${sync}/refs.json`).size, over);
+    assert.deepEqual(outbox.refsOf("t1-dom", "acme/widgets"), {
+      refused: `acme/widgets's list of branches (refs.json) is ${over} bytes, over the ${outbox.REFS_BYTES} allowed`,
+    });
+    // Control: at the bound exactly, read.
+    fs.writeFileSync(
+      `${sync}/refs.json`,
+      head.slice(0, -2) + "x".repeat(over - 1 - head.length) + head.slice(-2),
+    );
+    assert.deepEqual(refs("acme/widgets"), { main: A });
+    fs.rmSync(`${sync}/refs.json`);
   });
 
   it("only regular bundle files with plain names are taken; every name that was looked at is removed from the outbox, and nothing else", () => {
@@ -116,7 +164,11 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       taken.copies[0]!.startsWith(path.join(work, "state", "incoming")),
       "the copy is in the root's own directory",
     );
-    assert.equal(taken.dropped, 2, "the symlink and the directory were dropped, not followed");
+    assert.equal(
+      taken.dropped.length,
+      2,
+      "the symlink and the directory were dropped, not followed",
+    );
     assert.deepEqual(
       fs.readdirSync(sync).sort(),
       ["UPPER.bundle", "a b.bundle", "dir.bundle", "refs.json"],
@@ -190,7 +242,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.writeFileSync(`${honest}/refs.json`, JSON.stringify({ refs: { fine: "b".repeat(40) } }));
     fs.writeFileSync(`${honest}/aa.bundle`, "a bundle's bytes");
     assert.deepEqual(
-      outbox.listedRefs("t1-dom", "acme/honest"),
+      refs("acme/honest"),
       { fine: "b".repeat(40) },
       "control: a plain file in a plain directory is read",
     );
@@ -203,13 +255,16 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     // The directory itself is a symlink to the root's files.
     fs.symlinkSync(secret, `${domains}/t1-dom/outbox/sync/acme/linked`);
     assert.deepEqual(
-      outbox.listedRefs("t1-dom", "acme/linked"),
-      {},
+      outbox.refsOf("t1-dom", "acme/linked"),
+      {
+        refused:
+          "acme/linked's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one",
+      },
       "a refs list reached through a symlinked directory is not read",
     );
     assert.deepEqual(
       outbox.takeBundles("t1-dom", "acme/linked"),
-      { copies: [], dropped: 0, more: false },
+      { copies: [], dropped: [], more: false },
       "nor a bundle",
     );
     assert.equal(
@@ -221,7 +276,6 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.symlinkSync(path.join(work, "roots-own-tree"), `${domains}/t1-dom/outbox/requests`);
     fs.mkdirSync(path.join(work, "roots-own-tree"), { recursive: true });
     fs.writeFileSync(path.join(work, "roots-own-tree", "r.json"), JSON.stringify({ op: "fetch" }));
-    assert.equal(outbox.readData(`${domains}/t1-dom/outbox/requests/r.json`), null);
     assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), []);
     assert.ok(
       fs.existsSync(path.join(work, "roots-own-tree", "r.json")),
@@ -231,7 +285,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     spawnSync("mkfifo", [`${honest}/pipe.bundle`]);
     assert.deepEqual(outbox.takeBundles("t1-dom", "acme/honest"), {
       copies: [],
-      dropped: 1,
+      dropped: ["the bundle pipe.bundle is not a plain file"],
       more: false,
     });
     // CONTROL for drain: an honest request is read once and removed.
@@ -278,40 +332,44 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
   });
 });
 
-describe("T1 a domain's list of its branches: its word, read as data", () => {
-  it("names desolate would carry, commits that are commits, bounded; a link is not followed", async () => {
-    const { branchesOf } = await import("../../../release/root/outbox.ts");
-    const dir = `${domains}/t1-branches/outbox/sync/acme/widgets`;
-    fs.mkdirSync(dir, { recursive: true });
-    const A = "a".repeat(40);
-    fs.writeFileSync(
-      `${dir}/refs.json`,
-      JSON.stringify({
-        refs: { main: A, "feature/x": A, "--upload-pack=x": A, "../../etc": A, bad: "nope" },
-      }),
-    );
-    assert.deepEqual(branchesOf("t1-branches", ["acme/widgets", "acme/absent"]), [
-      { repo: "acme/widgets", branch: "main", commit: A },
-      { repo: "acme/widgets", branch: "feature/x", commit: A },
-    ]);
-    fs.writeFileSync(
-      `${dir}/refs.json`,
-      JSON.stringify({
-        refs: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`b${i}`, A])),
-      }),
-    );
-    assert.equal(
-      branchesOf("t1-branches", ["acme/widgets"]).length,
-      200,
-      "at most 200 a repository",
-    );
-    fs.rmSync(`${dir}/refs.json`);
-    fs.writeFileSync(path.join(work, "elsewhere.json"), JSON.stringify({ refs: { main: A } }));
-    fs.symlinkSync(path.join(work, "elsewhere.json"), `${dir}/refs.json`);
-    assert.deepEqual(
-      branchesOf("t1-branches", ["acme/widgets"]),
-      [],
-      "a list that is a link is not read",
-    );
-  });
-});
+describe(
+  "T1 a domain's list of its branches: its word, read as data",
+  { skip: ON_LINUX ? false : NEEDS_LINUX },
+  () => {
+    it("names desolate would carry, commits that are commits, every one; a link is not followed", async () => {
+      const { branchesOf } = await import("../../../release/root/outbox.ts");
+      const dir = `${domains}/t1-branches/outbox/sync/acme/widgets`;
+      fs.mkdirSync(dir, { recursive: true });
+      const A = "a".repeat(40);
+      fs.writeFileSync(
+        `${dir}/refs.json`,
+        JSON.stringify({
+          refs: { main: A, "feature/x": A, "--upload-pack=x": A, "../../etc": A, bad: "nope" },
+        }),
+      );
+      assert.deepEqual(branchesOf("t1-branches", ["acme/widgets", "acme/absent"]), [
+        { repo: "acme/widgets", branch: "main", commit: A },
+        { repo: "acme/widgets", branch: "feature/x", commit: A },
+      ]);
+      fs.writeFileSync(
+        `${dir}/refs.json`,
+        JSON.stringify({
+          refs: Object.fromEntries(Array.from({ length: 500 }, (_, i) => [`b${i}`, A])),
+        }),
+      );
+      assert.equal(
+        branchesOf("t1-branches", ["acme/widgets"]).length,
+        500,
+        "every one: the file's size is the bound, not a count",
+      );
+      fs.rmSync(`${dir}/refs.json`);
+      fs.writeFileSync(path.join(work, "elsewhere.json"), JSON.stringify({ refs: { main: A } }));
+      fs.symlinkSync(path.join(work, "elsewhere.json"), `${dir}/refs.json`);
+      assert.deepEqual(
+        branchesOf("t1-branches", ["acme/widgets"]),
+        [],
+        "a list that is a link is not read",
+      );
+    });
+  },
+);

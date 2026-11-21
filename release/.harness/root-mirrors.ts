@@ -15,3 +15,16 @@ export const theOnlyFileIn = (where: Where, dir: string): string => {
   if (names.length !== 1) throw new Error(`${dir} holds ${names.length} files, not one`);
   return fs.readFileSync(path.join(pathIn(where, dir), names[0]!), "utf8");
 };
+
+/** A bundle's copy, in the root's state, whose header (its list of refs) is `bytes` long
+ *  before the blank line that ends it, and a pack that is no pack. Its path. */
+export const aBundleWithAHeaderOf = (bytes: number): string => {
+  const file = pathIn("state", `incoming/header-${bytes}.bundle`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const magic = "# v2 git bundle\n";
+  const line = `${"0".repeat(40)} refs/heads/b\n`;
+  let header = magic + line.repeat(Math.floor((bytes - magic.length) / line.length));
+  header += "x".repeat(bytes - header.length);
+  fs.writeFileSync(file, `${header}\n\nPACK`);
+  return file;
+};

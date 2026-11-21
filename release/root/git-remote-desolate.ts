@@ -16,9 +16,11 @@ import * as readline from "node:readline";
 import { writeJson } from "../shared/json.ts";
 import { isBranch, isSlug, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
+import { printable } from "../shared/text.ts";
 import { domain as domainOf } from "./domains.ts";
+import { gitSaid } from "./git.ts";
 import { bundleRefusal } from "./intake.ts";
-import { clearRefusal, inbox, listedRefs, noteRefusal, takeBundles } from "./outbox.ts";
+import { clearRefusal, inbox, noteRefusal, refsOf, takeBundles, WHY_MOST } from "./outbox.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -80,10 +82,42 @@ declare namespace deliverySpec {
   >;
 }
 
+/** Bundles taken in one run of the helper, at most (R7: a hard bound against the domain,
+ *  which writes them). A workspace writes one each time it syncs, and the helper takes them
+ *  one at a time; a thousand is far past what a domain leaves between two fetches, and a
+ *  domain writing bundles as fast as they are taken cannot keep a fetch (and the root's
+ *  disk) busy for ever. What is left is taken by the next fetch, and that is said. */
+const ROUNDS_MOST = 1000;
+
+/** Of branch names desolate carries (names.ts, isBranch), the ones git takes as refs too:
+ *  isBranch's characters and rules leave out every name git refuses but two kinds, a part
+ *  that starts with a dot and a part that ends in ".lock" (git-check-ref-format(1), rule 1).
+ *  git has the last word all the same: a name it refuses in a list is one it ignores
+ *  ("Ignoring funny ref", measured with git 2.39). This keeps them out of the list, in
+ *  this process, where asking git took a process for each branch. */
+export const gitTakes = (branch: string) =>
+  branch.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"));
+
+declare namespace gitTakes {
+  /** what git itself takes, and the two kinds of name it does not that isBranch lets by */
+  export type Names = Table<
+    typeof gitTakes,
+    [
+      [args: [branch: "main"], expected: true],
+      [args: [branch: "feature/v1.2"], expected: true],
+      [args: [branch: "a.lockb"], expected: true],
+      [args: [branch: "a/.b"], expected: false],
+      [args: [branch: "x.lock/y"], expected: false],
+    ]
+  >;
+}
+
 const main = async () => {
   const slug = process.argv[3] ?? "";
   if (!isSlug(slug)) fail(`'${slug}' is not a domain`);
-  const git = (args: string[]) => run("git", args, { env: process.env, timeoutMs: 600_000 });
+  // In the root clone, on the root's own disk: no peer to go quiet. How long a fetch may take
+  // is the patience of whoever ran it (R4).
+  const git = (args: string[], input?: string) => run("git", args, { env: process.env, input });
   const repo = (await git(["config", "--get", "desolate.repo"])).stdout.trim();
   if (!parseRepo(repo))
     fail("this is not one of the root's clones (no desolate.repo in its config)");
@@ -100,18 +134,19 @@ const main = async () => {
   const refused = (why: string) => {
     noteRefusal(slug, repo, why);
     process.stderr.write(
-      `git-remote-desolate: a bundle from ${slug} was refused and dropped: ${why.replace(/[^\x20-\x7e]/g, "?").slice(0, 300)}\n  Nothing new from ${slug} is taken while one of its branches holds what git refused: delete that branch in the workspace, then \`desolate sync\` there.\n`,
+      `git-remote-desolate: a bundle from ${slug} was refused and dropped: ${printable(why, WHY_MOST)}\n  Nothing new from ${slug} is taken while one of its branches holds what git refused: delete that branch in the workspace, then \`desolate sync\` there.\n`,
     );
   };
 
   const importBundles = async () => {
     // One at a time: copy, check, fetch, delete. The root's disk holds one bundle of a
     // domain's at once, however many the domain left.
-    let droppedInAll = 0;
-    for (let round = 0, more = true; more && round < 1000; round++) {
+    const droppedInAll: string[] = [];
+    let more = true;
+    for (let round = 0; more && round < ROUNDS_MOST; round++) {
       const taken = takeBundles(slug, repo, 1);
       more = taken.more;
-      droppedInAll += taken.dropped;
+      droppedInAll.push(...taken.dropped);
       for (const copy of taken.copies) {
         // git is given a copy the root made (outbox.ts), never a path the domain controls,
         // and only after every object in it passed git's checks (refusedBy). Refs land under
@@ -133,16 +168,19 @@ const main = async () => {
             `+refs/heads/*:refs/desolate/incoming/${slug}/*`,
           ]);
           // What git says about a bundle is in part the bundle's author's text: shown as text.
-          if (fetched.code !== 0)
-            refused(`did not import: ${fetched.stderr.trim().split("\n").pop() ?? ""}`);
+          if (fetched.code !== 0) refused(`did not import: ${gitSaid(fetched, 1)}`);
           else clearRefusal(slug, repo);
         } else refused(why);
         fs.rmSync(copy, { force: true });
       }
     }
-    if (droppedInAll > 0)
+    for (const why of droppedInAll)
       process.stderr.write(
-        `git-remote-desolate: ${droppedInAll} file(s) in ${slug}'s outbox were not plain bundle files and were dropped\n`,
+        `git-remote-desolate: dropped from ${slug}'s outbox: ${printable(why, WHY_MOST)}\n`,
+      );
+    if (more)
+      process.stderr.write(
+        `git-remote-desolate: took ${ROUNDS_MOST} bundles from ${slug} in this fetch, the most one takes; the rest wait for the next\n`,
       );
     const scratch = (
       await git(["for-each-ref", "--format=%(refname)", `refs/desolate/incoming/${slug}/`])
@@ -153,19 +191,31 @@ const main = async () => {
   };
 
   const list = async () => {
+    // The domain's whole list, or none: git prunes <domain>/* to what this answers, so a
+    // list that could not be read whole fails the fetch, out loud, and nothing is pruned.
+    const listed = refsOf(slug, repo);
+    if ("refused" in listed) {
+      noteRefusal(slug, repo, listed.refused);
+      return fail(
+        `${printable(listed.refused, WHY_MOST)}: nothing from ${slug} is fetched, and none of its branches removed, until it is (\`desolate sync\` in a workspace writes it again)`,
+      );
+    }
+    const entries = Object.entries(listed.refs).filter(([branch]) => gitTakes(branch));
+    // A branch whose objects the root does not hold (its bundle was refused, or has not
+    // come) is not listed: one branch the root will not take does not hide the others.
+    // (One git for the whole list.)
+    const held = await git(
+      ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+      entries.map(([, commit]) => `${commit}\n`).join(""),
+    );
+    if (held.code !== 0) fail(`could not look for ${slug}'s commits: ${gitSaid(held)}`);
+    const types = held.stdout.split("\n");
     const lines: string[] = [];
     let missing = 0;
-    for (const [branch, commit] of Object.entries(listedRefs(slug, repo))) {
-      // The last word on a ref name is git's own.
-      if ((await git(["check-ref-format", `refs/heads/${branch}`])).code !== 0) continue;
-      // A branch whose objects the root does not hold (its bundle was refused, or has not
-      // come) is not listed: one branch the root will not take does not hide the others.
-      if ((await git(["cat-file", "-e", `${commit}^{commit}`])).code !== 0) {
-        missing++;
-        continue;
-      }
-      lines.push(`${commit} refs/heads/${branch}`);
-    }
+    entries.forEach(([branch, commit], i) => {
+      if (types[i] !== `${commit} commit`) missing++;
+      else lines.push(`${commit} refs/heads/${branch}`);
+    });
     // Everything the domain lists is here: whatever was refused before is no longer in it.
     if (missing === 0) clearRefusal(slug, repo);
     return lines;
@@ -196,8 +246,7 @@ const main = async () => {
     ]);
     await git(["update-ref", "-d", scratch]);
     const empty = made.code !== 0 && /empty bundle/i.test(made.stderr);
-    if (made.code !== 0 && !empty)
-      return `error refs/heads/${branch} ${made.stderr.trim().split("\n").pop()}`;
+    if (made.code !== 0 && !empty) return `error refs/heads/${branch} ${gitSaid(made, 1)}`;
     if (!empty) fs.renameSync(path.join(dir, `${id}.bundle.tmp`), path.join(dir, `${id}.bundle`));
     else fs.rmSync(path.join(dir, `${id}.bundle.tmp`), { force: true });
     // With no bundle, the commit is one the mirror already has: the note alone delivers it.

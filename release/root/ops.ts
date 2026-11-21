@@ -11,7 +11,8 @@ import * as path from "node:path";
 import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
 const parseRepoName = (value: string) => (parseRepo(value) ? value : null);
 import { writeJson } from "../shared/json.ts";
-import { git as gitIn, repoOf, writeKnownHosts } from "./git.ts";
+import { git as gitIn, gitSaid, repoOf, writeKnownHosts } from "./git.ts";
+import * as limits from "../shared/limits.ts";
 import { bundleRefusal } from "./intake.ts";
 import { pushCommit } from "./raw-push.ts";
 import type { Forge } from "./git.ts";
@@ -55,10 +56,22 @@ import type {
 } from "../.harness/root-state.ts";
 
 type Log = (line: string) => void;
-export type Op = (args: Record<string, unknown>, log: Log) => Promise<unknown>;
+/** `signal`: whoever asked went away (rootctl's service: the host closed the connection). */
+export type Op = (
+  args: Record<string, unknown>,
+  log: Log,
+  signal?: AbortSignal,
+) => Promise<unknown>;
 
-/** The largest LFS object a push may carry: what the host takes from the git VM. */
-const LFS_MOST = 5 * 1024 ** 3;
+/** A .gitrepo, read to find which repository and branch a vendored dependency names: a few
+ *  lines of text (git-subrepo writes seven). Its first 4 KiB are read and the rest is not
+ *  looked at (R7: a hard bound on the commit's content, which is not the root's): the two
+ *  lines taken from it are at its top. */
+const GITREPO_READ = 4096;
+
+/** How many entries of the egress log `desolate net log` asks for when it names none: the
+ *  newest, a terminal's screenful and more. `last` asks for another number. */
+const NET_LOG_LAST = 100;
 
 export const ops: Record<string, Op> = {
   async ping() {
@@ -95,8 +108,8 @@ export const ops: Record<string, Op> = {
       anonymous: args.anonymous === true,
     });
   },
-  async "repo.fetch"(args, log) {
-    return repos.fetch(repoOf(args.repo), log);
+  async "repo.fetch"(args, log, signal) {
+    return repos.fetch(repoOf(args.repo), log, signal);
   },
   async "repo.list"() {
     return repos.list();
@@ -231,7 +244,10 @@ export const ops: Record<string, Op> = {
   async "net.log"(args) {
     return proxy.auditLog({
       domain: typeof args.domain === "string" ? args.domain : undefined,
-      last: Number(args.last) || 100,
+      last:
+        Number.isInteger(Number(args.last)) && Number(args.last) > 0
+          ? Number(args.last)
+          : NET_LOG_LAST,
     });
   },
 
@@ -319,7 +335,9 @@ export const ops: Record<string, Op> = {
     // A file is the innermost dependency's: a subrepo vendored inside another is its own.
     const ownerOf = (file: string) =>
       dirs.filter((d) => file.startsWith(`${d}/`)).sort((a, b) => b.length - a.length)[0];
-    for (const record of records.slice(0, 200)) {
+    // Every dependency, and every file of each: what the host shows is a count of them, and
+    // a count of a cut list is not one (R2). (Each list is a commit's, bounded by its tree.)
+    for (const record of records) {
       const dir = record.slice(0, -"/.gitrepo".length);
       // A path is the commit's to name, and it is printed (desolate suede changed, the
       // recipe): one a terminal would act on, or that hides what it is, is not a dependency
@@ -327,7 +345,7 @@ export const ops: Record<string, Op> = {
       if (printable(dir, 400) !== dir) continue;
       const text = (await gitIn(clone, ["cat-file", "blob", `${to}:${record}`])).stdout.slice(
         0,
-        4096,
+        GITREPO_READ,
       );
       const remote = /^\s*remote\s*=\s*(\S+)/m.exec(text)?.[1] ?? "";
       const branch = /^\s*branch\s*=\s*(\S+)/m.exec(text)?.[1] ?? "release";
@@ -341,7 +359,7 @@ export const ops: Record<string, Op> = {
         dir,
         remote: id,
         branch: isBranch(branch) ? branch : "release",
-        files: changed.filter((f) => ownerOf(f) === dir && f !== record).slice(0, 2000),
+        files: changed.filter((f) => ownerOf(f) === dir && f !== record),
       });
     }
     return out;
@@ -418,7 +436,7 @@ export const ops: Record<string, Op> = {
       if (fetched.code !== 0)
         return {
           pushed: false,
-          error: `the root could not take the push in: ${fetched.stderr.trim().split("\n").pop() ?? ""}`,
+          error: `the root could not take the push in: ${gitSaid(fetched)}`,
           said,
         };
       try {
@@ -439,7 +457,22 @@ export const ops: Record<string, Op> = {
           const from = path.join(GIT_IN, `${file.slice(0, 16)}.lfs`, oid);
           const to = path.join(gitDir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
           fs.mkdirSync(path.dirname(to), { recursive: true });
-          const why = takeHashed(from, to, oid, LFS_MOST);
+          // No larger than the forge stores (the git VM's out-box on the host is checked
+          // against the same bound), said as that bound.
+          const size = fs.lstatSync(from, { throwIfNoEntry: false })?.size ?? 0;
+          if (size > limits.FORGE.lfsObjectBytes)
+            return {
+              pushed: false,
+              error: limits.over(
+                `the LFS object ${oid.slice(0, 12)}`,
+                limits.FORGE.lfsObjectBytes,
+                size,
+                "bytes",
+                "the forge stores",
+              ),
+              said,
+            };
+          const why = takeHashed(from, to, oid, limits.FORGE.lfsObjectBytes);
           if (why)
             return { pushed: false, error: `the LFS object ${oid.slice(0, 12)}: ${why}`, said };
         }
@@ -459,7 +492,7 @@ export const ops: Record<string, Op> = {
           if (delivered.code !== 0)
             return {
               pushed: false,
-              error: `not delivered: ${delivered.stderr.trim().split("\n").pop() ?? ""}`,
+              error: `not delivered: ${gitSaid(delivered)}`,
               said,
             };
           said.push(
