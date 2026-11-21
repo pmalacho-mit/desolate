@@ -81,6 +81,10 @@ desolate: no person confirmed the push, so nothing was pushed
   fix: run it from a terminal of your own, on the host
 [exit 78]
 
+## the reviewer's account: paged, diffs on demand
+
+## the reviewer's account: no deadline
+
 ## refusals before and at the prompt
 
 $ desolate push dev acme/widgets issue/12 --expect <commit>

@@ -25,9 +25,11 @@ reaches the forge. A push the reviewer cannot describe cannot be approved.
 
 What the page and the terminal show of it, all from the reviewer: the commits, the net
 change, files a commit changed and a later one changed back (which the net change does not
-show), each commit whole (who wrote it, when, its whole message, its diff; the first 50),
-and a warning for anything a commit carries that is not shown (a header other than git's
-four, a signature, an encoding). The two choices:
+show), each commit whole (who wrote it, when, its whole message, its diff), and a warning
+for anything a commit carries that is not shown (a header other than git's four, a
+signature, an encoding). Every list is counted and comes a page at a time, and every diff a
+page of bytes at a time, however large the push. The reviewer takes as long as the push needs
+(a large first push packs for minutes), and says what it is doing meanwhile. The two choices:
 - **Squashed into one commit** (`desolate push ... --squash`, `desolate approve --squash`,
   or the page's second button): the reviewer's commit with the last commit's files, on what
   the branch builds on, so nothing a commit in between held reaches the remote's history.

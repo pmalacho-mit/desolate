@@ -70,7 +70,7 @@ commit first, and the true total), and `page` and `diff` read the kept account.
 | reviewer.ts:339 | the submit's fetch, `1_800_000` | removed | |
 | review-client.ts:117-127 | bundle create `timeoutMs: 1_800_000` | removed | the push waits for its bundle |
 | reviewer.ts:48, 300-301 | bundle at most 2 GiB | bound by what holds it (R7) | refused when twice its size is more than the reviewer's disk has free (received, then stored): a repository over 2 GiB can be reviewed; the forge's push size bounds the pack, not the history |
-| reviewer.ts:49, 316 | `refs: 2000` in a bundle | removed | the bundle's size bounds it; the refspecs go to `git fetch --stdin` |
+| reviewer.ts:49, 316 | `refs: 2000` in a bundle | kept hard, larger, named (R3, R7) | `LIMIT.refs` 10,000, said with `over`: git fetch matches each refspec against every ref of the bundle (quadratic), and the header is the root's user's; review-client.ts now sends only the remote's branches whose tips the reviewer lacks, so only a first submit names them all |
 | reviewer.ts:280 | `{1,200}` in `BUNDLE_REF` | hard, named (R3) | `NAMES.branch`; review-client.ts sends only the refs that fit, and the account says some branches were not sent, instead of the whole submit refused; a refused bundle names the ref |
 | reviewer.ts:47, 1329 | `header: 64 * 1024` | kept hard | a request line from the root's user |
 | reviewer.ts:52, 263 | receive idle 60 s | kept (idle, untrusted peer) | |
@@ -84,7 +84,7 @@ commit first, and the true total), and `page` and `diff` read the kept account.
 | reviewer.ts:929-930 | `shown(author, 80)`, `shown(subject, 200)` | removed (R1) | `shown` is printable's (its flood bound, 4,000 characters, cut with the mark) and the variation selectors it hid before |
 | reviewer.ts:962, 1146 | paths `shown(raw, 300)` | removed | as above |
 | reviewer.ts:192 | git's error, last 2 lines, `.slice(0, 300)` | kept, marked (R1) | cut with the mark; git's whole stderr goes to the reviewer's log |
-| reviewer.ts:906 | `known.slice(0, 200)` | removed | the commits at git's boundary of what is new (`rev-list --boundary`), however many branches the remote has |
+| reviewer.ts:906 | `known.slice(0, 200)` | changed | the commits at git's boundary of what is new (`rev-list --boundary`), however many branches the remote has; the first 200 of them (`EDGES`) are tried, since the root's user shapes the boundary (an octopus of old commits) and each is two walks under the one account lock, and past 200 the account says so |
 | reviewer.ts:435 | gitBytes 64 MiB | kept hard | why the batches exist |
 | reviewer.ts:470-475 | 20,000 blobs a batch | kept, named (`BLOBS_AT_ONCE`) | 21 MiB at the new cutoff |
 | reviewer.ts:1064-1068 | 2,000 commits a batch | kept, named (`COMMITS_AT_ONCE`) | |
@@ -105,3 +105,24 @@ commit first, and the true total), and `page` and `diff` read the kept account.
 | reviewer.ts:1088-1110 | header names 40, 20 commits named | kept | one sentence of a warning; the rest counted |
 | reviewer.ts:1358 | pack-streaming process, 30 min | kept | as the pusher's |
 | review-client.ts:28, 35, 107, 187 | the start window, a 30 s tips ask, the 1 MiB header | kept | |
+
+## The independent review (a fresh subagent, limited context, 2026-11-21)
+Threat model: the root VM's ordinary user and all repository content are the attacker; the
+reviewer runs as its own user. What it found, and what was done:
+
+| finding | done |
+|---|---|
+| HIGH, older than this change: a review bundle's objects were never checked. A fetch from a bundle ignores fetch.fsckObjects before git 2.46 (intake.ts measured it on 2.43); a commit with a NUL in its message (git shows nothing past it) passed into the reviewer, and its pack | `submit` runs intake.ts's `bundleRefusal` (index-pack --strict into a quarantine) before the fetch; the header check also says a NUL. T2: such a commit is refused, beside the commits that were taken |
+| MEDIUM: the new-branch edge loop had no bound, under the account lock | `EDGES` (200) and a warning past it |
+| LOW: the fallback answer's diffs were 1 MiB pages counted to the end (6 MiB of JSON each, and the whole diff walked) | 256 KiB, as the host before took, and git is stopped there |
+| LOW: submit's refs unbounded (quadratic in git fetch); git's stderr logged whole | `LIMIT.refs` 10,000; the log keeps git's last 16 KiB |
+| LOW: a pack being made could be pruned for its age by a restart; an account's pack reused was not renewed | packs being made are named for their maker (pid and start) and pruned only when it is gone, never for size; reuse renews |
+| nits: stderr of pack-objects unbounded; an error not made safe; temporary names from Math.random; UTF-8 split across chunks | bounded; `shown`; randomBytes and `wx`; read as UTF-8 |
+
+Not done here (said in the pull request): the socket server runs without `nice` and without
+the reviewer's settings (root/start.sh starts it); `Sends.lfs` is a whole list in the
+account, so a push of some 50,000 LFS objects (pack and squash) passes the 8 MiB line bound
+and is refused as that bound (the contract's); the reviewer's stderr goes to the host whole
+(the host's end makes it safe and keeps its tail: ticket 2); intake.ts's 8-minute check
+(`CHECK_MS`) now applies to review bundles too, so a first submit of a very large history
+could be refused as slow.
