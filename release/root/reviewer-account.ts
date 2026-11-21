@@ -370,6 +370,8 @@ const namesOf = async (dir: string, args: string[]): Promise<string[]> => {
 /** An account as the reviewer keeps it, for `page` and `diff`: the account, and the whole of
  *  each list it pages. `raw`: a file's path as git has it, a character a byte (namesOf). */
 type Kept = {
+  /** (An account kept before names were read as bytes is made again.) */
+  names: "bytes";
   repo: string;
   commit: string;
   base: string | null;
@@ -394,7 +396,8 @@ const keptOf = (key: string): Kept | null => {
   try {
     const file = keptFile(key);
     if (Date.now() - fs.statSync(file).mtimeMs > PACKS.keptMs) return null;
-    return JSON.parse(fs.readFileSync(file, "utf8")) as Kept;
+    const kept = JSON.parse(fs.readFileSync(file, "utf8")) as Kept;
+    return kept.names === "bytes" ? kept : null;
   } catch {
     return null;
   }
@@ -643,6 +646,7 @@ const account = async (
       remote: now,
     };
     keep({
+      names: "bytes",
       repo: repoId(repo),
       commit,
       base,

@@ -64,11 +64,12 @@ declare namespace shown {
 
 /** A path as git has it (`raw`: its bytes, a character a byte), as the account shows it: as
  *  text when it is UTF-8, and when it is not, as git quotes it (each byte past ASCII as
- *  `\ooo`), so that it does not read as another name. */
+ *  `\ooo`), so that it does not read as another name. A UTF-8 name with a quote or a
+ *  backslash is quoted too, as git does, so that none reads as a quoted one. */
 export const named = (raw: string): string => {
   const bytes = Buffer.from(raw, "latin1");
   const text = bytes.toString("utf8");
-  if (Buffer.from(text, "utf8").equals(bytes)) return shown(text);
+  if (Buffer.from(text, "utf8").equals(bytes) && !/["\\]/.test(text)) return shown(text);
   const quoted = [...raw].map((c) =>
     c >= "\x80" ? `\\${c.charCodeAt(0).toString(8)}` : c === '"' || c === "\\" ? `\\${c}` : c,
   );
@@ -83,6 +84,8 @@ declare namespace named {
       [args: [raw: "src/cafÃ©.ts"], expected: "src/café.ts"],
       [args: [raw: "café.txt"], expected: '"caf\\351.txt"'],
       [args: [raw: 'a"\\ÿ'], expected: '"a\\"\\\\\\377"'],
+      /** and a UTF-8 name that looks quoted is quoted itself */
+      [args: [raw: '"caf\\351.txt"'], expected: '"\\"caf\\\\351.txt\\""'],
     ]
   >;
 }
@@ -263,7 +266,11 @@ export const gitBytes = (dir: string, args: string[], input: string): Promise<Bu
     child.on("error", () => resolve(null));
     // (A git that ends before reading all its input: EPIPE on its stdin, not a crash.)
     child.stdin.on("error", () => {});
-    child.on("close", (code) => resolve(code === 0 ? Buffer.concat(chunks) : null));
+    // (Past the bound it is null even when git had already exited well: the kill came too
+    // late to change its code, and what is held is not all it said. The independent review.)
+    child.on("close", (code) =>
+      resolve(code === 0 && size <= 64 * 1024 * 1024 ? Buffer.concat(chunks) : null),
+    );
     child.stdin.end(input);
   });
 
