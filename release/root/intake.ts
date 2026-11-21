@@ -11,6 +11,7 @@ import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.
 import type { aBundle } from "../.harness/root-git.ts";
 import type { aBundleWithAHeaderOf } from "../.harness/root-mirrors.ts";
 import type { emptyRoot } from "../.harness/root-state.ts";
+import type { abortedIn } from "../.harness/shared-run.ts";
 
 /** Check every object in a bundle BEFORE any of them enters a root clone (`gitDir`): index its
  *  pack, strictly, into a throwaway object directory that borrows that clone's objects.
@@ -149,6 +150,16 @@ declare namespace bundleRefusal {
     Invoke<typeof bundleRefusal, [copy: Clean["copy"], gitDir: Clean["gitDir"]]>,
     "=",
     null
+  >;
+  /** whoever asked went away (the fetch that ran the root's helper ended): the check is
+   *  ended, and the bundle is not taken, though it would have passed (Passes, the control) */
+  export type AskerGone = Expect<
+    Invoke<
+      typeof bundleRefusal,
+      [copy: Clean["copy"], gitDir: Clean["gitDir"], signal: Invoke<typeof abortedIn, [ms: 0]>]
+    >,
+    "=",
+    "whoever asked for it to be checked went away"
   >;
   /** a tree with a `.git` in it is refused before any of it enters the clone, and git's own
    *  words say why */
