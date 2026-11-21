@@ -23,8 +23,12 @@ reach is unreachable on purpose, and is not a bug in the project.
   so they need no key and no network here. (`desolate fetch` does the same for every
   repository at once.)
 - **When your work is ready:** commit it, then `desolate offer` (in the checkout, on the
-  branch), or `git push origin <branch>`, which does the same and says so. That hands the
-  branch to the person, who reviews it and pushes it. **Offering is
+  branch). That hands the branch to the person, who reviews it and pushes it.
+  `git push origin <branch>` offers it too, but then **exits with an error on purpose**
+  (`! [remote rejected] ... (offered to the root, not pushed ...)`), so that git does not
+  record a remote branch that does not exist. That error means the offer worked; the line
+  `offered <repo> <branch> at <commit>` above it says so. Do not retry it or look for another
+  way to push. Prefer `desolate offer`, which exits 0 when the offer is taken. **Offering is
   not pushing, and nothing you do here pushes.** Do not look for a token, install `gh`, or
   add a remote: there is nothing to find. If the pull request should go into a branch other
   than the default one, say which: `desolate offer --base <branch>`.
