@@ -12,8 +12,8 @@ desolate agent start acme/w1 --name claude -- claude         # any command: it r
 desolate agent start acme/w1 --name web -- npm run dev       # a dev server, kept running
 desolate agent list                                               # every one, in every workspace
 desolate agent attach acme/w1 --name claude                  # your terminal on it; Ctrl-] detaches
-desolate agent log acme/w1 --name claude                     # what it printed (its last 2 MiB)
-desolate agent stop acme/w1 --name claude                    # interrupts it, as you would
+desolate agent log acme/w1 --name claude                     # what it printed: to a terminal, its last 100 lines
+desolate agent stop acme/w1 --name claude                    # Ctrl-C, as you would; then asks before it kills
 ```
 
 It runs inside its workspace (in the project's devcontainer, in the checkout you name
@@ -21,10 +21,39 @@ with `--checkout`, else the first), under a small holder that keeps its terminal
 (`workspace/agent-holder.py`). It runs whether or not anyone is attached, and survives your
 terminal closing.
 
+**Its log keeps the newest.** Everything it prints goes to its log in the workspace VM, up to
+a most: past it, the oldest output is dropped, and reading the log from the start says so
+(`[desolate: 1.2 GiB of older output was dropped here: ...]`). The most is a twentieth of the
+workspace's disk, unless you set `DESOLATE_AGENT_LOG_MIB` (the setting `agent.logMiB`, in
+MiB) when you start it. The log stays after the program has ended, for as long as the
+workspace does; starting the same name again carries on the same log.
+
+```bash
+desolate agent log acme/w1 --name web --all          # all that is kept, from the start
+desolate agent log acme/w1 --name web --lines 500    # the last 500 lines
+desolate agent log acme/w1 --name web --since 10m    # since 10 minutes ago (s, m, h, d; or a date and time)
+desolate agent log acme/w1 --name web | grep error   # to a pipe or a file: all of it
+```
+
+What is left out is said on stderr, never in the log's own lines, so a pipe gets the log
+alone. Times are noted every 5 seconds of output, so `--since` may start up to 5 seconds
+early.
+
+**Stopping.** `desolate agent stop` sends Ctrl-C twice through its terminal, as you would
+(most programs, Claude Code among them, end on that). At a terminal it then says it is
+waiting, and asks whether to kill it; it waits for as long as you do, and nothing kills it on
+a clock. Answer no, and it is left to end on its own. From a script, `stop` asks it to stop
+and says whether it has ended; `--kill` ends its whole process group at once and returns when
+it has ended. (In a devcontainer that group is `docker exec`'s client, and the program in the
+container may outlive it: Ctrl-C reaches the program through its terminal, a kill reaches
+only the client. That has not been tested.)
+
 **No tmux, on purpose.** tmux draws the screen itself, so scrolling and copying are tmux's:
 its mouse mode gives you one and takes the other. `desolate agent attach` streams the
-program's terminal straight to yours, after replaying what it printed recently, so your
-terminal's own scrollback, selection and copy work as for anything else. Ctrl-] lets go
+program's terminal straight to yours, after replaying the end of its log (its last 2 MiB,
+more than a terminal keeps to scroll back; the rest is in `desolate agent log`), so your
+terminal's own scrollback, selection and copy work as for anything else. Attaching to one
+that has ended replays the same, and says it is not running. Ctrl-] lets go
 (and puts back what the program changed of your terminal's modes); Ctrl-C goes to the program.
 Many people can attach at once. What it prints reaches your terminal filtered: what
 a full-screen program needs passes, and the escape sequences that act beyond the screen
@@ -33,7 +62,7 @@ a full-screen program needs passes, and the escape sequences that act beyond the
 **In parallel.** One workspace is one VM, and agents in different workspaces run truly side
 by side (a workspace can hold more than one, by `--name`). A workspace from its domain's
 template starts in about 20 s. `desolate agent list` shows each agent's state and when it
-last printed anything; the dashboard shows each workspace's status as the agent sets it
+last printed anything (up to 100 a workspace, then how many more: `--json` lists them all); the dashboard shows each workspace's status as the agent sets it
 (`desolate status set ...` inside), and `desolate notify` turns orange and red into
 notifications.
 

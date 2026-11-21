@@ -453,6 +453,8 @@ def hold(name, directory, command, most, ready):
                     continue
                 text = clients.get(r, "") + chunk.decode("ascii", "replace")
                 *lines, rest = text.split("\n")
+                # An unended line from a client (the host's attach, as this user) is held only
+                # this far: a line of the protocol is a base64 chunk of what was typed.
                 clients[r] = rest[-200000:]
                 for line in lines:
                     if line.startswith("i "):

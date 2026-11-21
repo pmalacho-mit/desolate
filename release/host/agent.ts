@@ -94,10 +94,12 @@ export const FLAGS = {
   stop: { name: { type: "string" }, kill: { type: "boolean" } },
 } as const;
 
-/** The holder's error, whole (R1): its end, made safe, and where all of it is kept on this
- *  Mac when that is not all of it. */
+/** The holder's error, whole (R1): its last ten lines, made safe, and where all of it is
+ *  kept on this Mac when that is not all of it. (Ten, and the file under the host's logs, as
+ *  host/failures.ts has them on the branch that brings it: this keeper is to become that
+ *  one's `keep` when both have landed.) */
 const holderError = (said: { stdout: string; stderr: string }, what: string) =>
-  failure((said.stderr || said.stdout).replace(/^agent-holder: /, ""), 20, (whole) => {
+  failure((said.stderr || said.stdout).replace(/^agent-holder: /, ""), 10, (whole) => {
     fs.mkdirSync(paths.logs, { recursive: true });
     const file = path.join(
       paths.logs,
