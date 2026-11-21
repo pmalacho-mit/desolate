@@ -613,9 +613,14 @@ describe(
           .stdout.trim()
           .split("\n")
           .pop()!,
-      ) as { account?: { sends: { pack: string; lfs: string[] } }; error?: string };
+      ) as {
+        account?: { sends: { pack: string; lfs: { count: number; digest: string } } };
+        error?: string;
+      };
       assert.ok(accounted.account, String(accounted.error));
       const said = accounted.account;
+      // (It points to no LFS object: the list the pusher is given is empty.)
+      assert.equal(said.sends.lfs.count, 0);
       const text = signedFor(challenge.message, {
         commit,
         squashes: null,
@@ -664,7 +669,7 @@ const attempt = (tries) => {
 attempt(60);`,
           filed.id,
           "/tmp/own.pack",
-          JSON.stringify(said.sends.lfs),
+          "[]",
         ).stdout,
       ) as { ok: boolean; error?: string };
       assert.equal(answer.ok, false);

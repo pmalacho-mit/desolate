@@ -20,9 +20,15 @@ import type { repeat } from "../.harness/shared-text.ts";
 import type { all, chunks, failsAfter, longLine } from "../.harness/shared-review-account.ts";
 
 /** What a push sends: the pack the reviewer made and keeps (its sha256, and its size in
- *  bytes), and the LFS objects its commits point to, each `<oid> <size>` as its pointer
- *  says. The host puts these in the text the person signs. */
-export type Sends = { pack: string; size: number; lfs: string[] };
+ *  bytes), and the LFS objects its commits point to: how many, their bytes as their pointers
+ *  say, and their list's digest (shared/approval.ts, lfsDigest), which the host puts in the
+ *  text the person signs. The list itself, however long, stays in the root: the reviewer
+ *  gives it to the pusher, which checks it against that digest. */
+export type Sends = {
+  pack: string;
+  size: number;
+  lfs: { count: number; bytes: number; digest: string };
+};
 
 /** The person's other choice: the commits pushed as one. Its tree is the commit's own, its
  *  parent is where the commit leaves the remote's history, and its author, committer and
@@ -157,8 +163,10 @@ const isSends = (value: unknown) =>
   isObject(value) &&
   typeof value.pack === "string" &&
   isCount(value.size) &&
-  Array.isArray(value.lfs) &&
-  value.lfs.every((oid) => typeof oid === "string");
+  isObject(value.lfs) &&
+  isCount(value.lfs.count) &&
+  isCount(value.lfs.bytes) &&
+  typeof value.lfs.digest === "string";
 const LISTS = ["commits", "files", "between"] as const;
 
 /** Whether `held`, under the name `kind`, is that kind of line: the shape a reader relies
