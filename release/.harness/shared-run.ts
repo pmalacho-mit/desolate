@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run, sleep, waitFor } from "../shared/run.ts";
+import { ENDING_MS, run, sleep, waitFor } from "../shared/run.ts";
 
 const RUN_TS = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "shared", "run.ts");
 
@@ -47,19 +47,25 @@ export const leftRunning = async (cancelled: boolean): Promise<boolean> => {
 
 /** A process of its own runs a `sleep` with run(), in a group of its own (`grouped`: it is
  *  given a signal that never fires) or as run() always did, and is then told to end
- *  (SIGTERM), alone, as a supervisor would. Is the `sleep` still running afterwards?
- *  (Whatever is left is then ended here.) */
-export const outlivesItsRunner = async (grouped: boolean): Promise<boolean> => {
+ *  (SIGTERM), alone, as a supervisor would. `nested`: it runs, the same way, a process
+ *  that runs the `sleep`. Is the `sleep` still running afterwards? (Whatever is left is
+ *  then ended here.) */
+export const outlivesItsRunner = async (grouped: boolean, nested = false): Promise<boolean> => {
+  const inner = `import { run } from ${JSON.stringify(RUN_TS)};
+       const options = process.argv[1] === "grouped" ? { signal: new AbortController().signal } : {};
+       await run("sh", ["-c", "echo $$ >&2; exec sleep 30"], { ...options, inheritStderr: true });`;
+  const outer = `import { run } from ${JSON.stringify(RUN_TS)};
+       const options = process.argv[1] === "grouped" ? { signal: new AbortController().signal } : {};
+       await run(process.execPath, ["--disable-warning=ExperimentalWarning", "--input-type=module", "-e", process.argv[2], process.argv[1]], { ...options, inheritStderr: true });`;
   const runner = spawn(
     process.execPath,
     [
       "--disable-warning=ExperimentalWarning",
       "--input-type=module",
       "-e",
-      `import { run } from ${JSON.stringify(RUN_TS)};
-       const options = process.argv[1] === "grouped" ? { signal: new AbortController().signal } : {};
-       await run("sh", ["-c", "echo $$ >&2; exec sleep 30"], { ...options, inheritStderr: true });`,
+      nested ? outer : inner,
       grouped ? "grouped" : "alone",
+      inner,
     ],
     { stdio: ["ignore", "ignore", "pipe"] },
   );
@@ -72,10 +78,37 @@ export const outlivesItsRunner = async (grouped: boolean): Promise<boolean> => {
     });
     runner.on("close", () => reject(new Error(`the runner ended before its program: ${said}`)));
   });
+  await sleep(100);
   runner.kill("SIGTERM");
-  const left = !(await waitFor(() => !alive(pid), grouped ? 2000 : 300, 20));
+  const left = !(await waitFor(() => !alive(pid), grouped ? 4000 : 300, 20));
   if (left) process.kill(pid, "SIGKILL");
   return left;
+};
+
+/** run() runs a node that starts a `sleep` in a session of its own (out of every group of
+ *  run's) which holds the node's output open, and then exits; nothing more is said, so the
+ *  run is ended after `idleMs`. Its answer, and whether it came soon (within twice
+ *  ENDING_MS of the end), not when the sleep (10 s) ends. The sleep is then ended here. */
+export const answerWithAnEscapee = async (
+  idleMs: number,
+): Promise<{ code: number; stderr: string; soon: boolean }> => {
+  const started = Date.now();
+  const answer = await run(
+    process.execPath,
+    [
+      "-e",
+      `const child = require("node:child_process").spawn("sleep", ["10"], { detached: true, stdio: "inherit" });
+       process.stderr.write(child.pid + "\\n");`,
+    ],
+    { idleMs, inheritStderr: false },
+  );
+  const pid = Number(/^(\d+)\n/.exec(answer.stderr)?.[1]);
+  if (pid > 1 && alive(pid)) process.kill(pid, "SIGKILL");
+  return {
+    code: answer.code,
+    stderr: answer.stderr.replace(/^\d+\n/, ""),
+    soon: Date.now() - started < idleMs + 2 * ENDING_MS,
+  };
 };
 
 const NODE = [process.execPath, "--disable-warning=ExperimentalWarning", "--input-type=module"];
@@ -117,8 +150,12 @@ export const nestedLeftRunning = async (): Promise<boolean> => {
 };
 
 /** A process runs a `sleep` with run() and a signal, listens for SIGTERM itself (so it lives
- *  on), and is sent SIGTERM: what does its run answer? */
-export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
+ *  on), and is sent SIGTERM: what does its run answer? `escapee`: the program run starts the
+ *  `sleep` (10 s) in a session of its own, holding the run's output, and exits; the answer
+ *  then also says whether it came soon (within twice ENDING_MS), not when the sleep ends. */
+export const answerWhenItsRunnerEnds = async (
+  escapee = false,
+): Promise<{ code: number; stdout: string; stderr: string; soon?: boolean }> => {
   const runner = spawn(
     NODE[0]!,
     [
@@ -126,9 +163,13 @@ export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
       "-e",
       `import { run } from ${JSON.stringify(RUN_TS)};
        process.on("SIGTERM", () => {});
-       const answer = run("sh", ["-c", "exec sleep 30"], { signal: new AbortController().signal });
+       const program = process.argv[1] === "escapee"
+         ? [process.execPath, ["-e", 'require("node:child_process").spawn("sleep", ["10"], { detached: true, stdio: "inherit" }).unref()']]
+         : ["sh", ["-c", "exec sleep 30"]];
+       const answer = run(program[0], program[1], { signal: new AbortController().signal });
        process.stderr.write("running\\n");
        process.stdout.write(JSON.stringify(await answer));`,
+      escapee ? "escapee" : "plain",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -138,8 +179,10 @@ export const answerWhenItsRunnerEnds = async (): Promise<unknown> => {
     runner.stderr.on("data", (chunk) => String(chunk).includes("running") && resolve());
     runner.on("close", () => reject(new Error("the runner ended before its program ran")));
   });
-  await sleep(100);
+  await sleep(escapee ? 500 : 100);
+  const told = Date.now();
   runner.kill("SIGTERM");
   await new Promise((resolve) => runner.on("close", resolve));
-  return JSON.parse(out);
+  const answer = JSON.parse(out);
+  return escapee ? { ...answer, soon: Date.now() - told < 2 * ENDING_MS } : answer;
 };
