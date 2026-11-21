@@ -108,7 +108,10 @@ const rawPushWaiting = async (spec: string, name: string) => {
       const killed = inRootClone(`kill -TERM -- -$(cat ${log}.pid) 2>&1; echo kill=$?`);
       return `${killed.stdout}${killed.stderr}`;
     },
-    ps: () => `${ps().stdout}${ps().stderr}`,
+    ps: () => {
+      const seen = ps();
+      return `${seen.stdout}${seen.stderr}`;
+    },
   };
 };
 /** Waits until nothing is waiting for the person on the host (or a few seconds pass). */
