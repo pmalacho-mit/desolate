@@ -428,22 +428,28 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       nonce: string;
       token: string;
       branch: string;
-      summary: { waiting?: boolean; ok: boolean };
+      // (The page's answer since limits 02: where the reviewer is with it, and a token over
+      // the very account shown, which an approval names.)
+      review: { working?: unknown; error?: string; account?: unknown };
+      shown?: string;
     };
     let push: Waiting | undefined;
     for (let i = 0; i < 480 && !push; i++) {
       push = (
         JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
-      ).pending.find((p) => p.branch === "many-lfs" && !p.summary.waiting);
+      ).pending.find((p) => p.branch === "many-lfs" && !p.review.working);
       if (!push) await sleep(250);
     }
     const log = () => stack.inVm(gitVm(), ["cat", "/tmp/many-lfs.log"]).stdout;
     assert.ok(push, `the push waits on the approval page: ${log()}`);
-    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary).slice(0, 800));
-    assert.equal(
-      (await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status,
-      200,
-    );
+    assert.ok(push!.review.account, JSON.stringify(push!.review).slice(0, 800));
+    const approved = await approvals.post("/approve", {
+      nonce: push!.nonce,
+      token: push!.token,
+      commit,
+      shown: push!.shown,
+    });
+    assert.equal(approved.status, 200, approved.body);
     let said = "";
     for (let i = 0; i < 720 && !/\[new branch\]/.test(said); i++) {
       said = log();

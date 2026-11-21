@@ -39,7 +39,7 @@ import * as fs from "node:fs";
 import { createServer } from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
-import { hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
+import { actionRefusal, hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
 import { stateEvents } from "../shared/events.ts";
 import { LIMIT as ISSUE } from "../shared/issues.ts";
 import { writeJson } from "../shared/json.ts";
@@ -955,13 +955,12 @@ const act = (
   };
   if (kind === "offer.push") return push(args, record);
   const argv = hostArgv(kind, args);
-  if (!argv) return { error: `'${kind}' with those arguments is not something the dashboard does` };
-  // A title the host's list would leave out (shared/actions.ts) is refused here, in words:
-  // the domain was made without it, and nothing said so.
-  if (kind === "domain.create" && args.title && !argv.includes("--title"))
+  // Refused in the action's own words (shared/actions.ts): which bound was hit, or that the
+  // arguments are not ones it takes. (A title the host would leave out is refused there too:
+  // the domain was once made without it, and nothing said so.)
+  if (!argv)
     return {
-      error:
-        "that title is not one the dashboard takes: at most 80 characters, plain ASCII, not starting with a dash. (Any title: `desolate domain create <name> --title ...` in a terminal on the Mac.)",
+      error: `the dashboard does not do that: ${actionRefusal(kind, args) ?? `those are not arguments '${kind}' takes`}`,
     };
   // The command shown is the one the host will run: the dashboard teaches the CLI. A
   // workspace's spawn carries a whole command: its start is enough to know it by.
@@ -1005,13 +1004,13 @@ declare namespace act {
       [
         args: [kind: "workspace.rm", args: { domain: "acme"; workspace: "w1" }],
         expected: {
-          error: "'workspace.rm' with those arguments is not something the dashboard does";
+          error: "the dashboard does not do that: 'workspace.rm' is not something the host does";
         },
       ],
       [
         args: [kind: "workspace.start", args: { domain: "acme"; workspace: "--all" }],
         expected: {
-          error: "'workspace.start' with those arguments is not something the dashboard does";
+          error: "the dashboard does not do that: those are not arguments 'workspace.start' takes";
         },
       ],
     ]

@@ -462,9 +462,9 @@ describe("T2 section 4.8: the root UI", () => {
       const refused = await action(kind, args);
       // An option-like title is refused, as the rest are: never passed on, and the domain is
       // not made without the title the person typed (it was, in silence, until limits 04 and
-      // 15: root/stated.ts says what a title may be; shared/actions.ts refuses it too).
+      // 15: shared/actions.ts says what a title may be, and root/stated.ts passes that on).
       if (kind === "domain.create")
-        assert.match(refused.body, /that title is not one the dashboard takes/);
+        assert.match(refused.body, /a title is plain letters.*and does not start with -/);
       assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
     }
     assert.equal(

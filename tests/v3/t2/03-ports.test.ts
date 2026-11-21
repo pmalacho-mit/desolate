@@ -671,7 +671,9 @@ else {
         .find(Boolean)?.[1];
     assert.ok(await until(() => past() !== undefined, 20_000), JSON.stringify(ports()));
     const one = ports().find((w) => w.workspace === "web/one")!;
-    const forwarded = one.forwarded.length + one.reserved.length;
+    // (What it took of the workspace's: not the rows that say a port below 1024 is left out,
+    // which the workspace's own report adds since limits 08.)
+    const forwarded = one.forwarded.length + one.reserved.filter((r) => r.port >= 1024).length;
     assert.ok(forwarded <= 256, `at most 256 taken: ${forwarded}`);
     assert.ok(Number(past()) >= 300 - 256, `the rest counted: ${past()}`);
     assert.deepEqual(

@@ -239,6 +239,17 @@ export const newStack = (label: string): Stack => {
       .join(`${ip}:22`)
       .split(ip)
       .join("<forge>")
+      // A line drawn in place and drawn over (a carriage return, erase to the end, new text:
+      // the reviewer's progress in a terminal) is not a message that stays: a person sees
+      // what the line held last, and how many were drawn is the machine's pace.
+      .replace(/(?:\r\x1b\[K[^\r\n]*)+(?=\r\x1b\[K)/g, "")
+      .replace(/\r\x1b\[K/g, "")
+      // With no terminal, the reviewer's progress is a line each time it says something: how
+      // many, and their counts, are the machine's pace too. That it was shown is the message.
+      .replace(
+        /(?:^desolate's reviewer: [^\n]*\n)+/gm,
+        "desolate's reviewer: <what it is doing, as it goes>\n",
+      )
       .replace(/ssh-ed25519 [A-Za-z0-9+/=]+/g, "ssh-ed25519 <key>")
       .replace(/tkn=[0-9a-f]{48}/g, "tkn=<token>")
       .replace(/docker daemon: docker \d+\.\d+\.\d+/g, "docker daemon: docker <version>")
