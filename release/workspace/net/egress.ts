@@ -15,11 +15,12 @@ import type { Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { open as openLink, parseLink } from "../../shared/link.ts";
 import { sniffSocket } from "../../shared/sniff.ts";
+import { printable } from "../../shared/text.ts";
 import type { Sniffed } from "../../shared/sniff.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type { bytes } from "../../.harness/shared-bytes.ts";
-import type { throughEgress } from "../../.harness/workspace-egress.ts";
+import type { repeatedReason, throughEgress, utf8, xs } from "../../.harness/workspace-egress.ts";
 
 type Link = NonNullable<ReturnType<typeof parseLink>>;
 
@@ -110,21 +111,27 @@ declare namespace targetOf {
   >;
 }
 
+/** The most of the proxy's answer's head that is read: as much as node's own HTTP server
+ *  reads of a request's (`maxHeaderSize`, 16 KiB). What answers is the workspace's proxy, or
+ *  the host's end of the link (daemon.ts), neither of which says more. */
+const HEAD_MOST = 16 * 1024;
+
 /** The proxy's answer to the CONNECT, as far as it has come: more to read, too much without
- *  an end, a refusal with the proxy's reason, or open, its own bytes ending at `bodyAt`. */
+ *  an end, a refusal with the proxy's reason, or open, its own bytes ending at `bodyAt`. The
+ *  reason is its whole line (it was cut at 300 characters), as UTF-8, made safe to show. */
 export const proxyAnswer = (
   answer: Buffer,
 ): "more" | "too much" | { refused: string } | { bodyAt: number } => {
   const end = answer.indexOf("\r\n\r\n");
-  if (end < 0) return answer.length > 16384 ? "too much" : "more";
+  if (end < 0 ? answer.length > HEAD_MOST : end > HEAD_MOST) return "too much";
+  if (end < 0) return "more";
   const status = answer.subarray(0, answer.indexOf("\r\n")).toString("latin1");
-  if (!/^HTTP\/1\.[01] 200 /.test(status))
-    return {
-      refused:
-        /\r\nX-Desolate-Reason: ([^\r\n]{0,300})/i.exec(
-          answer.subarray(0, end).toString("latin1"),
-        )?.[1] ?? "the proxy refused this destination",
-    };
+  if (!/^HTTP\/1\.[01] 200 /.test(status)) {
+    const reason = /\r\nX-Desolate-Reason: ([^\r\n]*)/i.exec(
+      answer.subarray(0, end).toString("utf8"),
+    )?.[1];
+    return { refused: reason ? printable(reason) : "the proxy refused this destination" };
+  }
   return { bodyAt: end + 4 };
 };
 
@@ -188,7 +195,30 @@ declare namespace proxyAnswer {
         ],
         expected: { refused: "no" },
       ],
+      /** the whole line, however long, in the UTF-8 the proxy writes, and only made safe */
+      [
+        args: [
+          answer: Invoke<
+            typeof utf8,
+            [
+              text: "HTTP/1.1 403 Forbidden\r\nX-Desolate-Reason: café.example is not on this domain's list; to allow it: desolate domain dev net allow café.example\u001b[2J\r\n\r\n",
+            ]
+          >,
+        ],
+        expected: {
+          refused: "café.example is not on this domain's list; to allow it: desolate domain dev net allow café.example?[2J";
+        },
+      ],
+      [
+        args: [answer: Invoke<typeof repeatedReason, [length: 2000]>],
+        expected: { refused: Invoke<typeof xs, [length: 2000]> },
+      ],
     ]
+  >;
+  /** a head past HEAD_MOST is not an answer, ended or not */
+  export type TooMuch = Table<
+    typeof proxyAnswer,
+    [[args: [answer: Invoke<typeof repeatedReason, [length: 17000]>], expected: "too much"]]
   >;
   export type Incomplete = Table<
     typeof proxyAnswer,
