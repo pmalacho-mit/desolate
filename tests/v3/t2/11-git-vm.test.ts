@@ -352,6 +352,76 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     );
   });
 
+  it("a push the forge would refuse is refused in the git VM at once, with the bound and the size, and leaves nothing", () => {
+    // An LFS object over the forge's largest (sparse: nothing that size is written), named by
+    // a pointer in a commit. The old helper read it whole to hash it, and the host refused it
+    // as "not a plain file" after the bundle was made and copied.
+    const oid = "e".repeat(64);
+    const started = Date.now();
+    const ran = stack.inVm(gitVm(), [
+      "bash",
+      "-c",
+      `cd /git/acme/widgets && git switch -q -c too-big origin/main && printf 'version https://git-lfs.github.com/spec/v1\\noid sha256:${oid}\\nsize 5368709121\\n' > huge.bin && git add huge.bin && git -c user.name=p -c user.email=p@example.invalid commit -qm huge && mkdir -p .git/lfs/objects/ee/ee && truncate -s 5368709121 .git/lfs/objects/ee/ee/${oid} && git push origin HEAD:refs/heads/too-big 2>&1; echo "left: $(ls /desolate/out | wc -l)"; rm -f .git/lfs/objects/ee/ee/${oid}; git switch -q main; git branch -q -D too-big`,
+    ]);
+    assert.match(
+      ran.stdout,
+      /the LFS object eeeeeeeeeeee is 5368709121 bytes, over the 5368709120 the forge stores/,
+      ran.stdout + ran.stderr,
+    );
+    assert.match(ran.stdout, /left: 0$/m, "nothing was bundled or copied into the out-box");
+    assert.ok(Date.now() - started < 60_000, "refused at once, not after a wait");
+    assert.equal(forgeRefs("acme/widgets")["too-big"], undefined);
+  });
+
+  it("a push of 1,500 LFS objects from the git VM reaches the approval page and the remote", async () => {
+    // The control is the old host: its 64 KiB bound on the request was met at about 970
+    // objects, and it removed such a request unanswered, so git push waited 20 minutes.
+    const port = Number(stack.env.DESOLATE_EDITOR_PORT);
+    const started = stack.inVm(gitVm(), [
+      "bash",
+      "-c",
+      "cd /git/acme/widgets && git switch -q -c many-lfs origin/main && git lfs track '*.bin' >/dev/null && mkdir many && for i in $(seq 1500); do echo \"object $i\" > many/$i.bin; done && git add .gitattributes many && git -c user.name=p -c user.email=p@example.invalid commit -qm 'many LFS objects' && git rev-parse HEAD && (setsid nohup git push origin HEAD:refs/heads/many-lfs > /tmp/many-lfs.log 2>&1 &)",
+    ]);
+    assert.equal(started.code, 0, started.stdout + started.stderr);
+    const commit = started.stdout.trim().split("\n").pop()!;
+    const approvals = client("desolate-approve.localhost", port);
+    await approvals.login(
+      /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!,
+    );
+    type Waiting = {
+      nonce: string;
+      token: string;
+      branch: string;
+      summary: { waiting?: boolean; ok: boolean };
+    };
+    let push: Waiting | undefined;
+    for (let i = 0; i < 480 && !push; i++) {
+      push = (
+        JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
+      ).pending.find((p) => p.branch === "many-lfs" && !p.summary.waiting);
+      if (!push) await sleep(250);
+    }
+    const log = () => stack.inVm(gitVm(), ["cat", "/tmp/many-lfs.log"]).stdout;
+    assert.ok(push, `the push waits on the approval page: ${log()}`);
+    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary).slice(0, 800));
+    assert.equal(
+      (await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status,
+      200,
+    );
+    let said = "";
+    for (let i = 0; i < 720 && !/\[new branch\]/.test(said); i++) {
+      said = log();
+      if (!/\[new branch\]/.test(said)) await sleep(250);
+    }
+    assert.match(said, /\* \[new branch\]\s+HEAD -> many-lfs/, said);
+    assert.equal(forgeRefs("acme/widgets")["many-lfs"], commit, "the remote has that commit");
+    const first = stack
+      .inVm(gitVm(), ["bash", "-c", "printf 'object 1\\n' | sha256sum | cut -d' ' -f1"])
+      .stdout.trim();
+    assert.doesNotThrow(() => stack.forge("lfs-has", "acme/widgets", first), "and its LFS objects");
+    stack.inVm(gitVm(), ["bash", "-c", "cd /git/acme/widgets && git switch -q main"]);
+  });
+
   it("a new branch at a commit the remote has already (main's, which two of its refs name) is described, not left blank", async () => {
     // Found recording the demo: the reviewer was sent origin/HEAD and origin/main at one
     // commit, and refused the whole bundle; the page could not say what the push was.

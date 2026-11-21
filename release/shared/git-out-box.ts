@@ -70,11 +70,7 @@ declare namespace requestRefusal {
   /** a push that adds 1,500 LFS objects is about 100 KiB: taken. (The bound before this one
    *  was 64 KiB, which a push of more than about 970 objects passed, and was dropped unread.) */
   export type FifteenHundredObjects = [
-    Expect<
-      Invoke<typeof requestRefusal, [text: Invoke<typeof requestOf, [lfs: 1500]>]>,
-      "=",
-      null
-    >,
+    Expect<Invoke<typeof requestRefusal, [text: Invoke<typeof requestOf, [lfs: 1500]>]>, "=", null>,
     /** the control: that request is over the old bound */
     Expect<Invoke<typeof requestOf, [lfs: 1500]>, "matches", "^.{65537,}$">,
   ];
