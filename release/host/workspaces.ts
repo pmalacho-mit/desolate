@@ -304,14 +304,18 @@ const QUIET_BEATS = 12;
  *  dashboard (DESOLATE_PROGRESS: a `progress:` line each), a person at a terminal (each
  *  step on a line of its own, and its "still ..." in place), or nobody (a script: only the
  *  answer, as before). */
-const watcher = (): ((line: string) => void) => {
+type Shown = (line: string | null) => void;
+/** (`null`: the step ended, and a line in place is cleared.) */
+const watcher = (): Shown => {
   if (process.env.DESOLATE_PROGRESS)
-    return (line) => void process.stderr.write(`progress:   ${printable(line)}\n`);
+    return (line) =>
+      void (line !== null && process.stderr.write(`progress:   ${printable(line)}\n`));
   if (!process.stderr.isTTY) return () => {};
   let inPlace = false;
   return (line) => {
-    const beat = line.startsWith("still ");
-    process.stderr.write(`${inPlace ? "\r\x1b[K" : ""}  ${printable(line)}${beat ? "" : "\n"}`);
+    const beat = line?.startsWith("still ") ?? false;
+    const clear = inPlace ? "\r\x1b[K" : "";
+    process.stderr.write(line === null ? clear : `${clear}  ${printable(line)}${beat ? "" : "\n"}`);
     inPlace = beat;
   };
 };
@@ -320,13 +324,16 @@ const watcher = (): ((line: string) => void) => {
  *  runs: it has no deadline (docs/v3/limits.md, R4: the person waiting owns that, and can
  *  Ctrl-C). It says what it is doing, and that it still is, a line at a time on stderr; each
  *  line goes to `shown`, and one QUIET_BEATS' time with none ends it, said as run() says
- *  it. What it writes is the VM's, so it is held to run()'s bound on each stream. The
+ *  it. What it writes is the VM's, so all of it is held to run()'s bound (RUN_MAX). The
  *  answer's stderr is what it said, without its "still ..." lines. */
-const stepInVm = (plan: WorkspacePlan, argv: string[], shown: (line: string) => void) =>
+const stepInVm = (plan: WorkspacePlan, argv: string[], shown: Shown) =>
   new Promise<RunResult>((resolve) => {
     const child = backend().spawn(plan.vm, argv);
     child.stdin?.end();
     let [stdout, stderr, partial, ended] = ["", "", "", ""];
+    // Every byte it sent counts toward the bound, the "still ..." lines and a line that
+    // never ends too: they are held, or were.
+    let received = 0;
     const end = (why: string) => {
       ended ||= why;
       child.kill("SIGTERM");
@@ -336,26 +343,30 @@ const stepInVm = (plan: WorkspacePlan, argv: string[], shown: (line: string) => 
       () => end(`\n(nothing from the workspace's VM for ${elapsed(quietMs)}: stopped)`),
       quietMs,
     );
-    const take = (chunk: Buffer, into: "stdout" | "stderr") => {
+    const take = (chunk: string, into: "stdout" | "stderr") => {
+      if (ended) return;
       quiet.refresh();
-      if (stdout.length + stderr.length + chunk.length > RUN_MAX)
+      if ((received += Buffer.byteLength(chunk)) > RUN_MAX)
         return end(`\n(more than ${RUN_MAX} bytes from the workspace's VM: stopped)`);
-      if (into === "stdout") return void (stdout += chunk.toString());
-      const lines = (partial + chunk.toString()).split("\n");
+      if (into === "stdout") return void (stdout += chunk);
+      const lines = (partial + chunk).split("\n");
       partial = lines.pop()!;
       for (const line of lines) {
         shown(line);
         if (!line.startsWith("still ")) stderr += `${line}\n`;
       }
     };
-    child.stdout!.on("data", (chunk: Buffer) => take(chunk, "stdout"));
-    child.stderr!.on("data", (chunk: Buffer) => take(chunk, "stderr"));
+    // (Decoded as UTF-8 across chunks: a character split between two is one character.)
+    child.stdout!.setEncoding("utf8").on("data", (chunk: string) => take(chunk, "stdout"));
+    child.stderr!.setEncoding("utf8").on("data", (chunk: string) => take(chunk, "stderr"));
     child.on("error", (error) => {
       clearTimeout(quiet);
+      shown(null);
       resolve({ code: 127, stdout, stderr: `${stderr}${partial}${error.message}` });
     });
     child.on("close", (code) => {
       clearTimeout(quiet);
+      shown(null);
       resolve({
         code: ended ? 128 : (code ?? 128),
         stdout,
