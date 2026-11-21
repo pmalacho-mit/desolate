@@ -17,7 +17,6 @@ import { formatBytes, over } from "../shared/limits.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { CUT, failure, printable } from "../shared/text.ts";
 import { execFile, spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as os from "node:os";
 import type { Size } from "../shared/size.ts";
@@ -104,7 +103,6 @@ import type {
   setOf,
   shown,
   sixGiB,
-  vmAnswering,
   wire,
 } from "../.harness/host-daemon.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
@@ -319,19 +317,7 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
   let ranOut = false;
   async function* bytes(): AsyncGenerator<Uint8Array | string, void, void> {
     if (signal?.aborted) return;
-    let child: ChildProcess;
-    try {
-      child = backend().spawn(ROOT_VM, argv, { root: true });
-    } catch {
-      // FALLBACK, until host/vm/lima.ts offers `spawn` as root in the root VM (limits ticket
-      // 11, #183: this ticket's pull request has the exact change). With `exec` the answer
-      // arrives when it is whole: no progress is seen on the way, and a request that is
-      // dropped is not ended in the root. It is still not ended for being long (R4).
-      const result = await backend().exec(ROOT_VM, argv, { root: true, input });
-      ended = Promise.resolve({ code: result.code, stderr: result.stderr });
-      ranOut = true;
-      return void (yield result.stdout);
-    }
+    const child = backend().spawn(ROOT_VM, argv, { root: true });
     let stderr = "";
     ended = new Promise((resolve) => {
       child.once("error", (error) => resolve({ code: 127, stderr: stderr + error.message }));
@@ -559,7 +545,7 @@ declare namespace reviewerSummary {
       Call<
         Mocked<typeof backend>,
         "mockReturnValue",
-        [value: Invoke<typeof vmAnswering, [code: 2, stdout: "", stderr: "bad \u001b[2Jref"]>]
+        [value: Invoke<typeof vmRunning, [script: "printf 'bad \\033[2Jref' >&2; exit 2"]>]
       >,
     ],
     Expect<
@@ -597,7 +583,7 @@ declare namespace reviewerSummary {
         Call<
           Mocked<typeof backend>,
           "mockReturnValue",
-          [value: Invoke<typeof vmAnswering, [code: 0, stdout: "null\n", stderr: ""]>]
+          [value: Invoke<typeof vmRunning, [script: "echo null"]>]
         >,
       ],
       Expect<
@@ -616,7 +602,7 @@ declare namespace reviewerSummary {
         Call<
           Mocked<typeof backend>,
           "mockReturnValue",
-          [value: Invoke<typeof vmAnswering, [code: 0, stdout: '[{"ok":true}]\n', stderr: ""]>]
+          [value: Invoke<typeof vmRunning, [script: "echo '[{\"ok\":true}]'"]>]
         >,
       ],
       Expect<
@@ -630,9 +616,8 @@ declare namespace reviewerSummary {
       >
     >,
   ];
-  /** FALLBACK (review-fallback.ts, to go with it): a VM layer that cannot stream as root
-   *  answers when the reviewer is done, and a reviewer of the old kind answers with one JSON
-   *  object; both are read as the stream's one answer */
+  /** FALLBACK (review-fallback.ts, to go with it): a reviewer of the old kind answers with
+   *  one JSON object, read as the stream's one answer */
   export type OldWay = Given<
     [
       Mock<"./stack.ts">,
@@ -641,11 +626,9 @@ declare namespace reviewerSummary {
         "mockReturnValue",
         [
           value: Invoke<
-            typeof vmAnswering,
+            typeof vmRunning,
             [
-              code: 0,
-              stdout: '{"ok":true,"commits":[],"files":[],"fastForward":null,"sends":{"pack":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","size":100,"lfs":[]}}\n',
-              stderr: "",
+              script: 'echo \'{"ok":true,"commits":[],"files":[],"fastForward":null,"sends":{"pack":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","size":100,"lfs":[]}}\'',
             ]
           >,
         ]

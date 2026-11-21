@@ -1,0 +1,251 @@
+// T3 (qemu) and T4 (vz, on a Mac: DESOLATE_TIER=T4). The host asks desolate's reviewer as
+// root in the root VM (host/vm/lima.ts `spawn`, host/daemon.ts `reviewerAsked`), and a
+// question nobody waits for any more must end there: the person's Ctrl-C at the terminal,
+// a page that let go of its question. Each is tried beside a control asked the same at the
+// same moment and still waited for, which is still running when the other has ended.
+//
+// What keeps the reviewer working is real work, made here: a file of 3.2 million short
+// lines that a push changes. Its diff takes a minute or more (measured on the M1: 1.6
+// million lines, 15 s), so no delay is put in the root for the test.
+//
+// Run: tests/v3/run.sh t4   (or t3)
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import * as fs from "node:fs";
+import { request as httpRequest } from "node:http";
+import type { ClientRequest } from "node:http";
+import * as path from "node:path";
+import { after, before, describe, it } from "node:test";
+import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
+import type { Stack } from "../lib/harness.ts";
+
+let stack: Stack;
+const REAL = process.env.DESOLATE_TIER === "T3" || process.env.DESOLATE_TIER === "T4";
+const CLONE = "/desolate/root/acme/widgets";
+const LINES = 3_200_000;
+/** Within this long of being let go, no process of the question is left in the root. */
+const ENDS_MS = 15_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `count` short lines from a few dozen, in an order `seed` decides: a diff of two such files
+ *  is long work for git, whichever way it is asked. */
+const lines = (seed: number, count: number) => {
+  let x = seed;
+  const out: string[] = [];
+  for (let i = 0; i < count; i++) {
+    x = (x * 1103515245 + 12345) % 2147483648;
+    out.push(`x${x % 51}`);
+  }
+  return `${out.join("\n")}\n`;
+};
+
+const inClone = (script: string) =>
+  stack.inRoot([
+    "bash",
+    "-c",
+    `export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig; cd ${CLONE} && ${script}`,
+  ]);
+/** How many questions to the reviewer are being answered in the root, as root counts them:
+ *  review-ask.ts (root's, one a question) and the reviewer's own node for it (runuser, its
+ *  parent, is not counted). */
+const asking = () => {
+  const count = (pattern: string) =>
+    Number(stack.inRoot(["pgrep", "-fc", pattern], { root: true }).stdout.trim() || "0");
+  return {
+    asks: count("root/review-ask[.]ts"),
+    reviewers: count("^node .*reviewer[.]ts (account|summary)$"),
+  };
+};
+const until = async (what: string, done: () => boolean, ms: number) => {
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(500)) if (done()) return;
+  assert.fail(`${what}: not within ${ms / 1000} s (${JSON.stringify(asking())})`);
+};
+/** A raw `git push` of HEAD from the root's terminal, left waiting for its approval. */
+const rawPush = (branch: string) =>
+  inClone(
+    `setsid nohup git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1 </dev/null & sleep 0.2`,
+  );
+const waitingPushes = () =>
+  Number(
+    stack.inRoot(["bash", "-c", "ls /var/lib/desolate/approvals | grep -c '[.]json$'"]).stdout ||
+      "0",
+  );
+
+describe(
+  "T3: a question to the reviewer in the root ends when nobody waits for it",
+  { skip: REAL ? false : "set DESOLATE_TIER=T3 (tests/v3/run.sh t3), or T4 on a Mac" },
+  () => {
+    before(() => {
+      stack = newStack("rev");
+      stack.seed("acme/widgets", (dir) => {
+        fs.writeFileSync(path.join(dir, "big.txt"), lines(1, LINES));
+        git(dir, "add", "-A");
+        git(dir, "commit", "--quiet", "-m", "seed");
+      });
+    });
+    after(() => stack?.destroy());
+
+    it("T3 bootstrap, and a pushable clone", () => {
+      stack.step(`bootstrap on the ${stack.backend} backend`);
+      const result = bootstrap(stack);
+      assert.equal(result.code, 0, result.stderr + result.stdout.slice(-1500));
+      assert.equal(stack.quiet("clone", "acme/widgets", "--no-domain").code, 0);
+    });
+
+    it("T3 Ctrl-C at the terminal ends its question in the root; the control, still asked, runs on", async () => {
+      stack.step("the terminal's question to the reviewer, stopped");
+      // A push whose net change is the long diff: the account of it (its files' counts) is
+      // the long work.
+      const made = inClone(
+        `git checkout -q -b slow-net && awk 'BEGIN { srand(2); for (i = 0; i < ${LINES}; i++) print "x" int(rand() * 51) }' > big.txt && git commit -qam 'the long diff' && echo made`,
+      );
+      assert.match(made.stdout, /made/, made.stderr);
+      rawPush("slow-net");
+      await until("the push waits for its approval", () => waitingPushes() === 1, 120_000);
+      // Two people at two terminals, `desolate approve`, each asking the reviewer for its
+      // account: each a question of its own in the root.
+      const terminal = () =>
+        spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["approve"], {
+          env: stack.env,
+          detached: true,
+          stdio: "ignore",
+        });
+      const stopped = terminal();
+      const control = terminal();
+      try {
+        await until("both questions are being answered", () => asking().asks === 2, 60_000);
+        await sleep(3_000);
+        assert.deepEqual(asking(), { asks: 2, reviewers: 2 }, "both still at work");
+        // Ctrl-C: SIGINT to the terminal's foreground process group.
+        process.kill(-stopped.pid!, "SIGINT");
+        await until(
+          "the stopped terminal's question ends in the root",
+          () => asking().asks === 1,
+          ENDS_MS,
+        );
+        await sleep(2_000);
+        assert.deepEqual(
+          asking(),
+          { asks: 1, reviewers: 1 },
+          "CONTROL: the terminal still waiting is still answered",
+        );
+      } finally {
+        for (const child of [stopped, control])
+          try {
+            process.kill(-child.pid!, "SIGINT");
+          } catch {
+            /* ended */
+          }
+      }
+      await until(
+        "the control's question ends too, once stopped",
+        () => asking().asks === 0,
+        ENDS_MS,
+      );
+      assert.deepEqual(asking(), { asks: 0, reviewers: 0 });
+      // The push is withdrawn where it was asked: it leaves the list.
+      inClone("pkill -f 'git push origin HEAD:refs/heads/slow-ne[t]' || true");
+      await until("the withdrawn push leaves the list", () => waitingPushes() === 0, 30_000);
+    });
+
+    it("T3 a page that lets go of its question ends it in the root; the control, still asked, runs on", async () => {
+      stack.step("the approval page's question to the reviewer, let go");
+      // A push that changes the file and puts it back: its account is quick (no net change),
+      // and the diff of its first commit is the long work.
+      const made = inClone(
+        `git checkout -q -b slow-commit slow-net~1 && awk 'BEGIN { srand(3); for (i = 0; i < ${LINES}; i++) print "x" int(rand() * 51) }' > big.txt && git commit -qam 'the long diff' && git rev-parse HEAD && git checkout -q HEAD~1 -- big.txt && git commit -qam 'put back' && echo made`,
+      );
+      assert.match(made.stdout, /made/, made.stderr);
+      const changed = made.stdout.trim().split("\n")[0]!;
+      rawPush("slow-commit");
+      await until("the push waits for its approval", () => waitingPushes() === 1, 120_000);
+
+      const address =
+        /approvals {4}(http:\/\/desolate-approve\.localhost:(\d+)\/\?tkn=[0-9a-f]{48})/.exec(
+          stack.quiet("approve", "--web").stdout,
+        );
+      assert.ok(address, "the page's address");
+      const port = Number(address![2]);
+      const call = (
+        url: string,
+        headers: Record<string, string>,
+      ): {
+        req: ClientRequest;
+        answer: Promise<{ status: number; headers: Record<string, unknown>; body: string }>;
+      } => {
+        const req = httpRequest({
+          host: "127.0.0.1",
+          port,
+          path: url,
+          headers: { host: `desolate-approve.localhost:${port}`, ...headers },
+        });
+        const answer = new Promise<{
+          status: number;
+          headers: Record<string, unknown>;
+          body: string;
+        }>((resolve, reject) => {
+          req.on("response", (res) => {
+            let text = "";
+            res.on("data", (chunk) => (text += chunk));
+            res.on("end", () =>
+              resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }),
+            );
+          });
+          req.on("error", reject);
+        });
+        req.end();
+        return { req, answer };
+      };
+      const at = new URL(address![1]!);
+      const login = await call(at.pathname + at.search, {}).answer;
+      assert.equal(login.status, 200);
+      const cookie = String(login.headers["set-cookie"]).split(";")[0]!;
+      const key = /<meta name="desolate-key" content="([0-9a-f]{64})">/.exec(login.body)![1]!;
+      const asPage = { cookie, "x-desolate-key": key, "sec-fetch-site": "same-origin" };
+      type Waiting = {
+        nonce: string;
+        token: string;
+        branch: string;
+        review: { working?: unknown; error?: string; account?: unknown };
+      };
+      let push: Waiting | undefined;
+      for (let i = 0; i < 240 && !push; i++) {
+        const listed = JSON.parse((await call("/pending", asPage).answer).body) as {
+          pending?: Waiting[];
+        };
+        push = listed.pending?.find((p) => p.branch === "slow-commit" && !p.review.working);
+        if (!push) await sleep(500);
+      }
+      assert.ok(push?.review.account, `the page has the account: ${JSON.stringify(push)}`);
+      await until("the account's question has ended", () => asking().asks === 0, ENDS_MS);
+      // The page asks for the first commit's diff twice, on two connections.
+      const diff = `/diff?nonce=${push!.nonce}&token=${push!.token}&commit=${changed}&from=0`;
+      const letGo = call(diff, asPage);
+      const held = call(diff, asPage);
+      for (const asked of [letGo, held]) asked.answer.catch(() => {});
+      try {
+        await until("both questions are being answered", () => asking().asks === 2, 60_000);
+        await sleep(3_000);
+        assert.deepEqual(asking(), { asks: 2, reviewers: 2 }, "both still at work");
+        letGo.req.destroy();
+        await until("the question let go ends in the root", () => asking().asks === 1, ENDS_MS);
+        await sleep(2_000);
+        assert.deepEqual(
+          asking(),
+          { asks: 1, reviewers: 1 },
+          "CONTROL: the question still held is still answered",
+        );
+      } finally {
+        letGo.req.destroy();
+        held.req.destroy();
+      }
+      await until(
+        "the control's question ends too, once let go",
+        () => asking().asks === 0,
+        ENDS_MS,
+      );
+      assert.deepEqual(asking(), { asks: 0, reviewers: 0 });
+      inClone("pkill -f 'git push origin HEAD:refs/heads/slow-commi[t]' || true");
+    });
+  },
+);

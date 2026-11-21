@@ -1038,9 +1038,17 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     spawn(name, argv, options = {}) {
-      // Root in the root VM is asked for by exec() only; nothing streams as root there.
+      // Root in the root VM: ssh as root with this home's key, as exec reaches it, never
+      // through the login user. On a connection of its own: one that streams (a review) lives
+      // as long as a person reads a push, and sshd allows ten sessions on a connection
+      // (MaxSessions), which the root's other commands share. Its key is put there at
+      // bootstrap (ensureRootSsh); until then ssh is refused, and the child fails saying so.
       if (options.root && isRootVm(name))
-        throw new Error("spawn as root in the root VM is not offered; use exec");
+        return spawn(
+          "ssh",
+          ["-o", "ControlMaster=no", "-o", "ControlPath=none", ...rootSshArgs(name, argv, options)],
+          { stdio: ["pipe", "pipe", "pipe"], env: env() },
+        );
       return spawn(LIMACTL, ["--tty=false", ...shellArgs(name, argv, options)], {
         stdio: ["pipe", "pipe", "pipe"],
         env: env(),
