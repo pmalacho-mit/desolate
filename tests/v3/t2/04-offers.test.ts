@@ -782,12 +782,13 @@ echo "$c1 $c2 $c3 $c4"`);
 
   it("the reviewer's account: counted and paged, its diffs by file, by commit and in pages of bytes", () => {
     stack.step("the reviewer's account: paged, diffs on demand");
-    // 105 commits, the last of which adds 120 files and one of over a MiB of diff.
+    // 105 commits, the last of which adds 120 files, one of over a MiB of diff, and one that
+    // changes what runs (devcontainer.json, which git lists after big.txt).
     const made = inRootClone(String.raw`set -e
 base=$(git rev-parse origin/main)
 c=$base
 for i in $(seq 1 104); do c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$base^{tree}" -p "$c" -m "commit $i"); done
-t=$( { git ls-tree "$base"; for i in $(seq -w 1 120); do printf '100644 blob %s\tf-%s.txt\n' "$(printf 'file %s\n' "$i" | git hash-object -w --stdin)" "$i"; done; printf '100644 blob %s\tbig.txt\n' "$(seq 1 200000 | git hash-object -w --stdin)"; } | git mktree )
+t=$( { git ls-tree "$base"; for i in $(seq -w 1 120); do printf '100644 blob %s\tf-%s.txt\n' "$(printf 'file %s\n' "$i" | git hash-object -w --stdin)" "$i"; done; printf '100644 blob %s\tbig.txt\n' "$(seq 1 200000 | git hash-object -w --stdin)"; printf '100644 blob %s\tdevcontainer.json\n' "$(echo '{}' | git hash-object -w --stdin)"; } | git mktree )
 c=$(git -c user.name=many -c user.email=many@example.invalid commit-tree "$t" -p "$c" -m "commit 105")
 echo "$c"`);
     assert.equal(made.code, 0, made.stderr);
@@ -812,15 +813,21 @@ echo "$c"`);
       ["commit 101", "commit 102", "commit 103", "commit 104", "commit 105"],
       "the page past the first is the rest, in order",
     );
-    assert.equal(said.files?.total, 121);
+    assert.equal(said.files?.total, 122);
     assert.equal(said.files?.items.length, 100);
+    // What changes what runs comes first, whatever git's order: the page and the terminal
+    // show the first page (CONTROL below: git's own order has big.txt before it).
+    assert.deepEqual(
+      said.files?.items.slice(0, 2).map((f) => f.path),
+      ["devcontainer.json", "big.txt"],
+    );
     const files = askReviewer({ op: "page", key: said.key, list: "files", from: 100 }).at(-1) as {
       page?: { files?: Listed<{ path: string }> };
     };
-    assert.equal(files.page?.files?.items.length, 21);
+    assert.equal(files.page?.files?.items.length, 22);
     assert.equal(
       new Set([...said.files!.items, ...files.page!.files!.items].map((f) => f.path)).size,
-      121,
+      122,
       "the two pages are every file once",
     );
     // A file's diff is that file's (CONTROL: the net change has both).
@@ -845,6 +852,8 @@ echo "$c"`);
     assert.equal(at, total, "the pages are the whole diff");
     const all = pages.map((p) => p.diff!.text).join("");
     assert.ok(all.includes("+file 007") && all.includes("+file 008") && all.includes("+200000\n"));
+    // CONTROL for the order of the files above: git's own puts big.txt first.
+    assert.ok(all.indexOf("b/big.txt\n") < all.indexOf("b/devcontainer.json\n"));
     // A commit git shows only in part (a NUL in its message, past which git log prints
     // nothing) is refused before the reviewer takes any of it: what follows the NUL would ride
     // in the pack unseen. (CONTROL: the commits above, sent the same way, were taken.)
