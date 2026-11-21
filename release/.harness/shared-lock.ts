@@ -327,3 +327,61 @@ export const danglingLinkAt = (dir: string) => {
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   fs.symlinkSync(path.join(path.dirname(dir), "nowhere"), dir);
 };
+
+/** Another side, on a share, does what it can to the lock's folder: it puts a link in the
+ *  lock being made (`<dir>.new-<id>/holder`, in the moment after its directory appears)
+ *  that leads to a file of the taker's; or it leaves in the lock's place a directory that is
+ *  no lock, holding a link to a folder of the taker's. The taker takes the lock: did it (or
+ *  why not)? Are the taker's file and folder as they were, and what is left beside it? */
+export const hostileFolder = (
+  dir: string,
+  does: "link in the lock being made" | "a directory with a link in it",
+): { took: boolean | string; untouched: boolean; left: string[] } => {
+  const folder = path.dirname(dir);
+  fs.mkdirSync(folder, { recursive: true });
+  const victim = fs.mkdtempSync(path.join(path.dirname(folder), "victim-"));
+  fs.writeFileSync(path.join(victim, "notes.txt"), "the person's");
+  if (does === "a directory with a link in it") {
+    fs.mkdirSync(dir);
+    fs.symlinkSync(victim, path.join(dir, "sub"));
+    fs.writeFileSync(path.join(dir, "junk"), "");
+  }
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { createRequire, syncBuiltinESMExports } from "node:module";
+       const fs = createRequire(import.meta.url)("node:fs");
+       const [dir, victim, does] = process.argv.slice(1);
+       if (does === "link in the lock being made") {
+         const mkdir = fs.mkdirSync;
+         fs.mkdirSync = (made, ...rest) => {
+           const answer = mkdir(made, ...rest);
+           if (String(made).startsWith(dir + ".new-")) fs.symlinkSync(victim + "/notes.txt", made + "/holder");
+           return answer;
+         };
+         syncBuiltinESMExports();
+       }
+       const { withLock } = await import(${JSON.stringify(LOCK_TS)});
+       let took = false;
+       try {
+         await withLock(dir, async () => { took = true; }, { wait: false });
+       } catch (error) {
+         took = error.message.replace(new RegExp("'[^']*[.]new-[0-9a-f]+/"), "'<the lock being made>/");
+       }
+       process.stdout.write(JSON.stringify(took));`,
+      dir,
+      victim,
+      does,
+    ],
+    { encoding: "utf8" },
+  );
+  if (ran.status !== 0) throw new Error(`the taker failed: ${ran.stderr}`);
+  const untouched = fs.readFileSync(path.join(victim, "notes.txt"), "utf8") === "the person's";
+  fs.rmSync(victim, { recursive: true, force: true });
+  const left = fs
+    .readdirSync(folder)
+    .map((name) => name.replace(/-[0-9a-f]{16,32}$/, "-<id>"))
+    .sort();
+  return { took: JSON.parse(ran.stdout) as boolean | string, untouched, left };
+};

@@ -77,28 +77,28 @@ export const ENDING_MS = 2_000;
  *  ended and why, and they are killed when this process exits or is told to (the signals a
  *  terminal and a supervisor send). Where nothing else listens for the signal, this process
  *  then ends by it, as it would have had nothing listened. */
-const groups = new Map<number, (why: string) => void>();
+const groups = new Map<number, { said: (why: string) => boolean; end: (why: string) => void }>();
 let guarded = false;
 const guard = () => {
   if (guarded) return;
   guarded = true;
-  const endAll = (how: NodeJS.Signals) => {
-    for (const [pid, said] of groups) {
-      said(STOPPING);
-      toGroup(pid, how);
-    }
-  };
   // Exiting: at once, since a process that is exiting cannot wait for them.
-  process.on("exit", () => endAll("SIGKILL"));
+  process.on("exit", () => {
+    for (const [pid, run] of groups) {
+      run.said(STOPPING);
+      toGroup(pid, "SIGKILL");
+    }
+  });
   // Told to end: as a run is ended, told first and killed ENDING_MS later (or once they are
   // gone, if sooner), so that what they run in groups of their own is ended too.
   let ending: Promise<void> | undefined;
   const endAllInTurn = () =>
     (ending ??= (async () => {
-      endAll("SIGTERM");
+      // Each ended as its run ends it: told, killed later, its pipes let go.
+      for (const run of groups.values()) run.end(STOPPING);
       for (const by = Date.now() + ENDING_MS; groups.size > 0 && Date.now() < by;)
         await new Promise((resolve) => setTimeout(resolve, 20));
-      endAll("SIGKILL");
+      for (const pid of groups.keys()) toGroup(pid, "SIGKILL");
       ending = undefined;
     })());
   for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
@@ -153,7 +153,6 @@ export const run = (
       stderr += why;
       return true;
     };
-    if (group) groups.set(group, said);
     let closed = false;
     const end = (why: string) => {
       if (!said(why)) return;
@@ -162,14 +161,17 @@ export const run = (
       // to end first, so that what it runs in groups of its own is ended too; then killed.
       // What escaped the group (a daemon's own session) may still hold the pipes: they are
       // let go then too, so that the answer does not wait on it.
-      toGroup(group, "SIGTERM");
+      // (No group left to tell: none to kill later either, since its id may be another's by
+      // then.)
+      const told = toGroup(group, "SIGTERM");
       setTimeout(() => {
-        toGroup(group, "SIGKILL");
+        if (told) toGroup(group, "SIGKILL");
         if (closed) return;
         child.stdout?.destroy();
         child.stderr?.destroy();
       }, ENDING_MS).unref();
     };
+    if (group) groups.set(group, { said, end });
     const cancel = () => end(CANCELLED);
     const done = () => {
       closed = true;
@@ -359,6 +361,20 @@ declare namespace run {
     Invoke<typeof answerWhenItsRunnerEnds>,
     "=",
     { code: 128; stdout: ""; stderr: "\n(stopped: the program that ran it is ending)" }
+  >;
+  /** and says so soon, though what its program started left the group and holds its pipes */
+  export type SaysItsRunnerEndedThoughAnEscapee = Configure<
+    { timeout: 15_000 },
+    Expect<
+      Invoke<typeof answerWhenItsRunnerEnds, [escapee: true]>,
+      "=",
+      {
+        code: 128;
+        stdout: "";
+        stderr: "\n(stopped: the program that ran it is ending)";
+        soon: true;
+      }
+    >
   >;
 }
 
