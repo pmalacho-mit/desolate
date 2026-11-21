@@ -125,7 +125,7 @@ const SAID_MOST = 64 * 1024;
  *  whose pack it is: one can be made to be slow to check, with deltas on deltas). It grows
  *  with the bundle: a minute, and a second for each MiB beyond that (so the largest bundle
  *  the forge takes, 2 GiB, has 35 minutes). git checks an ordinary pack far faster than a
- *  MiB a second (measured on the M1: see docs/v3/limits/05-mirrors-outbox.md), so a bundle
+ *  MiB a second (measured on the M1: docs/v3/decisions.md, "The limits effort"), so a bundle
  *  that is not made to be slow is never near it. It was 8 minutes for any size: a large
  *  bundle could not be taken, and a small one made to be slow held the fetch that long. */
 export const checkMs = (bytes: number) => 60_000 + Math.ceil(bytes / (1024 * 1024)) * 1000;
