@@ -4,18 +4,24 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { backend } from "../host/stack.ts";
+import type { ExecOptions } from "../host/vm/types.ts";
 
 const home = () => process.env.DESOLATE_HOME!;
 const kept = () => path.join(home(), "root-kept", "root-state.tgz");
 
 /** Stands in for the VM layer: the root VM is in `status`, and every command run in it ends
- *  with `code` and prints `stdout` (and `stderr`). */
+ *  with `code` and prints `stdout` (and `stderr`). Its stdout goes to the file a command
+ *  asks it to (`stdoutTo`), one byte for each character (latin1), as a VM's tar writes bytes. */
 export const rootVm = (status: string, code: number, stdout: string, stderr = "") =>
   ({
     info: async () => ({ status }),
     start: async () => {},
     resume: async () => {},
-    exec: async () => ({ code, stdout, stderr }),
+    exec: async (_name: string, _argv: string[], options: ExecOptions = {}) => {
+      if (!options.stdoutTo) return { code, stdout, stderr };
+      fs.writeFileSync(options.stdoutTo, stdout, "latin1");
+      return { code, stdout: "", stderr };
+    },
   }) as unknown as ReturnType<typeof backend>;
 
 /** An archive a `destroy` kept, holding `text`. */
@@ -41,7 +47,7 @@ export const carried = async (
   }
   let archive: string | null = null;
   try {
-    archive = fs.readFileSync(kept(), "utf8");
+    archive = fs.readFileSync(kept(), "latin1");
   } catch {
     /* none */
   }

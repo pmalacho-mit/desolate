@@ -116,7 +116,8 @@ approval. (`desolate root
 shell` is still there, a shell in the root VM itself, for what only the root can do.)
 
 **Your own scripts: `desolate events`.** A JSON object per line, as things happen, until you
-stop it (`--replay <n>` first repeats the last ones the host holds). Each says where it comes
+stop it (`--replay <n>` first repeats the last ones the host holds: the last 500, or the
+setting `events.kept`, `DESOLATE_EVENTS_KEPT`). Each says where it comes
 from, which is how far to believe it:
 
 | `source` | types | believe it as |

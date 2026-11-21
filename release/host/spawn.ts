@@ -14,6 +14,7 @@ import { readJson, writeJson } from "../shared/json.ts";
 import { isSlug, workspaceVmName } from "../shared/names.ts";
 import { IDENTITY_FILE, KEY, verify } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
+import { because } from "./failures.ts";
 import { INSTANCE, paths } from "./paths.ts";
 import type { Backend } from "./vm/types.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -79,7 +80,7 @@ export const giveIdentity = async (b: Backend, vm: string) => {
   );
   if (put.code !== 0)
     throw new Error(
-      `the workspace's key could not be written into it: ${put.stderr.trim().slice(-300)}`,
+      because("the workspace's key could not be written into it", "workspace-key", put.stderr),
     );
 };
 

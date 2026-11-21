@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { refuse } from "../shared/exit.ts";
 import { waitFor } from "../shared/run.ts";
 import * as approver from "./approver.ts";
+import { because, lastFailure } from "./failures.ts";
 import { INSTANCE, paths, RELEASE_DIR, guest } from "./paths.ts";
 import {
   backend,
@@ -16,10 +17,12 @@ import {
   pinForge,
   ROOT_VM,
   rootctl,
+  rootctlBrief,
   rootSpec,
   saveConfig,
 } from "./stack.ts";
 import type { Config, ForgeConfig } from "./stack.ts";
+import { provisionStep } from "./vm/lima.ts";
 import type { Check } from "./vm/types.ts";
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
@@ -141,7 +144,7 @@ const startRootServices = async () => {
     await backend().refreshSessions?.(ROOT_VM, result.stdout.includes("desolate: sessions raised"));
   if (result.code !== 0)
     refuse(
-      `the root's services did not start: ${(result.stderr || result.stdout).trim().slice(-600)}`,
+      because("the root's services did not start", "root-start", result.stderr || result.stdout),
       "desolate doctor; the root's own logs are in /var/lib/desolate-root and /var/lib/desolate (desolate root shell)",
     );
 };
@@ -183,7 +186,11 @@ const installApprover = async (): Promise<boolean> => {
   for (const result of [key, tok, ui])
     if (result.code !== 0)
       throw new Error(
-        `the host's keys were not installed in the root: ${(result.stderr || result.stdout).trim().slice(-300)}`,
+        because(
+          "the host's keys were not installed in the root",
+          "root-keys",
+          result.stderr || result.stdout,
+        ),
       );
   // Only now, with the root holding it, is a dashboard token made after a retiring served.
   (await import("./retired.ts")).dashboardMade();
@@ -252,11 +259,7 @@ export const bootstrap = async (
   }
   step(info.status !== "running", "root VM running");
 
-  const wasUp = await rootctl<{ keyring: boolean }>(
-    "ping",
-    {},
-    { quiet: true, timeoutMs: 30_000 },
-  ).then(
+  const wasUp = await rootctlBrief<{ keyring: boolean }>("ping").then(
     (r) => r.keyring,
     () => false,
   );
@@ -291,7 +294,11 @@ export const bootstrap = async (
     );
     if (walled.code !== 0 && backend().isolated)
       refuse(
-        `the root VM could not be walled off from the Mac's loopback: ${(walled.stderr || walled.stdout).trim().slice(-300)}`,
+        because(
+          "the root VM could not be walled off from the Mac's loopback",
+          "root-wall",
+          walled.stderr || walled.stdout,
+        ),
         "desolate doctor",
       );
   }
@@ -307,6 +314,9 @@ export const bootstrap = async (
       out(
         `    the root VM was provisioned from ${stamp ? `image ${stamp}` : "an unstamped image"}; this desolate's is ${fingerprint}: provisioning it again, in place (minutes)`,
       );
+      // No timer (R4): apt and npm download over this Mac's link, however slow, and the
+      // person at the terminal is the one waiting. Each step is said as it starts
+      // (provision.sh's `==>` lines); Ctrl-C stops it, and provision.sh is idempotent.
       const again = await b.exec(
         ROOT_VM,
         [
@@ -316,11 +326,15 @@ export const bootstrap = async (
           "bash",
           `${guest.release}/image/provision.sh`,
         ],
-        { root: true, timeoutMs: 3_600_000 },
+        { root: true, lines: (line) => provisionStep(line, (said) => out(`    ${said}`)) },
       );
       if (again.code !== 0)
         refuse(
-          `provisioning the root VM again failed: ${(again.stderr || again.stdout).trim().split("\n").slice(-5).join(" | ")}`,
+          because(
+            "provisioning the root VM again failed",
+            "provision-root",
+            `${again.stdout}\n${again.stderr}`,
+          ),
           "desolate bootstrap again (provision.sh is idempotent); desolate doctor",
         );
       await b.exec(ROOT_VM, ["rm", "-f", "/var/lib/desolate-root/code"], {
@@ -332,10 +346,7 @@ export const bootstrap = async (
   }
   const waitKeyring = async () => {
     const up = await waitFor(
-      () =>
-        rootctl<{ keyring: boolean }>("ping", {}, { quiet: true, timeoutMs: 30_000 }).then(
-          (r) => r.keyring,
-        ),
+      () => rootctlBrief<{ keyring: boolean }>("ping").then((r) => r.keyring),
       30_000,
       500,
     );
@@ -462,7 +473,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
   let asked: Check[] | null = null;
   if (rootUp)
     try {
-      asked = await rootctl<Check[]>("doctor", {}, { quiet: true, timeoutMs: 60_000 });
+      asked = await rootctlBrief<Check[]>("doctor");
     } catch {
       asked = null;
     }
@@ -599,10 +610,20 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
     portsToCheck(process.env.DESOLATE_DOCTOR_PORTS),
     path.join(paths.state, "daemon.pid"),
   );
+  // Not a check either: where the whole text of the last failure is, of those a refusal
+  // showed the end of (failures.ts).
+  const last = lastFailure();
   if (json)
     out(
       JSON.stringify(
-        { ok: failed.length === 0, backend: kind, isolated: b.isolated, checks, heldOnMac: held },
+        {
+          ok: failed.length === 0,
+          backend: kind,
+          isolated: b.isolated,
+          checks,
+          heldOnMac: held,
+          lastFailure: last?.file ?? null,
+        },
         null,
         2,
       ),
@@ -620,6 +641,10 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
     for (const h of held)
       out(
         `note: port ${h.port} on this Mac is held (${h.by}): a workspace's server on ${h.port} is not forwarded, and its address on ${h.port} reaches that program. Serve what you open on another port.`,
+      );
+    if (last)
+      out(
+        `note: the whole text of the last failure shown cut is ${last.file} (${last.of} kept, newest last, in ${path.dirname(last.file)})`,
       );
   }
   return failed.length;
