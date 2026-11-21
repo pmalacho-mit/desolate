@@ -80,6 +80,30 @@ const forgeHasLfs = (repo: string, id: string) => {
   }
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** A raw `git push` in the root's terminal, left waiting for the person as it would be, in a
+ *  session of its own; `stop` is the person's Ctrl-C (SIGINT to its process group). */
+const rawPushWaiting = async (spec: string, name: string) => {
+  const log = `/tmp/${name}.log`;
+  inRootClone(
+    `setsid nohup git push origin ${spec} >${log} 2>&1 </dev/null & echo $! >${log}.pid; sleep 0.2`,
+  );
+  const said = () => inRootClone(`cat ${log}`).stdout;
+  let waiting = false;
+  for (let i = 0; i < 80 && !waiting; i++) {
+    waiting = /waiting for it for as long as this push waits/.test(said());
+    if (!waiting) await sleep(250);
+  }
+  assert.ok(waiting, said());
+  return { said, stop: () => inRootClone(`kill -INT -- -$(cat ${log}.pid)`) };
+};
+/** Waits until nothing is waiting for the person on the host (or a few seconds pass). */
+const nothingWaits = async () => {
+  for (let i = 0; i < 40; i++) {
+    if (/nothing is waiting for approval/.test(stack.desolate("approve").stdout)) return true;
+    await sleep(250);
+  }
+  return false;
+};
 /** What desolate's reviewer says a push sends, asked as the host asks it: as root. */
 const reviewerSays = (branch: string, commit: string, onto: string | null = null) =>
   JSON.parse(
@@ -113,7 +137,8 @@ const attempt = (tries) => {
   const socket = connect("/run/desolate/pusher/control.sock");
   let answer = "";
   let connected = false;
-  socket.on("data", (c) => { answer += c; if (answer.includes("\\n")) { console.log(answer.split("\\n")[0]); process.exit(0); } });
+  // Lines saying how far it is come first ({"progress"}); the answer is the line after them.
+  socket.on("data", (c) => { answer += c; for (const line of answer.split("\\n").slice(0, -1)) if (!("progress" in JSON.parse(line))) { console.log(line); process.exit(0); } });
   socket.on("error", (e) => { if (!connected && tries > 0) setTimeout(() => attempt(tries - 1), 500); else { console.log(JSON.stringify({ ok: false, error: "no answer: " + e.message })); process.exit(0); } });
   socket.on("connect", () => {
     connected = true;
@@ -268,20 +293,20 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.deepEqual(json.files.sort(), ["README.md", "new.bin"]);
   });
 
-  it("a push is impossible without a person: every automation path is tried, and refused", () => {
+  it("a push is impossible without a person: every automation path is tried, and refused", async () => {
     stack.step("automation tries to push");
     // 1. The CLI, driven by a script: no terminal.
     const cli = stack.desolate("push", "dev", "acme/widgets", "issue/12", "--expect", commit);
     assert.equal(cli.code, 78);
     assert.match(cli.stderr, /there is no terminal to ask on/);
     assert.match(cli.stderr, /no person confirmed the push, so nothing was pushed/);
-    // 2. Raw git in the root clone: it asks for an approval on the host, none comes, it gives up.
-    const raw = inRootClone(
-      `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/issue/12 2>&1`,
-    );
-    assert.notEqual(raw.code, 0);
-    assert.match(raw.stdout, /needs your approval, given on the host, outside every VM/);
-    assert.match(raw.stdout, /no person approved the push on the host, so nothing was pushed/);
+    // 2. Raw git in the root clone: it asks for an approval on the host, and waits for as long
+    //    as it is waited for; none comes, and stopped (Ctrl-C), it takes its request with it.
+    const raw = await rawPushWaiting(`${commit}:refs/heads/issue/12`, "automation-push");
+    assert.match(raw.said(), /needs your approval, given on the host, outside every VM/);
+    raw.stop();
+    assert.ok(await nothingWaits(), "stopped, it is no longer waiting on the host");
+    assert.equal(forgeRefs("acme/widgets")["issue/12"], undefined);
     // 3. Skipping desolate's hook: straight to the remote's own address, around desolate's
     //    helper and its hook. This user has no way to a write key at all (the pusher does).
     const noVerify = inRootClone(
@@ -588,6 +613,26 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       forgeRefs("acme/widgets")["f6-control"],
       controlCommit,
       "control: the approved pack lands",
+    );
+    // Once the pusher is done with it, the approval is gone: its claim was the pusher's
+    // connection to the keyring, closed when the push ended. Handed over again (the control
+    // is the push just above, which it allowed), it allows nothing.
+    const reused = toPusher(
+      approved3.id!,
+      controlPack,
+      [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
+      saidControl.sends!.lfs,
+    );
+    assert.equal(reused.ok, false);
+    assert.match(String(reused.error), /holds no live approval/);
+    assert.ok(
+      (audit() as Record<string, unknown>[]).some(
+        (e) =>
+          e.event === "revoked" &&
+          e.approval === approved3.id &&
+          e.why === "the pusher is done with it",
+      ),
+      "the claim ended with the pusher's push",
     );
     assert.equal(forgeHasLfs("acme/widgets", oid), true, "with its LFS object");
     // CONTROL for the checks above that something is NOT on the forge: they see what is.
@@ -1029,7 +1074,9 @@ echo "$c1 $c2 $c3 $c4"`);
     );
     let waiting = false;
     for (let i = 0; i < 40 && !waiting; i++) {
-      waiting = /waiting up to/.test(inRootClone("cat /tmp/raw-push.log").stdout);
+      waiting = /waiting for it for as long as this push waits/.test(
+        inRootClone("cat /tmp/raw-push.log").stdout,
+      );
       if (!waiting) await sleep(250);
     }
     assert.ok(waiting, "the push is waiting for the host");
@@ -1055,15 +1102,43 @@ echo "$c1 $c2 $c3 $c4"`);
     assert.equal(entries.pop()?.event, "revoked", "the approval did not outlive the push");
     // The default branch is pushed this way too, and waits for the person like any branch
     // (since 2026-11-18; unanswered here, so nothing goes); nothing is ever deleted.
-    const def = inRootClone(
-      `DESOLATE_APPROVAL_WAIT_MS=1500 git push origin ${commit}:refs/heads/main 2>&1`,
+    const def = await rawPushWaiting(`${commit}:refs/heads/main`, "main-push");
+    assert.doesNotMatch(def.said(), /default branch/);
+    assert.match(def.said(), /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    // It waits for as long as its asker does, and no longer: stopped (the person's Ctrl-C),
+    // its request goes from the host's list, and the keyring will not take an answer to it,
+    // even one signed with the approver's key. (Control: while it waited, the keyring held it,
+    // refusing an answer only for its signature.)
+    const request = JSON.parse(
+      stack.inRoot(["bash", "-c", "cat /var/lib/desolate/approvals/*.json"]).stdout,
+    ) as { message: string };
+    // (What it says it sends is not what is looked at here: the challenge is.)
+    const text = signedFor(request.message, {
+      commit,
+      squashes: null,
+      pack: "e".repeat(64),
+      lfs: [],
+    });
+    assert.match(
+      String(keyring({ op: "approve", message: text, signature: "" }).error),
+      /signature is not the host approver's/,
+      "control: outstanding while its asker waits",
     );
-    assert.doesNotMatch(def.stdout, /default branch/);
-    assert.match(def.stdout, /this push needs your approval[\s\S]*acme\/widgets {2}main/);
+    def.stop();
+    assert.ok(await nothingWaits(), "stopped, it is no longer listed on the host");
+    const hostKey = createPrivateKey(
+      fs.readFileSync(path.join(stack.home, "approver", "key"), "utf8"),
+    );
+    const late = keyring({
+      op: "approve",
+      message: text,
+      signature: sign("sha256", Buffer.from(text), hostKey).toString("base64"),
+    });
+    assert.equal(late.ok, false);
+    assert.match(String(late.error), /not outstanding/);
     assert.notEqual(forgeRefs("acme/widgets")["main"], commit, "unapproved: not pushed");
     assert.match(
-      inRootClone("DESOLATE_APPROVAL_WAIT_MS=1500 git push origin :refs/heads/raw-push 2>&1")
-        .stdout,
+      inRootClone("git push origin :refs/heads/raw-push 2>&1").stdout,
       /deleting a branch on the remote is not something desolate does/,
     );
     assert.equal(forgeRefs("acme/widgets")["raw-push"], commit);

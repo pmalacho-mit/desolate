@@ -205,11 +205,14 @@ const hold = (connection: Socket) => {
   if (holders.has(connection)) return;
   holders.add(connection);
   uncounted.get(connection)?.();
+  // On the asker's end, before this side closes: so an asker that waits for the close (the
+  // pusher, done) knows what it held is gone, and its record (audit) written.
+  connection.once("end", () => released(connection));
   connection.once("close", () => released(connection));
 };
 /** Whoever held `connection` stopped waiting: what it held goes. */
 const released = (connection: Socket) => {
-  holders.delete(connection);
+  if (!holders.delete(connection)) return;
   for (const [nonce, entry] of challenges)
     if (entry.holder === connection) challenges.delete(nonce);
   for (const approval of approvals.values())
@@ -724,7 +727,8 @@ declare namespace consume {
 }
 
 // ---------------------------------------------------------------- the sockets
-const publicOps = (
+/** The control socket's operations (exported for T1, which drives them on a real connection). */
+export const publicOps = (
   request: Record<string, unknown>,
   connection?: Socket,
 ): Record<string, unknown> => {

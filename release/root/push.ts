@@ -508,7 +508,7 @@ const main = async () => {
               : "try the push again; desolate doctor",
           );
       } finally {
-        (held as Held | null)?.release();
+        await (held as Held | null)?.release();
       }
     },
     {

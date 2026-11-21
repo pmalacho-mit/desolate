@@ -929,7 +929,7 @@ const push = async (
       };
     return await pushClaimed(socket, request, rest, claim.answer.approval as Approved);
   } finally {
-    claim.release();
+    await claim.release();
   }
 };
 

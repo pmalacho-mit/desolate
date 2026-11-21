@@ -103,7 +103,8 @@ export type Held = {
   answer: Record<string, unknown>;
   told: (line: Record<string, unknown>) => void;
   ended: Promise<void>;
-  release: () => void;
+  /** Settles once the keyring has seen the connection end: what it held is gone by then. */
+  release: () => Promise<void>;
 };
 export const hold = async (
   socketPath: string,
@@ -112,11 +113,24 @@ export const hold = async (
   timeoutMs = 10_000,
 ): Promise<Held> => {
   const { answer, connection, rest } = await first(socketPath, request, timeoutMs);
+  const ended = new Promise<void>((resolve) => connection.once("close", () => resolve()));
   const held: Held = {
     answer,
     told,
-    ended: new Promise((resolve) => connection.once("close", () => resolve())),
-    release: () => connection.destroy(),
+    ended,
+    // Ended, not destroyed: the keyring hears the end, lets go of what this held, and only
+    // then closes its side, which is what settles this. (A keyring that does not, in the time
+    // it has to answer anything, is cut off: what it held goes when it notices.)
+    release: async () => {
+      connection.end();
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        ended,
+        new Promise((resolve) => (timer = setTimeout(resolve, timeoutMs))),
+      ]);
+      clearTimeout(timer);
+      connection.destroy();
+    },
   };
   if (answer.ok !== true) connection.destroy();
   let buffer = rest;

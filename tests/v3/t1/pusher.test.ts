@@ -9,7 +9,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Writable } from "node:stream";
 import { after, before, describe, it } from "node:test";
-import { advertised, pkt, reported, Uncertain, updateRef } from "../../../release/root/pusher.ts";
+import { Writable as WritableStream } from "node:stream";
+import {
+  advertised,
+  pkt,
+  reported,
+  Uncertain,
+  updateRef,
+  uploadWatched,
+  write,
+} from "../../../release/root/pusher.ts";
 
 const ZERO = "0".repeat(40);
 let dir = "";
@@ -198,5 +207,73 @@ describe("T1 the pusher speaks receive-pack, and asks for one ref update", () =>
       (error: Error) => error instanceof Uncertain,
     );
     assert.equal(tipOf("main"), landed);
+  });
+});
+
+// Uploads end when they stall, not when they are long (R4): the forge is remote, and the one
+// timer it is allowed is "nothing moved for N". Each with its control: the same upload,
+// moving, outlives N however long it runs.
+describe("T1 the pusher's uploads: stopped when nothing moves, never for taking long", () => {
+  const PACE = { idleMs: 400, everyMs: 300, pollMs: 50 };
+  const progress = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lfs-progress-")), "p");
+  // A stand-in for git-lfs: writes a progress line as git-lfs does (one per 32 KiB sent), at
+  // `every` seconds, `lines` times, then exits; or says nothing, and hangs.
+  const lfs = (lines: number, every: number) => [
+    "-c",
+    `for i in $(seq 1 ${lines}); do echo "upload 1/1 $((i * 32768))/${lines * 32768} obj" >> "$GIT_LFS_PROGRESS"; sleep ${every}; done`,
+  ];
+
+  it("control: an upload that keeps moving runs past the idle bound, and says how far it is", async () => {
+    const said: string[] = [];
+    const started = Date.now();
+    const up = await uploadWatched(
+      "sh",
+      lfs(8, 0.15),
+      { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      progress(),
+      { objects: 1, bytes: 8 * 32768 },
+      (line) => said.push(line),
+      PACE,
+    );
+    assert.equal(up.stalled, null);
+    assert.equal(up.code, 0);
+    assert.ok(Date.now() - started > PACE.idleMs * 2, "it ran longer than the idle bound");
+    assert.ok(
+      said.some((line) =>
+        /^uploading: [01] of 1 LFS object\(s\) up, \d+ KiB of 256 KiB$/.test(line),
+      ),
+      said.join("\n"),
+    );
+  });
+
+  it("an upload that stops moving is stopped, with everything it started, and says where it stood", async () => {
+    const up = await uploadWatched(
+      "sh",
+      ["-c", 'echo "upload 1/1 32768/65536 obj" >> "$GIT_LFS_PROGRESS"; sleep 30'],
+      { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      progress(),
+      { objects: 1, bytes: 65536 },
+      () => {},
+      PACE,
+    );
+    assert.equal(
+      up.stalled,
+      "nothing was sent for 0.4 s (0 of 1 LFS object(s) up, 32 KiB of 64 KiB)",
+    );
+    assert.notEqual(up.code, 0);
+  });
+
+  it("a forge that stops taking the pack is given up on; control: one that takes it slowly is not", async () => {
+    // A sink that never drains once full: the forge stopped reading.
+    const stuck = new WritableStream({ highWaterMark: 4, write: () => {} });
+    await assert.rejects(write(stuck, Buffer.alloc(64), 200), /the forge took nothing for 0.2 s/);
+    // One that takes each chunk after a while, though all of it takes longer than the bound.
+    const slow = new WritableStream({
+      highWaterMark: 4,
+      write: (_chunk, _encoding, done) => void setTimeout(done, 80),
+    });
+    const started = Date.now();
+    for (let i = 0; i < 5; i++) await write(slow, Buffer.alloc(64), 200);
+    assert.ok(Date.now() - started > 200, "it took longer than the bound, and was not stopped");
   });
 });

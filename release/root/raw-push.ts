@@ -145,7 +145,7 @@ export const pushCommit = async (
     if (failed) return failed.error.replace(/\n/g, " ");
     return pushed(repo, commit, branch, approval.commit, say);
   } finally {
-    held.release();
+    await held.release();
   }
 };
 
