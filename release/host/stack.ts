@@ -509,12 +509,12 @@ export const revealSecret = async (domain: string, name: string): Promise<string
   try {
     reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   } catch {
-    // Its stderr alone: what it printed on stdout may be the value, or part of it, and a
-    // failure's text is shown and kept (failures.ts).
+    // Its stderr alone: what it printed on stdout may be the value, or part of it. And not
+    // kept in a file (failures.ts): a secret is held by the root, and by no file on the Mac.
     throw new Refusal(
       because(
         `the root did not read ${domain}'s secret (exit ${result.code})`,
-        "secret-reveal",
+        null,
         result.stderr,
       ),
       "desolate doctor",
@@ -543,7 +543,7 @@ export const changeSecrets = async <T>(
     throw new Refusal(
       because(
         `the root did not change ${domain}'s secrets (exit ${result.code})`,
-        "secret-store",
+        null,
         result.stderr,
       ),
       "desolate doctor",

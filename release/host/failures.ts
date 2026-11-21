@@ -62,9 +62,11 @@ export const keep =
 
 /** `summary`, and why: what the other layer said (`output`), as `failure` shows it. A reason
  *  of one line follows the summary on its line, as it always has; a longer one starts on the
- *  next, under the line that says how much was left out and where all of it is. */
-export const because = (summary: string, what: string, output: string): string => {
-  const said = failure(output.trim(), LAST, keep(what));
+ *  next, under the line that says how much was left out and where all of it is. `what` null:
+ *  the whole is not written anywhere (what a secret's store said may hold the secret), and
+ *  the refusal says only how much was left out. */
+export const because = (summary: string, what: string | null, output: string): string => {
+  const said = failure(output.trim(), LAST, what === null ? () => null : keep(what));
   if (said === "") return `${summary}: no output`;
   return said.includes("\n") ? `${summary}:\n${said}` : `${summary}: ${said}`;
 };
@@ -106,6 +108,25 @@ declare namespace because {
         "^provisioning the base VM failed:\n\\(4 earlier lines not shown; all of it: .*/logs/failures/[0-9TZ-]+-provision\\.txt\\)\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12\nline 13\nline 14$"
       >,
       Expect<Invoke<typeof keptFailures>, "=", [{ what: "provision"; lines: 14; mode: "600" }]>,
+    ]
+  >;
+  /** not to be kept: how much was left out is said, and nothing is written */
+  export type Unkept = Given<
+    Invoke<typeof emptyHome>,
+    [
+      Expect<
+        Invoke<
+          typeof because,
+          [
+            summary: "the root did not change acme's secrets (exit 1)",
+            what: null,
+            output: Invoke<typeof lines, [count: 11]>,
+          ]
+        >,
+        "matches",
+        "^the root did not change acme's secrets \\(exit 1\\):\n\\(1 earlier line not shown\\)\nline 2\n"
+      >,
+      Expect<Invoke<typeof keptFailures>, "=", []>,
     ]
   >;
   /** what it said is text, not commands for the terminal it is shown on */
