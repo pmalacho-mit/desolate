@@ -20,3 +20,6 @@ export const perDomain = (events: Record<string, unknown>[]): Record<string, num
   for (const e of events) out[String(e.domain)] = (out[String(e.domain)] ?? 0) + 1;
   return out;
 };
+
+/** The last of these events. */
+export const lastOf = (events: Record<string, unknown>[]) => events[events.length - 1];

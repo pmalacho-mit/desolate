@@ -108,7 +108,7 @@ desolate issue offer --title "Login loops after a password reset" --body-file no
 
 - In a checkout, it is for that repository; else name it: `--repo <owner>/<repo>`.
 - The body is GitHub's Markdown. Keep it to what the person needs: what you saw, how to see
-  it again, what you think it needs. At most 64 KiB; no control or invisible characters.
+  it again, what you think it needs. At most 65,536 characters (GitHub's own limit); no control or invisible characters.
 - Labels must already exist in the repository. A label like `desolate:run` may make a
   recipe start an agent on the issue once it is published: offer it only when the task says.
 - `desolate events --follow` says when it is published (`issue-published`, with its page) or

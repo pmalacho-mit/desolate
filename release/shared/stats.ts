@@ -33,12 +33,15 @@ export type Stats = {
 const gib = (mib: number) => `${(mib / 1024).toFixed(mib % 1024 === 0 ? 0 : 1)} GiB`;
 
 /** The stats as lines of text. What is in them was written by the root, and the status
- *  messages and branch names by the domain's agents: each made printable. */
+ *  messages and branch names by the domain's agents: each made printable. Nothing is cut
+ *  for width (R1): each name is bounded where it is made (a slug, a branch, a repository, a
+ *  status: shared/limits.ts NAMES), and a terminal wraps a long line. printable's own
+ *  bound, against a flood, is the only one. */
 export const statsLines = (value: unknown): string[] => {
   const s = (typeof value === "object" && value !== null ? value : {}) as Partial<Stats>;
-  const p = (text: unknown, max = 120) => printable(text, max);
+  const p = (text: unknown) => printable(text);
   const lines = [
-    `domain ${p(s.domain, 40)}  "${p(s.title, 80)}"  ${(s.repos ?? []).map((r) => p(r, 100)).join(", ")}`,
+    `domain ${p(s.domain)}  "${p(s.title)}"  ${(s.repos ?? []).map((r) => p(r)).join(", ")}`,
   ];
   const mac =
     s.mac && Number.isFinite(s.mac.memoryMiB)
@@ -59,12 +62,11 @@ export const statsLines = (value: unknown): string[] => {
   for (const w of s.workspaces ?? []) {
     const size = w.size ? `  ${Number(w.size.cpus)} CPU, ${gib(Number(w.size.memoryMiB))}` : "";
     const by = w.startedBy
-      ? `started by ${p(w.startedBy, 40)}${w.outlived ? " (since removed: this one outlived it)" : ""}`
+      ? `started by ${p(w.startedBy)}${w.outlived ? " (since removed: this one outlived it)" : ""}`
       : "started by the person";
-    lines.push(`  ${p(w.workspace, 40)}  ${p(w.vm ?? w.state, 20)}${size}  ${by}`);
-    for (const c of w.checkouts ?? [])
-      lines.push(`      ${p(c.repo, 100)}  ${p(c.head ?? c.branch, 120)}`);
-    if (w.status) lines.push(`      status ${p(w.status.color, 10)}: ${p(w.status.message, 200)}`);
+    lines.push(`  ${p(w.workspace)}  ${p(w.vm ?? w.state)}${size}  ${by}`);
+    for (const c of w.checkouts ?? []) lines.push(`      ${p(c.repo)}  ${p(c.head ?? c.branch)}`);
+    if (w.status) lines.push(`      status ${p(w.status.color)}: ${p(w.status.message)}`);
   }
   return lines;
 };
@@ -145,5 +147,31 @@ declare namespace statsLines {
     >,
     "includes",
     "  its workspaces cannot start workspaces: the person turned it off"
+  >; /** a branch of 160 characters (desolate carries 200) is shown whole: it was bounded where
+   *  it was made, and the terminal wraps it (until 2026-11-21 it was cut at 120, unsaid) */
+  export type WholeBranch = Expect<
+    Invoke<
+      typeof statsLines,
+      [
+        value: {
+          domain: "acme";
+          workspaces: [
+            {
+              workspace: "w1";
+              state: "up";
+              checkouts: [
+                {
+                  repo: "acme/app";
+                  branch: "feature/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+                  head: null;
+                },
+              ];
+            },
+          ];
+        },
+      ]
+    >,
+    "includes",
+    "      acme/app  feature/xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
   >;
 }

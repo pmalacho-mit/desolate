@@ -2,10 +2,12 @@
 // and each domain's own events, which the root writes into the domain's inbox for its
 // workspaces (`desolate events`, inside one; root/stated.ts). Pure: a state in, events out.
 import { printable } from "./text.ts";
+import { NAMES } from "./limits.ts";
+import { LIMIT as ISSUE } from "./issues.ts";
 import { isBranch, isCommit, isSlug, parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { offersIn, perDomain } from "../.harness/shared-events.ts";
+import type { lastOf, offersIn, perDomain } from "../.harness/shared-events.ts";
 
 export type Event = { v: 1; at: string; type: string; source: "host" | "pusher" | "root" } & Record<
   string,
@@ -61,7 +63,9 @@ declare namespace slugOrNull {
     [[args: [value: "dev"], expected: "dev"], [args: [value: "-dev"], expected: null]]
   >;
 }
-/** At most this many events from one change of the root's state. */
+/** At most this many events for one domain from one change of the root's state (R7: what
+ *  makes them is what a domain's workspaces did, and each event is written into every
+ *  follower's stream). Past it, one `events-dropped` event says how many were not sent. */
 const PER_CHANGE = 200;
 
 // (The fixed keys last: no field can stand in for them.)
@@ -195,7 +199,8 @@ export const stateEvents = (before: State | null, after: State): Event[] => {
           domain: slugOrNull(s.domain),
           workspace: slugOrNull(s.workspace),
           color: /^(gray|blue|green|yellow|orange|red)$/.test(String(s.color)) ? s.color : null,
-          message: printable(s.message, 200),
+          // As the root read it (status.ts): cut there, if at all, and the cut said.
+          message: printable(s.message, NAMES.status),
         }),
       );
   }
@@ -209,7 +214,7 @@ export const stateEvents = (before: State | null, after: State): Event[] => {
       workspace: slugOrNull(i.workspace),
       repo: repoOrNull(i.repo),
       id: /^[0-9a-z-]{1,40}$/.test(String(i.id)) ? i.id : null,
-      title: printable(i.title, 256),
+      title: printable(i.title, ISSUE.title),
     };
     if (!old && i.state === "offered") out.push(event("issue-offered", "root", fields));
     else if (i.state === "published")
@@ -302,14 +307,21 @@ export const stateEvents = (before: State | null, after: State): Event[] => {
       );
   }
   // At most PER_CHANGE per domain: one domain's busy change must not push the others' events
-  // out (audit, 2026-11-16: the cap was across all domains, before they were split).
-  const per = new Map<string, number>();
-  return out.filter((e) => {
-    const k = String((e as { domain?: unknown }).domain ?? "");
-    const n = (per.get(k) ?? 0) + 1;
-    per.set(k, n);
+  // out (audit, 2026-11-16: the cap was across all domains, before they were split). What is
+  // not sent is said (R1), once for each domain, after the ones that were: a script that
+  // follows the events knows to look at the state itself.
+  const per = new Map<unknown, number>();
+  const sent = out.filter((e) => {
+    const n = (per.get(e.domain ?? null) ?? 0) + 1;
+    per.set(e.domain ?? null, n);
     return n <= PER_CHANGE;
   });
+  for (const [domain, n] of per)
+    if (n > PER_CHANGE)
+      sent.push(
+        event("events-dropped", "root", { domain, dropped: n - PER_CHANGE, sent: PER_CHANGE }),
+      );
+  return sent;
 };
 
 declare namespace stateEvents {
@@ -638,8 +650,8 @@ declare namespace stateEvents {
       },
     ]
   >;
-  /** at most 200 events per domain from one change: one busy domain does not push out
-   *  another's */
+  /** at most 200 events per domain from one change, and one more that says how many were
+   *  not sent: one busy domain does not push out another's */
   export type PerDomain = Expect<
     Invoke<
       typeof perDomain,
@@ -651,6 +663,34 @@ declare namespace stateEvents {
       ]
     >,
     "=",
-    { busy: 200; quiet: 1 }
+    { busy: 201; quiet: 1 }
+  >;
+  /** the last of a busy domain's: how many of its events were not sent, and how many were */
+  export type DroppedIsSaid = Expect<
+    Invoke<
+      typeof lastOf,
+      [
+        events: Invoke<
+          typeof stateEvents,
+          [before: null, after: Invoke<typeof offersIn, [counts: { busy: 250; quiet: 1 }]>]
+        >,
+      ]
+    >,
+    "matches",
+    { v: 1; type: "events-dropped"; source: "root"; domain: "busy"; dropped: 50; sent: 200 }
+  >;
+  /** the control: a change within the bound says nothing was dropped */
+  export type NoneDropped = Expect<
+    Invoke<
+      typeof perDomain,
+      [
+        events: Invoke<
+          typeof stateEvents,
+          [before: null, after: Invoke<typeof offersIn, [counts: { busy: 200 }]>]
+        >,
+      ]
+    >,
+    "=",
+    { busy: 200 }
   >;
 }
