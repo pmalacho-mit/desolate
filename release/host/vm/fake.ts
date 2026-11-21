@@ -18,6 +18,7 @@ import { Duplex } from "node:stream";
 import { must, run } from "../../shared/run.ts";
 import type { RunResult } from "../../shared/run.ts";
 import { INSTANCE } from "../paths.ts";
+import { runStreamed } from "./stream.ts";
 import { GUEST_USER } from "./types.ts";
 import { socatAddress } from "./types.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
@@ -296,9 +297,18 @@ export const fakeBackend = (): Backend => {
     },
 
     exec(name, argv, options = {}): Promise<RunResult> {
+      if (options.lines || options.stdoutTo || options.stdinFrom)
+        return runStreamed("docker", execArgs(name, argv, options, true), {
+          input: options.input,
+          lines: options.lines,
+          stdoutTo: options.stdoutTo,
+          stdinFrom: options.stdinFrom,
+        });
       return run("docker", execArgs(name, argv, options, options.input !== undefined), {
         input: options.input,
         timeoutMs: options.timeoutMs,
+        signal: options.signal,
+        idleMs: options.idleMs,
         inheritStderr: options.inheritStderr,
       });
     },
@@ -344,10 +354,6 @@ export const fakeBackend = (): Backend => {
       if (result.code !== 0)
         throw new Error(`cannot list listeners in ${name}: ${result.stderr.trim()}`);
       return parseSs(result.stdout);
-    },
-
-    async logs(name) {
-      return (await docker(["logs", "--tail", "200", name])).stdout;
     },
   };
   return backend;

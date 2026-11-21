@@ -43,8 +43,23 @@ export type ExecOptions = {
   input?: string | Buffer;
   env?: Record<string, string>;
   cwd?: string;
+  /** A total, past which the command is killed: for callers not yet moved to `signal` and
+   *  `idleMs` (shared/run.ts; docs/v3/limits.md, R4). */
   timeoutMs?: number;
+  /** Whoever asked went away: the command is ended, and what it started on the host with it. */
+  signal?: AbortSignal;
+  /** The command is ended when it has said nothing for this long, however long it has run. */
+  idleMs?: number;
   inheritStderr?: boolean;
+  /** A long step a person is waiting on, streamed (host/vm/stream.ts). With any of these
+   *  three no timer applies: the command runs until it ends or the person stops it.
+   *  `lines`: each line of its stdout as it comes, so the step says what it is doing. */
+  lines?: (line: string) => void;
+  /** A file on the host the command's stdout is written to as it comes, byte for byte (the
+   *  answer's `stdout` is then empty): an archive, whatever its size. */
+  stdoutTo?: string;
+  /** A file on the host that is the command's stdin. */
+  stdinFrom?: string;
 };
 
 export type Listener = { port: number; address: string };
@@ -92,7 +107,6 @@ export interface Backend {
   link(name: string): { guest: string; hostPort?: number; token?: string };
   /** TCP listeners inside the VM right now. */
   listeners(name: string): Promise<Listener[]>;
-  logs(name: string): Promise<string>;
   /** After root in the VM changed the ordinary user's groups (docker in a workspace, the
    *  proxies' group in the root): make the next commands run with them. Lima's sessions
    *  share one ssh connection, and a session keeps the groups that connection logged in
