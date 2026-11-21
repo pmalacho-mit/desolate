@@ -503,6 +503,39 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     }
   };
 
+  /** Whether a running vz VM's Lima host process is under today's profile (`profile`, written
+   *  by `start` just before it starts the process, which keeps the profile for its whole life).
+   *  A VM started otherwise (by an older desolate: found on the M1 after the upgrade of
+   *  2026-11-20, when the root VM had run since midnight and bootstrap did not restart it; or
+   *  by Lima itself) may be handed any folder its host process can open, until it starts
+   *  again. macOS says whether the process is sandboxed at all (sandbox_check, asked through
+   *  the system's python, which Homebrew's command line tools provide: a file's age alone was
+   *  fooled by a profile an earlier start had left, T4); and the profile is today's if it
+   *  carries today's rule and was written before the process started. Undecided is not ok. */
+  const startedConfined = async (name: string): Promise<boolean | null> => {
+    try {
+      const file = path.join(LIMA_HOME, name, "confine.sb");
+      if (!fs.readFileSync(file, "utf8").includes("(deny file-issue-extension)")) return false;
+      const pid = fs.readFileSync(path.join(LIMA_HOME, name, "ha.pid"), "utf8").trim();
+      if (!/^[0-9]+$/.test(pid)) return false;
+      const asked = await run("/usr/bin/python3", [
+        "-c",
+        "import ctypes, sys\nf = ctypes.CDLL('/usr/lib/libSystem.dylib').sandbox_check\nf.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int]\nprint(f(int(sys.argv[1]), None, 0))",
+        pid,
+      ]);
+      if (asked.code !== 0 || !/^[01]$/.test(asked.stdout.trim())) return null;
+      if (asked.stdout.trim() !== "1") return false;
+      const ps = await run("ps", ["-o", "lstart=", "-p", pid], {
+        env: { ...process.env, LC_ALL: "C" },
+      });
+      const began = Date.parse(ps.stdout.trim());
+      // (ps says the start to the second.)
+      return Number.isFinite(began) && began + 1000 >= fs.statSync(file).mtimeMs;
+    } catch {
+      return false;
+    }
+  };
+
   /** Wait for every share to be mounted as the spec says; stop the VM and refuse if one
    *  is mounted the wrong way, or is still missing after a minute. */
   const sharesReady = async (name: string, m: Meta) => {
@@ -626,6 +659,30 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
             : `${open.join(", ")} still forward their loopback listeners onto this Mac`,
         fix: "restart each: desolate stop <domain>/<workspace> && desolate start <domain>/<workspace> (the root VM: desolate down, then desolate bootstrap)",
       });
+      // Every running vz VM may be handed only its own shares (`profile`): one whose host
+      // process started before its profile was written keeps no such limit.
+      if (kind === "vz") {
+        const loose: string[] = [];
+        let undecided = false;
+        for (const vm of await backend.list())
+          if (vm.status === "running") {
+            const confined = await startedConfined(vm.name);
+            if (confined === null) undecided = true;
+            else if (!confined) loose.push(vm.labels.title ?? vm.name);
+          }
+        checks.push({
+          name: "VMs started confined",
+          ok: loose.length === 0 && !undecided,
+          detail: undecided
+            ? "macOS could not be asked whether a VM's host process is sandboxed (/usr/bin/python3 did not answer)"
+            : loose.length === 0
+              ? "every running VM's host process may hand it only its own shares"
+              : `${loose.join(", ")} started without the profile that lets it be handed only its own shares: until it starts again, a share swapped for a link could hand it any folder of this Mac's user`,
+          fix: undecided
+            ? "xcode-select --install (the command line tools, which give /usr/bin/python3), then desolate doctor"
+            : "restart each: desolate stop <domain>/<workspace> && desolate start <domain>/<workspace> (the root VM: desolate down, then desolate bootstrap)",
+        });
+      }
       const haveBase = fs.existsSync(path.join(LIMA_HOME, BASE, "lima.yaml"));
       const stamp = baseStamp();
       const current = haveBase && stamp === imageFingerprint();
