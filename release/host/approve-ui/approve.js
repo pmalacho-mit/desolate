@@ -108,127 +108,231 @@ const diffView = (text, tokens) => {
   });
   return pre;
 };
-/** "Show the diff": asked of the host once, for the very text the card shows (its token).
- *  Opening it changes the card, so Approve disarms and arms again only as it always does. */
-const diffToggle = (card, each) => {
+/** What the host is asked for a push the card shows: by its nonce and the token over its very
+ *  text, as an approval is. */
+const askHost = async (card, what, query) => {
+  const answer = await fetch(`/${what}?nonce=${card.push.nonce}&token=${card.push.token}&${query}`, { credentials: sendCookie, headers: credential });
+  const body = await answer.json().catch(() => ({}));
+  if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
+  return body;
+};
+/** Anything added to a card changes it: Approve disarms, and arms again only as it always does. */
+const changed = (card) => { card.changedAt = performance.now(); disarm(card); };
+/** A diff, asked of desolate's reviewer a page at a time (its bytes from `from` up to `next`):
+ *  the first when opened, the next when the person asks for more. Nothing is cut: a long diff
+ *  is a longer read, never a shorter one. */
+const diffToggle = (card, labels, query) => {
   const box = el("div", undefined, "diffbox");
-  const label = each ? ["Show each commit whole", "Hide each commit"] : ["Show the diff", "Hide the diff"];
-  const button = el("button", label[0], "quiet");
+  const button = el("button", labels[0], "quiet");
   button.type = "button";
   let open = false;
-  button.addEventListener("click", async (event) => {
+  const page = async (from) => {
+    const waiting = el("p", "asking desolate's reviewer...", "hint");
+    box.append(waiting);
+    try {
+      const { diff } = await askHost(card, "diff", `${query}&from=${from}`);
+      waiting.remove();
+      if (!open) return;
+      const shown = diffView(diff.text);
+      box.append(shown);
+      // Its colours, when the worker has them (or never: the diff stays plain). The text is the
+      // same; the card is redrawn all the same, so Approve disarms again.
+      if (typeof DesolateHighlight !== "undefined")
+        DesolateHighlight.tokensFor(diff.text).then((tokens) => {
+          if (!open || !shown.isConnected || !tokens.some(Boolean)) return;
+          const coloured = diffView(diff.text, tokens);
+          shown.replaceWith(coloured);
+          changed(card);
+        });
+      if (diff.next !== null) {
+        const more = el("button", `Show more of it (${size(diff.next)} of ${size(diff.total)} shown)`, "quiet");
+        more.type = "button";
+        more.addEventListener("click", (event) => { if (!event.isTrusted) return; more.remove(); void page(diff.next); });
+        box.append(more);
+      } else if (diff.total === 0) box.append(el("p", "No change.", "hint"));
+    } catch (error) {
+      waiting.remove();
+      box.append(el("p", `the diff could not be had: ${error.message}`, "error"));
+    }
+    changed(card);
+  };
+  button.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
     open = !open;
-    button.textContent = open ? label[1] : label[0];
-    if (!open) box.replaceChildren();
-    else {
-      box.replaceChildren(el("p", "asking desolate's reviewer...", "hint"));
-      try {
-        const answer = await fetch(`/diff?nonce=${card.push.nonce}&token=${card.push.token}${each ? "&each=1" : ""}`, { credentials: sendCookie, headers: credential });
-        const body = await answer.json();
-        if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
-        box.replaceChildren(...(body.diff === null ? [el("p", "Too large to show here (over 20 000 lines): read it with git in the git terminal.", "error")] : [diffView(body.diff), ...(body.cut ? [el("p", `${body.why ? `Only ${body.why}` : "Cut at 256 KiB"}: read the rest with git in the git terminal.`, "error")] : [])]));
-        // Then its colours, when the worker has them (or never: the diff stays plain). The
-        // text is the same; the card is redrawn all the same, so Approve disarms again.
-        if (body.diff !== null && typeof DesolateHighlight !== "undefined") {
-          const shown = box.querySelector("pre.diff");
-          DesolateHighlight.tokensFor(body.diff).then((tokens) => {
-            if (!open || !shown.isConnected || !tokens.some(Boolean)) return;
-            const coloured = diffView(body.diff, tokens);
-            coloured.scrollTop = shown.scrollTop;
-            shown.replaceWith(coloured);
-            coloured.scrollTop = shown.scrollTop;
-            card.changedAt = performance.now();
-            disarm(card);
-          });
-        }
-      } catch (error) {
-        box.replaceChildren(el("p", `the diff could not be had: ${error.message}`, "error"));
-      }
-    }
-    card.changedAt = performance.now();
-    disarm(card);
+    button.textContent = open ? labels[1] : labels[0];
+    box.replaceChildren();
+    if (open) void page(0);
+    changed(card);
   });
   return [button, box];
 };
 
-const summaryOf = (summary, card) => {
+/** A size, as desolate writes one (shared/limits.ts, formatBytes: the page cannot import it). */
+const size = (bytes) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : bytes < 1024 * 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MiB` : `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GiB`;
+const count = (n) => Number(n).toLocaleString("en-US");
+/** What the reviewer says it is doing: "packing (1,200 of 8,000), 2 min". */
+const workingText = (w) => `${w.phase}${w.of !== undefined ? ` (${count(w.done || 0)} of ${count(w.of)})` : w.done !== undefined ? ` (${count(w.done)})` : ""}${w.seconds >= 60 ? `, ${Math.floor(w.seconds / 60)} min` : w.seconds >= 5 ? `, ${w.seconds} s` : ""}`;
+
+/** A list of the account (`listed`: a page of it, and the true total) as `ul`, each item by
+ *  `line`, with a button for the rest before it and after it: asked of the reviewer a page
+ *  at a time (/page), never cut. `onPage`: told of each page added, in order. */
+const pagedList = (card, name, listed, ul, line, noun, onPage) => {
+  let first = listed.from;
+  let end = listed.from + listed.items.length;
+  const before = el("button", "", "quiet more");
+  const after = el("button", "", "quiet more");
+  before.type = after.type = "button";
+  const label = () => {
+    before.hidden = first <= 0;
+    before.textContent = `Show the ${count(first)} ${noun} before these`;
+    after.hidden = end >= listed.total;
+    after.textContent = `Show ${count(listed.total - end)} more ${noun}`;
+  };
+  const add = (items, at) => {
+    const nodes = items.map(line).filter(Boolean);
+    if (at === "start") ul.prepend(...nodes);
+    else ul.append(...nodes);
+  };
+  const ask = async (from, at) => {
+    const button = at === "start" ? before : after;
+    button.disabled = true;
+    try {
+      const { page } = await askHost(card, "page", `list=${name}&from=${from}`);
+      if (at === "start") {
+        const items = page.items.slice(0, Math.max(0, first - page.from));
+        add(items, "start");
+        first = Math.min(first, page.from);
+      } else {
+        const items = page.items.slice(Math.max(0, end - page.from));
+        add(items, "end");
+        end = Math.max(end, page.from + page.items.length);
+        if (onPage) onPage(items);
+      }
+      label();
+    } catch (error) {
+      button.textContent = `the rest could not be had: ${error.message}`;
+    }
+    button.disabled = false;
+    changed(card);
+  };
+  before.addEventListener("click", (event) => { if (event.isTrusted) void ask(Math.max(0, first - 100), "start"); });
+  after.addEventListener("click", (event) => { if (event.isTrusted) void ask(end, "end"); });
+  add(listed.items, "end");
+  label();
+  return { before, after, more: () => ask(end, "end"), done: () => end >= listed.total };
+};
+
+const summaryOf = (review, card) => {
   const box = document.createDocumentFragment();
-  if (!summary || !summary.ok) {
-    box.append(el("p", summary && summary.waiting ? "desolate's reviewer is working out what this push would send..." : `desolate's reviewer could not say what this push would send: ${summary && summary.error ? summary.error : "no answer"}. It cannot be approved: what the reviewer makes is what a push sends.`, summary && summary.waiting ? "" : "error"));
+  if (!review || review.working) {
+    // No deadline: the person waits as long as they choose to, or refuses (R4).
+    box.append(el("p", `desolate's reviewer is working out what this push would send: ${review ? workingText(review.working) : "starting"}. It may take a while for a large push; Approve arms when it has said. Or refuse it.`));
     return box;
   }
-  for (const warning of summary.warnings || []) box.append(el("p", `Warning: ${warning}`, "error"));
-  if (summary.fastForward === false) box.append(el("p", "This does not build on the remote's branch: it REPLACES it, and the commits only the remote has are dropped from the branch. To do that, type the branch's name below.", "error"));
+  if (!review.account) {
+    box.append(el("p", `desolate's reviewer could not say what this push would send: ${review.error || "no answer"}. It cannot be approved: what the reviewer makes is what a push sends. Refuse it, and push again.`, "error"));
+    return box;
+  }
+  const account = review.account;
+  // Every warning: none is ever one of "and 3 more".
+  for (const warning of account.warnings) box.append(el("p", `Warning: ${warning}`, "error"));
+  if (account.fastForward === false) box.append(el("p", "This does not build on the remote's branch: it REPLACES it, and the commits only the remote has are dropped from the branch. To do that, type the branch's name below.", "error"));
   // After a squashed push the remote's branch is the squash, and the workspace's is not on
   // it: most likely nothing would be lost, and a rebase in the workspace is the way on.
   const branch = card.push && card.push.branch;
-  if (summary.fastForward === false && /^[0-9a-f]{40}$/.test(summary.squashedFrom || "") && /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branch || "")) {
-    const p = el("p", `The remote's ${branch} is the squash of ${summary.squashedFrom.slice(0, 12)}, a commit of this branch, pushed before. To build on it instead, refuse this, and in the workspace run `);
-    p.append(el("code", `git fetch && git rebase --rebase-merges --autostash --onto origin/${branch} ${summary.squashedFrom} ${branch}`), document.createTextNode(", then push again."));
+  if (account.fastForward === false && /^[0-9a-f]{40}$/.test(account.squashedFrom || "") && /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branch || "")) {
+    const p = el("p", `The remote's ${branch} is the squash of ${account.squashedFrom.slice(0, 12)}, a commit of this branch, pushed before. To build on it instead, refuse this, and in the workspace run `);
+    p.append(el("code", `git fetch && git rebase --rebase-merges --autostash --onto origin/${branch} ${account.squashedFrom} ${branch}`), document.createTextNode(", then push again."));
     box.append(p);
   }
-  const commits = summary.commits || [];
-  const total = commits.length + (summary.more || 0);
-  box.append(el("p", total ? `${total} commit(s) the remote does not have:` : "No commit the remote does not have already."));
+  const commits = account.commits;
+  box.append(el("p", commits.total ? `${count(commits.total)} commit(s) the remote does not have, first to last:` : "No commit the remote does not have already."));
   // A long list scrolls in a box of its own: the card stays short enough that Approve is in
   // view, and what is scrolled away is never what needs attention (see the files below).
-  const ul = el("ul", undefined, commits.length > 8 ? "long" : "");
   // Its id, its subject, and who wrote it, quieter: the subject is what is read.
-  for (const c of commits) { const li = el("li", undefined, "commit"); li.append(el("code", c.commit.slice(0, 12)), el("span", ` ${c.subject}`), el("span", `  ${c.author}`, "who")); ul.append(li); }
-  if (summary.more) ul.append(el("li", `and ${summary.more} more`));
-  if (commits.length) box.append(ul);
-  const files = summary.files || [];
-  if (files.length) {
-    box.append(el("p", `${files.length + (summary.moreFiles || 0)} file(s) changed${summary.base ? ` against ${summary.base.slice(0, 12)}` : ""}:`));
+  if (commits.total) {
+    const ul = el("ul", undefined, commits.total > 8 ? "long" : "");
+    const list = pagedList(card, "commits", commits, ul, (c) => { const li = el("li", undefined, "commit"); li.append(el("code", c.commit.slice(0, 12)), el("span", ` ${c.subject}`), el("span", `  ${c.author}`, "who")); return li; }, "commits");
+    box.append(list.before, ul, list.after);
+  }
+  const files = account.files;
+  if (files.total) {
+    box.append(el("p", `${count(files.total)} file(s) changed${account.base ? ` against ${account.base.slice(0, 12)}` : ""}:`));
     // What runs on the forge (CI workflows, hooks) or changes how git treats the repository:
-    // always listed in full, outside any scrolling box, before the rest.
+    // listed in full, outside any scrolling box, before the rest. The reviewer lists them
+    // first, so while a page ends with one the next is asked for at once: not one waits
+    // behind "show more".
     const line = (f) => {
       const li = el("li", undefined, f.sensitive ? "file sensitive" : "file");
       // Lines added and removed in colour, as the dashboard's review shows them.
       li.append(el("code", f.path));
       if (f.binary) li.append(el("span", "binary", "who"));
-      else li.append(el("span", `+${f.added}`, "add"), el("span", `\u2212${f.removed}`, "del"));
+      else li.append(el("span", `+${f.added}`, "add"), el("span", `−${f.removed}`, "del"));
       return li;
     };
-    const sensitive = files.filter((f) => f.sensitive);
-    const rest = files.filter((f) => !f.sensitive);
-    if (sensitive.length) {
-      box.append(el("p", `${sensitive.length} of them run on the forge, change how git treats the repository, or are suede's own machinery:`, "error"));
-      const sl = el("ul");
-      for (const f of sensitive) sl.append(line(f));
-      box.append(sl);
-    }
-    const fl = el("ul", undefined, rest.length > 8 ? "long" : "");
-    for (const f of rest) fl.append(line(f));
-    if (summary.moreFiles) fl.append(el("li", `and ${summary.moreFiles} more (every one that runs on the forge is listed above)`));
-    if (rest.length || summary.moreFiles) box.append(fl);
+    const sensitiveNote = el("p", "", "error");
+    const sl = el("ul");
+    const fl = el("ul", undefined, files.total > 8 ? "long" : "");
+    let sensitive = 0;
+    const note = () => { sensitiveNote.hidden = sensitive === 0; sensitiveNote.textContent = `${count(sensitive)} of them run on the forge, change how git treats the repository, or are suede's own machinery:`; };
+    const sort = (items) => { for (const f of items) if (f.sensitive) { sl.append(line(f)); sensitive += 1; } note(); };
+    // One list of the reviewer's, in two places on the page: its sensitive files above, the
+    // rest in the box (a page's items are placed by where they are in the reviewer's list).
+    let list = null;
+    const onward = (items) => { if (items.length && items[items.length - 1].sensitive) void list.more(); };
+    list = pagedList(card, "files", files, fl, (f) => (f.sensitive ? null : line(f)), "files", (items) => { sort(items); onward(items); });
+    sort(files.items);
+    box.append(sensitiveNote, sl, fl, list.after);
+    onward(files.items);
   }
   // What the net change does not show: files a commit changes that end as they were (changed,
   // then changed back, or as the branch it replaces has them). Every commit is pushed, so what
   // they held is in the history all the same.
-  const between = summary.between || [];
-  if (between.length || summary.moreBetween) {
-    box.append(el("p", `${between.length + (summary.moreBetween || 0)} more file(s) that these commits change, though the list above (the net change) does not show them. Each commit is pushed, so what they held is in the branch's history:`, "error"));
-    const bl = el("ul", undefined, between.length > 8 ? "long" : "");
-    for (const f of between) { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(el("code", f.path)); bl.append(li); }
-    if (summary.moreBetween) bl.append(el("li", `and ${summary.moreBetween} more`));
-    box.append(bl);
+  const between = account.between;
+  if (between.total) {
+    box.append(el("p", `${count(between.total)} more file(s) that these commits change, though the list above (the net change) does not show them. Each commit is pushed, so what they held is in the branch's history:`, "error"));
+    const bl = el("ul", undefined, between.total > 8 ? "long" : "");
+    const list = pagedList(card, "between", between, bl, (f) => { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(el("code", f.path)); return li; }, "files");
+    box.append(list.before, bl, list.after);
   }
   // What goes, exactly as it is signed: the reviewer's pack, its size, and the LFS objects.
   const lfsBytes = (sends) => sends.lfs.reduce((n, entry) => n + Number(entry.split(" ")[1] || 0), 0);
-  const size = (bytes) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-  if (summary.sends) box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(summary.sends.size)}, and ${summary.sends.lfs.length} LFS object(s) they point to${summary.sends.lfs.length ? `, ${size(lfsBytes(summary.sends))}` : ""}: nothing else.`));
-  if (summary.hasDiff !== undefined && card) box.append(...diffToggle(card, false));
-  if (summary.hasEachDiff && card) box.append(...diffToggle(card, true));
+  box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(account.sends.size)}, and ${account.sends.lfs.length} LFS object(s) they point to${account.sends.lfs.length ? `, ${size(lfsBytes(account.sends))}` : ""}: nothing else.`));
+  if (card) {
+    box.append(...diffToggle(card, ["Show the diff", "Hide the diff"], "net=1"));
+    // Each commit whole (what was changed in between, too), one at a time, as asked for.
+    if (commits.total > 1 || between.total) {
+      const each = el("div", undefined, "diffbox");
+      const button = el("button", "Show each commit whole", "quiet");
+      button.type = "button";
+      let open = false;
+      button.addEventListener("click", (event) => {
+        if (!event.isTrusted) return;
+        open = !open;
+        button.textContent = open ? "Hide each commit" : "Show each commit whole";
+        each.replaceChildren();
+        if (open) {
+          const ul = el("ul");
+          const list = pagedList(card, "commits", commits, ul, (c) => {
+            const li = el("li", undefined, "whole");
+            li.append(...diffToggle(card, [`${c.commit.slice(0, 12)} ${c.subject}`, `Hide ${c.commit.slice(0, 12)}`], `commit=${c.commit}`));
+            return li;
+          }, "commits");
+          each.append(list.before, ul, list.after);
+        }
+        changed(card);
+      });
+      box.append(button, each);
+    }
+  }
   // The other choice: the same push as one commit (its tree is the last commit's), so nothing
-  // in between reaches the history.
-  if (summary.squash) {
-    const sq = summary.squash;
+  // in between reaches the history. Its whole message: it is what is signed.
+  if (account.squash) {
+    const sq = account.squash;
     box.append(el("p", `Or push it squashed into one commit, ${sq.commit.slice(0, 12)}, ${sq.parent ? `on ${sq.parent.slice(0, 12)}` : "with no parent"}: the same files as the last commit, and none of what was in between. The workspace's branch keeps its ${sq.count} commits.`));
     box.append(el("pre", `${sq.message}${sq.author ? `\nAuthor:    ${sq.author}\nCommitter: ${sq.committer}` : ""}${sq.dates ? `\n${sq.dates}` : ""}`, "message"));
     // What that choice sends, as it is signed: its own pack and LFS objects.
-    if (sq.sends) box.append(el("p", `Squashed, it sends a pack of its own, ${size(sq.sends.size)}, and ${sq.sends.lfs.length} LFS object(s)${sq.sends.lfs.length ? `, ${size(lfsBytes(sq.sends))}` : ""}: nothing else.`));
+    box.append(el("p", `Squashed, it sends a pack of its own, ${size(sq.sends.size)}, and ${sq.sends.lfs.length} LFS object(s)${sq.sends.lfs.length ? `, ${size(lfsBytes(sq.sends))}` : ""}: nothing else.`));
   }
   return box;
 };
@@ -271,7 +375,9 @@ const add = (push, issue) => {
     arm.wrap.addEventListener("pointerleave", () => disarm(card));
     arm.button.addEventListener("click", async (event) => {
       // A real pointer's click, on a button armed a moment ago: not a key, not a script.
-      if (!event.isTrusted || event.detail === 0 || !arm.armedAt || performance.now() - arm.armedAt < DWELL_MS || card.busy || card.done || !confirmed(card)) return;
+      if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
+      // Armed a moment ago, and clicked at once: said, so the person knows to rest a moment.
+      if (performance.now() - arm.armedAt < DWELL_MS) { card.hint.textContent = "hold still on the button a moment, then click"; return; }
       card.busy = true;
       arm.button.disabled = true;
       card.hint.textContent = issue ? "publishing..." : "approving...";
@@ -297,12 +403,12 @@ const add = (push, issue) => {
 };
 
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
-const choicesOf = (card, summary) => {
-  const ok = Boolean(summary && summary.ok);
-  card.reviewed = ok && Boolean(summary.sends);
-  card.replaces = ok && summary.fastForward === false;
+const choicesOf = (card, review) => {
+  const account = review && review.account;
+  card.reviewed = Boolean(account);
+  card.replaces = Boolean(account) && account.fastForward === false;
   const squash = card.arms.find((a) => a.squash);
-  if (squash) squash.wrap.hidden = !(ok && summary.squash);
+  if (squash) squash.wrap.hidden = !(account && account.squash);
   const main = card.arms.find((a) => !a.squash);
   main.button.textContent = card.replaces ? `Replace ${card.push.branch}` : "Approve push";
   if (squash) squash.button.textContent = card.replaces ? `Replace ${card.push.branch}, squashed into one commit` : "Approve, squashed into one commit";
@@ -333,11 +439,11 @@ const render = (pending, issues) => {
       list.append(card.element);
       changed = true;
     }
-    const shown = JSON.stringify(push.summary);
+    const shown = JSON.stringify(push.review);
     if (shown !== card.shown) {
       card.shown = shown;
-      card.summary.replaceChildren(summaryOf(push.summary, card));
-      choicesOf(card, push.summary);
+      card.summary.replaceChildren(summaryOf(push.review, card));
+      choicesOf(card, push.review);
       card.changedAt = performance.now();
       changed = true;
     }
@@ -346,7 +452,7 @@ const render = (pending, issues) => {
   for (const card of cards.values())
     if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
-      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or its two minutes ran out)"; }
+      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or given up)"; }
       card.element.classList.add("gone");
       changed = true;
     }
