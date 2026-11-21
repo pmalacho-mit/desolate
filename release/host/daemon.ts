@@ -53,6 +53,7 @@ import { sleep, waitFor } from "../shared/run.ts";
 import { sniffSocket } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
+import { holderIn } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import {
@@ -61,7 +62,6 @@ import {
   folderFor,
   folderFrom,
   greetingGoes,
-  holderIn,
   inboundRoute,
   listenersFrom,
   pagesRoute,

@@ -3,7 +3,6 @@
 // name, which ports a workspace is asked to keep taken, and what of a workspace's own word
 // (its listeners, its editor's token, its folder) is believed. Functions of what they decide
 // on and nothing else: the daemon does the reading, the writing and the dialling.
-import { printable } from "../shared/text.ts";
 import {
   APPROVE_HOSTNAME,
   GIT_HOSTNAME,
@@ -80,28 +79,6 @@ declare namespace rawPortsOf {
       [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257, 4000]
     >,
   ];
-}
-
-/** What holds a port, from lsof's `-Fcp` lines, as the person is told it. */
-const holderIn = (found: string) => {
-  const pid = /^p(\d+)/m.exec(found)?.[1];
-  const command = /^c(.+)/m.exec(found)?.[1];
-  return pid && command
-    ? `${printable(command, 40)}, pid ${pid}`
-    : "not a program of yours: another user's, or the system's";
-};
-
-declare namespace holderIn {
-  /** lsof sees only this user's programs: one it cannot name is another user's, or the
-   *  system's. A program's name is shown as text */
-  export type Holders = Table<
-    typeof holderIn,
-    [
-      [args: [found: "p4242\ncnode\n"], expected: "node, pid 4242"],
-      [args: [found: ""], expected: "not a program of yours: another user's, or the system's"],
-      [args: [found: "p1\nc\u001b[31mevil\n"], expected: "?[31mevil, pid 1"],
-    ]
-  >;
 }
 
 /** The workspace a name belongs to, and which of its surfaces: its dev servers or its editor. */
@@ -1832,7 +1809,6 @@ export {
   folderFor,
   folderFrom,
   greetingGoes,
-  holderIn,
   inboundRoute,
   listenersFrom,
   pagesRoute,

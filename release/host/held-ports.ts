@@ -49,6 +49,28 @@ declare namespace portsToCheck {
   >;
 }
 
+/** What holds a port, from lsof's `-Fcp` lines, as the person is told it. */
+export const holderIn = (found: string) => {
+  const pid = /^p(\d+)/m.exec(found)?.[1];
+  const command = /^c(.+)/m.exec(found)?.[1];
+  return pid && command
+    ? `${printable(command, 40)}, pid ${pid}`
+    : "not a program of yours: another user's, or the system's";
+};
+
+declare namespace holderIn {
+  /** lsof sees only this user's programs: one it cannot name is another user's, or the
+   *  system's. A program's name is shown as text */
+  export type Holders = Table<
+    typeof holderIn,
+    [
+      [args: [found: "p4242\ncnode\n"], expected: "node, pid 4242"],
+      [args: [found: ""], expected: "not a program of yours: another user's, or the system's"],
+      [args: [found: "p1\nc\u001b[31mevil\n"], expected: "?[31mevil, pid 1"],
+    ]
+  >;
+}
+
 const refusedOn = (port: number, host: string) =>
   new Promise<boolean>((resolve) => {
     const server = createServer();
