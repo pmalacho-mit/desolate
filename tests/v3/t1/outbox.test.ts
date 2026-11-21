@@ -290,6 +290,20 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       },
       "a refs list reached through a symlinked directory is not read",
     );
+    // A link that leads nowhere is something there, not nothing synced: taken for none, git
+    // would prune every branch of the domain's on it. So is one further up the way.
+    fs.symlinkSync(`${work}/nowhere`, `${domains}/t1-dom/outbox/sync/acme/dangling`);
+    assert.deepEqual(outbox.refsOf("t1-dom", "acme/dangling"), {
+      refused:
+        "acme/dangling's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one",
+    });
+    fs.symlinkSync(`${work}/nowhere`, `${domains}/t1-dom/outbox/sync/dangling-owner`);
+    assert.ok("refused" in outbox.refsOf("t1-dom", "dangling-owner/app"));
+    assert.deepEqual(
+      outbox.refsOf("t1-dom", "acme/never-synced"),
+      { refs: {} },
+      "control: a repository nothing was synced for has no branches, and that is no refusal",
+    );
     assert.deepEqual(
       outbox.takeBundles("t1-dom", "acme/linked"),
       { copies: [], dropped: [], more: false },
@@ -331,14 +345,20 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     const pad = (bytes: number) => JSON.stringify({ op: "fetch", pad: "x".repeat(bytes) });
     fs.writeFileSync(`${requests}/big.json`, pad(1024 * 1024));
     fs.writeFileSync(`${requests}/fits.json`, pad(1024 * 1024 - 100));
+    fs.writeFileSync(`${requests}/notjson.json`, "{");
     const drained = outbox.drain<{ op: string }>(requests, /\.json$/, 50);
     assert.deepEqual(
-      drained.map((d) => [d.name, d.data?.op ?? null]),
+      drained.map((d) => [d.name, d.data?.op ?? null, "why" in d ? d.why : null]),
       [
-        ["big.json", null],
-        ["fits.json", "fetch"],
+        [
+          "big.json",
+          null,
+          `the request big.json is ${pad(1024 * 1024).length} bytes, over the 1048576 allowed`,
+        ],
+        ["fits.json", "fetch", null],
+        ["notjson.json", null, "the request notjson.json is not JSON"],
       ],
-      "control: just under the limit is read",
+      "a request past the bound says the bound and its size; control: just under it is read",
     );
     const many = `${domains}/t1-dom/outbox/sync/acme/many`;
     fs.mkdirSync(many, { recursive: true });

@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { run } from "../shared/run.ts";
 import type { RunOptions, RunResult } from "../shared/run.ts";
-import { failure } from "../shared/text.ts";
+import { failure, printableLines } from "../shared/text.ts";
 import { parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { readJson } from "../shared/json.ts";
@@ -351,10 +351,12 @@ export const FORGE_IDLE_MS = 5 * 60_000;
 
 /** Where the root keeps the whole of what a program said when a message shows only its end
  *  (shared/text.ts, `failure`): its own state, which a person reads in the root's terminal.
- *  The newest are kept, up to 64 MiB in all (what a program says is bounded by run()): the
- *  message that names one is read within minutes, not months. */
+ *  The newest are kept, up to 64 MiB and 1,000 files in all (what a program says is bounded
+ *  by run()): the message that names one is read within minutes, not months. What is kept
+ *  is made safe to print (printableLines): git's words about a domain's bundle are in part
+ *  the domain's, and a person is asked to read them in a terminal. */
 const FAILURES = path.join(ROOT.state, "failures");
-const FAILURES_MOST = 64 * 1024 * 1024;
+const FAILURES_MOST = { bytes: 64 * 1024 * 1024, files: 1000 };
 export const keepFailure = (whole: string): string | null => {
   try {
     fs.mkdirSync(FAILURES, { recursive: true, mode: 0o700 });
@@ -362,14 +364,19 @@ export const keepFailure = (whole: string): string | null => {
       FAILURES,
       `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}.txt`,
     );
-    fs.writeFileSync(file, whole, { mode: 0o600 });
-    // Named by their time, so the newest sort last.
+    fs.writeFileSync(file, printableLines(whole), { mode: 0o600 });
+    // Named by their time, so the newest sort first here. (One another process removed
+    // meanwhile is gone already.)
     let kept = 0;
-    for (const name of fs.readdirSync(FAILURES).sort().reverse()) {
-      kept += fs.statSync(path.join(FAILURES, name)).size;
-      if (kept > FAILURES_MOST && path.join(FAILURES, name) !== file)
-        fs.rmSync(path.join(FAILURES, name), { force: true });
-    }
+    fs.readdirSync(FAILURES)
+      .sort()
+      .reverse()
+      .forEach((name, i) => {
+        const at = path.join(FAILURES, name);
+        kept += fs.statSync(at, { throwIfNoEntry: false })?.size ?? 0;
+        if (at !== file && (kept > FAILURES_MOST.bytes || i >= FAILURES_MOST.files))
+          fs.rmSync(at, { force: true });
+      });
     return `${file} (in the root)`;
   } catch {
     return null;
@@ -440,6 +447,21 @@ declare namespace gitSaid {
         "=",
         "one\ntwo\nthree\nfour"
       >,
+    ]
+  >;
+  /** what is kept is safe to print in a terminal: a domain's words in it do nothing there */
+  export type KeptSafe = Given<
+    Fresh,
+    [
+      Expect<
+        Invoke<
+          typeof gitSaid,
+          [result: { code: 1; stdout: ""; stderr: "\u001b[2Jone\u202e\ntwo\n" }, lines: 1]
+        >,
+        "endsWith",
+        " | two"
+      >,
+      Expect<Invoke<typeof theOnlyFileIn, [where: "state", dir: "failures"]>, "=", "?[2Jone?\ntwo">,
     ]
   >;
 }

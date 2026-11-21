@@ -331,10 +331,22 @@ export const ops: Record<string, Op> = {
       .split("\0")
       .filter(Boolean);
     const out = [];
-    const dirs = records.map((record) => record.slice(0, -"/.gitrepo".length));
     // A file is the innermost dependency's: a subrepo vendored inside another is its own.
-    const ownerOf = (file: string) =>
-      dirs.filter((d) => file.startsWith(`${d}/`)).sort((a, b) => b.length - a.length)[0];
+    // Each file's owner is found once, by its own directories, innermost first: the lists
+    // are a commit's, and a commit can hold many thousands of each (a lookup of every file
+    // against every dependency held the root's service for hours).
+    const dirs = new Set(records.map((record) => record.slice(0, -"/.gitrepo".length)));
+    const filesOf = new Map<string, string[]>();
+    for (const file of changed) {
+      const parts = file.split("/");
+      for (let i = parts.length - 1; i > 0; i--) {
+        const dir = parts.slice(0, i).join("/");
+        if (!dirs.has(dir)) continue;
+        if (!filesOf.has(dir)) filesOf.set(dir, []);
+        if (file !== `${dir}/.gitrepo`) filesOf.get(dir)!.push(file);
+        break;
+      }
+    }
     // Every dependency, and every file of each: what the host shows is a count of them, and
     // a count of a cut list is not one (R2). (Each list is a commit's, bounded by its tree.)
     for (const record of records) {
@@ -359,7 +371,7 @@ export const ops: Record<string, Op> = {
         dir,
         remote: id,
         branch: isBranch(branch) ? branch : "release",
-        files: changed.filter((f) => ownerOf(f) === dir && f !== record),
+        files: filesOf.get(dir) ?? [],
       });
     }
     return out;

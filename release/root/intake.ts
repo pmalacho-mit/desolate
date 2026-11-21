@@ -22,7 +22,11 @@ import type { emptyRoot } from "../.harness/root-state.ts";
  *  Why not rely on fetch.fsckObjects: before git 2.46 a fetch FROM A BUNDLE checked nothing
  *  (measured on the image's 2.43: a tree containing ".git" was imported and offered). This
  *  does not depend on which git the image has. Returns why the bundle is refused, or null. */
-export const bundleRefusal = async (copy: string, gitDir: string): Promise<string | null> => {
+export const bundleRefusal = async (
+  copy: string,
+  gitDir: string,
+  signal?: AbortSignal,
+): Promise<string | null> => {
   // The header: a v2 bundle, which is what a workspace's git writes. v3 exists to carry
   // capabilities (another hash, a filter that leaves objects out); neither is taken. Its
   // list of refs is the domain's list of branches in another form, and has that bound
@@ -72,10 +76,16 @@ export const bundleRefusal = async (copy: string, gitDir: string): Promise<strin
       late = true;
       child.kill("SIGKILL");
     }, allowed);
+    // Whoever asked went away (`signal`): ended, and not taken.
+    const asked = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", asked, { once: true });
+    if (signal?.aborted) asked();
     const code = await new Promise<number>((resolve) =>
       child.on("close", (status) => resolve(status ?? 1)),
     );
     clearTimeout(timer);
+    signal?.removeEventListener("abort", asked);
+    if (signal?.aborted) return "whoever asked for it to be checked went away";
     if (late)
       return `checking its objects took longer than ${Math.round(allowed / 60_000)} minutes, the most a bundle of ${formatBytes(size)} is given`;
     if (code === 0) return null;

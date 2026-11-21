@@ -157,6 +157,15 @@ const serve = () => {
   fs.mkdirSync(path.dirname(SOCKET), { recursive: true, mode: 0o700 });
   fs.chmodSync(path.dirname(SOCKET), 0o700);
   fs.rmSync(SOCKET, { force: true });
+  // What is being answered. A service on old code (the release changed under it) takes no
+  // new request (the host then asks the old way, one process a request: host/stack.ts) and
+  // leaves once these are answered: leaving at once killed what they run in groups of their
+  // own (shared/run.ts, on exit), a fetch of a mirror among them, mid-write.
+  let answering = 0;
+  let leaving = false;
+  const leaveWhenDone = () => {
+    if (leaving && answering === 0) setTimeout(() => process.exit(0), 100);
+  };
   // Half-open: the host's side ends its request with EOF, and a socket that closed itself on
   // that (node's default) lost the answer of every operation slower than the EOF (found on
   // the M1: doctor's answer never came).
@@ -176,9 +185,9 @@ const serve = () => {
       connection.removeAllListeners("data");
       if (codeTime() !== started) {
         connection.end(JSON.stringify({ stale: true }) + "\n");
-        server.close();
-        setTimeout(() => process.exit(0), 100);
-        return;
+        if (!leaving) server.close();
+        leaving = true;
+        return leaveWhenDone();
       }
       let request: unknown = null;
       try {
@@ -192,12 +201,18 @@ const serve = () => {
       // when it goes, what was asked for is ended (an operation that takes the signal).
       const asker = new AbortController();
       connection.on("close", () => asker.abort(new Error("whoever asked went away")));
-      const reply = await answer(
-        request,
-        (line) => connection.write(JSON.stringify({ progress: line }) + "\n"),
-        asker.signal,
-      );
-      connection.end(JSON.stringify({ reply }) + "\n");
+      answering++;
+      try {
+        const reply = await answer(
+          request,
+          (line) => connection.write(JSON.stringify({ progress: line }) + "\n"),
+          asker.signal,
+        );
+        connection.end(JSON.stringify({ reply }) + "\n");
+      } finally {
+        answering--;
+        leaveWhenDone();
+      }
     });
   });
   server.listen(SOCKET, () => fs.chmodSync(SOCKET, 0o600));

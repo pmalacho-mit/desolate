@@ -142,12 +142,13 @@ const removeIn = (dir: Dir, name: string) => {
   }
 };
 
-/** The bytes of a file in a checked directory, at most `max` of them. The size was checked
- *  when the file was opened, and a workspace can make it grow afterwards: what is read is
- *  bounded here, by counting, and a file that turns out longer is not taken. */
-const readIn = (dir: Dir, name: string, max: number): Buffer | null => {
-  const opened = openIn(dir, name, max);
-  if (!isOpened(opened)) return null;
+/** The bytes of a file in a checked directory, at most `max` of them; else why not (`what`
+ *  names it). The size was checked when the file was opened, and a workspace can make it
+ *  grow afterwards: what is read is bounded here, by counting, and a file that turns out
+ *  longer is not taken. */
+const readIn = (dir: Dir, name: string, max: number, what: string): Buffer | string => {
+  const opened = openIn(dir, name, max, what);
+  if (!isOpened(opened)) return opened.why;
   try {
     const buffer = Buffer.alloc(Math.min(opened.size, max) + 1);
     let total = 0;
@@ -157,11 +158,12 @@ const readIn = (dir: Dir, name: string, max: number): Buffer | null => {
       read = fs.readSync(opened.fd, buffer, total, buffer.length - total, total)
     ) {
       total += read;
-      if (total >= buffer.length) return null;
+      if (total >= buffer.length)
+        return `${what} grew while it was read, past the ${max} bytes allowed`;
     }
     return buffer.subarray(0, total);
   } catch {
-    return null;
+    return `${what} could not be read`;
   } finally {
     fs.closeSync(opened.fd);
   }
@@ -191,22 +193,14 @@ const copyOut = (fd: number, target: string, max: number): string | null => {
   }
 };
 
-const parse = <T>(data: Buffer | null): T | null => {
-  if (!data) return null;
-  try {
-    return JSON.parse(data.toString("utf8")) as T;
-  } catch {
-    return null;
-  }
-};
-
 /** Every JSON file waiting in a directory of an outbox whose name matches, oldest name
- *  first, each read once and removed (its name, in that directory). */
+ *  first, each read once and removed (its name, in that directory). One that could not be
+ *  taken (past JSON_BYTES, a link, not JSON) is `data: null`, with `why`, to answer with. */
 export const drain = <T>(
   directory: string,
   pattern: RegExp,
   most: number,
-): { name: string; data: T | null }[] => {
+): ({ name: string; data: T } | { name: string; data: null; why: string })[] => {
   const dir = openDir(directory);
   if (!dir) return [];
   try {
@@ -215,9 +209,15 @@ export const drain = <T>(
       .filter((name) => pattern.test(name))
       .slice(0, most)
       .map((name) => {
-        const data = parse<T>(readIn(dir, name, JSON_BYTES));
+        const what = `the request ${name}`;
+        const read = readIn(dir, name, JSON_BYTES, what);
         removeIn(dir, name);
-        return { name, data };
+        if (typeof read === "string") return { name, data: null, why: read };
+        try {
+          return { name, data: JSON.parse(read.toString("utf8")) as T };
+        } catch {
+          return { name, data: null, why: `${what} is not JSON` };
+        }
       });
   } finally {
     dir.close();
@@ -225,6 +225,20 @@ export const drain = <T>(
 };
 
 const syncDir = (domain: string, repo: string) => path.join(outbox(domain), "sync", repo);
+
+/** Whether a directory under `base` is not there at all: some directory on the way to it
+ *  is missing, and each before that is a plain one. Anything else in the way (a link, one
+ *  that leads nowhere among them) is something there, and not taken for nothing. */
+const notThere = (base: string, below: string): boolean => {
+  let at = base;
+  for (const part of ["", ...below.split("/")]) {
+    at = path.join(at, part);
+    const stat = fs.lstatSync(at, { throwIfNoEntry: false });
+    if (!stat) return true;
+    if (!stat.isDirectory()) return false;
+  }
+  return false;
+};
 
 /** A domain's list of the branches of one repository (refs.json, which its workspaces write
  *  beside each bundle: workspace/sync.ts), read as data: the one reader of that file, for
@@ -244,9 +258,9 @@ export const refsOf = (
   const what = `${repo}'s list of branches (refs.json)`;
   const dir = openDir(syncDir(domain, repo));
   if (!dir)
-    return fs.existsSync(syncDir(domain, repo))
-      ? { refused: `${what} could not be read: its directory in the outbox is not a plain one` }
-      : { refs: {} };
+    return notThere(outbox(domain), path.join("sync", repo))
+      ? { refs: {} }
+      : { refused: `${what} could not be read: its directory in the outbox is not a plain one` };
   let text: string;
   try {
     const opened = openIn(dir, "refs.json", REFS_BYTES, what);

@@ -116,15 +116,25 @@ const main = async () => {
   const slug = process.argv[3] ?? "";
   if (!isSlug(slug)) fail(`'${slug}' is not a domain`);
   // In the root clone, on the root's own disk: no peer to go quiet. How long a fetch may take
-  // is the patience of whoever ran it (R4).
-  const git = (args: string[], input?: string) => run("git", args, { env: process.env, input });
+  // is the patience of whoever ran it (R4), and when that git goes (it closes its end of
+  // this helper's input: ended, or killed by whoever ran it), what is under way here is
+  // ended and nothing more is taken. A helper does not outlive its fetch, so a domain that
+  // writes bundles made to be slow, as fast as they are taken, holds one fetch's helper at
+  // most. (`untilGone` false: tidying the root clone, which is done all the same.)
+  const gone = new AbortController();
+  const git = (args: string[], input?: string, untilGone = true) =>
+    run("git", args, { env: process.env, input, signal: untilGone ? gone.signal : undefined });
   const repo = (await git(["config", "--get", "desolate.repo"])).stdout.trim();
   if (!parseRepo(repo))
     fail("this is not one of the root's clones (no desolate.repo in its config)");
   if (!domainOf(slug).repos.includes(repo)) fail(`${repo} is not in the domain '${slug}'`);
 
   const refusedBy = async (copy: string) =>
-    bundleRefusal(copy, (await git(["rev-parse", "--absolute-git-dir"])).stdout.trim());
+    bundleRefusal(
+      copy,
+      (await git(["rev-parse", "--absolute-git-dir"])).stdout.trim(),
+      gone.signal,
+    );
 
   /** Bring the domain's waiting bundles into this root clone, then drop them. */
   /** One branch with an object git calls dangerous takes its whole bundle with it, and a
@@ -143,7 +153,7 @@ const main = async () => {
     // domain's at once, however many the domain left.
     const droppedInAll: string[] = [];
     let more = true;
-    for (let round = 0; more && round < ROUNDS_MOST; round++) {
+    for (let round = 0; more && round < ROUNDS_MOST && !gone.signal.aborted; round++) {
       const taken = takeBundles(slug, repo, 1);
       more = taken.more;
       droppedInAll.push(...taken.dropped);
@@ -153,6 +163,10 @@ const main = async () => {
         // a scratch namespace that is deleted below. What becomes <domain>/* is decided by
         // git, from `list`.
         const why = await refusedBy(copy);
+        if (gone.signal.aborted) {
+          fs.rmSync(copy, { force: true });
+          break;
+        }
         if (why === null) {
           const fetched = await git([
             "-c",
@@ -178,16 +192,20 @@ const main = async () => {
       process.stderr.write(
         `git-remote-desolate: dropped from ${slug}'s outbox: ${printable(why, WHY_MOST)}\n`,
       );
-    if (more)
+    if (more && !gone.signal.aborted)
       process.stderr.write(
         `git-remote-desolate: took ${ROUNDS_MOST} bundles from ${slug} in this fetch, the most one takes; the rest wait for the next\n`,
       );
     const scratch = (
-      await git(["for-each-ref", "--format=%(refname)", `refs/desolate/incoming/${slug}/`])
+      await git(
+        ["for-each-ref", "--format=%(refname)", `refs/desolate/incoming/${slug}/`],
+        undefined,
+        false,
+      )
     ).stdout
       .split("\n")
       .filter(Boolean);
-    for (const ref of scratch) await git(["update-ref", "-d", ref]);
+    for (const ref of scratch) await git(["update-ref", "-d", ref], undefined, false);
   };
 
   const list = async () => {
@@ -260,6 +278,7 @@ const main = async () => {
   };
 
   const input = readline.createInterface({ input: process.stdin, terminal: false });
+  input.on("close", () => gone.abort(new Error("the git that ran this helper went away")));
   const say = (text: string) => process.stdout.write(text);
   let batch: string[] = [];
   for await (const line of input) {
