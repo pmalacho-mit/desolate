@@ -206,7 +206,7 @@ export const sign = async (
       : []),
     ...(summary
       ? [
-          ...summary.slice(0, 60).map((line) => `  ${clean(line)}`),
+          ...summary.slice(0, 60).map((line) => `  ${clean(line)}`.trimEnd()),
           "              (desolate's reviewer, in the root)",
         ]
       : []),
