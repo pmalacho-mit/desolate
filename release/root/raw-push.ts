@@ -67,7 +67,7 @@ export const pushCommit = async (
     // After a squashed push, the remote's branch is the squash: say how to build on it.
     const squashed = await squashedFrom((args) => git(clone, args), onto, commit).catch(() => null);
     return squashed
-      ? `the remote's ${branch} is the squash of ${squashed.slice(0, 12)}, a commit of this branch, pushed before. To build on it, run \`${catchUp(branch, squashed)}\`, then push again; or push with + to replace it`
+      ? `the remote's ${branch} is the squash of ${squashed.slice(0, 12)}, a commit of this branch, pushed before. To build on it, run \`${catchUp(branch, squashed)}\` in the workspace, on the branch you pushed, then push again; or push with + to replace it`
       : `the remote's ${branch} has commits this does not (non-fast-forward): fetch and rebase, or push with + to replace it`;
   }
   const push = { repo: name, ref: branch, commit, onto };
@@ -117,7 +117,7 @@ export const pushCommit = async (
   }
   if (approval.commit !== commit) {
     say(
-      `desolate: pushed squashed into one commit, ${approval.commit}. This ${branch} still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash (what you committed since is kept, on top):`,
+      `desolate: pushed squashed into one commit, ${approval.commit}. The branch you pushed still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace, on that branch (what you committed since is kept, on top):`,
     );
     say(`desolate:   ${catchUp(branch, commit)}`);
   }

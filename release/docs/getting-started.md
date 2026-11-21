@@ -359,20 +359,21 @@ What the approval page shows, and the two choices it may add:
 
 - **Files changed in between.** The file list is the net change. Each commit is pushed,
   though, so a file one commit added and a later one took out again is in the history. The
-  page lists those files, and **Show each commit's diff** shows every commit on its own.
+  page lists those files, and **Show each commit whole** shows every commit on its own:
+  who wrote it, when, its whole message and its diff.
 - **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
   the last commit's files, on what the branch builds on, with a message listing every
   commit. Nothing that was in between reaches the remote. The workspace's branch still has
-  the commits that were squashed, so to carry on, move it onto the squash. The push prints
-  the command, to run in the workspace:
+  the commits that were squashed, so to carry on, move it onto the squash. After the push,
+  the Mac prints the command, to run in the workspace:
 
   ```bash
-  git fetch && git rebase --autostash --onto origin/<branch> <the commit squashed> <branch>
+  git fetch && git rebase --rebase-merges --autostash --onto origin/<branch> <the commit squashed> <branch>
   ```
 
-  It keeps anything you committed since, and sets aside and puts back what you have not
-  committed. Forget, and the next push says the remote's branch is the squash, and names the
-  command again.
+  It keeps anything you committed since (a merge stays a merge), and sets aside and puts
+  back what you have not committed. Forget, and the next push says the remote's branch is
+  the squash, and names the command again.
   From a terminal: `desolate push ... --squash`, or `desolate approve --squash`.
 - **Replacing a branch.** A push that does not build on the remote's branch replaces it, and
   drops the commits only the remote has. The page says so in red, and approves it only once

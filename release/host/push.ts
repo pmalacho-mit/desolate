@@ -12,7 +12,7 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import { editorHostPort, isCommit, parseRepo, repoId, ROOT_HOSTNAME } from "../shared/names.ts";
 import { parseArgs } from "node:util";
 import { sign } from "./approver.ts";
-import { catchUp, parseApproval, signedFor } from "../shared/approval.ts";
+import { catchUp, parseApproval, parseSigned, signedFor } from "../shared/approval.ts";
 import type { Summary } from "./approve-web.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
@@ -555,7 +555,7 @@ export const push = async (args: string[]): Promise<number> => {
   if (typeof chosen === "number") return chosen;
   const signature = await sign(chosen.text, chosen.line, chosen.replaces, chosen.size);
   void (await import("./daemon.ts")).announceApproved(plan.message);
-  return backend().attach(
+  const code = await backend().attach(
     ROOT_VM,
     [
       ...PUSH,
@@ -568,7 +568,17 @@ export const push = async (args: string[]): Promise<number> => {
     ],
     { cwd: guest.rootClones },
   );
+  // How to carry on from a squash, said by the host, from the very text it signed: what the
+  // root's user prints, it may have written itself (the independent review of #169).
+  const signed = parseSigned(chosen.text);
+  if (code === 0 && signed?.squashes)
+    process.stdout.write(carryOn(signed.branch, signed.squashes, true));
+  return code;
 };
+
+/** After a squashed push: what the workspace's branch is now, and the command to carry on. */
+const carryOn = (branch: string, squashed: string, sameName: boolean): string =>
+  `desolate (on the Mac): the workspace's ${sameName ? branch : "branch"} still has the commits that were squashed, so its next push would replace the remote's ${branch}. To carry on from the squash, run this in the workspace${sameName ? "" : ", on the branch you pushed"} (what you committed since is kept, on top; what you have not committed is put back):\n  ${catchUp(branch, squashed, sameName ? branch : undefined)}\n`;
 
 /** The text the person signs for a challenge: the challenge, with what desolate's reviewer
  *  says the push sends (the host asks it, as root). The person's choices: the commits as they
@@ -578,7 +588,7 @@ export const push = async (args: string[]): Promise<number> => {
 export const chosenText = async (
   message: string,
   choice: { squash: boolean; replace: boolean; again: string },
-): Promise<{ text: string; line: string; replaces: boolean; size: number } | number> => {
+): Promise<{ text: string; line: string[]; replaces: boolean; size: number } | number> => {
   const push = parseApproval(message);
   if (!push) return refuse("the root's approval text is not one", "desolate doctor");
   const { reviewerSummary } = await import("./daemon.ts");
@@ -595,7 +605,7 @@ export const chosenText = async (
         ? `this push REPLACES the remote's ${push.branch}, which is the squash of ${s.squashedFrom.slice(0, 12)}, a commit of this branch, pushed before. Nothing was signed`
         : `this push REPLACES the remote's ${push.branch}: it does not build on it, and the commits only the remote has would be dropped. Nothing was signed`,
       s.squashedFrom && isCommit(s.squashedFrom)
-        ? `to build on the squash, run \`${catchUp(push.branch, s.squashedFrom)}\` in the workspace, then push again. To replace it instead: ${choice.again} --replace`
+        ? `to build on the squash, run \`${catchUp(push.branch, s.squashedFrom, push.branch)}\` in the workspace, then push again. To replace it instead: ${choice.again} --replace`
         : `to replace it, say so: ${choice.again} --replace (or fetch, and rebase in the workspace)`,
     );
   if (choice.squash && !s.squash)
@@ -608,33 +618,61 @@ export const chosenText = async (
     : { commit: push.commit, squashes: null, ...s.sends };
   return {
     text: signedFor(message, sends),
-    line: reviewedLine(s, choice.squash),
+    line: reviewedLines(s, choice.squash),
     replaces,
     size: sends.size,
   };
 };
 
-/** The reviewer's account of a push, in one line for the terminal's prompt: what the
- *  approval page shows, from the root's reviewer, not the root's ordinary user (which reads
- *  what domains write). */
-const reviewedLine = (s: Summary, squashed: boolean): string => {
+/** The reviewer's account of a push, for the terminal's prompt: what the approval page shows,
+ *  from the root's reviewer, not the root's ordinary user (which reads what domains write).
+ *  A line each, what needs attention first, none cut short by another (the independent review
+ *  of #169: one 300-character line lost "changes what runs on the forge" behind a warning). */
+const reviewedLines = (s: Summary, squashed: boolean): string[] => {
   const commits = (s.commits?.length ?? 0) + (s.more ?? 0);
   const files = (s.files?.length ?? 0) + (s.moreFiles ?? 0);
   const between = (s.between?.length ?? 0) + (s.moreBetween ?? 0);
+  const sends = squashed ? s.squash?.sends : s.sends;
+  const lfsBytes = (sends?.lfs ?? []).reduce((n, e) => n + Number(e.split(" ")[1] || 0), 0);
+  const forge = (s.files ?? []).filter((f) => f.sensitive).map((f) => f.path);
+  const square = s.squash;
   return [
+    ...(forge.length
+      ? [
+          `FORGE       changes what runs on the forge: ${forge.slice(0, 5).join(", ")}${forge.length > 5 ? `, and ${forge.length - 5} more` : ""}`,
+        ]
+      : []),
+    ...(s.warnings ?? []).slice(0, 20).map((w) => `warning     ${w}`),
     squashed
-      ? `${commits} commit(s) the remote does not have, squashed into one, ${files} file(s)`
-      : `${commits} commit(s) the remote does not have, ${files} file(s)`,
-    s.sends?.lfs.length ? `, ${s.sends.lfs.length} LFS object(s) with them` : "",
-    !squashed && between
-      ? `; ${between} more file(s) its commits change that the net change does not show (each commit is pushed, so what they held is in the history): --squash pushes only the net change`
-      : "",
-    ...(s.warnings ?? []).map((w) => `; warning: ${w}`),
-    s.files?.some((f) => f.sensitive) ? "; changes what runs on the forge" : "",
-  ]
-    .join("")
-    .trim();
+      ? `sends       ${commits} commit(s) the remote does not have, squashed into one, ${files} file(s)`
+      : `sends       ${commits} commit(s) the remote does not have, ${files} file(s)`,
+    ...(sends?.lfs.length
+      ? [`            ${sends.lfs.length} LFS object(s) with them, ${formatBytes(lfsBytes)}`]
+      : []),
+    ...(!squashed && between
+      ? [
+          `between     ${between} more file(s) its commits change that the net change does not show: each commit is pushed, so what they held is in the history (--squash pushes only the net change)`,
+        ]
+      : []),
+    ...(squashed && square
+      ? [
+          `as          ${square.author ?? ""}`,
+          `committer   ${square.committer ?? ""}`,
+          `            ${square.dates ?? ""}`,
+          ...square.message
+            .replace(/\n$/, "")
+            .split("\n")
+            .slice(0, 12)
+            .map((line, i) => `${i === 0 ? "message     " : "            "}${line}`),
+          ...(square.message.split("\n").length > 13 ? ["            (and more lines)"] : []),
+        ]
+      : []),
+  ];
 };
+const formatBytes = (bytes: number) =>
+  bytes < 1024 * 1024
+    ? `${Math.max(1, Math.round(bytes / 1024))} KiB`
+    : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 
 /** `desolate approve`: answer the raw `git push` that is waiting in the root's terminal. */
 export const approve = async (
@@ -665,6 +703,9 @@ export const approve = async (
     void (await import("./daemon.ts")).announceApproved(request.message);
     await rootctl("approvals.answer", { message: chosen.text, signature }, { quiet: true });
     out("approved; the push waiting in the root continues.");
+    const signed = parseSigned(chosen.text);
+    // (A raw push's branch in the workspace may have another name: the one checked out.)
+    if (signed?.squashes) out(carryOn(signed.branch, signed.squashes, false).trimEnd());
   }
   return 0;
 };

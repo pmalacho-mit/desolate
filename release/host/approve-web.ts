@@ -203,6 +203,7 @@ export type Summary = {
     message: string;
     author?: string;
     committer?: string;
+    dates?: string;
     sends: { pack: string; size: number; lfs: string[] };
   };
   /** Files a commit changes that the net change does not list: changed, then put back. */
@@ -210,6 +211,7 @@ export type Summary = {
   moreBetween?: number;
   eachDiff?: string;
   eachDiffCut?: boolean;
+  eachDiffWhy?: string;
 };
 export type Waiting = { message: string; at: string };
 const SUMMARY = { deadlineMs: 90_000, keepMs: 120_000 } as const;
@@ -532,7 +534,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         const { diff, eachDiff, ...summary } = summaryOf(push, waiting.message);
         // The page is given this account now: from here it may be signed.
         const given = summaries.get(digestOf(waiting.message));
-        if (given?.value?.ok) given.listed = true;
+        // (An account that says the reviewer could not describe it is shown too: the click is
+        // then refused for that, not for an account not shown.)
+        if (given?.value) given.listed = true;
         out.push({
           nonce: push.nonce,
           repo: push.repo,
@@ -613,7 +617,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       if (!shown?.ok) return json(res, 404, { error: "the reviewer has not worked it out yet" });
       // `each`: every commit's own diff, for what was changed in between.
       if (url.searchParams.get("each") === "1")
-        return json(res, 200, { diff: shown.eachDiff ?? null, cut: shown.eachDiffCut === true });
+        return json(res, 200, {
+          diff: shown.eachDiff ?? null,
+          cut: shown.eachDiffCut === true,
+          ...(shown.eachDiffWhy ? { why: shown.eachDiffWhy } : {}),
+        });
       return json(res, 200, { diff: shown.diff ?? null, cut: shown.diffCut === true });
     }
     if (req.method === "POST" && (url.pathname === "/approve" || url.pathname === "/refuse")) {
@@ -663,10 +671,16 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       const reviewed = entry?.listed ? entry.value : null;
       let signed = "";
       if (url.pathname === "/approve") {
-        if (!reviewed?.ok || !reviewed.sends)
+        // (Two refusals, told apart: the page has not shown an account yet, or the reviewer
+        // had none to give.)
+        if (!entry?.listed)
           return json(res, 409, {
             error:
-              "desolate's reviewer has not said what this push would send, or the page has not shown it yet, so it cannot be approved: nothing was signed",
+              "the page has not shown desolate's reviewer's account of this push yet, so it cannot be approved: nothing was signed. Look at it, then approve",
+          });
+        if (!reviewed?.ok || !reviewed.sends)
+          return json(res, 409, {
+            error: `desolate's reviewer could not say what this push would send (${String(reviewed?.error ?? "no answer").slice(0, 300)}), so it cannot be approved: nothing was signed`,
           });
         // A push that replaces the remote's branch, only when the page said so and the
         // person confirmed that, apart from Approve (approve.js: the branch's name, typed).
@@ -1487,7 +1501,8 @@ declare namespace handler {
   };
   /** a click before the page listed the reviewer's account signs nothing, though the reviewer
    *  has one: what is signed is what the page was given to show (the T1 node test signs
-   *  after the page's own poll, squashed and replacing too) */
+   *  after the page's own poll, squashed and replacing too, and is refused after it for a
+   *  push the reviewer could not describe) */
   export type NotListed = Given<
     HasToken,
     [
@@ -1495,38 +1510,6 @@ declare namespace handler {
         Invoke<typeof ask, [handler: ReviewedPage, request: Click]>,
         "matches",
         { status: 409 }
-      >,
-      Expect<Invoke<typeof approved>, "=", []>,
-    ]
-  >;
-  /** a push the reviewer cannot describe is not signed at all: what it sends is what it names */
-  export type NotReviewed = Given<
-    HasToken,
-    [
-      Expect<
-        Invoke<
-          typeof ask,
-          [
-            handler: Invoke<
-              typeof handler,
-              [
-                backend: Invoke<
-                  typeof waiting,
-                  [messages: [Push], summary: { ok: false; error: "bad object" }]
-                >,
-                log: typeof quiet,
-              ]
-            >,
-            request: Click,
-          ]
-        >,
-        "matches",
-        {
-          status: 409;
-          json: {
-            error: "desolate's reviewer has not said what this push would send, or the page has not shown it yet, so it cannot be approved: nothing was signed";
-          };
-        }
       >,
       Expect<Invoke<typeof approved>, "=", []>,
     ]

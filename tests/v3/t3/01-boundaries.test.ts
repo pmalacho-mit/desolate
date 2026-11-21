@@ -668,6 +668,8 @@ attempt(60);`,
       );
       assert.equal(pushed.code, 0, pushed.stdout);
       assert.equal(forgeRefs()["offered"], commit, "control: the reviewer's pack lands");
+      // CONTROL for "not on the forge" above: the check sees what is there.
+      assert.equal(forgeHas(commit), true, "control: the forge has the pushed commit");
     });
 
     it("T3 the editor runs inside the workspace's VM and answers at its own hostname", async () => {

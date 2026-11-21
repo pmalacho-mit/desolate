@@ -107,11 +107,15 @@ export const parseApproval = (text: unknown): PushApproval | null => {
  *  - `pack`: the sha256 of the very pack the reviewer made of the commits (the objects
  *    `commit` has that the remote's branches do not, and nothing else). The pusher forwards a
  *    pack only if it hashes to this, so no other object rides along;
- *  - `lfs`: how many LFS objects those commits point to, and the sha256 of their ids (sorted,
- *    one a line). The pusher uploads only those;
+ *  - `lfs`: how many LFS objects those commits point to, and the sha256 of their entries,
+ *    each `<oid> <size>` as its pointer says (sorted, unique, one a line). The pusher uploads
+ *    only those, at those sizes;
  *  - `squashes`: none, or the commit the person reviewed when they chose to push it squashed
  *    into one: `commit` is then the reviewer's squash of it (its tree, on the commit it leaves
- *    the remote's history at). Either way the keyring checks the text is about its challenge.
+ *    the remote's history at). Either way the keyring checks the text answers its challenge
+ *    (`answers`): the same repository, branch, onto and nonce, and `squashes`, or else
+ *    `commit`, the challenge's commit. That `commit` is a squash of it the keyring cannot
+ *    check: the host's signature vouches for it, made from the reviewer's account.
  */
 export type SignedApproval = PushApproval & {
   squashes: string | null;
@@ -169,8 +173,9 @@ export const parseSigned = (text: unknown): SignedApproval | null => {
   return formatSigned(parsed) === text ? parsed : null;
 };
 
-/** The digest the text carries for a list of LFS ids: sha256 over them, sorted and unique, one a
- *  line. The pusher computes it of the list it is sent, and uploads only what is on it. */
+/** The digest the text carries for a push's LFS objects: sha256 over their entries (each
+ *  `<oid> <size>`), sorted and unique, one a line. The pusher computes it of the list it is
+ *  sent, and uploads only what is on it, at that size. */
 export const lfsDigest = (oids: readonly string[]): string =>
   createHash("sha256")
     .update(
@@ -198,16 +203,18 @@ export const signedFor = (
   });
 };
 
-/** Is a signed text about this challenge: the same repository, branch, onto and nonce, and
- *  the challenge's commit as it is, or squashed? */
 /** After a squashed push, the remote's branch is one commit the workspace's branch does not
  *  have, so its next push would replace the remote's. The command, run in the workspace,
  *  that puts the branch on that commit: what was squashed is dropped (the squash has the very
- *  same files), what was committed since is kept on top, and uncommitted work is set aside
- *  and put back. With nothing since, the branch simply becomes the remote's. */
-export const catchUp = (branch: string, squashed: string): string => {
-  if (!isBranch(branch) || !isCommit(squashed)) throw new Error("not a branch and a commit");
-  return `git fetch && git rebase --autostash --onto origin/${branch} ${squashed} ${branch}`;
+ *  same files), what was committed since is kept on top (a merge as a merge: the review of
+ *  #169 found a plain rebase made new copies of what a merge brought in), and uncommitted
+ *  work is set aside and put back. With nothing since, the branch simply becomes the remote's.
+ *  `local`: the workspace's branch, when it is known to have the remote's name; without it,
+ *  the branch checked out. */
+export const catchUp = (branch: string, squashed: string, local?: string): string => {
+  if (!isBranch(branch) || !isCommit(squashed) || (local !== undefined && !isBranch(local)))
+    throw new Error("not a branch and a commit");
+  return `git fetch && git rebase --rebase-merges --autostash --onto origin/${branch} ${squashed}${local ? ` ${local}` : ""}`;
 };
 declare namespace catchUp {
   /** the branch's name and the commit squashed, as they are (a branch name is never one a
@@ -216,8 +223,17 @@ declare namespace catchUp {
     typeof catchUp,
     [
       [
-        args: [branch: "fix/login", squashed: "0123456789abcdef0123456789abcdef01234567"],
-        expected: "git fetch && git rebase --autostash --onto origin/fix/login 0123456789abcdef0123456789abcdef01234567 fix/login",
+        args: [
+          branch: "fix/login",
+          squashed: "0123456789abcdef0123456789abcdef01234567",
+          local: "fix/login",
+        ],
+        expected: "git fetch && git rebase --rebase-merges --autostash --onto origin/fix/login 0123456789abcdef0123456789abcdef01234567 fix/login",
+      ],
+      /** the branch checked out, when the workspace's may have another name */
+      [
+        args: [branch: "fix", squashed: "0123456789abcdef0123456789abcdef01234567"],
+        expected: "git fetch && git rebase --rebase-merges --autostash --onto origin/fix 0123456789abcdef0123456789abcdef01234567",
       ],
     ]
   >;
@@ -251,6 +267,8 @@ export const squashedFrom = async (
     : null;
 };
 
+/** Is a signed text about this challenge: the same repository, branch, onto and nonce, and
+ *  the challenge's commit as it is, or (`squashes`) squashed? */
 export const answers = (signed: SignedApproval, challenge: PushApproval): boolean =>
   signed.repo === challenge.repo &&
   signed.branch === challenge.branch &&
@@ -375,8 +393,8 @@ declare namespace parseSigned {
 }
 
 declare namespace lfsDigest {
-  /** over the ids sorted and unique, one a line: the same list in any order, or repeated, is
-   *  the same digest; none at all is sha256 of nothing */
+  /** over the entries sorted and unique, one a line: the same list in any order, or repeated,
+   *  is the same digest; none at all is sha256 of nothing */
   export type Digests = Table<
     typeof lfsDigest,
     [
@@ -387,12 +405,12 @@ declare namespace lfsDigest {
       [
         args: [
           oids: [
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 7",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa 12",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 7",
           ],
         ],
-        expected: "913f9338fb6c17253f3a14816fc08d52522454bfc19a8c99538a197cfb23fb41",
+        expected: "ad009674bf78536e78346c47e5847044e9c607ad2c0f38f34dd848db0cbbbfaf",
       ],
     ]
   >;

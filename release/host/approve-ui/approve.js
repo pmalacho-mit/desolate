@@ -112,7 +112,7 @@ const diffView = (text, tokens) => {
  *  Opening it changes the card, so Approve disarms and arms again only as it always does. */
 const diffToggle = (card, each) => {
   const box = el("div", undefined, "diffbox");
-  const label = each ? ["Show each commit's diff", "Hide each commit's diff"] : ["Show the diff", "Hide the diff"];
+  const label = each ? ["Show each commit whole", "Hide each commit"] : ["Show the diff", "Hide the diff"];
   const button = el("button", label[0], "quiet");
   button.type = "button";
   let open = false;
@@ -127,7 +127,7 @@ const diffToggle = (card, each) => {
         const answer = await fetch(`/diff?nonce=${card.push.nonce}&token=${card.push.token}${each ? "&each=1" : ""}`, { credentials: sendCookie, headers: credential });
         const body = await answer.json();
         if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
-        box.replaceChildren(...(body.diff === null ? [el("p", "Too large to show here (over 20 000 lines): read it with git in the git terminal.", "error")] : [diffView(body.diff), ...(body.cut ? [el("p", "Cut at 256 KiB: read the rest with git in the git terminal.", "error")] : [])]));
+        box.replaceChildren(...(body.diff === null ? [el("p", "Too large to show here (over 20 000 lines): read it with git in the git terminal.", "error")] : [diffView(body.diff), ...(body.cut ? [el("p", `${body.why ? `Only ${body.why}` : "Cut at 256 KiB"}: read the rest with git in the git terminal.`, "error")] : [])]));
         // Then its colours, when the worker has them (or never: the diff stays plain). The
         // text is the same; the card is redrawn all the same, so Approve disarms again.
         if (body.diff !== null && typeof DesolateHighlight !== "undefined") {
@@ -165,7 +165,7 @@ const summaryOf = (summary, card) => {
   const branch = card.push && card.push.branch;
   if (summary.fastForward === false && /^[0-9a-f]{40}$/.test(summary.squashedFrom || "") && /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branch || "")) {
     const p = el("p", `The remote's ${branch} is the squash of ${summary.squashedFrom.slice(0, 12)}, a commit of this branch, pushed before. To build on it instead, refuse this, and in the workspace run `);
-    p.append(el("code", `git fetch && git rebase --autostash --onto origin/${branch} ${summary.squashedFrom} ${branch}`), document.createTextNode(", then push again."));
+    p.append(el("code", `git fetch && git rebase --rebase-merges --autostash --onto origin/${branch} ${summary.squashedFrom} ${branch}`), document.createTextNode(", then push again."));
     box.append(p);
   }
   const commits = summary.commits || [];
@@ -216,12 +216,9 @@ const summaryOf = (summary, card) => {
     box.append(bl);
   }
   // What goes, exactly as it is signed: the reviewer's pack, its size, and the LFS objects.
-  if (summary.sends) {
-    const mib = summary.sends.size / 1024 / 1024;
-    const lfsBytes = summary.sends.lfs.reduce((n, entry) => n + Number(entry.split(" ")[1] || 0), 0);
-    const size = (bytes) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-    box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(summary.sends.size)}, and ${summary.sends.lfs.length} LFS object(s) they point to${summary.sends.lfs.length ? `, ${size(lfsBytes)}` : ""}: nothing else.`));
-  }
+  const lfsBytes = (sends) => sends.lfs.reduce((n, entry) => n + Number(entry.split(" ")[1] || 0), 0);
+  const size = (bytes) => bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KiB` : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+  if (summary.sends) box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(summary.sends.size)}, and ${summary.sends.lfs.length} LFS object(s) they point to${summary.sends.lfs.length ? `, ${size(lfsBytes(summary.sends))}` : ""}: nothing else.`));
   if (summary.hasDiff !== undefined && card) box.append(...diffToggle(card, false));
   if (summary.hasEachDiff && card) box.append(...diffToggle(card, true));
   // The other choice: the same push as one commit (its tree is the last commit's), so nothing
@@ -229,7 +226,9 @@ const summaryOf = (summary, card) => {
   if (summary.squash) {
     const sq = summary.squash;
     box.append(el("p", `Or push it squashed into one commit, ${sq.commit.slice(0, 12)}, ${sq.parent ? `on ${sq.parent.slice(0, 12)}` : "with no parent"}: the same files as the last commit, and none of what was in between. The workspace's branch keeps its ${sq.count} commits.`));
-    box.append(el("pre", `${sq.message}${sq.author ? `\nAuthor:    ${sq.author}\nCommitter: ${sq.committer}` : ""}`, "message"));
+    box.append(el("pre", `${sq.message}${sq.author ? `\nAuthor:    ${sq.author}\nCommitter: ${sq.committer}` : ""}${sq.dates ? `\n${sq.dates}` : ""}`, "message"));
+    // What that choice sends, as it is signed: its own pack and LFS objects.
+    if (sq.sends) box.append(el("p", `Squashed, it sends a pack of its own, ${size(sq.sends.size)}, and ${sq.sends.lfs.length} LFS object(s)${sq.sends.lfs.length ? `, ${size(lfsBytes(sq.sends))}` : ""}: nothing else.`));
   }
   return box;
 };
@@ -278,7 +277,7 @@ const add = (push, issue) => {
       card.hint.textContent = issue ? "publishing..." : "approving...";
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : arm.squash ? "approved, squashed into one commit: the push continues in the root" : "approved: the push continues in the root"; }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : arm.squash ? `approved, squashed into one commit: the push continues in the root. Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "approved: the push continues in the root"; }
       catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
       finally { card.busy = false; disarm(card); }
     });

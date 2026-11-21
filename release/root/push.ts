@@ -13,7 +13,7 @@
 // Nothing here can make the signature: the approver's key is not in this VM (P2).
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { catchUp, parseSigned } from "../shared/approval.ts";
+import { parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { isCommit, parseRepo } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
@@ -512,25 +512,25 @@ const main = async () => {
   withdraw(domain, r.repo, branch);
   // What the remote now has, the mirror has: origin/* in every clone follows.
   await repos.fetch(repo).catch(() => {});
-  // How many were squashed: those the remote's branch did not have (r.commits counts from the
-  // default branch, more when part of the branch was pushed before).
-  const squashedCount =
-    signed.squashes && signed.onto
-      ? Number(
-          (
-            await git(clonePath(repo), [
-              "rev-list",
-              "--count",
-              signed.squashes,
-              `^${signed.onto}`,
-            ]).catch(() => ({ stdout: "" }))
-          ).stdout.trim(),
-        ) || null
-      : r.commits.length;
+  // How many went: those the remote's branch did not have (r.commits counts from the default
+  // branch, more when part of the branch was pushed before), and the LFS objects the signed
+  // text names: the counts the person was shown (the reviews of #169).
+  const tip = signed.squashes ?? signed.commit;
+  const sent = signed.onto
+    ? Number(
+        (
+          await git(clonePath(repo), ["rev-list", "--count", tip, `^${signed.onto}`]).catch(() => ({
+            stdout: "",
+          }))
+        ).stdout.trim(),
+      ) || null
+    : r.commits.length;
+  const commits = sent ? `${sent} commit(s)` : "its commits";
+  const lfs = signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : "";
   process.stdout.write(
     signed.squashes
-      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${squashedCount ? `${squashedCount} commit(s)` : "its commits"} squashed into one${signed.lfs.count ? `, ${signed.lfs.count} LFS object(s) first` : ""}.\nThe workspace's ${branch} still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace (what you committed since is kept, on top):\n  ${catchUp(branch, signed.squashes)}\n`
-      : `pushed ${r.repo} ${branch} at ${r.commit} (${r.commits.length} commit(s)${r.lfsObjects ? `, ${r.lfsObjects} LFS object(s) first` : ""}).\n`,
+      ? `pushed ${r.repo} ${branch} at ${signed.commit}: ${commits} squashed into one${lfs}.\n`
+      : `pushed ${r.repo} ${branch} at ${signed.commit} (${commits}${lfs}).\n`,
   );
   if (link)
     process.stdout.write(

@@ -167,7 +167,7 @@ const clean = (text: string) => text.replace(/[^\x20-\x7e]/g, "?").slice(0, 300)
  *  anything else. */
 export const sign = async (
   message: string,
-  summary?: string,
+  summary?: string[],
   replaces = false,
   size?: number,
 ): Promise<string> => {
@@ -205,7 +205,10 @@ export const sign = async (
         ]
       : []),
     ...(summary
-      ? [`  sends       ${clean(summary)}`, "              (desolate's reviewer, in the root)"]
+      ? [
+          ...summary.slice(0, 60).map((line) => `  ${clean(line)}`),
+          "              (desolate's reviewer, in the root)",
+        ]
       : []),
     "",
   ];
@@ -416,7 +419,7 @@ export const selftest = async (out: (line: string) => void): Promise<number> => 
     lfs: { count: 0, digest: "0".repeat(64) },
     nonce: "0".repeat(32),
   });
-  const signature = await sign(message, "nothing: this is the approver's self-test");
+  const signature = await sign(message, ["sends       nothing: this is the approver's self-test"]);
   const pem = publicKey();
   const ok =
     pem !== null &&

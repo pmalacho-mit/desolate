@@ -495,6 +495,43 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     );
     assert.equal(forgeHasLfs("acme/widgets", oid), false, "nor the commit's own: nothing went up");
     assert.deepEqual(forgeRefs("acme/widgets"), before);
+    // The list as approved, and an object sent that is not on it: the pusher checks each object
+    // sent against the list, not only the list against the approval (the review of #169: the
+    // case above is refused by the digest, and never reached this check).
+    const fourth = keyring({ op: "challenge", repo: "acme/widgets", ref: "issue/12", commit });
+    const fourthText = signedFor(fourth.message, {
+      commit,
+      squashes: null,
+      pack: said.sends!.pack,
+      lfs: said.sends!.lfs,
+    });
+    const approved4 = keyring({
+      op: "approve",
+      message: fourthText,
+      signature: signedBy(fourthText),
+    });
+    assert.equal(approved4.ok, true, String(approved4.error));
+    const unlisted = toPusher(
+      approved4.id!,
+      reviewerPack,
+      [
+        { oid, file: `${ROOT_CLONE}/${lfsFile}` },
+        { oid: planted, file: "/tmp/planted" },
+      ],
+      said.sends!.lfs,
+    );
+    assert.equal(unlisted.ok, false);
+    assert.match(
+      unlisted.error!,
+      /an LFS object sent is not one the approved commits point to, of the size they say: nothing was pushed/,
+    );
+    assert.equal(
+      forgeHasLfs("acme/widgets", planted),
+      false,
+      "the unlisted object is not on the forge",
+    );
+    assert.equal(forgeHasLfs("acme/widgets", oid), false, "nor the listed one: nothing went up");
+    assert.deepEqual(forgeRefs("acme/widgets"), before);
     // CONTROL: the reviewer's own pack and the approved LFS object, under a third approval,
     // land. (Of a commit of its own, the same files on the same parent, on another branch: the
     // person's push below is still the first of the reviewed commit.)
@@ -553,6 +590,127 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       "control: the approved pack lands",
     );
     assert.equal(forgeHasLfs("acme/widgets", oid), true, "with its LFS object");
+    // CONTROL for the checks above that something is NOT on the forge: they see what is.
+    assert.equal(
+      forgeHas("acme/widgets", controlCommit),
+      true,
+      "control: the forge has the commit",
+    );
+    const controlBlob = inRootClone(`git rev-parse ${controlCommit}:README.md`).stdout.trim();
+    assert.equal(forgeHas("acme/widgets", controlBlob), true, "control: and its blobs");
+    // The pack goes as desolate's reviewer compressed it, not as the root's user did: an object
+    // stored uncompressed (zlib's stored blocks) carries its bytes as they are, and a pack that
+    // copied them would carry a channel of the root's user's choosing to the forge (the second
+    // independent review; untested until the review of #169).
+    const stored = inRootClone(
+      [
+        `blob=$(head -c 65536 /dev/zero | tr '\\0' A | git -c core.looseCompression=0 hash-object -w --stdin)`,
+        `tree=$(printf '100644 blob %s\\tstored.txt\\n' "$blob" | git mktree)`,
+        `c=$(git -c user.name=stored -c user.email=stored@example.invalid commit-tree "$tree" -p ${controlCommit} -m stored)`,
+        `git -c pack.compression=0 repack -d -q`,
+        `printf '%s\\n^%s\\n' "$c" ${controlCommit} | git pack-objects --stdout --revs --quiet > /tmp/reused.pack`,
+        `echo "$c"`,
+      ].join(" && "),
+    );
+    assert.equal(stored.code, 0, stored.stderr);
+    const storedCommit = stored.stdout.trim().split("\n").pop()!;
+    const sentStored = stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+      storedCommit,
+    ]);
+    assert.equal(sentStored.code, 0, sentStored.stderr);
+    const saidStored = reviewerSays("stored", storedCommit, null);
+    assert.equal(saidStored.ok, true, String(saidStored.error));
+    stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { packFor } from "/desolate/release/root/review-client.ts"; await packFor({ owner: "acme", name: "widgets" }, process.argv[1], "/tmp/recompressed.pack");`,
+      saidStored.sends!.pack,
+    ]);
+    const runOf = (file: string) =>
+      stack
+        .inRoot([
+          "node",
+          "-e",
+          `console.log(require("node:fs").readFileSync(process.argv[1]).includes(Buffer.alloc(4096, "A")))`,
+          file,
+        ])
+        .stdout.trim();
+    assert.equal(
+      runOf("/tmp/reused.pack"),
+      "true",
+      "control: a pack that reuses what the root's user stored carries its bytes as they are",
+    );
+    assert.equal(
+      runOf("/tmp/recompressed.pack"),
+      "false",
+      "the reviewer's pack does not: it compressed the object itself",
+    );
+    // What a commit carries beyond its four headers is said, every pushed commit's; a file whose
+    // name holds a newline is one file; an empty message is a commit of the squash; and each
+    // commit's diff goes first to last (the review of #169 found each of these wrong).
+    const chain = inRootClone(String.raw`set -e
+base=${storedCommit}
+secret=$(printf 'secret\n' | git hash-object -w --stdin)
+t1=$( { git ls-tree -z "$base"; printf '100644 blob %s\tREADME.md\nkey.env\0' "$secret"; } | git mktree -z )
+c1=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$t1" -p "$base" -F /dev/null)
+c2=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$base^{tree}" -p "$c1" -m 'put back')
+plain=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$base^{tree}" -p "$c2" -m 'with headers')
+c3=$(git cat-file commit "$plain" | awk '/^committer /{print; print "encoding ISO-8859-1"; print "x-data a payload of the attacker"; print "gpgsig -----BEGIN PGP SIGNATURE-----"; print " AAAA"; print " -----END PGP SIGNATURE-----"; next} {print}' | git hash-object -t commit -w --stdin)
+echo "$c1 $c2 $c3"`);
+    assert.equal(chain.code, 0, chain.stderr);
+    const [c1, c2, c3] = chain.stdout.trim().split("\n").pop()!.split(" ") as [
+      string,
+      string,
+      string,
+    ];
+    const sentChain = stack.inRoot([
+      "node",
+      "--disable-warning=ExperimentalWarning",
+      "--input-type=module",
+      "-e",
+      `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
+      c3,
+    ]);
+    assert.equal(sentChain.code, 0, sentChain.stderr);
+    const saidChain = reviewerSays("chain", c3) as ReturnType<typeof reviewerSays> & {
+      warnings?: string[];
+      between?: { path: string }[];
+      squash?: { message: string; count: number };
+      eachDiff?: string;
+    };
+    assert.equal(saidChain.ok, true, String(saidChain.error));
+    const headers = (saidChain.warnings ?? []).find((w) => /carry headers/.test(w)) ?? "";
+    assert.match(headers, /^1 commit\(s\) carry headers this page does not show/);
+    assert.match(
+      headers,
+      new RegExp(
+        `${c3.slice(0, 12)}: encoding "ISO-8859-1", x-data \\(\\d+ bytes\\), gpgsig \\(\\d+ bytes, a signature\\)`,
+      ),
+    );
+    assert.equal(
+      ((saidStored as { warnings?: string[] }).warnings ?? []).some((w) => /carry headers/.test(w)),
+      false,
+      "control: a commit with only git's four headers is not warned of",
+    );
+    assert.deepEqual(
+      saidChain.between?.map((f) => f.path),
+      ["README.md?key.env"],
+      "the file with a newline in its name is one file, not two",
+    );
+    assert.equal(saidChain.squash?.count, 3);
+    assert.equal(
+      saidChain.squash?.message,
+      "(no message)\n\nSquashed from 3 commits:\n- (no message)\n- put back\n- with headers\n",
+    );
+    const at = (id: string) => saidChain.eachDiff?.indexOf(`commit ${id}`) ?? -1;
+    assert.ok(at(c1) >= 0 && at(c1) < at(c2) && at(c2) < at(c3), "each commit, first to last");
   });
 
   it("refusals that need no person: --expect, the default branch, a terminal answer that is not the branch", () => {
@@ -732,11 +890,11 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.match(squashed.stdout, new RegExp(`squashes {4}${tip}`));
     assert.match(
       squashed.stdout,
-      /2 commit\(s\) squashed into one\.\nThe workspace's squash-me still has the commits that were squashed/,
+      /2 commit\(s\) squashed into one\.\ndesolate \(on the Mac\): the workspace's squash-me still has the commits that were squashed/,
     );
     assert.ok(
       squashed.stdout.includes(
-        `  git fetch && git rebase --autostash --onto origin/squash-me ${tip} squash-me\n`,
+        `  git fetch && git rebase --rebase-merges --autostash --onto origin/squash-me ${tip} squash-me\n`,
       ),
       squashed.stdout,
     );
@@ -772,7 +930,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     )?.[1];
     assert.equal(
       catchUp,
-      `git fetch && git rebase --autostash --onto origin/squash-me ${tip} squash-me`,
+      `git fetch && git rebase --rebase-merges --autostash --onto origin/squash-me ${tip} squash-me`,
     );
     const caught = inWs(
       "dev/w1",

@@ -21,20 +21,27 @@ reviewer says the push sends: the sha256 of the pack it made of the commits (the
 commit has that the remote's branches do not), and the LFS objects those commits point to.
 The pusher sends that pack and those objects, and no other: it takes the whole pack and
 every object first, and one that does not hash to what was approved is refused before a byte
-reaches the forge. A push the
-reviewer cannot describe cannot be approved. Two choices go in the same text:
+reaches the forge. A push the reviewer cannot describe cannot be approved.
+
+What the page and the terminal show of it, all from the reviewer: the commits, the net
+change, files a commit changed and a later one changed back (which the net change does not
+show), each commit whole (who wrote it, when, its whole message, its diff; the first 50),
+and a warning for anything a commit carries that is not shown (a header other than git's
+four, a signature, an encoding). The two choices:
 - **Squashed into one commit** (`desolate push ... --squash`, `desolate approve --squash`,
   or the page's second button): the reviewer's commit with the last commit's files, on what
   the branch builds on, so nothing a commit in between held reaches the remote's history.
-  The page lists files a commit changed and a later one changed back, which the net change
-  does not show, and shows each commit's own diff. The workspace's branch still has the
-  commits that were squashed; the push prints the command that moves it onto the squash,
-  keeping what was committed since:
-  `git fetch && git rebase --autostash --onto origin/<branch> <the commit squashed> <branch>`.
+  Its message, who it names and its dates are shown, and the text you sign names it and
+  the commit it squashes. The workspace's branch still has the commits that were squashed;
+  the host prints the command that moves it onto the squash, keeping what was committed
+  since (a merge as a merge) and what was not committed:
+  `git fetch && git rebase --rebase-merges --autostash --onto origin/<branch> <the commit squashed> <branch>`.
   A later push that would replace the squash says so, and names that command again.
 - **Replacing the remote's branch**, when the commit does not build on it: `desolate push`
   refuses it without `--replace`, the terminal asks you to type `replace <branch>`, and the
-  page approves it only after you type the branch's name.
+  page approves it only after you type the branch's name. (This is the host's own gate, not
+  a line of the signed text: what the remote's branch is now, `onto`, is in the text, and
+  the forge moves the branch only from exactly that.)
 
 **Use Chrome or Firefox for desolate's pages** (the dashboard, the approval page, the git
 terminal, the editors): they are at names under `localhost`, which those browsers resolve

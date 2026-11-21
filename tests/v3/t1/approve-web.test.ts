@@ -28,12 +28,16 @@ const push = {
 };
 const message = formatApproval(push);
 // What desolate's reviewer says the push sends: the host signs the challenge with it.
-const SENDS = { pack: "e".repeat(64), size: 100, lfs: ["f".repeat(64)] };
+// (An LFS entry as the reviewer lists it, and the pusher takes it: "<oid> <size>".)
+const SENDS = { pack: "e".repeat(64), size: 100, lfs: [`${"f".repeat(64)} 12`] };
 const signed = signedFor(message, { commit: push.commit, squashes: null, ...SENDS });
 // A second push, which replaces the remote's branch, with two commits to squash.
 const other = { ...push, branch: "issue/13", onto: "b".repeat(40), nonce: "2".repeat(32) };
 const otherMessage = formatApproval(other);
 const SQUASH_SENDS = { pack: "d".repeat(64), size: 90, lfs: [] };
+// A third, which desolate's reviewer cannot describe.
+const unreviewed = { ...push, branch: "issue/14", nonce: "3".repeat(32) };
+const unreviewedMessage = formatApproval(unreviewed);
 /** The page's own poll, as the page makes it: what it lists is what it may then sign. */
 const listedNow = async () => {
   for (let i = 0; i < 2; i++) {
@@ -57,31 +61,33 @@ before(async () => {
       {
         pending: async () => listed,
         summary: async (asked) =>
-          asked.nonce === other.nonce
-            ? {
-                ok: true,
-                fastForward: false,
-                sends: SENDS,
-                squash: {
-                  commit: "5".repeat(40),
-                  parent: null,
-                  count: 2,
-                  message: "x\n",
-                  sends: SQUASH_SENDS,
-                },
-              }
-            : {
-                ok: true,
-                commits: [
-                  {
-                    commit: "a".repeat(40),
-                    subject: "<img src=x onerror=alert(1)>",
-                    author: "agent",
+          asked.nonce === unreviewed.nonce
+            ? { ok: false, error: "bad object" }
+            : asked.nonce === other.nonce
+              ? {
+                  ok: true,
+                  fastForward: false,
+                  sends: SENDS,
+                  squash: {
+                    commit: "5".repeat(40),
+                    parent: null,
+                    count: 2,
+                    message: "x\n",
+                    sends: SQUASH_SENDS,
                   },
-                ],
-                diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
-                sends: SENDS,
-              },
+                }
+              : {
+                  ok: true,
+                  commits: [
+                    {
+                      commit: "a".repeat(40),
+                      subject: "<img src=x onerror=alert(1)>",
+                      author: "agent",
+                    },
+                  ],
+                  diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
+                  sends: SENDS,
+                },
         approve: async (m) => void approved.push(m),
         refuse: async (m) => void refused.push(m),
         issues: async () => issuesListed,
@@ -385,7 +391,7 @@ describe("T1 the approval page", () => {
     // Before the page has listed the reviewer's account: nothing is signed.
     const early = await click({ replace: true });
     assert.equal(early.status, 409, early.body);
-    assert.match(early.body, /has not shown it yet/);
+    assert.match(early.body, /has not shown desolate's reviewer's account of this push yet/);
     await listedNow();
     const unconfirmed = await click();
     assert.equal(unconfirmed.status, 409);
@@ -396,6 +402,39 @@ describe("T1 the approval page", () => {
     assert.deepEqual(approved, [
       signedFor(otherMessage, { commit: "5".repeat(40), squashes: other.commit, ...SQUASH_SENDS }),
     ]);
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+  });
+
+  it("a push the reviewer could not describe is not signed, though the page listed it", async () => {
+    listed = [{ message: unreviewedMessage, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    await listedNow();
+    const clicked = await approve({
+      nonce: unreviewed.nonce,
+      token: pushToken(approveToken(), unreviewedMessage),
+      commit: unreviewed.commit,
+    });
+    assert.equal(clicked.status, 409, clicked.body);
+    assert.match(
+      clicked.body,
+      /desolate's reviewer could not say what this push would send \(bad object\)/,
+    );
+    assert.deepEqual(approved, [], "nothing signed");
+    // CONTROL: the same page, the same poll, for a push the reviewer describes, signs.
+    const described = { ...push, branch: "issue/15", nonce: "4".repeat(32) };
+    const describedMessage = formatApproval(described);
+    listed = [{ message: describedMessage, at: "2026-11-12T00:00:00Z" }];
+    await listedNow();
+    const control = await approve({
+      nonce: described.nonce,
+      token: pushToken(approveToken(), describedMessage),
+      commit: described.commit,
+    });
+    assert.equal(control.status, 200, control.body);
+    assert.deepEqual(approved, [
+      signedFor(describedMessage, { commit: described.commit, squashes: null, ...SENDS }),
+    ]);
+    approved.length = 0;
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
   });
 
