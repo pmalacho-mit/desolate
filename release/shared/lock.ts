@@ -26,10 +26,7 @@
 //   moves what is in the lock's place out of it, and then looks at what it moved; when that
 //   is not the directory it found dead (it read the holder a moment too late, or was frozen
 //   between, on a share), it puts it straight back. The lock a new holder made is not
-//   removed by a waiter who meant the old one. (root/reviewer.ts's `oneAtATime` read the
-//   dead lock and then renamed it away, two steps: a second waiter between them removed the
-//   first one's new lock. Checking the holder's id before the rename is the same two steps,
-//   and every lock with no holder to read has the same id.)
+//   removed by a waiter who meant the old one.
 // - Leaving: the holder moves its own lock away under the same right, so a holder that was
 //   taken for dead (possible on a share: see BEAT) does not remove its heir's lock.
 //
@@ -41,7 +38,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Worker } from "node:worker_threads";
-import { openPlain } from "./copy.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
@@ -54,6 +50,7 @@ import type {
 import type { emptyScratch, scratch, scratchFiles } from "../.harness/shared-files.ts";
 import type {
   answering,
+  beatUnreadable,
   contended,
   heldBy,
   holding,
@@ -65,6 +62,7 @@ import type {
   hostileFolder,
   leftWithABeat,
   misleadingLock,
+  modesUnder,
 } from "../.harness/shared-lock.ts";
 
 /** Who holds a lock, as a refusal or a wait says it: the process, the machine it is on (a
@@ -120,7 +118,6 @@ const holderFile = (file: string): string | null | undefined => {
     return code === "ENOENT" ||
       code === "ELOOP" ||
       code === "ENOTDIR" ||
-      code === "EMLINK" ||
       code === "EACCES" ||
       code === "EPERM"
       ? null
@@ -188,21 +185,6 @@ const me = (): Entry => ({
   start: (ownStart ??= startOf(process.pid)),
 });
 
-/** A small plain file's text, or null: not followed if it is a link, not waited on if it is
- *  a FIFO, not read if it is large. A lock on a share is written by another VM. */
-const small = (file: string): string | null => {
-  const opened = openPlain(file, 1024);
-  if (!opened) return null;
-  try {
-    const bytes = Buffer.alloc(opened.size);
-    return bytes.subarray(0, fs.readSync(opened.fd, bytes, 0, opened.size, 0)).toString("utf8");
-  } catch {
-    return null;
-  } finally {
-    fs.closeSync(opened.fd);
-  }
-};
-
 /** Which directory is at `at` (its device and inode), or null when nothing is. The lock is
  *  this, and not what its holder file says: two locks may say the same, never be the same. */
 const identity = (at: string): string | null => {
@@ -234,16 +216,14 @@ const read = (at: string): Seen | null => {
     if (!is.endsWith(":d")) return { entry: NOBODY, is };
     // Its holder first, as `same` reads it, so the two never disagree about one lock.
     const text = holderFile(path.join(at, "holder"));
-    let entry = text === undefined ? UNREAD : holderOf(text);
     // No holder: an empty directory is no lock (a rename replaces it); one that holds other
     // things, or that no taker may list (ours are open to all), is nobody's.
-    if (text === null && emptyDir(at)) entry = EMPTY;
+    if (text === null && emptyDir(at)) return null;
     if (identity(at) !== is) continue;
-    return entry === EMPTY ? null : { entry, is };
+    return { entry: text === undefined ? UNREAD : holderOf(text), is };
   }
 };
 
-const EMPTY: Entry = { id: "empty", pid: 0, host: "", since: "", start: null };
 /** Whether the directory `at` holds nothing, by its first entry alone (a directory of a
  *  million names put there is not listed); false when it cannot be listed. */
 const emptyDir = (at: string): boolean => {
@@ -294,16 +274,22 @@ const holderOf = (text: string | null): Entry => {
  *  take it is the folder's to say. `filled` adds to the lock before it is in place. */
 const put = (at: string, entry: Entry, filled?: (fresh: string) => void): string | null => {
   const fresh = `${at}.new-${entry.id}`;
-  fs.mkdirSync(fresh, { mode: 0o755 });
+  fs.mkdirSync(fresh);
   let is: string | null;
   try {
+    // Open to every taker whatever the umask: one that cannot read a holder takes it for
+    // nobody's (holderFile).
+    fs.chmodSync(fresh, 0o755);
     // Made, never opened: a link another side put there in the moment since the mkdir is
     // not followed (O_EXCL fails on any name that is there, a link that leads nowhere too),
     // and the taking fails, saying so: another is at the lock's own making.
-    fs.writeFileSync(path.join(fresh, "holder"), JSON.stringify(entry), {
-      mode: 0o644,
-      flag: "wx",
-    });
+    const fd = fs.openSync(path.join(fresh, "holder"), "wx");
+    try {
+      fs.fchmodSync(fd, 0o644);
+      fs.writeSync(fd, JSON.stringify(entry));
+    } finally {
+      fs.closeSync(fd);
+    }
     filled?.(fresh);
     is = identity(fresh);
   } catch (error) {
@@ -386,12 +372,7 @@ const removed = (dir: string) => {
   try {
     fs.rmdirSync(dir);
   } catch {
-    /* not empty (not ours), or not a directory: a link, a file */
-    try {
-      if (!fs.lstatSync(dir).isDirectory()) fs.unlinkSync(dir);
-    } catch {
-      /* gone already */
-    }
+    /* not empty: not ours */
   }
 };
 
@@ -445,7 +426,10 @@ const beating = (
 ): Is => {
   if (entry === NOBODY) return "dead";
   if (entry === UNREAD) return "alive";
-  const beat = small(path.join(at, "beat")) ?? "";
+  // A beat there and not read just now is no sign of silence, as with the holder file.
+  const text = holderFile(path.join(at, "beat"));
+  if (text === undefined) return "alive";
+  const beat = text ?? "";
   const now = performance.now();
   const last = seen.get(entry.id);
   // Silence counts only while it was watched: a waiter that did not look for half the
@@ -472,7 +456,6 @@ const beating = (
  *  again in a moment.
  *  Also how a holder leaves: `seen` is then its own. */
 const clear = (
-  dir: string,
   at: string,
   seen: Seen,
   is: (at: string, entry: Entry) => Is,
@@ -495,9 +478,7 @@ const clear = (
     return true;
   }
   const other = read(right);
-  return (
-    other !== null && is(right, other.entry) === "dead" && clear(dir, right, other, is, depth + 1)
-  );
+  return other !== null && is(right, other.entry) === "dead" && clear(right, other, is, depth + 1);
 };
 
 /** The beat of a share lock: a thread that writes a count into the lock's `beat` file,
@@ -506,7 +487,8 @@ const clear = (
  *  the process busy (a `spawnSync`, a long parse) does not stop the beat; it ends with the
  *  process, which is the point. Answers once the first beat is written. */
 const startBeat = async (file: string, everyMs: number): Promise<() => Promise<void>> => {
-  const fd = fs.openSync(file, "wx", 0o644);
+  const fd = fs.openSync(file, "wx");
+  fs.fchmodSync(fd, 0o644);
   const worker = new Worker(
     // (getBuiltinModule: the same text is a script or a module, whichever this process
     // takes evaluated code for.)
@@ -605,6 +587,9 @@ export const withLock = async <T>(
           mine = { entry, is: there };
           break;
         }
+        // Another put its lock there first (or a listing was stale): looked at in a moment,
+        // not at once, so a place that reads free and is not never spins the main thread.
+        await pause(pace.pollMs, options.signal);
         continue;
       }
       const fresh = `${dir}.beat-${entry.id}`;
@@ -630,13 +615,14 @@ export const withLock = async <T>(
         break;
       }
       await stop();
+      await pause(pace.pollMs, options.signal);
       continue;
     }
     const holder = seen.entry;
     const state = is(dir, holder);
     // Cleared: look again at once; unless what was there is there still (it could not be
     // moved), which is looked at again in a moment like any lock that is held.
-    if (state === "dead" && clear(dir, dir, seen, is) && identity(dir) !== seen.is) continue;
+    if (state === "dead" && clear(dir, seen, is) && identity(dir) !== seen.is) continue;
     if (state === "alive") {
       const who: Holder = { pid: holder.pid, host: holder.host, since: holder.since };
       if (options.wait === false)
@@ -654,7 +640,7 @@ export const withLock = async <T>(
         options.waiting?.(who);
       }
     }
-    await pause(share ? Math.min(pace.pollMs, pace.beatMs) : pace.pollMs, options.signal);
+    await pause(pace.pollMs, options.signal);
   }
   try {
     // Whoever asked may have gone while the lock was being taken.
@@ -667,7 +653,7 @@ export const withLock = async <T>(
       /* the thread ends with the process, and the lock is left below all the same */
     }
     try {
-      clear(dir, dir, mine, is);
+      clear(dir, mine, is);
     } catch {
       /* below */
     }
@@ -883,6 +869,29 @@ declare namespace withLock {
       ]
     >
   >;
+  /** a lock is open to every taker whatever its holder's umask (here 077, which would make
+   *  it 700 and its files 600): one that may not read a holder takes it for nobody's */
+  export type OpenToEveryTaker = Given<
+    Invoke<typeof emptyScratch>,
+    [
+      Expect<
+        Invoke<
+          typeof modesUnder,
+          [dir: Invoke<typeof scratch, [name: "locks/m.lock"]>, umask: 0o077, share: false]
+        >,
+        "=",
+        { lock: "755"; holder: "644"; beat: null }
+      >,
+      Expect<
+        Invoke<
+          typeof modesUnder,
+          [dir: Invoke<typeof scratch, [name: "locks/s.lock"]>, umask: 0o077, share: true]
+        >,
+        "=",
+        { lock: "755"; holder: "644"; beat: "644" }
+      >,
+    ]
+  >;
   /** what is in the lock's place and is no directory (here a link that leads nowhere) is
    *  nobody's lock: moved away, and the lock taken, at once */
   export type NotADirectory = Given<
@@ -995,6 +1004,16 @@ declare namespace withLock {
         ]
       >,
       "init.lock is held by process"
+    >
+  >;
+  /** a beat that is there and could not be read just now (EIO on a share) is no sign that
+   *  it stopped: refused while it cannot be read; the control, once it can, it is taken */
+  export type ShareBeatUnreadable = Given<
+    Invoke<typeof emptyScratch>,
+    Expect<
+      Invoke<typeof beatUnreadable, [dir: Invoke<typeof scratch, [name: "locks/eio.lock"]>]>,
+      "=",
+      ["eio.lock is held by process 1 on another-vm, since 2026-11-20T21:04:05.000Z", "taken"]
     >
   >;
   /** and one whose beat has stopped is gone, whatever pid it names (another VM's, which
