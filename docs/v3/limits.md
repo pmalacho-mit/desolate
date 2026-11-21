@@ -57,13 +57,27 @@ that produces something keeps the producing end; the layer that shows or consume
 other. Two tickets that meet at a contract change only their own side of it.
 
 ### `shared/text.ts`: safe is not short (R1)
-- `printable(value, max?, instead?)` makes foreign text safe for a terminal, as now. Its
-  default bound becomes a safety bound (4,000 characters, against a flood), not a display
-  width, and text cut by it ends in `…`.
-- `tail(text, lines)` gives the last lines of a program's output and how many it left out.
+```ts
+export const SAFE_MOST = 4000; // the bound against a flood, in characters
+export const CUT = "…"; // ends text that was cut; counts toward the bound
+export const printable: (value: unknown, max?: number, instead?: string) => string;
+export const tail: (text: string, lines: number) => { text: string; before: number };
+export const failure: (
+  output: string,
+  lines: number,
+  keep: (whole: string) => string | null,
+) => string;
+```
+- `printable(value, max?, instead?)` makes foreign text safe for a terminal, as before. Its
+  default bound is a safety bound (`SAFE_MOST`, against a flood), not a display width, and
+  text cut by it, or by a caller's own `max`, ends in `…`.
+- `tail(text, lines)` gives the last lines of a program's output (`text`) and how many lines
+  came before them (`before`). It does not make them safe.
 - `failure(output, lines, keep)` is how an error from another layer is shown: its last
-  lines, a count of what was left out, and where the whole text was kept (`keep` writes it
-  and answers the path; the host keeps them under its logs, the root under its state).
+  lines, made safe; and, when that is not all of it, a first line that says how much was
+  left out and where the whole text is: `(412 earlier lines not shown; all of it: <path>)`.
+  `keep` is called only then, with the whole text: it writes it and answers the path, or
+  null when it could not (the host keeps them under its logs, the root under its state).
 - Fitting text to a line is the display's: CSS `text-overflow` with the whole value in
   `title`, or a terminal's own wrapping.
 
@@ -72,8 +86,12 @@ other. Two tickets that meet at a contract change only their own side of it.
 export type Listed<T> = { items: T[]; total: number; from: number };
 export const PAGE = 100; // a page, not a cap: the next one is asked for
 export const listed: <T>(all: readonly T[], from?: number, count?: number) => Listed<T>;
-export const andMore: (list: Listed<unknown>, noun: string) => string | null; // "and 37 more commits"
+// "and 37 more commits"; null when the page ends the list. `noun` is one of them ("commit");
+// `nouns` is several, when adding an s is not it ("branches").
+export const andMore: (list: Listed<unknown>, noun: string, nouns?: string) => string | null;
 ```
+`listed` takes a `from` or `count` that is not a place in the list (negative, past the end,
+not whole) as the nearest that is: they come from whoever asks for the page.
 A producer counts with the cheap exact tool (`git rev-list --count`), and lists a page. A
 consumer shows `total`, shows the page, and asks for the next when the person wants it.
 
@@ -82,29 +100,57 @@ One object per subject, each number with its reason:
 - `FORGE`: what the forge itself takes. `packBytes` (2 GiB: GitHub's push limit),
   `lfsObjectBytes` (5 GiB: GitHub's largest LFS object).
 - `LFS_POINTER_BYTES` (1024: git-lfs reads no pointer larger), replacing four copies of 400.
-- `NAMES`: slug 40, branch 200, status 200 (code points), note 16,384 bytes.
-- `TERMINAL` (1000 x 500), `PORTS` (1024 to 65535).
-- `over(what, limit, actual, unit)`: the one sentence for a bound that was hit ("the pack is
-  2.3 GiB, over the 2 GiB a push to the forge may carry").
-- `formatBytes(n)`: the one way a size is written for a person.
+- `NAMES`: `slug` 40, `branch` 200, `status` 200 (characters: code points), `noteBytes`
+  16,384.
+- `TERMINAL` (`cols` 1000, `rows` 500), `PORTS` (`min` 1024, `max` 65535).
+- `over(what, limit, actual, unit, allows?)`: the one sentence for a bound that was hit.
+  `unit` is `"bytes"` (written as sizes) or what was counted (`"characters"`); `allows`
+  ends the sentence with who sets the limit, and is "allowed" when not given:
+  `over("the pack", FORGE.packBytes, n, "bytes", "a push to the forge may carry")` is "the
+  pack is 2.3 GiB, over the 2 GiB a push to the forge may carry";
+  `over("the status", NAMES.status, 312, "characters")` is "the status is 312 characters,
+  over the 200 allowed". No capital and no full stop: the refusal puts it in place.
+- `formatBytes(n)`: the one way a size is written for a person ("4 KiB", "5.5 MiB",
+  "2.3 GiB"). Under a GiB it is the text `host/approver.ts` and `host/push.ts` print now.
 
 There is **no count of LFS objects per push**: three files had 2000, meaning three things.
 What bounds the list is the size of the request that carries it, which has a name.
 
 ### `shared/lock.ts`: locks by liveness (R5)
 ```ts
+export type Holder = { pid: number; host: string; since: string }; // `since`: an ISO time
+export const BEAT = { pollMs: 250, beatMs: 2_000, missed: 5 };
 export const withLock: <T>(
-  dir: string,
+  dir: string, // the lock's own name ("<state>/fetch.lock"): there while it is held
   work: () => Promise<T>,
-  options?: { scope?: "machine" | "share"; wait?: boolean; busy?: (holder: Holder) => string },
+  options?: {
+    scope?: "machine" | "share"; // "machine" unless said
+    wait?: boolean; // true unless said
+    busy?: (holder: Holder) => string; // words the refusal of `wait: false`
+    waiting?: (holder: Holder) => void; // told who it waits for, once for each holder
+    signal?: AbortSignal; // ends a wait: whoever asked went away
+  },
+  pace?: typeof BEAT, // for tests only
 ) => Promise<T>;
 ```
 - `machine` (every process that takes it runs in one VM or on the Mac): the lock names its
   holder's pid and start time; it is stale only when that process is gone.
 - `share` (a folder several VMs see, where one cannot see another's processes): the holder
-  writes a heartbeat while it lives; the lock is stale only when the beat has stopped. The
-  beat's interval is the one number, defined there.
-- Not waiting (`wait: false`) refuses with who holds it and since when.
+  writes a heartbeat while it lives, from a thread of its own, so work that keeps the
+  process busy does not stop it; the lock is stale only when the beat has stopped. The
+  beat is the one number, `BEAT`: every 2 s, and stopped when a waiter has watched 10 s go
+  by with no new one (by its own running clock, so a Mac that slept wakes to no stale lock).
+  A holder whose whole VM is frozen that long while others run loses its lock: what is done
+  under a share lock must be safe to do again.
+- Waiting (the default) has no timer in it (R4): it waits for as long as its caller does,
+  tells `waiting` who holds the lock so the caller can say so, and stops when `signal` fires.
+- Not waiting (`wait: false`) refuses with who holds it and since when: an `Error` with
+  `holder` on it, its message `busy`'s. On a share that takes up to one beat, since a holder
+  is known to be alive only by its next one.
+- A lock whose holder is gone is taken, waiting or not, by exactly one of those who find it.
+  The right to move a dead holder's lock away is itself taken exclusively, by the dead
+  holder's id, so a waiter who read the dead holder a moment late never removes the lock a
+  new holder made. It is not re-entrant.
 
 ### `shared/settings.ts`: the registry (R6)
 ```ts
@@ -113,36 +159,65 @@ export type Setting<T> = {
   env: string; // "DESOLATE_ROOT_MEMORY_MIB"
   side: "host" | "root" | "workspace" | "git";
   default: T | (() => T);
-  parse: (text: string) => T | null;
+  parse: Parse<T>;
   why: string; // one sentence a person reads in `desolate settings`
 };
+// A function from text to a value, or null. `takes` says what a value is ("a whole number
+// from 1 to 64"), for the refusal of one that is not; a plain function need not have it.
+export type Parse<T> = { (text: string): T | null; takes?: string };
 export const define: <T>(setting: Setting<T>) => Setting<T>;
 export const valueOf: <T>(setting: Setting<T>) => T;
+export const defined: () => readonly Setting<unknown>[]; // for `desolate settings`
+// Parsers for the common shapes:
+export const whole: (min: number, max: number) => Parse<number>;
+export const mebibytes: (min: number, max: number) => Parse<number>; // "4g", "512m", "4096"
+export const ports: Parse<number[]>; // "3000,5173": each within limits.ts's PORTS
 ```
 A tunable is declared with `define` in the file that uses it, and read with `valueOf`. Until
 the settings ticket lands, `valueOf` reads the environment variable; after it, the same call
 reads what `desolate settings` stored and what the host passed into each VM.
+- `define` refuses (throws, when the file loads) a name that is not `area.thing`, a variable
+  that is not `DESOLATE_...`, and a name or variable defined before: one definition each.
+- `valueOf` gives the default when the variable is unset or empty, and refuses (throws) a
+  value its parser does not take: "DESOLATE_GIT_SHELLS must be a whole number from 1 to 64,
+  not 'lots'". A typo never silently becomes the default.
+- `defined()` lists the settings of the files loaded so far: what lists them imports them.
 
 ### `shared/run.ts`: cancel, and idle (R4)
 `run()` takes `signal` (an `AbortSignal`: the requester went away) and `idleMs` (nothing on
 stdout or stderr for this long). `timeoutMs`, a total, stays only for callers not yet moved.
+- Each ends the program by killing it, and the answer says so as the timeout's does: code
+  128, and stderr ending in `(cancelled)` or `(nothing from it for <n> ms: stopped)`. A
+  signal that has already fired runs nothing.
+- With `signal` or `idleMs` the program runs in a process group of its own, and the group is
+  killed whole: what the program started ends with it. Such a program has no terminal (it
+  cannot ask the person anything there, and Ctrl-C does not reach it), so `run` itself ends
+  the groups it made when its own process exits or is sent SIGINT, SIGTERM or SIGHUP.
+- With `timeoutMs` alone, nothing changes: no group, and only the program itself is killed.
 
 ### `shared/review-account.ts`: the reviewer's account of a push (R1, R2, R4)
 The one type for what desolate's reviewer says a push would send, used by the reviewer, the
 host's approval page and terminal. Today it is written twice (`root/reviewer.ts`,
 `host/approve-web.ts`) and cut in both.
 ```ts
-/** One line of the reviewer's answer stream (`review-ask`): progress, then the account. */
+/** One line of the reviewer's answer stream (`review-ask`): progress, then the one answer. */
 export type AccountLine =
   | { progress: { phase: string; done?: number; of?: number } }
-  | { account: Account }
+  | { account: Account } // answers `account`
+  | { page: Pick<Account, "commits"> | Pick<Account, "files"> | Pick<Account, "between"> } // answers `page`
+  | { diff: DiffPage } // answers `diff`
   | { error: string };
+export type AccountCommit = { commit: string; subject: string; author: string };
+export type AccountFile = { path: string; added: number; removed: number; binary?: boolean; sensitive?: boolean };
+export type AccountBetween = { path: string; sensitive?: boolean };
+export type Sends = { pack: string; size: number; lfs: string[] }; // as root/reviewer.ts has it
+export type Squash = { commit: string; parent: string | null; count: number; message: string; author: string; committer: string; dates: string };
 export type Account = {
   key: string; // names this account, for `page` and `diff`
   warnings: string[]; // every one
-  commits: Listed<{ commit: string; subject: string; author: string }>; // first to last
-  files: Listed<{ path: string; added: number; removed: number; binary?: boolean; sensitive?: boolean }>;
-  between: Listed<{ path: string; sensitive?: boolean }>;
+  commits: Listed<AccountCommit>; // first to last
+  files: Listed<AccountFile>;
+  between: Listed<AccountBetween>;
   sends: Sends;
   squash?: Squash & { sends: Sends };
   fastForward: boolean | null;
@@ -154,7 +229,22 @@ export type AccountRequest =
   | { op: "account"; repo: string; branch: string; commit: string; onto: string | null }
   | { op: "page"; key: string; list: "commits" | "files" | "between"; from: number }
   | { op: "diff"; key: string; of: { file: string } | { commit: string } | "net"; from?: number };
+/** A page of a diff: the bytes from `from` up to `next`, cut between lines. `next` is where
+ *  the following page starts (null: this one ends the diff); `total` is the whole diff's
+ *  size. The asker takes `next` from the producer, never from the length of `text`. */
+export type DiffPage = { text: string; from: number; next: number | null; total: number };
+export const ACCOUNT_LINE_BYTES = 8 * 1024 * 1024; // the most one line may be
+export const accountLine: (line: AccountLine) => string; // one JSON object and a newline
+export const accountLines: (stream: AsyncIterable<Uint8Array | string>) => AsyncGenerator<AccountLine>;
 ```
+The stream is any number of `progress` lines and then exactly one answer (`account`, `page`,
+`diff` or `error`), which ends it. `accountLines` reads it from bytes cut into chunks
+anywhere, and always ends with one answer: a line that is not one of these, a line over
+`ACCOUNT_LINE_BYTES`, or a stream that ends before its answer (the reviewer stopped, or was
+stopped) is given as an `error` line that says which. So the reviewer writes nothing but
+these lines on that stream: what it logs goes to stderr. A `page` holds the list asked for
+under its own name (`{ page: { files: Listed<AccountFile> } }`), and a page of a diff is the
+producer's to keep under the line's bound.
 `account` runs for as long as its requester holds the connection, saying what it is doing;
 there is no deadline inside it. A diff is asked for by file or by commit, and comes in pages
 of bytes, counted as bytes.

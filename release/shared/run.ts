@@ -1,15 +1,31 @@
 // Running other programs: always an argv, never a shell string.
+//
+// How long a program may take is not decided here (docs/v3/limits.md, R4: patience belongs
+// to whoever is waiting). A caller passes `signal`, and the program is ended when whoever
+// asked for it goes away; and, for a program that talks to a peer which is remote or not
+// trusted (the forge, a VM), `idleMs`: ended when nothing has arrived for that long, however
+// long it has run. `timeoutMs`, a total, is for the callers not yet moved to those.
 import { spawn } from "node:child_process";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { never, throwsUntil, trueOnCall } from "../.harness/shared-probe.ts";
+import type { abortedIn, leftRunning, outlivesItsRunner } from "../.harness/shared-run.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = {
   input?: string | Buffer;
   env?: NodeJS.ProcessEnv;
   cwd?: string;
+  /** A total: past it the program is killed, whatever it was doing. For callers not yet
+   *  moved to `signal` and `idleMs` (R4). */
   timeoutMs?: number;
+  /** Whoever asked went away (a closed connection, a request that was dropped): when it
+   *  fires, the program is ended, and so is everything it started. */
+  signal?: AbortSignal;
+  /** The program is ended, with everything it started, when neither of its streams has
+   *  produced anything for this long: "nothing arrived", not "it took too long". (With
+   *  `inheritStderr`, stdout alone is watched: its stderr is not ours to see.) */
+  idleMs?: number;
   /** Echo the child's stderr to ours as it arrives (progress for a person). */
   inheritStderr?: boolean;
   /** The most of each stream kept (default 192 MiB): past it, the program is stopped. */
@@ -22,51 +38,124 @@ export type RunOptions = {
  *  (audit, 2026-11-20). Past it, the program is killed and the answer says so: a failure. */
 export const RUN_MAX = 192 * 1024 * 1024;
 
+/** What the answer's stderr ends with when the program was ended because whoever asked for
+ *  it went away. */
+const CANCELLED = "\n(cancelled)";
+
+/** A program run with `signal` or `idleMs` is ended with everything it started: it runs in a
+ *  process group of its own, and the group is killed whole. (Killed alone, a `runuser` left
+ *  its node and that node's git running, and a shell leaves what it started holding the
+ *  pipes this waits on: the independent review of #169.) A group of its own has no terminal:
+ *  such a program cannot ask the person anything there, and the terminal's Ctrl-C does not
+ *  reach it. So what would have ended it with this process still does: these are the groups
+ *  now running, and they are killed when this process exits or is told to (the signals a
+ *  terminal and a supervisor send). Where nothing else listens for the signal, this process
+ *  then ends by it, as it would have had nothing listened. */
+const groups = new Set<number>();
+let guarded = false;
+const guard = () => {
+  if (guarded) return;
+  guarded = true;
+  const endAll = () => {
+    for (const pid of groups)
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        /* ended already */
+      }
+  };
+  process.on("exit", endAll);
+  for (const name of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+    const told = () => {
+      endAll();
+      if (process.listenerCount(name) > 1) return;
+      process.removeListener(name, told);
+      process.kill(process.pid, name);
+    };
+    process.on(name, told);
+  }
+};
+
 export const run = (
   command: string,
   args: string[],
   options: RunOptions = {},
 ): Promise<RunResult> =>
   new Promise((resolve) => {
+    const { signal } = options;
+    if (signal?.aborted) return resolve({ code: 128, stdout: "", stderr: CANCELLED });
+    const grouped = signal !== undefined || options.idleMs !== undefined;
+    if (grouped) guard();
     const child = spawn(command, args, {
       env: options.env ?? process.env,
       cwd: options.cwd,
       stdio: ["pipe", "pipe", options.inheritStderr ? "inherit" : "pipe"],
+      detached: grouped,
     });
+    const group = grouped ? child.pid : undefined;
+    if (group) groups.add(group);
     let stdout = "";
     let stderr = "";
     let timer: NodeJS.Timeout | undefined;
+    let idle: NodeJS.Timeout | undefined;
+    // Ended by us, once, for one reason, which the answer's stderr ends with.
+    let ended = false;
+    const end = (why: string) => {
+      if (ended) return;
+      ended = true;
+      stderr += why;
+      try {
+        // A negative pid is the process group: the program and everything it started.
+        if (group) process.kill(-group, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const cancel = () => end(CANCELLED);
+    const done = () => {
+      if (timer) clearTimeout(timer);
+      if (idle) clearTimeout(idle);
+      if (group) groups.delete(group);
+      signal?.removeEventListener("abort", cancel);
+    };
     const max = options.maxBytes ?? RUN_MAX;
     let over = false;
     const tooMuch = () => {
-      if (over) return;
       over = true;
-      stderr += `\n(more than ${max} bytes of output: stopped)`;
-      child.kill("SIGKILL");
+      end(`\n(more than ${max} bytes of output: stopped)`);
     };
     child.stdout!.on("data", (chunk) => {
+      idle?.refresh();
       if (over) return;
       if (stdout.length + chunk.length > max) return tooMuch();
       stdout += chunk;
     });
     child.stderr?.on("data", (chunk) => {
+      idle?.refresh();
       if (over) return;
       if (stderr.length + chunk.length > max) return tooMuch();
       stderr += chunk;
     });
     child.on("error", (error) => {
-      if (timer) clearTimeout(timer);
+      done();
       resolve({ code: 127, stdout, stderr: stderr + String(error.message) });
     });
-    child.on("close", (code, signal) => {
-      if (timer) clearTimeout(timer);
-      resolve({ code: code ?? (signal ? 128 : 1), stdout, stderr });
+    child.on("close", (code, killed) => {
+      done();
+      resolve({ code: code ?? (killed ? 128 : 1), stdout, stderr });
     });
     if (options.timeoutMs)
-      timer = setTimeout(() => {
-        stderr += `\n(timed out after ${options.timeoutMs} ms)`;
-        child.kill("SIGKILL");
-      }, options.timeoutMs);
+      timer = setTimeout(
+        () => end(`\n(timed out after ${options.timeoutMs} ms)`),
+        options.timeoutMs,
+      );
+    if (options.idleMs)
+      idle = setTimeout(
+        () => end(`\n(nothing from it for ${options.idleMs} ms: stopped)`),
+        options.idleMs,
+      );
+    signal?.addEventListener("abort", cancel, { once: true });
     child.stdin!.on("error", () => {});
     child.stdin!.end(options.input ?? "");
   });
@@ -108,6 +197,70 @@ declare namespace run {
     "=",
     { code: 128; stdout: ""; stderr: "\n(timed out after 50 ms)" }
   >;
+  /** silent for longer than `idleMs`, it is killed, and says so; what it said first is kept */
+  export type Idle = Expect<
+    Invoke<
+      typeof run,
+      [command: "sh", args: ["-c", "echo connecting; sleep 10"], options: { idleMs: 300 }]
+    >,
+    "=",
+    { code: 128; stdout: "connecting\n"; stderr: "\n(nothing from it for 300 ms: stopped)" }
+  >;
+  /** idle is not a total: a program that keeps saying something runs past `idleMs` (here
+   *  four lines, 150 ms apart, against 400 ms) */
+  export type NotIdleWhileItTalks = Expect<
+    Invoke<
+      typeof run,
+      [
+        command: "sh",
+        args: ["-c", "for n in 1 2 3 4; do echo $n; sleep 0.15; done"],
+        options: { idleMs: 400 },
+      ]
+    >,
+    "=",
+    { code: 0; stdout: "1\n2\n3\n4\n"; stderr: "" }
+  >;
+  /** whoever asked went away: it is killed, and says so: 128, never a success */
+  export type Cancelled = Expect<
+    Invoke<
+      typeof run,
+      [
+        command: "sh",
+        args: ["-c", "echo started; sleep 10"],
+        options: { signal: Invoke<typeof abortedIn, [ms: 300]> },
+      ]
+    >,
+    "=",
+    { code: 128; stdout: "started\n"; stderr: "\n(cancelled)" }
+  >;
+  /** asked for by someone already gone: never started */
+  export type CancelledBefore = Expect<
+    Invoke<
+      typeof run,
+      [
+        command: "sh",
+        args: ["-c", "echo started"],
+        options: { signal: Invoke<typeof abortedIn, [ms: 0]> },
+      ]
+    >,
+    "=",
+    { code: 128; stdout: ""; stderr: "\n(cancelled)" }
+  >;
+  /** what the program started ends with it: the shell's own child, a `sleep` it left running
+   *  behind it, is gone once the run is cancelled. The control: the same shell, cancelled by
+   *  nobody, exits and leaves its `sleep` alive (the harness then ends it). */
+  export type EndsWhatItStarted = [
+    Expect<Invoke<typeof leftRunning, [cancelled: true]>, "=", false>,
+    Expect<Invoke<typeof leftRunning, [cancelled: false]>, "=", true>,
+  ];
+  /** and it does not outlive the process that ran it: a program in a group of its own (it
+   *  was given a signal) is ended when its runner is told to end (SIGTERM, as a terminal's
+   *  Ctrl-C or a supervisor would), though nothing fired the signal. The control: run with
+   *  neither `signal` nor `idleMs`, as before, a runner killed alone leaves it running. */
+  export type EndsWithItsRunner = [
+    Expect<Invoke<typeof outlivesItsRunner, [grouped: true]>, "=", false>,
+    Expect<Invoke<typeof outlivesItsRunner, [grouped: false]>, "=", true>,
+  ];
 }
 
 /** run(), but a failure is an exception carrying the child's stderr. */

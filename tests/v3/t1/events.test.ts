@@ -100,7 +100,9 @@ describe("T1 desolate events", () => {
   it("printable keeps text and drops what a terminal would act on", () => {
     assert.equal(printable("issue/12 ✓ café"), "issue/12 ✓ café");
     assert.equal(printable("a\u0000b\u001bc\u009bd​e⁦f"), "a?b?c?d?e?f");
-    assert.equal(printable("x".repeat(500), 10), "x".repeat(10));
+    // A cut is said (docs/v3/limits.md, R1): the mark ends it, and counts toward the bound.
+    assert.equal(printable("x".repeat(500), 10), `${"x".repeat(9)}…`);
+    assert.equal(printable("x".repeat(10), 10), "x".repeat(10));
   });
 
   it("the hub replays what it holds, then streams", () => {

@@ -2,27 +2,57 @@
 // terminal, where some characters are commands, and to a page or a prompt, where others
 // change what is seen (bidirectional overrides reorder a line; zero-width characters hide in
 // one). One rule for every place desolate shows such text.
+//
+// Safe is not short (docs/v3/limits.md, R1). What is here makes text safe, and bounds it
+// only against a flood; what it cuts, it marks. Fitting text to a line is the display's.
+// The last lines of a program's output (`tail`, `failure`) are a cut too, and say so: how
+// much was left out, and where the whole of it is.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { keptAt, notKept, repeat } from "../.harness/shared-text.ts";
 
 /** Controls, format characters (bidirectional overrides, zero-width), private-use and
  *  unassigned code points, and the line and paragraph separators. */
 const UNSAFE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Zl}\p{Zp}]/gu;
 
-/** Text another wrote, safe to print in a terminal: no control characters, no
- *  bidirectional overrides or invisible formatting, and not too long. */
-export const printable = (value: unknown, max = 300, instead = "?"): string =>
-  [
-    ...String(value ?? "")
+/** The most of a text printable passes when its caller names no bound: a bound against a
+ *  flood (a megabyte of status would fill a terminal's scrollback and a page's memory), not
+ *  a width. 4,000 characters is fifty full lines of a terminal: more than any one message a
+ *  person reads in place, and little enough to print. Making text fit a line is the
+ *  display's own job (CSS `text-overflow`, a terminal's wrapping): docs/v3/limits.md, R1. */
+export const SAFE_MOST = 4000;
+
+/** The mark that ends text which was cut. It counts toward the bound. */
+export const CUT = "…";
+
+/** `value` as text with nothing in it a terminal or a page would act on, at most `max`
+ *  characters (code points, after NFC). Cut text ends in the mark, so a cut is never silent.
+ *  `tabs`: a tab stays a tab (text of many lines, where a tab is layout). */
+const safe = (
+  value: unknown,
+  max: number,
+  instead: string,
+  tabs: boolean,
+): { text: string; cut: boolean } => {
+  const text = String(value ?? "");
+  const chars = [
+    ...text
       .slice(0, max * 4)
       .normalize("NFC")
-      .replace(UNSAFE, instead),
-  ]
-    .slice(0, max)
-    .join("");
+      .replace(UNSAFE, (c) => (tabs && c === "\t" ? c : instead)),
+  ];
+  if (chars.length <= max && text.length <= max * 4) return { text: chars.join(""), cut: false };
+  return { text: max < 1 ? "" : chars.slice(0, max - 1).join("") + CUT, cut: true };
+};
+
+/** Text another wrote, safe to print in a terminal: no control characters, no
+ *  bidirectional overrides or invisible formatting. Bounded against a flood (SAFE_MOST
+ *  unless the caller names its own bound), and text that was cut ends in `…`. */
+export const printable = (value: unknown, max = SAFE_MOST, instead = "?"): string =>
+  safe(value, max, instead, false).text;
 declare namespace printable {
   /** text kept; what a terminal would act on (controls, bidirectional overrides, invisible
-   *  formatting) replaced; cut to length */
+   *  formatting) replaced */
   export type Cases = Table<
     typeof printable,
     [
@@ -30,17 +60,42 @@ declare namespace printable {
       [args: [value: "a\u0000b\u001bc"], expected: "a?b?c"],
       [args: [value: "ready \u202edlrow"], expected: "ready ?dlrow"],
       [args: [value: "zero\u200bwidth"], expected: "zero?width"],
-      [args: [value: "xxxxxxxxxx", max: 4], expected: "xxxx"],
       [args: [value: undefined], expected: ""],
       [args: [value: "a\tb\nc", max: 10, instead: " "], expected: "a b c"],
       /** a carriage return cannot send the cursor back to write over what was printed */
       [args: [value: "tests: ok\rFAIL"], expected: "tests: ok?FAIL"],
-      /** one spelling of each character (NFC), and its length counted in characters, an emoji
-       *  one, not in UTF-16 units */
+      /** one spelling of each character (NFC) */
       [args: [value: "cafe\u0301"], expected: "caf\u00e9"],
-      [args: [value: "\u{1f44d}\u{1f44d}\u{1f44d}", max: 2], expected: "\u{1f44d}\u{1f44d}"],
       [args: [value: 42], expected: "42"],
     ]
+  >;
+  /** a cut is said: text over the bound ends in the mark, which counts toward the bound;
+   *  text that fits exactly is whole, and carries no mark */
+  export type Cut = Table<
+    typeof printable,
+    [
+      [args: [value: "xxxxxxxxxx", max: 4], expected: "xxx…"],
+      [args: [value: "xxxx", max: 4], expected: "xxxx"],
+      /** its length counted in characters, an emoji one, not in UTF-16 units */
+      [args: [value: "\u{1f44d}\u{1f44d}\u{1f44d}", max: 2], expected: "\u{1f44d}…"],
+      [args: [value: "\u{1f44d}\u{1f44d}", max: 2], expected: "\u{1f44d}\u{1f44d}"],
+      /** composed first, then counted: five letters and an accent are five characters */
+      [args: [value: "cafe\u0301s", max: 5], expected: "caf\u00e9s"],
+      /** no room for even the mark: nothing */
+      [args: [value: "xxxx", max: 0], expected: ""],
+    ]
+  >;
+  /** with no bound named, the bound is the one against a flood: a long reason arrives whole */
+  export type Whole = Expect<
+    Invoke<typeof printable, [value: Invoke<typeof repeat, [text: "x", count: 4000]>]>,
+    "matches",
+    "^x{4000}$"
+  >;
+  /** and a flood does not: 4,000 characters, the last of them the mark */
+  export type Flood = Expect<
+    Invoke<typeof printable, [value: Invoke<typeof repeat, [text: "x", count: 1000000]>]>,
+    "matches",
+    "^x{3999}…$"
   >;
 }
 
@@ -48,12 +103,7 @@ declare namespace printable {
 export const printableLines = (value: unknown, instead = "?"): string =>
   String(value ?? "")
     .split("\n")
-    .map((line) =>
-      line
-        .split("\t")
-        .map((part) => printable(part, Infinity, instead))
-        .join("\t"),
-    )
+    .map((line) => safe(line, Infinity, instead, true).text)
     .join("\n");
 
 declare namespace printableLines {
@@ -67,6 +117,116 @@ declare namespace printableLines {
         expected: "+ x = 1; ?// ?evil?\n?[2J",
       ],
     ]
+  >;
+}
+
+/** The last `lines` lines of a program's output, and how many lines came before them.
+ *  The newlines that end the output are not lines of it. Nothing is made safe here: that is
+ *  printable's, and `failure` does both. */
+export const tail = (text: string, lines: number): { text: string; before: number } => {
+  const all = text.replace(/\n+$/, "").split("\n");
+  const kept = lines < 1 ? [] : all.slice(-lines);
+  return { text: kept.join("\n"), before: all.length - kept.length };
+};
+
+declare namespace tail {
+  /** the end of it, where a program says why it failed, and a true count of the rest */
+  export type Cases = Table<
+    typeof tail,
+    [
+      [
+        args: [text: "Cloning\nremote: denied\nfatal: could not read\n", lines: 2],
+        expected: { text: "remote: denied\nfatal: could not read"; before: 1 },
+      ],
+      /** all of it, when it is that short: nothing came before */
+      [
+        args: [text: "fatal: bad object\n", lines: 5],
+        expected: { text: "fatal: bad object"; before: 0 },
+      ],
+      /** a blank line inside the output is a line; the ones that end it are not */
+      [args: [text: "a\n\nb\n\n\n", lines: 2], expected: { text: "\nb"; before: 1 }],
+      [args: [text: "", lines: 3], expected: { text: ""; before: 0 }],
+      [args: [text: "a\nb", lines: 0], expected: { text: ""; before: 2 }],
+    ]
+  >;
+}
+
+/** How an error from another layer is shown (R1): the last `lines` lines of what it said,
+ *  made safe, and, when that is not all of it, a first line that says how much was left out
+ *  and where the whole text is. `keep` is given the whole text when something was left out
+ *  (and only then), writes it somewhere a person can read, and answers the path, or null
+ *  when it could not: the host keeps them under its logs, the root under its state. A line
+ *  is cut, with the mark, only at the bound against a flood (SAFE_MOST). */
+export const failure = (
+  output: string,
+  lines: number,
+  keep: (whole: string) => string | null,
+): string => {
+  const last = tail(output, lines);
+  const safeLines = last.text.split("\n").map((line) => safe(line, SAFE_MOST, "?", true));
+  const shown = safeLines.map((line) => line.text).join("\n");
+  const cut = safeLines.some((line) => line.cut);
+  if (last.before === 0 && !cut) return shown;
+  let where: string | null = null;
+  try {
+    where = keep(output);
+  } catch {
+    /* not kept: said below, by the path's absence */
+  }
+  const left =
+    last.before === 0
+      ? "a long line is cut"
+      : `${last.before} earlier line${last.before === 1 ? "" : "s"} not shown`;
+  return `(${left}${where === null ? "" : `; all of it: ${where}`})\n${shown}`;
+};
+
+declare namespace failure {
+  /** what a person is shown of a failure: its end, how much came before, where all of it is */
+  export type Shown = Expect<
+    Invoke<
+      typeof failure,
+      [
+        output: "Cloning into 'app'\nremote: Repository not found.\nfatal: could not read from remote repository\n",
+        lines: 2,
+        keep: Invoke<typeof keptAt, [path: "/Users/ada/.desolate/logs/clone-1.txt"]>,
+      ]
+    >,
+    "=",
+    "(1 earlier line not shown; all of it: /Users/ada/.desolate/logs/clone-1.txt)\nremote: Repository not found.\nfatal: could not read from remote repository"
+  >;
+  /** short enough to show whole: shown whole, with nothing kept and nothing to say */
+  export type Whole = Expect<
+    Invoke<typeof failure, [output: "fatal: bad object\n", lines: 5, keep: Invoke<typeof notKept>]>,
+    "=",
+    "fatal: bad object"
+  >;
+  /** what another layer said is text, not commands: made safe, its tabs kept */
+  export type Safe = Expect<
+    Invoke<
+      typeof failure,
+      [output: "one\n\u001b[2Jtwo\tthree\rFOUR", lines: 1, keep: Invoke<typeof notKept>]
+    >,
+    "=",
+    "(1 earlier line not shown)\n?[2Jtwo\tthree?FOUR"
+  >;
+  /** a keeper that fails does not hide the failure: the count is still said */
+  export type NotKept = Expect<
+    Invoke<typeof failure, [output: "a\nb\nc\nd", lines: 1, keep: Invoke<typeof notKept>]>,
+    "=",
+    "(3 earlier lines not shown)\nd"
+  >;
+  /** one line that is a flood is cut at the bound against one, and says so */
+  export type LongLine = Expect<
+    Invoke<
+      typeof failure,
+      [
+        output: Invoke<typeof repeat, [text: "x", count: 5000]>,
+        lines: 3,
+        keep: Invoke<typeof keptAt, [path: "/var/lib/desolate/failures/1.txt"]>,
+      ]
+    >,
+    "matches",
+    "^\\(a long line is cut; all of it: /var/lib/desolate/failures/1.txt\\)\nx{3999}…$"
   >;
 }
 
