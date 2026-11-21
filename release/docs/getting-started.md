@@ -13,6 +13,11 @@ of you (step 6). One of desolate's first users? Read [dogfooding.md](dogfooding.
 
 - **A Mac with Apple silicon** (M1 or later). desolate runs its VMs with Apple's
   Virtualization.framework, through Lima; an Intel Mac is not supported.
+- **Apple's Command Line Tools** (`xcode-select --install`; installing Homebrew installs
+  them, and Xcode includes them). desolate uses two of the programs they provide on the Mac:
+  `git`, and `/usr/bin/python3`, which `desolate doctor` uses to ask macOS whether each VM
+  is sandboxed. Without them, both are placeholders that offer to install the tools, and
+  that doctor check fails.
 - **Homebrew**, and from it: `brew install lima node gh jq` (`jq` is for the recipes in step 6)
   - Lima **2.3 or newer** (`limactl --version`): older versions let a confined VM's pings out.
   - node **22.18 or newer**: desolate is TypeScript that node runs directly.
