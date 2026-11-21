@@ -130,7 +130,7 @@ ul.rows { container-type: inline-size; }
 /* What a workspace said of itself: its colour, as a dot, before its words. */
 .what .line[data-says] { flex-wrap: nowrap; align-items: flex-start; line-height: var(--row); }
 /* The step a workspace is at: whole from the root, fitted to its row here, all of it in its title. */
-.what .line[data-making-step] { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: var(--row); }
+.what .line.fit { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: var(--row); }
 .said { flex: none; width: 8px; height: 8px; margin-top: calc((var(--row) - 8px) / 2); border-radius: 50%; background: var(--gray); }
 .said.blue { background: var(--blue); } .said.green { background: var(--green); } .said.yellow { background: var(--yellow); }
 .said.orange { background: var(--orange); } .said.red { background: var(--red); }
