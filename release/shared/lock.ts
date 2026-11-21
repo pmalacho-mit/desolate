@@ -37,12 +37,7 @@ import { Worker } from "node:worker_threads";
 import { openPlain } from "./copy.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type {
-  Expect,
-  Given,
-  Invoke,
-  Throws,
-} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyScratch, scratch, scratchFiles } from "../.harness/shared-files.ts";
 import type {
   answering,
@@ -50,6 +45,7 @@ import type {
   heldBy,
   holding,
   leftByADeadProcess,
+  leftByAZombie,
   leftWithABeat,
 } from "../.harness/shared-lock.ts";
 
@@ -87,30 +83,41 @@ const ID = /^[0-9a-f]{32}$/;
  *  by a side that does not keep to the form. It is cleared as a dead holder's is. */
 const NOBODY: Entry = { id: "nobody", pid: 0, host: "", since: "", start: null };
 
-/** When the process `pid` started, as text that is the same each time it is asked about one
- *  process and differs for another that later has the pid; null when there is no such
- *  process, or the system will not say. Linux: the start time in /proc/<pid>/stat (clock
- *  ticks since boot: field 22). A Mac has no /proc: `ps -o lstart=`, in UTC and the C
- *  locale so that two askers with different settings read the same text. */
-export const startOf = (pid: number): string | null => {
+/** What the system says of the process `pid`: when it started; "gone" when there is no such
+ *  process; "zombie" when only its remains are there (it has exited, and nothing has asked
+ *  after it yet: a signal can still be sent to it, and it holds nothing); null when the
+ *  system will not say. Linux: /proc/<pid>/stat, whose third field is the state and whose
+ *  22nd is the start time, in clock ticks since boot. A Mac has no /proc: `ps`, in UTC and
+ *  the C locale, so that two askers with different settings read the same text. */
+const look = (pid: number): { start: string } | "gone" | "zombie" | null => {
   try {
     // The second field is the program's name in brackets, and may itself hold spaces and
     // brackets: the fields are counted from after the last one.
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "latin1");
-    return (
-      stat
-        .slice(stat.lastIndexOf(")") + 2)
-        .split(" ")
-        .at(19) ?? null
-    );
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    if (fields[0] === "Z" || fields[0] === "X") return "zombie";
+    return fields[19] ? { start: fields[19] } : null;
   } catch {
-    if (fs.existsSync("/proc/self/stat")) return null;
+    if (fs.existsSync("/proc/self/stat")) return "gone";
   }
-  const ran = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+  const ran = spawnSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], {
     encoding: "utf8",
     env: { PATH: process.env.PATH ?? "/usr/bin:/bin", LC_ALL: "C", TZ: "UTC" },
   });
-  return ran.status === 0 && ran.stdout.trim() !== "" ? ran.stdout.trim() : null;
+  if (ran.error || ran.status === null) return null;
+  const said = ran.stdout.trim();
+  if (ran.status !== 0 || said === "") return "gone";
+  if (said.startsWith("Z")) return "zombie";
+  const start = said.replace(/^\S+\s+/, "");
+  return start === said ? null : { start };
+};
+
+/** When the process `pid` started, as text that is the same each time it is asked about one
+ *  process and differs for another that later has the pid; null when there is no such
+ *  process, or the system will not say. */
+export const startOf = (pid: number): string | null => {
+  const seen = look(pid);
+  return seen !== null && typeof seen === "object" ? seen.start : null;
 };
 
 let ownStart: string | null | undefined;
@@ -205,20 +212,28 @@ const away = (at: string) => {
 
 type Is = "alive" | "dead" | "watched";
 
-/** Is the process a machine lock names still there? Gone when there is no such pid, or the
- *  pid is now a process that started at another time. Where the system will not say when a
- *  process started, a live pid is taken for the holder: a lock is never taken from a
- *  process that may be its holder. */
+/** Is the process a machine lock names still there? Gone when there is no such pid, when
+ *  the pid is now a process that started at another time, and when it is a zombie: a
+ *  holder that was killed and that its parent has not asked after would otherwise hold its
+ *  lock for as long as the parent lived. Where the system will not say (no `ps`, or a
+ *  /proc that hides other users' processes), a pid that is there is taken for the holder: a
+ *  lock is never taken from a process that may be its holder. */
 const running = (entry: Entry): Is => {
   if (entry === NOBODY) return "dead";
+  let ours = true;
   try {
     process.kill(entry.pid, 0);
   } catch (error) {
-    // EPERM: there is such a process, and it is another user's.
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return "dead";
+    // EPERM: there is such a process, and it is another user's.
+    ours = false;
   }
-  const start = startOf(entry.pid);
-  return start !== null && entry.start !== null && start !== entry.start ? "dead" : "alive";
+  const seen = look(entry.pid);
+  if (seen === "zombie") return "dead";
+  // Not to be seen, though it took a signal a moment ago: it has just ended, unless it is
+  // another user's and hidden from us.
+  if (seen === "gone") return ours ? "dead" : "alive";
+  return seen !== null && entry.start !== null && seen.start !== entry.start ? "dead" : "alive";
 };
 
 /** Is the holder of a share lock still beating? `seen` is this waiter's own memory of each
@@ -322,7 +337,11 @@ const pause = (ms: number, signal?: AbortSignal) =>
 
 /** `work`, done while holding the lock `dir`, and its answer; the lock is left when the
  *  work ends, however it ends. `dir` is the lock's own name (`<state>/fetch.lock`): it is
- *  there while the lock is held, and its folder must be one every taker can write.
+ *  there while the lock is held, and its folder must be one every taker can write. Beside
+ *  it, for moments, are others named after it (`<dir>.new-<id>`, `.heir-<id>`, `.gone-<id>`,
+ *  `.beat-<id>`): the lock being made, taken over or removed. Whatever sweeps that folder
+ *  leaves them, or sweeps only when no taker runs; one left by a process killed in such a
+ *  moment is small, and harmless.
  *
  *  - `scope`: how a holder is known to be alive (above). `machine` unless said.
  *  - `wait`: when the lock is held by something alive, wait for it (the default), for as
@@ -517,6 +536,26 @@ declare namespace withLock {
         ]
       >,
       { matches: "^push\\.lock is held by process \\d+ on .+, since 2026-11-20T21:04:05.000Z$" }
+    >
+  >;
+  /** a holder that was killed and not yet asked after by its parent is a zombie: a signal
+   *  still reaches its pid, and it holds nothing. Its lock is taken. */
+  export type HolderIsAZombie = Given<
+    [
+      Invoke<typeof emptyScratch>,
+      Invoke<typeof leftByAZombie, [dir: Invoke<typeof scratch, [name: "locks/fetch.lock"]>]>,
+    ],
+    Expect<
+      Invoke<
+        typeof withLock,
+        [
+          dir: Invoke<typeof scratch, [name: "locks/fetch.lock"]>,
+          work: Invoke<typeof answering, [answer: "fetched"]>,
+          options: { wait: false },
+        ]
+      >,
+      "=",
+      "fetched"
     >
   >;
   /** a reused pid: the lock names a pid that is alive, but as a process that started at

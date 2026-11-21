@@ -53,6 +53,38 @@ export const leftByADeadProcess = (dir: string) => {
     throw new Error(`the process that was to die holding the lock did not: ${ran.stderr}`);
 };
 
+/** A lock left by a process that took it, exited inside its work, and is now a zombie: its
+ *  parent (a `sleep`, which the shell that started both became) never asks after it. The
+ *  parent is ended when the test ends. */
+export const leftByAZombie = async (dir: string) => {
+  const parent = spawn(
+    "sh",
+    [
+      "-c",
+      '"$0" "$@" & exec sleep 60',
+      process.execPath,
+      ...NODE,
+      `import { withLock } from ${JSON.stringify(LOCK_TS)};
+       await withLock(process.argv[1], async () => process.exit(0));`,
+      dir,
+    ],
+    { stdio: "ignore" },
+  );
+  onTestFinished(() => void parent.kill("SIGKILL"));
+  const state = () => {
+    try {
+      const { pid } = JSON.parse(fs.readFileSync(path.join(dir, "holder"), "utf8"));
+      return spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout;
+    } catch {
+      return "";
+    }
+  };
+  for (let waited = 0; !state().trim().startsWith("Z"); waited += 20) {
+    if (waited > 4000) throw new Error(`the holder did not become a zombie: '${state()}'`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+};
+
 /** A lock in place, written by hand, held since `since` by:
  *  - "this process": this very process, with its true start time: a live holder;
  *  - "this pid, started at another time": the same pid, but a process that started at
@@ -168,7 +200,7 @@ export const contended = async (
   await Promise.all(started.map((taker) => taker.ended));
   let [inside, most, entered] = [0, 0, 0];
   for (const line of fs.readFileSync(log, "utf8").split("\n")) {
-    if (line === "in") most = Math.max(most, ++inside), entered++;
+    if (line === "in") ((most = Math.max(most, ++inside)), entered++);
     if (line === "out") inside--;
   }
   return { entered, overlapped: most > 1 };
