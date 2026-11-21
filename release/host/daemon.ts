@@ -321,10 +321,12 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
     try {
       child = backend().spawn(ROOT_VM, argv, { root: true });
     } catch {
-      // Until the VM layer can stream as root in the root VM (host/vm/lima.ts, the owner's
-      // decision): `exec`, whose answer comes whole, with no progress, and is not ended early.
+      // FALLBACK, until host/vm/lima.ts offers `spawn` as root in the root VM (limits ticket
+      // 11, #183: this ticket's pull request has the exact change). With `exec` the answer
+      // arrives when it is whole: no progress is seen on the way, and a request that is
+      // dropped is not ended in the root. It is still not ended for being long (R4).
       const result = await backend().exec(ROOT_VM, argv, { root: true, input });
-      ended = Promise.resolve({ code: result.code, stderr: lastWords(result.stderr) });
+      ended = Promise.resolve({ code: result.code, stderr: result.stderr });
       ranOut = true;
       return void (yield result.stdout);
     }
@@ -337,7 +339,7 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
       // The end of it is where a program says why it stopped; a reviewer that logs for an
       // hour is not held whole. What was dropped is marked (R1).
       stderr += chunk;
-      if (stderr.length > 2 * REVIEWER_WORDS) stderr = lastWords(stderr);
+      if (stderr.length > 2 * REVIEWER_WORDS) stderr = `${CUT}\n${stderr.slice(-REVIEWER_WORDS)}`;
     });
     // Whoever asked went away: the connection is dropped, and the reviewer's end of it
     // closing is what stops the work there.
@@ -362,8 +364,6 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
  *  KiB of text is a long stack trace many times over. It is the host's memory this bounds,
  *  against a program in a VM. */
 const REVIEWER_WORDS = 64 * 1024;
-const lastWords = (text: string) =>
-  text.length > REVIEWER_WORDS ? `${CUT}\n${text.slice(-REVIEWER_WORDS)}` : text;
 /** Where the whole of the last such error is kept (shared/text.ts, failure). */
 const REVIEWER_FAILURE = path.join(paths.logs, "reviewer-failure.txt");
 const keepFailure = (whole: string): string | null => {
