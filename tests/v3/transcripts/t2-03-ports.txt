@@ -99,6 +99,8 @@ bootstrap: 1 step(s) done.
 doctor: all checks passed.
 [exit 0]
 
+## more listeners than are forwarded
+
 ## stop
 
 $ desolate stop web/two

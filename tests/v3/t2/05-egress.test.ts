@@ -140,7 +140,8 @@ describe("T2 section 4.3: egress through the workspace's own proxy", () => {
     stack.step("the link's bound");
     // Four connections straight to the link, each held open: the first two are carried (the
     // proxy answers 200), the next two wait. A fifth, a program's request through the relay,
-    // is refused with the reason. When the first two end, the waiting two are carried.
+    // is refused with the reason, as busy (503: a program may try again), not forbidden.
+    // When the first two end, the waiting two are carried.
     const held = inWs(
       "dev/w1",
       `for i in 1 2 3 4; do
@@ -151,13 +152,13 @@ done
 sleep 1
 echo "carried: $(head -c 12 /tmp/held1) / $(head -c 12 /tmp/held2)"
 echo "waiting: [$(cat /tmp/held3)] [$(cat /tmp/held4)]"
-echo "fifth: $(curl -sS -m 5 http://api.example.test/fifth 2>&1)"
+echo "fifth: $(curl -sS -m 5 -o /tmp/fifth -w '%{http_code}' http://api.example.test/fifth 2>&1) $(cat /tmp/fifth)"
 wait
 echo "in turn: $(head -c 12 /tmp/held3) / $(head -c 12 /tmp/held4)"
 echo "after: $(curl -sS -m 5 http://api.example.test/after-the-bound 2>&1)"`,
     );
     const said = held.stdout + held.stderr;
-    assert.match(said, /^carried: HTTP\/1\.1 200 \/ HTTP\/1\.1 200 $/m, said);
+    assert.match(said, /^carried: HTTP\/1\.1 200 \/ HTTP\/1\.1 200$/m, said);
     assert.match(
       said,
       /^waiting: \[\] \[\]$/m,
@@ -165,12 +166,12 @@ echo "after: $(curl -sS -m 5 http://api.example.test/after-the-bound 2>&1)"`,
     );
     assert.match(
       said,
-      /^fifth: desolate: this workspace has 2 connections out carried at once and 2 more waiting their turn, the most it may \(the setting link\.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap\)$/m,
+      /^fifth: 503 desolate: this workspace has 2 connections out carried at once and 2 more waiting their turn, the most it may \(the setting link\.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap\)$/m,
       said,
     );
     assert.match(
       said,
-      /^in turn: HTTP\/1\.1 200 \/ HTTP\/1\.1 200 $/m,
+      /^in turn: HTTP\/1\.1 200 \/ HTTP\/1\.1 200$/m,
       "the waiting two were carried when the first two ended: a connection past the bound works, later",
     );
     assert.match(

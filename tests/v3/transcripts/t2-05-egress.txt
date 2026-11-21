@@ -46,6 +46,8 @@ dev: any public host is reachable (open). Its workspaces still reach nothing int
   internal addresses it may reach: <forge>
 [exit 0]
 
+## the link's bound
+
 ## addresses of the VM's own
 
 ## per-domain network rules
