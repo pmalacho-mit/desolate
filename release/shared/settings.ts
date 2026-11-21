@@ -27,7 +27,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { EXIT, Refusal } from "./exit.ts";
+import { Refusal } from "./exit.ts";
 import { PORTS } from "./limits.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -295,8 +295,9 @@ export const lookup = <T>(setting: Setting<T>): { value: T; from: From } => {
   if (text !== undefined && text.trim() !== "") {
     const value = setting.parse(text);
     if (value === null)
-      throw new Error(
+      throw new Refusal(
         `${setting.env} must be ${setting.parse.takes ?? `a value for ${setting.name}`}, not '${printable(text, 80)}'`,
+        `unset ${setting.env} (or set it to what it takes)`,
       );
     return { value, from: "environment" };
   }
