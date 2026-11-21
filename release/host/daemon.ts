@@ -13,6 +13,7 @@
 // THE LINK. Each workspace's only way out is one stream to its own proxy in the root. The
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
+import { formatBytes } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -644,13 +645,22 @@ declare namespace sinceTag {
   >;
 }
 
+/** The most of the pusher's log one look reads (base64 of it is what the look answers). A
+ *  look comes every 2 s, and a push's line is a few hundred bytes. */
+const PUSHER_LOOK_BYTES = 1024 * 1024;
+
 /** Where the pusher's log was read to (its file's identity, and an offset), and what one look
- *  read (`stat -c '%i %s'`, then up to a MiB of what is new, as base64). The whole lines it
- *  read, and where the next look starts. A new file (rotated, recreated), or one cut
+ *  read (`stat -c '%i %s'`, then up to `most` bytes of what is new, as base64). The whole
+ *  lines it read, and where the next look starts. A new file (rotated, recreated), or one cut
  *  shorter: from its start. The first look: from where it is now. A line not yet ended
- *  waits for the next look. */
-type LogAt = { inode: string; offset: number } | null;
-const pusherLogRead = (where: LogAt, stdout: string): { where: LogAt; lines: string[] } => {
+ *  waits for the next look; a line longer than a whole look is skipped to its end (once,
+ *  `skipped`), where it once stopped every later event: the offset never moved past it. */
+type LogAt = { inode: string; offset: number; skipping?: true } | null;
+const pusherLogRead = (
+  where: LogAt,
+  stdout: string,
+  most = PUSHER_LOOK_BYTES,
+): { where: LogAt; lines: string[]; skipped?: true } => {
   const [head = "", body = ""] = stdout.split("\n");
   const [inode = "", sizeText = ""] = head.split(" ");
   const size = Number(sizeText);
@@ -658,11 +668,27 @@ const pusherLogRead = (where: LogAt, stdout: string): { where: LogAt; lines: str
   if (!where) return { where: { inode, offset: size }, lines: [] };
   if (where.inode !== inode || size < where.offset)
     return { where: { inode, offset: 0 }, lines: [] };
-  const bytes = Buffer.from(body, "base64");
+  const look = Buffer.from(body, "base64");
+  let bytes = look;
+  let offset = where.offset;
+  if (where.skipping) {
+    const ends = bytes.indexOf(10);
+    if (ends < 0)
+      return { where: { inode, offset: offset + bytes.length, skipping: true }, lines: [] };
+    offset += ends + 1;
+    bytes = bytes.subarray(ends + 1);
+  }
   const end = bytes.lastIndexOf(10);
-  if (end < 0) return { where, lines: [] };
+  if (end < 0)
+    return look.length >= most && bytes === look
+      ? {
+          where: { inode, offset: offset + bytes.length, skipping: true },
+          lines: [],
+          skipped: true,
+        }
+      : { where: { inode, offset }, lines: [] };
   return {
-    where: { inode, offset: where.offset + end + 1 },
+    where: { inode, offset: offset + end + 1 },
     lines: bytes.subarray(0, end).toString("utf8").split("\n"),
   };
 };
@@ -702,6 +728,38 @@ declare namespace pusherLogRead {
       Invoke<typeof pusherLogRead, [where: { inode: "1234"; offset: 518 }, stdout: "1234 40\n"]>,
       "=",
       { where: { inode: "1234"; offset: 0 }; lines: [] }
+    >,
+  ];
+  /** a line longer than a whole look is skipped to its end, and said once; the lines after
+   *  it are read (here a look is 8 bytes) */
+  export type OverLong = [
+    Expect<
+      Invoke<
+        typeof pusherLogRead,
+        [where: { inode: "1234"; offset: 518 }, stdout: "1234 2000\nYWFhYWFhYWE=", most: 8]
+      >,
+      "=",
+      { where: { inode: "1234"; offset: 526; skipping: true }; lines: []; skipped: true }
+    >,
+    Expect<
+      Invoke<
+        typeof pusherLogRead,
+        [where: { inode: "1234"; offset: 526; skipping: true }, stdout: "1234 2000\nYWFh", most: 8]
+      >,
+      "=",
+      { where: { inode: "1234"; offset: 529; skipping: true }; lines: [] }
+    >,
+    Expect<
+      Invoke<
+        typeof pusherLogRead,
+        [
+          where: { inode: "1234"; offset: 526; skipping: true },
+          stdout: "1234 2000\nYWFhCmxpbmUKcGE=",
+          most: 8,
+        ]
+      >,
+      "=",
+      { where: { inode: "1234"; offset: 535 }; lines: ["line"] }
     >,
   ];
   /** a look that did not say where the file stands changes nothing */
@@ -1582,23 +1640,28 @@ const serve = async () => {
         continue;
       }
       try {
-        // One look: the file's identity and size, and up to a MiB of what is new, as base64
-        // (bytes, so an offset is never miscounted).
+        // One look: the file's identity and size, and up to PUSHER_LOOK_BYTES of what is
+        // new, as base64 (bytes, so an offset is never miscounted).
         const from = where ? where.offset : -1;
         const read = await b.exec(
           ROOT_VM,
           [
             "bash",
             "-c",
-            `stat -c '%i %s' "$1"; if [ "$2" -ge 0 ]; then tail -c +$(( $2 + 1 )) "$1" | head -c 1048576 | base64 -w0; fi`,
+            `stat -c '%i %s' "$1"; if [ "$2" -ge 0 ]; then tail -c +$(( $2 + 1 )) "$1" | head -c "$3" | base64 -w0; fi`,
             "_",
             file,
             String(from),
+            String(PUSHER_LOOK_BYTES),
           ],
           { root: true, timeoutMs: 20_000 },
         );
         const step = pusherLogRead(where, read.stdout);
         where = step.where;
+        if (step.skipped)
+          log(
+            `the pusher's log has a line longer than ${formatBytes(PUSHER_LOOK_BYTES)}: skipped to its end (if it was a push's, \`desolate events\` does not have it)`,
+          );
         for (const line of step.lines) {
           const e = pusherEvent(line);
           if (e) events.publish(e);
