@@ -53,7 +53,7 @@ import { sleep, waitFor } from "../shared/run.ts";
 import { sniffSocket } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
-import { holderIn } from "./held-ports.ts";
+import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
 import {
@@ -717,28 +717,21 @@ const serve = async () => {
   /** What holds such a port, as this user's lsof sees it: said to the person, who otherwise
    *  had to guess (dogfooding: 3000 was another macOS user's, which lsof cannot show). */
   const heldBy = new Map<number, string>();
-  // Asked of lsof in the background: run while the forwarder waited, it held up every timer,
-  // and a 400 ms sniff could end before bytes already sent were read (T2 03, 2026-11-16).
+  // Asked in the background (held-ports.ts): what holds it is "a program on this Mac" until
+  // lsof has said.
   const holderOf = (port: number) => {
     if (!heldBy.has(port)) {
       heldBy.set(port, "a program on this Mac");
-      execFile(
-        "lsof",
-        ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fcp"],
-        { encoding: "utf8", timeout: 3000 },
-        (_error, found) => {
-          if (heldBy.has(port)) heldBy.set(port, holderIn(found ?? ""));
-        },
-      );
+      void portHolder(port).then(({ by }) => {
+        if (heldBy.has(port)) heldBy.set(port, by);
+      });
     }
     return heldBy.get(port)!;
   };
   /** For a port spoken without a name: the one workspace it reaches. */
   const rawOwner = new Map<number, string>();
-  // Ports whose protocol carries no name: the known ones, the person's (DESOLATE_RAW_PORTS, a
-  // comma list, for a server that speaks first on another port), and ones learned from bytes
-  // that were not HTTP or TLS, forgotten when no workspace listens there any more.
-  const knownRaw = rawPortsOf(process.env.DESOLATE_RAW_PORTS);
+  // Ports whose protocol carries no name: the known ones and the person's (forward.ts).
+  const knownRaw = rawPortsOf();
   const waiting = new Set<Socket>();
   const log = (line: string) => fs.appendFileSync(LOG, `${new Date().toISOString()} ${line}\n`);
 

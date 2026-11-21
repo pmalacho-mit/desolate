@@ -14,10 +14,18 @@ import {
 } from "../shared/names.ts";
 import { greetingIs, LIMIT } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
+import { define, ports, valueOf } from "../shared/settings.ts";
 import { INSTANCE } from "./paths.ts";
 import { dashboardStale, stale } from "./retired.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Table,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { setEnv } from "../.harness/env.ts";
 import type {
   asked,
   askedTls,
@@ -53,30 +61,53 @@ type Routable = { vm: string; domain: string; workspace: string; listeners: Read
 /** What a connection said first (shared/sniff.ts, sniffSocket). */
 type Heard = { sniffed: Sniffed; head: Buffer; undecided?: boolean };
 
-/** Ports whose protocol carries no name: the known ones, and the person's (DESOLATE_RAW_PORTS,
- *  a comma list, for a server that speaks first on another port). Nothing learns a port is
- *  raw from traffic: anyone could teach it that. */
-const rawPortsOf = (extra: string | undefined) =>
-  new Set([
-    ...RAW_PORTS,
-    ...(extra ?? "")
-      .split(",")
-      .map(Number)
-      .filter((p) => Number.isInteger(p) && p >= 1024 && p <= 65535),
-  ]);
+/** The person's own ports whose protocol carries no name, besides RAW_PORTS. */
+const RAW_PORTS_TOO = define({
+  name: "forward.rawPorts",
+  env: "DESOLATE_RAW_PORTS",
+  side: "host",
+  default: (): number[] => [],
+  parse: ports,
+  why: "Ports where a workspace's server speaks first and its protocol carries no name, besides the databases' and queues' own (3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257): a client there reaches the workspace that had the port first.",
+});
+
+/** Ports whose protocol carries no name: the known ones, and the person's (`extra`, the
+ *  setting forward.rawPorts). Nothing learns a port is raw from traffic: anyone could teach
+ *  it that. */
+const rawPortsOf = (extra: readonly number[] = valueOf(RAW_PORTS_TOO)) =>
+  new Set([...RAW_PORTS, ...extra]);
 
 declare namespace rawPortsOf {
-  /** the databases and queues known to speak without a name, and the person's own from 1024 up */
+  /** the databases and queues known to speak without a name, and the person's own */
   export type Known = [
     Expect<
-      Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: undefined]>]>,
+      Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: []]>]>,
       "=",
       [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257]
     >,
     Expect<
-      Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: "4000, 80,x,70000"]>]>,
+      Invoke<typeof shown, [value: Invoke<typeof rawPortsOf, [extra: [4000, 5432]]>]>,
       "=",
       [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257, 4000]
+    >,
+  ];
+  /** with nothing said, the setting's: the person's list, or none; a list with a port the
+   *  forwarder never forwards is refused, not shortened */
+  export type FromTheSetting = [
+    Given<
+      Invoke<typeof setEnv, [name: "DESOLATE_RAW_PORTS", value: "7000, 7001"]>,
+      Expect<
+        Invoke<typeof shown, [value: Invoke<typeof rawPortsOf>]>,
+        "=",
+        [3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257, 7000, 7001]
+      >
+    >,
+    Given<
+      Invoke<typeof setEnv, [name: "DESOLATE_RAW_PORTS", value: "4000,80"]>,
+      Throws<
+        Invoke<typeof rawPortsOf>,
+        "DESOLATE_RAW_PORTS must be ports from 1024 to 65535, separated by commas, not '4000,80'"
+      >
     >,
   ];
 }
