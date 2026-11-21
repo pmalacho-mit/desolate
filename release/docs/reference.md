@@ -226,6 +226,9 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
   is often the AirPlay Receiver: System Settings, General, AirDrop & Handoff). (Until
   2026-11-16 desolate kept such a port taken inside every workspace,
   which made a server there move on, and stopped a backend that needed it.)
+- **A listener below 1024, or past a workspace's 256th,** is not forwarded: below 1024 a
+  port is the Mac's system's, and a workspace may not have the Mac listen on every port.
+  `desolate ports` says which ports, or how many, were left out.
 - **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
   clicked) is sent on to the workspace serving that port, at its own name, the path kept;
   with several serving it, the page lists them. Nothing is ever served at bare `localhost`.
@@ -297,6 +300,12 @@ work with no credential, private repositories included. Only the `.git` spelling
   else leaves at all: a registry on another port (`:5000`), ssh to a forge, a database
   outside: none of it can be reached from a workspace. Fetch what needs those on the Mac or
   in the root, or serve it on 443.
+- **Connections out at once.** Each connection a workspace has open through its proxy is
+  a session into the root VM, about 85 MB of the Mac's memory, so a workspace has a number
+  carried at once (by default an eighth of the Mac's memory's worth, from 16 to 256), and as
+  many more wait their turn. Past those, a connection is refused with the reason (a plain-HTTP
+  program reads it; TLS is closed), the host's log says so, and `desolate ports` counts them.
+  More: `DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap` (the setting `link.connections`).
 - **TLS stays end to end,** with the real certificates, for every host but the hosts of the
   domain's own secrets: image pulls and `apt`, `npm` or `pip` in a build need nothing of
   desolate's. Only a secret's host is answered by the domain's secrets proxy, with a
