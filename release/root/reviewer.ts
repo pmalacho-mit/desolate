@@ -834,20 +834,6 @@ const summary = async (
     return { ok: false, error: "the root has not sent the reviewer this commit" };
   const warnings: string[] = [];
   const remote = await remoteOf(repo, dir);
-  // The same push against the same remote, asked again (each challenge's page asks anew): the
-  // account already made, for ten minutes. A root's user that has the page ask again and again
-  // starts no new work (the independent review of #169).
-  const key = createHash("sha256")
-    .update(JSON.stringify([repoId(repo), branch, commit, onto, [...remote.heads].sort()]))
-    .digest("hex");
-  const cached = cachedSummary(key);
-  // (Only while the packs it names are kept: pruned past 8 GiB, it is made again.)
-  if (
-    cached?.sends &&
-    storedPack(repo, cached.sends.pack) &&
-    (!cached.squash || storedPack(repo, cached.squash.sends.pack))
-  )
-    return cached;
   const now = remote.heads.get(branch) ?? null;
   if (now !== onto)
     warnings.push(
@@ -866,6 +852,30 @@ const summary = async (
     };
   const known = [];
   for (const id of new Set(remote.heads.values())) if (await has(dir, id)) known.push(id);
+  // The same push against the same remote, asked again (each challenge's page asks anew): the
+  // account already made, for ten minutes. A root's user that has the page ask again and again
+  // starts no new work (the independent review of #169).
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify([
+        repoId(repo),
+        branch,
+        commit,
+        onto,
+        [...remote.heads].sort(),
+        remote.defaultBranch,
+        known,
+      ]),
+    )
+    .digest("hex");
+  const cached = cachedSummary(key);
+  // (Only while the packs it names are kept: pruned past 8 GiB, it is made again.)
+  if (
+    cached?.sends &&
+    storedPack(repo, cached.sends.pack) &&
+    (!cached.squash || storedPack(repo, cached.squash.sends.pack))
+  )
+    return cached;
   if (known.length < new Set(remote.heads.values()).size)
     warnings.push(
       "some of the remote's branches were not sent to the reviewer: commits on them may be listed as new",
@@ -1035,7 +1045,11 @@ const summary = async (
   )
     .split("\n")
     .filter(isCommit);
-  const COMMON = /^(tree|parent|author|committer) /;
+  // The four, as git writes them and in its order, each once (parents any number): what fsck
+  // checks. After them, anything, repeated names and continuation lines too, is extra (the
+  // review of the fixes: a second `committer` line, or a continuation of the first, passed
+  // fsck --strict and receive.fsckObjects, and a match on the name alone took it as git's).
+  const PREFIX = /^tree [0-9a-f]{40}\n(parent [0-9a-f]{40}\n)*author [^\n]*\ncommitter [^\n]*\n/;
   const odd: string[] = [];
   let unread = false;
   for (let from = 0; from < order.length && !unread; from += 2000) {
@@ -1051,17 +1065,18 @@ const summary = async (
       const [id, , size] = raw.subarray(at, end).toString("latin1").split(" ");
       const body = raw.subarray(end + 1, end + 1 + Number(size)).toString("utf8");
       const split = body.indexOf("\n\n");
+      const head = split < 0 ? `${body}\n` : body.slice(0, split + 1);
+      const fixed = PREFIX.exec(head)?.[0] ?? "";
       // A header and its continuation lines (a signature's), with their size.
       const extra: { name: string; bytes: number; value: string }[] = [];
+      if (!fixed) extra.push({ name: "malformed headers", bytes: head.length, value: "" });
       let current: (typeof extra)[number] | null = null;
-      for (const line of (split < 0 ? body : body.slice(0, split)).split("\n")) {
-        if (line.startsWith(" ")) {
-          if (current) current.bytes += line.length + 1;
-        } else if (line === "" || COMMON.test(line)) current = null;
+      for (const line of (fixed ? head.slice(fixed.length) : "").split("\n").slice(0, -1)) {
+        if (line.startsWith(" ") && current) current.bytes += line.length + 1;
         else {
           const space = line.indexOf(" ");
           current = {
-            name: shown(space < 0 ? line : line.slice(0, space), 40),
+            name: shown(space < 0 ? line : line.slice(0, space), 40) || "(a line with no name)",
             bytes: line.length + 1,
             value: space < 0 ? "" : line.slice(space + 1),
           };
@@ -1160,10 +1175,32 @@ const summary = async (
             ? "cut at 256 KiB"
             : undefined;
     } else eachDiffWhy = "git could not make it (too large, or too slow)";
-  } else if (diffCut) eachDiffWhy = "the change is over 20 000 lines";
-  if (counted >= 2 && eachDiff === undefined)
+  } else if (diffCut) {
+    // Over 20 000 lines: no diffs, but every commit's message and who made it, all the same.
+    const text = await gitIn(
+      dir,
+      [
+        "log",
+        "--no-walk=unsorted",
+        "--no-show-signature",
+        "--no-decorate",
+        "--date=iso-strict",
+        "--format=commit %H%nAuthor:     %an <%ae>%nAuthorDate: %ad%nCommitter:  %cn <%ce>%nCommitDate: %cd%n%n%w(0,4,4)%B",
+        ...order.slice(0, LIMIT.commits),
+      ],
+      { timeoutMs: 120_000 },
+    );
+    if (text.code === 0) {
+      eachDiff = text.stdout.slice(0, DIFF_MOST.bytes);
+      eachDiffCut = true;
+      eachDiffWhy = `each commit's message, without its diff (the change is over 20 000 lines)${counted > LIMIT.commits ? `, the first ${LIMIT.commits} of ${counted}` : ""}`;
+    } else eachDiffWhy = "the change is over 20 000 lines, and git could not list the commits";
+  }
+  if (counted >= 1 && eachDiff === undefined)
     warnings.push(
-      `each commit's own diff is not shown (${eachDiffWhy ?? "not made"}): what the commits held on the way is not seen here, and each is pushed. Squashed, only the net change is pushed`,
+      counted >= 2
+        ? `each commit's own diff is not shown (${eachDiffWhy ?? "not made"}): what the commits held on the way is not seen here, and each is pushed. Squashed, only the net change is pushed`
+        : `the commit's message is not shown (${eachDiffWhy ?? "not made"}): it is pushed as it is`,
     );
   return keepSummary(key, {
     ok: true,
@@ -1232,9 +1269,13 @@ const oneAtATime = async <T>(work: () => Promise<T>): Promise<T> => {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
-    const holder = Number(
-      fs.readFileSync(path.join(LOCK, "pid"), { encoding: "utf8", flag: "a+" }),
-    );
+    let holder = 0;
+    try {
+      holder = Number(fs.readFileSync(path.join(LOCK, "pid"), "utf8"));
+    } catch {
+      // Gone between the two: try again. (No pid yet: its holder is still writing it.)
+      if (!fs.existsSync(LOCK)) continue;
+    }
     const young = Date.now() - (fs.statSync(LOCK, { throwIfNoEntry: false })?.mtimeMs ?? 0) < 5000;
     let alive = young;
     if (holder > 0)
@@ -1245,7 +1286,16 @@ const oneAtATime = async <T>(work: () => Promise<T>): Promise<T> => {
         alive = (error as NodeJS.ErrnoException).code === "EPERM";
       }
     if (!alive) {
-      fs.rmSync(LOCK, { recursive: true, force: true });
+      // Taken away by one waiter alone: renamed, so a second that also found it dead does not
+      // remove the lock the first then made.
+      const away = `${LOCK}.stale-${randomBytes(8).toString("hex")}`;
+      try {
+        if (Number(fs.readFileSync(path.join(LOCK, "pid"), "utf8")) === holder)
+          fs.renameSync(LOCK, away);
+      } catch {
+        /* another took it first */
+      }
+      fs.rmSync(away, { recursive: true, force: true });
       continue;
     }
     if (Date.now() > until)
@@ -1316,8 +1366,10 @@ const handle = (socket: Socket) => {
 let server: ReturnType<typeof createServer>;
 const main = async () => {
   fs.rmSync(REVIEWER.control, { force: true });
+  // (The summary lock and kept summaries stay: the root's user restarts this service at will,
+  // with one connection, and a restart that cleared them undid both, the review of the fixes.)
   for (const name of fs.readdirSync(REVIEWER.home))
-    if (name !== "repos" && name !== "packs")
+    if (!["repos", "packs", "summaries", "summary.lock"].includes(name))
       fs.rmSync(path.join(REVIEWER.home, name), { recursive: true, force: true });
   prunePacks();
   const before = process.umask(0o111);

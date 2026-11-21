@@ -55,7 +55,16 @@ describe("T1 after a squashed push", () => {
     fs.rmSync(path.join(dir, "g"));
     assert.equal(await squashedFrom(run, other, squashed), null);
     // Nor is a merge on the remote, whatever its files.
-    const merged = git("commit-tree", "-p", "main", "-p", squashed, "-m", "merge", `${squashed}^{tree}`);
+    const merged = git(
+      "commit-tree",
+      "-p",
+      "main",
+      "-p",
+      squashed,
+      "-m",
+      "merge",
+      `${squashed}^{tree}`,
+    );
     assert.equal(await squashedFrom(run, merged, squashed), null);
   });
 

@@ -663,9 +663,12 @@ c1=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$t1
 c2=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$base^{tree}" -p "$c1" -m 'put back')
 plain=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$base^{tree}" -p "$c2" -m 'with headers')
 c3=$(git cat-file commit "$plain" | awk '/^committer /{print; print "encoding ISO-8859-1"; print "x-data a payload of the attacker"; print "gpgsig -----BEGIN PGP SIGNATURE-----"; print " AAAA"; print " -----END PGP SIGNATURE-----"; next} {print}' | git hash-object -t commit -w --stdin)
-echo "$c1 $c2 $c3"`);
+plain4=$(git -c user.name=chain -c user.email=chain@example.invalid commit-tree "$base^{tree}" -p "$c3" -m 'hidden')
+c4=$(git cat-file commit "$plain4" | awk '/^committer /{print; print " a continuation of the committer"; print "committer a second, which fsck does not read"; next} {print}' | git hash-object -t commit -w --stdin)
+echo "$c1 $c2 $c3 $c4"`);
     assert.equal(chain.code, 0, chain.stderr);
-    const [c1, c2, c3] = chain.stdout.trim().split("\n").pop()!.split(" ") as [
+    const [c1, c2, c3, c4] = chain.stdout.trim().split("\n").pop()!.split(" ") as [
+      string,
       string,
       string,
       string,
@@ -676,10 +679,10 @@ echo "$c1 $c2 $c3"`);
       "--input-type=module",
       "-e",
       `import { submitForReview } from "/desolate/release/root/review-client.ts"; const why = await submitForReview({ owner: "acme", name: "widgets" }, process.argv[1]); if (why) { console.error(why); process.exit(1); }`,
-      c3,
+      c4,
     ]);
     assert.equal(sentChain.code, 0, sentChain.stderr);
-    const saidChain = reviewerSays("chain", c3) as ReturnType<typeof reviewerSays> & {
+    const saidChain = reviewerSays("chain", c4) as ReturnType<typeof reviewerSays> & {
       warnings?: string[];
       between?: { path: string }[];
       squash?: { message: string; count: number };
@@ -687,11 +690,19 @@ echo "$c1 $c2 $c3"`);
     };
     assert.equal(saidChain.ok, true, String(saidChain.error));
     const headers = (saidChain.warnings ?? []).find((w) => /carry headers/.test(w)) ?? "";
-    assert.match(headers, /^1 commit\(s\) carry headers this page does not show/);
+    assert.match(headers, /^2 commit\(s\) carry headers this page does not show/);
     assert.match(
       headers,
       new RegExp(
         `${c3.slice(0, 12)}: encoding "ISO-8859-1", x-data \\(\\d+ bytes\\), gpgsig \\(\\d+ bytes, a signature\\)`,
+      ),
+    );
+    // A continuation of the committer line, and a second committer line: fsck reads neither,
+    // so neither is git's own, whatever its name.
+    assert.match(
+      headers,
+      new RegExp(
+        `${c4.slice(0, 12)}: \\(a line with no name\\) \\(\\d+ bytes\\), committer \\(\\d+ bytes\\)`,
       ),
     );
     assert.equal(
@@ -704,13 +715,16 @@ echo "$c1 $c2 $c3"`);
       ["README.md?key.env"],
       "the file with a newline in its name is one file, not two",
     );
-    assert.equal(saidChain.squash?.count, 3);
+    assert.equal(saidChain.squash?.count, 4);
     assert.equal(
       saidChain.squash?.message,
-      "(no message)\n\nSquashed from 3 commits:\n- (no message)\n- put back\n- with headers\n",
+      "(no message)\n\nSquashed from 4 commits:\n- (no message)\n- put back\n- with headers\n- hidden\n",
     );
     const at = (id: string) => saidChain.eachDiff?.indexOf(`commit ${id}`) ?? -1;
-    assert.ok(at(c1) >= 0 && at(c1) < at(c2) && at(c2) < at(c3), "each commit, first to last");
+    assert.ok(
+      at(c1) >= 0 && at(c1) < at(c2) && at(c2) < at(c3) && at(c3) < at(c4),
+      "each commit, first to last",
+    );
   });
 
   it("refusals that need no person: --expect, the default branch, a terminal answer that is not the branch", () => {

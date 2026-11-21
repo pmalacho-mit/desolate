@@ -1476,6 +1476,14 @@ are left for the owner, with what would close them.
   - **After a squash.** The command printed to carry on came from the root's ordinary user,
     which could print any: now the host prints it, from the text it signed. A plain rebase
     made copies of what a merge brought in: now `--rebase-merges`.
+  A fresh review of those fixes found the header check still open: a second `committer`
+  line, or a line continuing the first, passed `fsck --strict` and `receive.fsckObjects`,
+  and was taken as git's own by its name. Now the four are matched as git writes them, in
+  order, once, and every byte after them is extra (T2 04 pushes exactly that commit's
+  account). It also found the lock and the kept summaries cleared at each restart of the
+  reviewer, which the root's user causes at will (now kept), two races in the lock, and a
+  single commit's message unseen when its change was too large (now its message is shown,
+  without the diff).
 - **Tokens in a command line.** `desolate approve --web --open`, `git --open` and
   `editor --open` pass the page's address, its token in it, to `open`, whose arguments any
   user of the Mac can read in `ps`. Closing it: open them through a one-time sign-in code, as

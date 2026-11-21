@@ -637,9 +637,11 @@ const reviewedLines = (s: Summary, squashed: boolean): string[] => {
   const forge = (s.files ?? []).filter((f) => f.sensitive).map((f) => f.path);
   const square = s.squash;
   return [
+    // (One a line: a long name cannot push the others, or the count, off the end.)
     ...(forge.length
       ? [
-          `FORGE       changes what runs on the forge: ${forge.slice(0, 5).join(", ")}${forge.length > 5 ? `, and ${forge.length - 5} more` : ""}`,
+          `FORGE       changes what runs on the forge${forge.length > 5 ? ` (${forge.length} files; the first 5)` : ""}:`,
+          ...forge.slice(0, 5).map((f) => `              ${f}`),
         ]
       : []),
     ...(s.warnings ?? []).slice(0, 20).map((w) => `warning     ${w}`),
