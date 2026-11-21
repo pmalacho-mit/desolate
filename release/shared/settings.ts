@@ -270,7 +270,7 @@ export const storedIn = (file: string): Stored => {
   const object = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
   const ours =
     object &&
-    Object.entries(parsed).every(([name, entry]) => {
+    Object.entries(parsed as Record<string, unknown>).every(([name, entry]) => {
       const { value, side } = (entry ?? {}) as { value?: unknown; side?: unknown };
       if (typeof value !== "string" || typeof side !== "string" || !SIDES.includes(side))
         return false;

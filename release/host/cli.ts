@@ -101,6 +101,9 @@ The stack itself:
   desolate doctor [--json]                                       check it; every failure names its fix
   desolate down                                                  stop every VM and the daemon; remove nothing
   desolate destroy [--all]                                       remove the VMs (--all: and ~/.desolate)
+  desolate settings [--json] | set <name> <value> | unset <name>
+                                                                 what depends on this Mac or on you (VM sizes, how many
+                                                                 of things): each one's value, default and why
   desolate root shell                                            the root's terminal: git on the root clones
   desolate completion                                            tab completion for zsh and bash (below)
   desolate help                                                  this text
@@ -555,6 +558,12 @@ const main = async (argv: string[]): Promise<number> => {
       );
     const { down } = await import("./bootstrap.ts");
     await down(out);
+    return EXIT.ok;
+  }
+  if (verb === "settings") {
+    const { values, positionals } = flags(rest, {});
+    const { settings } = await import("./settings.ts");
+    await settings(positionals, values.json === true, out);
     return EXIT.ok;
   }
   if (verb === "completion") {

@@ -18,3 +18,14 @@ export const storeText = (text: string) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, text);
 };
+
+/** `run(...args, out)`, awaited: the lines it gave `out`, as a terminal would have shown them
+ *  (host/settings.ts's commands print through the `out` they are given). */
+export const said = async (
+  run: (...args: any[]) => unknown,
+  args: unknown[] = [],
+): Promise<string[]> => {
+  const lines: string[] = [];
+  await run(...args, (line: string) => lines.push(line));
+  return lines;
+};

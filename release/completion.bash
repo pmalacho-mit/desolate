@@ -46,7 +46,7 @@ _desolate() {
     local i
     for ((i = 1; i < COMP_CWORD; i++)); do [ "${COMP_WORDS[i]}" = "--" ] && return 0; done
     if [ "$COMP_CWORD" -eq 1 ]; then
-        words="bootstrap doctor destroy down clone fetch repos keys domain up list status board start stop resize rm exec editor ui ports offers branches review push approve root net git events notify agent suede upstream completion help"
+        words="bootstrap doctor destroy down clone fetch repos keys domain up list status board start stop resize rm exec editor ui ports offers branches review push approve root net git events notify agent suede upstream settings completion help"
     else
         case "$verb" in
             domain)
@@ -72,6 +72,9 @@ _desolate() {
             approve) words="--selftest" ;;
             root) if [ "$COMP_CWORD" -eq 2 ]; then words="shell"; fi ;;
             net) if [ "$COMP_CWORD" -eq 2 ]; then words="log"; else words="$(_desolate_domains) --json"; fi ;;
+            # (A setting's name is not offered: the settings are known by loading desolate's
+            # code, which a completion must not do on every key press. `desolate settings` lists them.)
+            settings) if [ "$COMP_CWORD" -eq 2 ]; then words="set unset --json"; fi ;;
             destroy) words="--all" ;;
             doctor|repos|keys) words="--json" ;;
         esac
