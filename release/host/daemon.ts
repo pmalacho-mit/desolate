@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import { connect, createServer } from "node:net";
 import type { Server, Socket } from "node:net";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { refuse } from "../shared/exit.ts";
@@ -221,6 +222,11 @@ const SILENT_MOST = 512;
 /** How long a refused connection out is given to read its answer and close (openLink): a
  *  workspace's relay reads it at once. */
 const REFUSED_MS = 5000;
+/** The most connections at once in their handshake on one vz link's loopback port
+ *  (openLink). Each costs a socket of this daemon's, not a session into the root, and any
+ *  program of any user's can open them: so far above what a guest needs that a flood must
+ *  open this many within the guest's own handshake to keep it off its link. */
+const PROVING_MOST = 1024;
 
 /** The most of one answer from the root's state service this host reads: a hard bound
  *  against the root's user, whose service parses what domains send (decisions.md, "the
@@ -970,6 +976,18 @@ const serve = async () => {
     }
   };
 
+  // A connection into a VM that cannot be started (no descriptor left on this Mac: spawn
+  // then gives no pipes, and reading them throws) is one that closes, never a throw out of a
+  // socket's handler, which would end the daemon and every workspace's link with it.
+  const dial = (vm: string, target: number | string): Duplex => {
+    try {
+      return b.dial(vm, target);
+    } catch (error) {
+      log(`could not reach ${vm}: ${error instanceof Error ? error.message : String(error)}`);
+      return new PassThrough().destroy();
+    }
+  };
+
   const pipe = (client: Socket, upstream: Duplex, head: Buffer) => {
     const close = () => {
       client.destroy();
@@ -1021,7 +1039,7 @@ const serve = async () => {
     if (route.to === "close") return void client.destroy();
     if (route.to === "redirect") return redirectHttp(client, route.location);
     if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
-    if (route.to === "pipe") return pipe(client, b.dial(route.entry.vm, port), head);
+    if (route.to === "pipe") return pipe(client, dial(route.entry.vm, port), head);
     const entry = route.entry;
     // A client that already went gets no connection to the owner (final review: each one
     // held the owner's server until it hung up).
@@ -1030,7 +1048,7 @@ const serve = async () => {
     // greeting goes out now; but what the client says first is read before any of it goes on.
     // If it is HTTP or TLS (a browser's preconnected socket, used later for a request naming
     // another workspace, with its cookies: third review), both ends are closed.
-    const upstream = b.dial(entry.vm, port);
+    const upstream = dial(entry.vm, port);
     const close = () => (client.destroy(), upstream.destroy());
     upstream.on("error", close);
     upstream.on("close", close);
@@ -1130,7 +1148,7 @@ const serve = async () => {
       }
       if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
       if (route.to === "close") return void client.destroy();
-      pipe(client, b.dial(route.entry.vm, EDITOR.gate), head);
+      pipe(client, dial(route.entry.vm, EDITOR.gate), head);
     });
   };
   // On 127.0.0.1 and on ::1, or not at all: browsers try ::1 first for *.localhost (measured
@@ -1330,7 +1348,7 @@ const serve = async () => {
           turn();
         });
         // To this workspace's proxy in the root, and nowhere else.
-        pipe(client, b.dial(ROOT_VM, entry.proxy), head);
+        pipe(client, dial(ROOT_VM, entry.proxy), head);
       };
       if (verdict === "carry") return go();
       // What it sends meanwhile waits in its socket, read when it is carried.
@@ -1352,17 +1370,17 @@ const serve = async () => {
     if (hostPort) {
       // Every process on this machine can connect to a loopback port. Only a connection
       // that opens with this workspace's token is carried; without a token, none is. Until
-      // it has proved it is the workspace's, a connection is nobody's: at most linkMost are
-      // in their handshake at once (shared/link.ts gives each ten seconds), and past that
-      // the one that has been at it longest is closed with no word, since it is not known
-      // to be the workspace's to tell. The longest, not the newest: another user's program
-      // holding linkMost silent ones would otherwise keep the workspace off its link, for as
-      // long as it liked; this way it must open linkMost within the guest's own handshake.
+      // it has proved it is the workspace's, a connection is nobody's: at most PROVING_MOST
+      // are in their handshake at once (shared/link.ts gives each ten seconds), and past
+      // that the one that has been at it longest is closed with no word, since it is not
+      // known to be the workspace's to tell. The longest, not the newest: another user's
+      // program holding as many silent ones would otherwise keep the workspace off its link
+      // for as long as it liked (it was 64, the link's own bound, and closed the newest).
       const proving = new Set<Socket>();
       const tcp = createServer((client) => {
         client.on("error", () => client.destroy());
         if (!token || entry.proxy === null) return client.destroy();
-        if (proving.size >= linkMost) {
+        if (proving.size >= PROVING_MOST) {
           const longest = proving.values().next().value!;
           proving.delete(longest);
           longest.destroy();
@@ -1526,7 +1544,7 @@ const serve = async () => {
         ready.splice(i, 1);
       }
     while (rootUp && Date.now() - dashboardUsed < READY.afterUseMs && ready.length < READY.count) {
-      const item = { stream: b.dial(ROOT_VM, ROOT_UI.port), at: Date.now(), dead: false };
+      const item = { stream: dial(ROOT_VM, ROOT_UI.port), at: Date.now(), dead: false };
       const die = () => (item.dead = true);
       item.stream.on("error", die);
       item.stream.on("close", die);
@@ -1538,7 +1556,7 @@ const serve = async () => {
     stock();
     const item = ready.shift();
     setImmediate(stock);
-    if (!item || item.dead) return b.dial(ROOT_VM, ROOT_UI.port);
+    if (!item || item.dead) return dial(ROOT_VM, ROOT_UI.port);
     item.stream.removeAllListeners("error");
     item.stream.removeAllListeners("close");
     return item.stream;
