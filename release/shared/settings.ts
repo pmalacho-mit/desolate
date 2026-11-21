@@ -13,13 +13,22 @@
 //   });
 //   ... valueOf(SHELLS)
 //
-// Today a setting's value is its environment variable, or its default. When `desolate
-// settings` stores values and the host passes them into each VM, `valueOf` is where that is
-// read: no caller changes.
+// A setting's value is, in order: its environment variable (in the process that reads it),
+// what the person stored with `desolate settings set`, its default. What is stored is the
+// person's, on the Mac (`storeFile`): a file under the host's home, which no VM's share
+// reaches. A setting read in a VM (side root, workspace or git) is passed in by the host
+// when it starts that VM's services (host/settings.ts `passInward`): a file of root's in the
+// VM's own disk, not on a share, so neither a workspace nor the root's ordinary user can
+// change what another VM, or the host, reads. A process inside a VM can still be started
+// with a variable of its own: that changes only what that process does, as it always could.
 //
-// A setting is listed once its file has been imported: what lists them imports the files.
+// A setting is listed once its file has been imported: what lists them imports the files
+// (host/settings.ts finds them by their `define(` calls; there is no list to keep).
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { EXIT, Refusal } from "./exit.ts";
 import { PORTS } from "./limits.ts";
-import { parseMemory } from "./size.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
@@ -30,7 +39,8 @@ import type {
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { setEnv } from "../.harness/env.ts";
-import type { namesOf } from "../.harness/shared-settings.ts";
+import type { namesOf, storeText } from "../.harness/shared-settings.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 /** A value as a person typed it, read: the value, or null when it is not one. `takes` says
  *  what one is ("a whole number from 1 to 64"), for the refusal of a value that is not. The
@@ -210,23 +220,244 @@ declare namespace defined {
   >;
 }
 
-/** A setting's value now: what its variable says, read by its parser, or its default when
- *  the variable is unset or empty. A variable that is set to something its parser does not
- *  take is refused (throws), naming the variable, what it takes and what it holds: a typo
- *  must not silently become the default. */
-export const valueOf = <T>(setting: Setting<T>): T => {
-  const text = process.env[setting.env];
-  if (text === undefined || text.trim() === "") {
-    const or = setting.default;
-    return typeof or === "function" ? (or as () => T)() : or;
+/** Where a value was found: the reading process's environment, what the person stored (on
+ *  the Mac, or passed into the VM by the host), or nowhere (the default). */
+export type From = "environment" | "stored" | "default";
+
+/** What `desolate settings set` keeps: each setting's text as the person wrote it, and the
+ *  side it is read on (so the host can pass a VM's into it without loading every file). */
+export type Stored = Record<string, { value: string; side: Setting<unknown>["side"] }>;
+
+/** The file a setting of `side` is stored in, as the process reading it sees it. On the Mac
+ *  (side host): `settings.json` in the host's home (DESOLATE_HOME, else ~/.desolate, as
+ *  host/paths.ts has it; read here, not imported, since this file runs in every VM too).
+ *  In a VM: what the host wrote there as root, on the VM's own disk. */
+export const storeFile = (side: Setting<unknown>["side"]): string =>
+  side === "host"
+    ? path.join(
+        path.resolve(process.env.DESOLATE_HOME ?? path.join(os.homedir(), ".desolate")),
+        "settings.json",
+      )
+    : INWARD;
+
+/** In a VM, where the host leaves the settings passed in: root's, mode 0644, not a share. */
+export const INWARD = "/etc/desolate/settings.json";
+
+const read = new Map<string, { at: string; stored: Stored }>();
+
+/** What is stored in `file` (nothing, when there is no file). Read again only when the file
+ *  changed, so a value set while a program runs is what its next `valueOf` gives. A file
+ *  that is not what `desolate settings` writes is refused, never taken as nothing: a value
+ *  the person set must not silently become the default. */
+export const storedIn = (file: string): Stored => {
+  let at: string;
+  try {
+    const stat = fs.statSync(file);
+    at = `${stat.ino}:${stat.mtimeMs}:${stat.size}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw error;
   }
-  const value = setting.parse(text);
-  if (value === null)
-    throw new Error(
-      `${setting.env} must be ${setting.parse.takes ?? `a value for ${setting.name}`}, not '${printable(text, 80)}'`,
+  const known = read.get(file);
+  if (known?.at === at) return known.stored;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    parsed = null;
+  }
+  const stored: Stored = {};
+  const object = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+  const ours =
+    object &&
+    Object.entries(parsed).every(([name, entry]) => {
+      const { value, side } = (entry ?? {}) as { value?: unknown; side?: unknown };
+      if (typeof value !== "string" || typeof side !== "string" || !SIDES.includes(side))
+        return false;
+      stored[name] = { value, side: side as Setting<unknown>["side"] };
+      return true;
+    });
+  if (!ours)
+    throw new Refusal(
+      `${file} is not the settings desolate stores (an object of { "value": text, "side": where } by name)`,
+      `move it aside (desolate settings set writes a new one): mv ${file} ${file}.bad`,
     );
-  return value;
+  read.set(file, { at, stored });
+  return stored;
 };
+
+/** A setting's value now, and where it came from: its variable, read by its parser, else
+ *  what was stored, else its default. A variable that is unset or empty is not set. A value
+ *  that is set to something its parser does not take is refused (throws), naming where it
+ *  is, what it takes and what it holds: a typo must not silently become the default. */
+export const lookup = <T>(setting: Setting<T>): { value: T; from: From } => {
+  const text = process.env[setting.env];
+  if (text !== undefined && text.trim() !== "") {
+    const value = setting.parse(text);
+    if (value === null)
+      throw new Error(
+        `${setting.env} must be ${setting.parse.takes ?? `a value for ${setting.name}`}, not '${printable(text, 80)}'`,
+      );
+    return { value, from: "environment" };
+  }
+  const stored = storedIn(storeFile(setting.side))[setting.name];
+  if (stored !== undefined) {
+    const value = setting.parse(stored.value);
+    if (value === null)
+      throw new Refusal(
+        `${setting.name} is stored as '${printable(stored.value, 80)}', and must be ${setting.parse.takes ?? "a value it takes"}`,
+        `on the Mac: desolate settings set ${setting.name} <value> (or unset ${setting.name})`,
+      );
+    return { value, from: "stored" };
+  }
+  const or = setting.default;
+  return { value: typeof or === "function" ? (or as () => T)() : or, from: "default" };
+};
+
+declare namespace lookup {
+  /** the variable comes first, then what was stored, then the default */
+  export type Order = [
+    Given<
+      [
+        Invoke<typeof storeText, [text: '{"git.shells":{"value":"9","side":"host"}}']>,
+        Invoke<typeof setEnv, [name: "DESOLATE_GIT_SHELLS", value: "12"]>,
+      ],
+      Expect<
+        Invoke<
+          typeof lookup,
+          [
+            setting: {
+              name: "git.shells";
+              env: "DESOLATE_GIT_SHELLS";
+              side: "host";
+              default: 6;
+              parse: Invoke<typeof whole, [min: 1, max: 64]>;
+              why: "";
+            },
+          ]
+        >,
+        "=",
+        { value: 12; from: "environment" }
+      >
+    >,
+    Given<
+      [
+        Invoke<typeof storeText, [text: '{"git.shells":{"value":"9","side":"host"}}']>,
+        Invoke<typeof setEnv, [name: "DESOLATE_GIT_SHELLS", value: null]>,
+      ],
+      Expect<
+        Invoke<
+          typeof lookup,
+          [
+            setting: {
+              name: "git.shells";
+              env: "DESOLATE_GIT_SHELLS";
+              side: "host";
+              default: 6;
+              parse: Invoke<typeof whole, [min: 1, max: 64]>;
+              why: "";
+            },
+          ]
+        >,
+        "=",
+        { value: 9; from: "stored" }
+      >
+    >,
+    Given<
+      [
+        Invoke<typeof storeText, [text: '{"other.thing":{"value":"9","side":"host"}}']>,
+        Invoke<typeof setEnv, [name: "DESOLATE_GIT_SHELLS", value: null]>,
+      ],
+      Expect<
+        Invoke<
+          typeof lookup,
+          [
+            setting: {
+              name: "git.shells";
+              env: "DESOLATE_GIT_SHELLS";
+              side: "host";
+              default: 6;
+              parse: Invoke<typeof whole, [min: 1, max: 64]>;
+              why: "";
+            },
+          ]
+        >,
+        "=",
+        { value: 6; from: "default" }
+      >
+    >,
+  ];
+  /** a stored value the setting does not take (the file edited by hand, or a range that
+   *  changed since) is refused in the setting's own words, with how to put it right */
+  export type StoredWrong = Given<
+    [
+      Invoke<typeof storeText, [text: '{"git.shells":{"value":"lots","side":"host"}}']>,
+      Invoke<typeof setEnv, [name: "DESOLATE_GIT_SHELLS", value: null]>,
+    ],
+    Expect<
+      Invoke<
+        typeof refusalOf,
+        [
+          run: typeof lookup,
+          args: [
+            setting: {
+              name: "git.shells";
+              env: "DESOLATE_GIT_SHELLS";
+              side: "host";
+              default: 6;
+              parse: Invoke<typeof whole, [min: 1, max: 64]>;
+              why: "";
+            },
+          ],
+        ]
+      >,
+      "=",
+      {
+        message: "git.shells is stored as 'lots', and must be a whole number from 1 to 64";
+        fix: "on the Mac: desolate settings set git.shells <value> (or unset git.shells)";
+        code: 1;
+      }
+    >
+  >;
+  /** a setting read in a VM is not read from the Mac's store: the host passes those in */
+  export type NotTheMacs = Given<
+    [
+      Invoke<typeof storeText, [text: '{"root.landedMinutes":{"value":"5","side":"root"}}']>,
+      Invoke<typeof setEnv, [name: "DESOLATE_ROOT_LANDED_MINUTES", value: null]>,
+    ],
+    Expect<
+      Invoke<
+        typeof lookup,
+        [
+          setting: {
+            name: "root.landedMinutes";
+            env: "DESOLATE_ROOT_LANDED_MINUTES";
+            side: "root";
+            default: 15;
+            parse: Invoke<typeof whole, [min: 1, max: 1440]>;
+            why: "";
+          },
+        ]
+      >,
+      "=",
+      { value: 15; from: "default" }
+    >
+  >;
+}
+
+declare namespace storedIn {
+  /** a file that is not one desolate wrote is refused, not read as nothing */
+  export type NotOurs = Given<
+    Invoke<typeof storeText, [text: '{"git.shells":9}']>,
+    Throws<
+      Invoke<typeof storedIn, [file: Invoke<typeof storeFile, [side: "host"]>]>,
+      "is not the settings desolate stores"
+    >
+  >;
+}
+
+/** A setting's value now (`lookup`'s, without where it came from): what every caller reads. */
+export const valueOf = <T>(setting: Setting<T>): T => lookup(setting).value;
 
 declare namespace valueOf {
   /** nobody set it: the default */
@@ -340,7 +571,36 @@ declare namespace whole {
   ];
 }
 
-/** A size of memory or disk, answered in MiB, from `min` to `max` MiB. Written as size.ts's
+/** "8g", "8gb", "8GiB", "512m", "8192" (MiB): memory in MiB, or null. */
+export const parseMemory = (value: unknown): number | null => {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(g|gb|gib|m|mb|mib)?\s*$/i.exec(String(value ?? ""));
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const mib = /^g/i.test(match[2] ?? "") ? amount * 1024 : amount;
+  return Number.isFinite(mib) && Number.isInteger(Math.round(mib)) ? Math.round(mib) : null;
+};
+
+declare namespace parseMemory {
+  /** what a person types after --memory: GiB with a g, MiB with an m or nothing; a fraction of
+   *  a GiB is whole MiB; anything else is not a size */
+  export type Spellings = Table<
+    typeof parseMemory,
+    [
+      [args: [value: "8g"], expected: 8192],
+      [args: [value: "8GiB"], expected: 8192],
+      [args: [value: " 8 GB "], expected: 8192],
+      [args: [value: "1.5g"], expected: 1536],
+      [args: [value: "512m"], expected: 512],
+      [args: [value: "4096"], expected: 4096],
+      [args: [value: "lots"], expected: null],
+      [args: [value: "-4g"], expected: null],
+      [args: [value: "8t"], expected: null],
+      [args: [value: null], expected: null],
+    ]
+  >;
+}
+
+/** A size of memory or disk, answered in MiB, from `min` to `max` MiB. Written as
  *  parseMemory reads it: "8g", "8GiB", "512m", or a bare number of MiB. */
 export const mebibytes = (min: number, max: number): Parse<number> =>
   taking(`a size from ${min} to ${max} MiB (as 4096, 4096m or 4g)`, (text) => {

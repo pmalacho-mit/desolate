@@ -30,6 +30,7 @@ import {
   repoId,
 } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
+import { vmSize } from "../shared/size.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
@@ -61,8 +62,7 @@ export const gitSpec = (): VmSpec => ({
     { host: paths.gitAnswers, guest: guest.gitAnswers, writable: false },
   ],
   sockets: [],
-  cpus: 2,
-  memoryMiB: 1536,
+  ...vmSize("git"), // its CPUs and memory: settings (shared/size.ts), from this Mac
   diskGiB: 30, // (the base's: a clone's disk cannot be smaller; 10 was never applied)
   labels: { title: "git" },
 });

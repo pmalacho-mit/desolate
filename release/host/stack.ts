@@ -5,6 +5,7 @@ import { Refusal, refuse } from "../shared/exit.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { forTerminal } from "../shared/text.ts";
 import { rootVmName } from "../shared/names.ts";
+import { vmSize } from "../shared/size.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
 import { limaBackend } from "./vm/lima.ts";
@@ -138,8 +139,7 @@ export const rootSpec = (): VmSpec => ({
     { host: paths.domains, guest: guest.domains, writable: true },
   ],
   sockets: [],
-  cpus: 2,
-  memoryMiB: 2048,
+  ...vmSize("root"), // its CPUs and memory: settings (shared/size.ts), from this Mac
   diskGiB: 30, // (the base's: a clone's disk cannot be smaller; 20 was never applied)
   labels: { title: "root" },
 });
