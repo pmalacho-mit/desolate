@@ -23,11 +23,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { formatBytes, NAMES } from "../shared/limits.ts";
-import { andMore, listed, PAGE } from "../shared/listed.ts";
+import { andMore, PAGE } from "../shared/listed.ts";
+import type { Listed } from "../shared/listed.ts";
 import { parseRepo, SLUG } from "../shared/names.ts";
 import { define, mebibytes, valueOf } from "../shared/settings.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
-import { CUT, failure, printable } from "../shared/text.ts";
+import { CUT, failure, printable, printableLines } from "../shared/text.ts";
 import { guest, paths } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type {
@@ -120,7 +121,14 @@ const holderError = (said: { stdout: string; stderr: string }, what: string) =>
       paths.logs,
       `agent-${what}-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`,
     );
-    fs.writeFileSync(file, whole);
+    // Made safe here too: the file is read with `cat` as often as not. At most SAID_MOST of
+    // it (an exec's answer may be up to 192 MiB, all of it the VM's choosing).
+    fs.writeFileSync(
+      file,
+      printableLines(
+        whole.length > SAID_MOST ? `${whole.slice(0, SAID_MOST)}\n(cut at 1 MiB)` : whole,
+      ),
+    );
     return file;
   });
 
@@ -221,7 +229,16 @@ export const start = async (
       `the agent did not start: ${holderError(started, name)}`,
       `desolate agent list ${w.domain}/${w.workspace}`,
     );
-  if (json) return out(started.stdout.trim());
+  if (json) {
+    // The holder's state file, which the agent can write: only its well-formed fields.
+    let given: unknown = null;
+    try {
+      given = JSON.parse(started.stdout.trim());
+    } catch {
+      /* said nothing a script can use */
+    }
+    return out(JSON.stringify(rowsOf([given], `${w.domain}/${w.workspace}`).items[0] ?? null));
+  }
   out(`agent ${name} is running in ${w.domain}/${w.workspace} (${checkout!.repo})`);
   out(
     `  attach: desolate agent attach ${w.domain}/${w.workspace}${name === "agent" ? "" : ` --name ${name}`}   (Ctrl-] detaches; it keeps running)`,
@@ -298,20 +315,29 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
 
 type Row = Agent & { workspace: string };
 
-/** The rows of a VM's account of its agents that are well formed: the VM's (an agent is root
- *  there), so only rows of the expected shape, every string made printable, a time that is
- *  not one dropped. */
-const rowsOf = (given: unknown, workspace: string): Row[] => {
+/** How many of a workspace's agents are listed, at most: far more than one VM runs (each
+ *  running one holds a pty, and Linux has 4096 by default), so a longer list is the VM's
+ *  flood (an agent is root there), and is said to be by its count. */
+const AGENTS_MOST = 1000;
+
+/** The rows of a VM's account of its agents that are well formed, each name once, at most
+ *  AGENTS_MOST of them, and how many there were: the VM's (an agent is root there), so only
+ *  rows of the expected shape, every string made printable, a time that is not one dropped. */
+const rowsOf = (given: unknown, workspace: string): Listed<Row> => {
   const iso = (v: unknown) =>
     typeof v === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(v) ? v : null;
   const rows: Row[] = [];
+  const seen = new Set<string>();
   for (const a of (Array.isArray(given) ? given : []) as Agent[]) {
     if (
       typeof a?.name !== "string" ||
       !SLUG.test(a.name) ||
+      seen.has(a.name) ||
       !["running", "exited", "lost"].includes(String(a.state))
     )
       continue;
+    seen.add(a.name);
+    if (rows.length >= AGENTS_MOST) continue;
     rows.push({
       name: a.name,
       state: String(a.state),
@@ -323,8 +349,56 @@ const rowsOf = (given: unknown, workspace: string): Row[] => {
       ...(iso(a.ended) ? { ended: iso(a.ended)! } : {}),
     });
   }
-  return rows.sort((a, b) => a.name.localeCompare(b.name));
+  return { items: rows.sort((a, b) => a.name.localeCompare(b.name)), total: seen.size, from: 0 };
 };
+
+declare namespace rowsOf {
+  /** a name once (the second is the VM's, not an agent), a row not of the shape left out,
+   *  and the count of what was kept */
+  export type EachOnce = Expect<
+    Invoke<
+      typeof rowsOf,
+      [
+        given: [
+          {
+            name: "web";
+            state: "running";
+            command: ["npm", "run", "dev"];
+            started: "2026-11-16T10:00:00Z";
+            lastOutput: null;
+            exit: null;
+          },
+          {
+            name: "web";
+            state: "exited";
+            command: [];
+            started: "2026-11-16T10:00:00Z";
+            lastOutput: null;
+            exit: 0;
+          },
+          { name: "../x"; state: "running"; command: [] },
+        ],
+        workspace: "acme/w1",
+      ]
+    >,
+    "=",
+    {
+      items: [
+        {
+          name: "web";
+          state: "running";
+          workspace: "acme/w1";
+          command: ["npm run dev"];
+          started: "2026-11-16T10:00:00Z";
+          lastOutput: null;
+          exit: null;
+        },
+      ];
+      total: 1;
+      from: 0;
+    }
+  >;
+}
 
 /** A line fitted to a terminal `width` columns wide, the cut marked; whole when the width is
  *  not known (a pipe, a file: whatever reads it has all of it). Counted in code points, as
@@ -367,7 +441,7 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
   const running = new Set(
     (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
   );
-  const found: Row[][] = [];
+  const found: Listed<Row>[] = [];
   const { isOwnVm } = await import("./workspaces.ts");
   await Promise.all(
     all
@@ -387,20 +461,20 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
               /* no agents there */
             }
             const rows = rowsOf(given, `${d.slug}/${w.workspace}`);
-            if (rows.length) found.push(rows);
+            if (rows.total) found.push(rows);
           }),
       ),
   );
-  found.sort((a, b2) => a[0]!.workspace.localeCompare(b2[0]!.workspace));
+  found.sort((a, b2) => a.items[0]!.workspace.localeCompare(b2.items[0]!.workspace));
   // A script gets every agent; a person, a page of each workspace's, and how many more.
-  if (json) return out(JSON.stringify(found.flat()));
+  if (json) return out(JSON.stringify(found.flatMap((rows) => rows.items)));
   if (found.length === 0)
     return out("no agents. Start one: desolate agent start <domain>/<workspace> -- <command...>");
   const ago = (when: string | null) =>
     when ? `${Math.max(0, Math.round((Date.now() - Date.parse(when)) / 1000))} s ago` : "never";
   const width = process.stdout.isTTY ? process.stdout.columns : undefined;
   for (const rows of found) {
-    const page = listed(rows, 0, PAGE);
+    const page = { ...rows, items: rows.items.slice(0, PAGE) };
     for (const a of page.items)
       out(
         fitted(
@@ -411,7 +485,7 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
     const rest = andMore(page, "agent");
     if (rest)
       out(
-        `  ${rows[0]!.workspace}: ${rest} (every one: desolate agent list ${rows[0]!.workspace} --json)`,
+        `  ${rows.items[0]!.workspace}: ${rest}${rows.total > rows.items.length ? ` (it lists more than ${AGENTS_MOST}: they are not shown)` : ` (every one: desolate agent list ${rows.items[0]!.workspace} --json)`}`,
       );
   }
 };
@@ -539,7 +613,9 @@ export const stop = async (
   const answer = asker
     .question("Kill it now? [y/N] ", { signal: asking.signal })
     .then((text) => (/^\s*y(es)?\s*$/i.test(text) ? "kill" : "leave"))
-    .catch(() => "ended" as const);
+    // Rejected only when aborted below, or when the person closed the prompt (Ctrl-C, Ctrl-D):
+    // that is a no, not an end the VM may then be taken to say.
+    .catch(() => (asking.signal.aborted ? ("ended" as const) : "leave"));
   const first = await Promise.race([over.then(() => "ended" as const), answer]);
   asking.abort();
   asker.close();
@@ -743,7 +819,13 @@ export const attach = async (
       }
       send(`i ${chunk.toString("base64")}`);
     });
-    child.stdout!.on("data", (chunk: Buffer) => process.stdout.write(filter(chunk)));
+    child.stdout!.on("data", (chunk: Buffer) => {
+      // A terminal's writes wait; a slow pipe's would gather here, as fast as the VM sends.
+      if (!process.stdout.write(filter(chunk))) {
+        child.stdout!.pause();
+        process.stdout.once("drain", () => child.stdout!.resume());
+      }
+    });
     child.on("close", () => finish(0));
   });
   return done;
