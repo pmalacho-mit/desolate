@@ -46,6 +46,8 @@ type Seen = {
   authorization: string | null;
   apiKey: string | null;
   body: string;
+  bytes: number;
+  sha256: string;
 };
 const upstream = () => JSON.parse(stack.forge("upstream")) as Seen[];
 const last = () => upstream().pop()!;
@@ -59,7 +61,11 @@ type Entry = {
   via?: string;
 };
 const log = (domain: string) =>
-  JSON.parse(stack.quiet("net", "log", domain, "--json").stdout) as Entry[];
+  (
+    JSON.parse(stack.quiet("net", "log", domain, "--last", "100000", "--json").stdout) as {
+      items: Entry[];
+    }
+  ).items;
 
 describe("T2 phase 4: a domain's secrets", () => {
   before(() => {
@@ -396,6 +402,72 @@ describe("T2 phase 4: a domain's secrets", () => {
       stack.desolate("domain", "two", "secret", "list").stdout.trim().split("\n")[0],
       "the domain two has no secrets. To add one: set <NAME> --hosts <host>[,...] [--headers <header>[,...]]",
     );
+  });
+
+  it("a body past the domain's hold bound streams: whole if it names no secret, refused if it does, its value taken out on the way back", () => {
+    stack.step("bodies past the hold bound");
+    const held = stack.desolate("domain", "dev", "net", "hold", "1m");
+    assert.equal(held.code, 0, held.stderr);
+    assert.match(held.stdout, /its secrets proxy holds a body whole up to 1 MiB/);
+    // An upload of 8 MiB, over the bound, that names no secret in its body: it arrives whole,
+    // its header's name put in as before.
+    const up = inWs(
+      "dev/w1",
+      "head -c 8388608 /dev/urandom | tr -d 'A-Z' > /tmp/big; sha256sum < /tmp/big | cut -c1-64; wc -c < /tmp/big; curl -sS -m 120 https://api.example.test/upload -H 'Authorization: Bearer MYAPP-API-KEY' --data-binary @/tmp/big 2>&1",
+    );
+    const [sha, size, answer] = up.stdout.trim().split("\n");
+    assert.equal(answer, "upstream https host=api.example.test path=/upload", up.stdout);
+    assert.deepEqual(
+      [last().bytes, last().sha256, last().authorization],
+      [Number(size), sha, `Bearer ${VALUE}`],
+      "every byte arrived, streamed, and the header still got its value",
+    );
+    assert.ok(Number(size) > 1024 * 1024 * 7, "control: the body is past the 1 MiB bound");
+    // The same size naming a secret in its body: to put a value in a body it must be held,
+    // and this one is over what may be: refused, and the name never reaches the host.
+    const before = upstream().length;
+    const named = inWs(
+      "dev/w1",
+      "{ printf 'token=MYAPP-TOKEN-TWO&'; head -c 2097152 /dev/zero; } > /tmp/named; curl -sS -m 60 https://api.example.test/upload --data-binary @/tmp/named; echo curl=$?",
+    );
+    assert.match(named.stdout, /curl=(52|56|92)/, named.stdout);
+    const reached = upstream().slice(before);
+    assert.ok(
+      reached.every((r) => !r.body.includes("MYAPP-TOKEN-TWO") && !r.body.includes(TOKEN)),
+      "neither the name nor the value reached the host",
+    );
+    // Under the bound the same name in a body is put in, as it always was (the control).
+    curl("dev/w1", "https://api.example.test/small -d 'token=MYAPP-TOKEN-TWO'");
+    assert.equal(last().body, `token=${TOKEN}`);
+    // A download of 3 MiB, over the bound, that reflects the value: streamed, and the value
+    // taken out before the workspace sees it.
+    const down = inWs(
+      "dev/w1",
+      "curl -sS -m 60 'https://api.example.test/download?n=3145728&at=2097252' -H 'Authorization: Bearer MYAPP-API-KEY' -o /tmp/down; echo curl=$? size=$(wc -c < /tmp/down) name=$(grep -ac 'Bearer MYAPP-API-KEY' /tmp/down)",
+    );
+    assert.equal(
+      last().authorization,
+      `Bearer ${VALUE}`,
+      "control: the value went up, and came back",
+    );
+    assert.equal(
+      down.stdout.trim(),
+      `curl=0 size=${3145728 - VALUE.length + "MYAPP-API-KEY".length} name=1`,
+    );
+    assert.equal(
+      inWs("dev/w1", `grep -ac '${VALUE}' /tmp/down`).stdout.trim(),
+      "0",
+      "the workspace never holds the value",
+    );
+    assert.ok(
+      log("dev").some(
+        (e) =>
+          e.verdict === "refused" &&
+          /is over the 1 MiB this domain's secrets proxy holds whole/.test(e.reason ?? ""),
+      ),
+      "the refusal is on record, with why",
+    );
+    assert.equal(stack.desolate("domain", "dev", "net", "hold", "default").code, 0);
   });
 
   it("the audit names the workspace and the secret, and holds no value", () => {

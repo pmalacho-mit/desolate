@@ -213,19 +213,38 @@ export const auditDir = (domain: string) => proxyOutDir(domain);
 declare namespace auditWriter {
   type Fresh = Invoke<typeof emptyRoot>;
   type Dir = "out/acme";
-  type Log = Invoke<typeof auditWriter, [dir: Invoke<typeof auditDir, [domain: "acme"]>, budget: 400]>;
+  type Log = Invoke<
+    typeof auditWriter,
+    [dir: Invoke<typeof auditDir, [domain: "acme"]>, budget: 400]
+  >;
   /** the newest file takes every line; past its share (a quarter of the budget) the next is
    *  begun, and past four files the oldest is let go */
   export type Series = Given<
     [
       Fresh,
       Invoke<typeof writeIn, [where: "proxies", name: "out/acme/audit.log", text: "{}\n"]>,
-      Invoke<Log, [entry: { n: 1; pad: "........................................................................................" }]>,
+      Invoke<
+        Log,
+        [
+          entry: {
+            n: 1;
+            pad: "........................................................................................";
+          },
+        ]
+      >,
       Invoke<Log, [entry: { n: 2 }]>,
     ],
     [
-      Expect<Invoke<typeof namesIn, [where: "proxies", dir: Dir]>, "=", ["audit-1.log", "audit-2.log", "audit.log"]>,
-      Expect<Invoke<typeof readIn, [where: "proxies", name: "out/acme/audit-2.log"]>, "=", '{"n":2}\n'>,
+      Expect<
+        Invoke<typeof namesIn, [where: "proxies", dir: Dir]>,
+        "=",
+        ["audit-1.log", "audit-2.log", "audit.log"]
+      >,
+      Expect<
+        Invoke<typeof readIn, [where: "proxies", name: "out/acme/audit-2.log"]>,
+        "=",
+        '{"n":2}\n'
+      >,
     ]
   >;
 }
@@ -277,6 +296,10 @@ declare namespace AUDIT_MIB {
   /** a setting of the root's, read as a size */
   export type Declared = Table<
     typeof AUDIT_MIB.parse,
-    [[args: [text: "64"], expected: 64], [args: [text: "1g"], expected: 1024], [args: [text: "2"], expected: null]]
+    [
+      [args: [text: "64"], expected: 64],
+      [args: [text: "1g"], expected: 1024],
+      [args: [text: "2"], expected: null],
+    ]
   >;
 }

@@ -59,7 +59,14 @@ if (
 // What it reads is its domain's directory, and what it writes is its domain's proxies' own
 // (as-proxy.ts; it runs as that domain's proxies' user).
 const DOMAIN_DIR = `${ROOT.proxies}/domains/${domain}`;
-export type Policy = { mode: "open" | "enforce"; hosts: string[]; internal: string[] };
+/** A domain's network rules. `heldMiB`: its own bound on a body its secrets proxy holds
+ *  whole (secrets.ts's HELD_MIB when not set). */
+export type Policy = {
+  mode: "open" | "enforce";
+  hosts: string[];
+  internal: string[];
+  heldMiB?: number;
+};
 const policy = (): Policy => ({
   mode: "open",
   hosts: [],

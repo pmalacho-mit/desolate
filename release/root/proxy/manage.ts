@@ -22,6 +22,7 @@ import {
 } from "./as-proxy.ts";
 import { auditDir, auditDomains, auditEnv, auditLines } from "./audit.ts";
 import { hostAllowed } from "./proxy.ts";
+import { HELD_MIB } from "./secrets.ts";
 import type { Policy } from "./proxy.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke, Throws } from "../../../suede.nests/dsl.import.meta.vitest.ts";
@@ -114,7 +115,13 @@ export const policy = (domain: string): Policy => ({
 
 export const setPolicy = (
   domain: string,
-  change: { mode?: unknown; allow?: unknown; deny?: unknown; internal?: unknown },
+  change: {
+    mode?: unknown;
+    allow?: unknown;
+    deny?: unknown;
+    internal?: unknown;
+    held?: unknown;
+  },
 ): Policy => {
   const next = policy(domain);
   if (change.mode !== undefined) {
@@ -146,6 +153,16 @@ export const setPolicy = (
         "name the one internal address this domain may reach",
       );
     if (!next.internal.includes(String(address))) next.internal.push(String(address));
+  }
+  if (change.held === "default") delete next.heldMiB;
+  else if (change.held !== undefined) {
+    const held = HELD_MIB.parse(String(change.held));
+    if (held === null)
+      refuse(
+        `'${printable(change.held, 80)}' is not ${HELD_MIB.parse.takes}`,
+        `desolate domain ${domain} net hold 512m | default`,
+      );
+    next.heldMiB = held!;
   }
   // Readable by the proxies' user, through the directory's group (root/start.sh).
   writeJson(policyFile(domain), next, 0o640);
@@ -189,6 +206,35 @@ declare namespace setPolicy {
         Invoke<typeof readJsonIn, [where: "proxies", name: "domains/acme/policy.json"]>,
         "matches",
         { mode: "enforce"; internal: ["10.0.0.5"] }
+      >,
+    ]
+  >;
+  /** the domain's own bound on a body its secrets proxy holds whole, as a size; and back to
+   *  the stack's */
+  export type Held = Given<
+    [Fresh, Dir],
+    [
+      Expect<
+        Invoke<typeof setPolicy, [domain: "acme", change: { held: "1g" }]>,
+        "matches",
+        { heldMiB: 1024 }
+      >,
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [f: typeof setPolicy, args: [domain: "acme", change: { held: "lots" }]]
+        >,
+        "=",
+        {
+          message: "'lots' is not a size from 1 to 2048 MiB (as 4096, 4096m or 4g)";
+          fix: "desolate domain acme net hold 512m | default";
+          code: 1;
+        }
+      >,
+      Expect<
+        Invoke<typeof setPolicy, [domain: "acme", change: { held: "default" }]>,
+        "=",
+        { mode: "open"; hosts: []; internal: [] }
       >,
     ]
   >;

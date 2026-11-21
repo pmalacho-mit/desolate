@@ -29,6 +29,13 @@ tests/v3/t2/07-secrets.test.ts here):
                       is off.
   SCRUB               a value echoed back in a response (headers, body, websocket frames
                       from the server) is replaced by its name before the workspace sees it.
+  HELD OR STREAMED    a body is held whole (to look inside it) up to the domain's bound
+                      (policy.json's heldMiB, else secrets.heldMiB): that is where a
+                      placeholder is put in a body. Past it, or of a length its headers do not
+                      fix, a body is streamed: a response with each value taken out as it
+                      passes, a request watched for names. A request body over the bound that
+                      names a secret is refused, its name masked and its response withheld:
+                      to substitute, a body is held, and the bound is what may be.
   FAIL CLOSED         any error in here refuses the request or withholds the response.
 
 Attribution: which workspace a request came from is what proxy.ts says (x-desolate-workspace
@@ -112,10 +119,180 @@ def host_pattern_problem(pattern):
     return "puts a wildcard somewhere it cannot be trusted: only '*.<name>.<tld>' is accepted"
 
 
+# The most of one request or response body held whole, in MiB, unless the domain's policy
+# says (heldMiB): secrets.heldMiB, as the root started this proxy (root/proxy/secrets.ts).
+def _held_default() -> int:
+    try:
+        return max(1, int(os.environ.get("DESOLATE_SECRETS_HELD_MIB", "")))
+    except ValueError:
+        return 256
+
+
+HELD_DEFAULT_MIB = _held_default()
+
+
+def fixed_length(message, request):
+    """The body's length as the message's headers fix it, or None when they do not: chunked,
+    HTTP/2 without a content-length, a response read to its close, or a length that is not
+    one number. An HTTP/1 request that says neither has no body."""
+    headers = message.headers
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        return None
+    lengths = headers.get_all("content-length")
+    if len(lengths) == 1 and lengths[0].strip().isdigit():
+        return int(lengths[0].strip())
+    if lengths:
+        return None
+    return 0 if request and not message.is_http2 else None
+
+
+def kept_back(data, patterns):
+    """Where the end of `data` could begin one of `patterns` (the start of the longest such
+    tail), or len(data): what a stream keeps back until its next chunk, so that a pattern cut
+    between two chunks is still seen whole."""
+    longest = max((len(p) for p in patterns), default=1)
+    start = max(0, len(data) - longest + 1)
+    best = len(data)
+    for first in {p[:1] for p in patterns}:
+        at = data.find(first, start)
+        while at != -1 and at < best:
+            tail = data[at:]
+            if any(p.startswith(tail) for p in patterns):
+                best = at
+                break
+            at = data.find(first, at + 1)
+    return best
+
+
+def _chunks(data):
+    """What a stream callable answers: a list of chunks to send. Never an empty one: HTTP/1.1
+    frames each chunk it is given, and an empty chunk is the end of the body."""
+    return [data] if data else []
+
+
+class _Decoded:
+    """A response body's content-encoding, undone as it streams, so that a value in it is
+    seen. The client is then sent it decoded (identity): re-encoding needs the stream's end,
+    which a stream is not told apart from an empty chunk."""
+    def __init__(self, encoding):
+        import zlib
+        encoding = encoding.strip().lower()
+        if encoding in ("", "identity"):
+            self.step = lambda data: data
+        elif encoding in ("gzip", "x-gzip", "deflate"):
+            self.step = zlib.decompressobj(32 + zlib.MAX_WBITS).decompress
+        elif encoding == "br":
+            import brotli
+            self.step = brotli.Decompressor().process
+        elif encoding == "zstd":
+            import zstandard
+            self.step = zstandard.ZstdDecompressor().decompressobj().decompress
+        else:
+            raise ValueError(f"a content-encoding that cannot be undone here: {encoding!r}")
+
+
+class Scrub:
+    """A response body, streamed with each value taken out and its name put in, as the
+    response hook does to a held one. The end of a chunk that could begin a value is kept back
+    for the next. Anything that goes wrong withholds the rest (fail closed)."""
+    def __init__(self, pairs, encoding=""):
+        self.pairs = sorted(((v.encode(), n.encode()) for v, n in pairs), key=lambda p: -len(p[0]))
+        self.values = [v for v, _ in self.pairs]
+        self.decode = _Decoded(encoding).step
+        self.carry = b""
+        self.failed = False
+
+    def __call__(self, chunk):
+        if self.failed:
+            return []
+        try:
+            data = self.carry + (self.decode(chunk) if chunk else b"")
+            for value, name in self.pairs:
+                if value in data:
+                    data = data.replace(value, name)
+            # An empty chunk is the end (or nothing): everything goes.
+            cut = kept_back(data, self.values) if chunk else len(data)
+            self.carry = data[cut:]
+            return _chunks(data[:cut])
+        except Exception:
+            log.exception("response scrub failed; withholding the rest of it (fail-closed)")
+            self.failed = True
+            return []
+
+
+class Watch:
+    """A request body that streams, as it goes. `rule(name)` says what a name found in it may
+    do: None, go on as it is (a placeholder toward a host its secret does not name), "hold"
+    (it is put in: allowed only while the body is held, whole), or a reason it is refused.
+    While `holding` (a body of unknown length, under `bound` bytes), the body is kept back and
+    given at its end, its names put in by `put`. A refusal masks every name from then on and
+    calls `refused(reason, names)`."""
+    def __init__(self, names, rule, put, refused, bound, holding, domain):
+        self.domain = domain
+        self.names = [n.encode() for n in names]
+        self.rule, self.put, self.refused = rule, put, refused
+        self.bound, self.holding = bound, holding
+        self.held, self.carry = b"", b""
+        self.found, self.passed = set(), set()
+        self.stopped = False
+
+    def _refuse(self, reason, names):
+        if not self.stopped:
+            self.stopped = True
+            self.refused(reason, names)
+
+    def _look(self, data, holding):
+        for name in self.names:
+            if name not in data:
+                continue
+            text = name.decode()
+            rule = self.rule(text)
+            if rule is None:
+                self.passed.add(text)
+            elif rule == "hold" and holding:
+                self.found.add(text)
+            else:
+                self._refuse(rule if rule != "hold" else
+                             f"the request's body is over the {self.bound // (1024 * 1024)} MiB this "
+                             f"domain's secrets proxy holds whole, and names {text}: a secret is put "
+                             f"only in a body that is held. To hold more: desolate domain {self.domain} net "
+                             f"hold <size>", [text])
+        if self.stopped:
+            for name in self.names:
+                data = data.replace(name, b"*" * len(name))
+        return data
+
+    def __call__(self, chunk):
+        try:
+            if self.holding:
+                if chunk and len(self.held) + len(chunk) <= self.bound:
+                    self.held += chunk
+                    return []
+                data, self.held, self.holding = self.held + chunk, b"", False
+                if not chunk:
+                    # The end, held whole: its names are put in, or it is refused.
+                    data = self._look(data, True)
+                    return [] if self.stopped else _chunks(self.put(data, self.found))
+                # Over the bound: from here on it streams, what was held first, and nothing
+                # is put in.
+                self.found = set()
+            else:
+                data = chunk
+            data = self._look(self.carry + data, False)
+            cut = kept_back(data, self.names) if chunk else len(data)
+            self.carry = data[cut:]
+            return _chunks(data[:cut])
+        except Exception:
+            log.exception("request body watch failed; refusing the request (fail-closed)")
+            self._refuse("internal error; request refused", [])
+            return []
+
+
 class DesolateSecrets:
     def __init__(self):
         self.secrets = {}
         self.internal = set()
+        self.held = HELD_DEFAULT_MIB * 1024 * 1024
         self.domain = ""
         self._mtime = None
         self._policy_mtime = None
@@ -170,13 +347,18 @@ class DesolateSecrets:
             policy_mtime = os.stat(POLICY_PATH).st_mtime_ns
         except OSError:
             self.internal, self._policy_mtime = set(), None
+            self.held = HELD_DEFAULT_MIB * 1024 * 1024
             return
         if policy_mtime != self._policy_mtime:
             try:
                 with open(POLICY_PATH) as handle:
-                    self.internal = {str(a) for a in (json.load(handle).get("internal") or [])}
-            except (OSError, ValueError):
-                self.internal = set()
+                    policy = json.load(handle)
+                self.internal = {str(a) for a in (policy.get("internal") or [])}
+                held = policy.get("heldMiB")
+                self.held = (held if isinstance(held, int) and not isinstance(held, bool) and held > 0
+                             else HELD_DEFAULT_MIB) * 1024 * 1024
+            except (OSError, ValueError, AttributeError):
+                self.internal, self.held = set(), HELD_DEFAULT_MIB * 1024 * 1024
             self._policy_mtime = policy_mtime
 
     def is_on(self, name):
@@ -334,7 +516,10 @@ class DesolateSecrets:
         allowed = self.secrets[name]["headers"]
         return any(name in v for k, v in flow.request.headers.items(multi=True) if k.lower() in allowed)
 
-    def _placeholders(self, flow):
+    def _unconfined(self):
+        return [n for n, e in self.secrets.items() if e["headers"] is None]
+
+    def _placeholders(self, flow, body):
         if not self.secrets:
             return set()
         confined = {n for n, e in self.secrets.items() if e["headers"] is not None}
@@ -343,7 +528,6 @@ class DesolateSecrets:
         if rest:
             url = flow.request.url
             headers = "\n".join(f"{k}: {v}" for k, v in flow.request.headers.items(multi=True))
-            body = flow.request.content or b""
             found |= {n for n in rest if n in url or n in headers or n.encode() in body}
         return found
 
@@ -368,60 +552,60 @@ class DesolateSecrets:
     def client_disconnected(self, client):
         self.tunnels.pop(client.id, None)
 
-    def request(self, flow: http.HTTPFlow):
-        try:
-            self._request(flow)
-        except Exception:
-            log.exception("request handling failed; refusing the request (fail-closed)")
-            self._block(flow, 502, "internal error; request refused")
-
-    def _request(self, flow: http.HTTPFlow):
-        self._maybe_reload()
+    def _route(self, flow):
+        """The checks of where a request goes, before anything of it is looked at: the tunnel,
+        the TLS name, the address. (proven, None), or (shown, why it is refused)."""
         tunnel = self.tunnels.get(flow.client_conn.id)
         proven = self.proven_host(flow)
         if tunnel is None:
-            return self._block(flow, 403, "this proxy is reached only through a workspace's own proxy")
+            return None, "this proxy is reached only through a workspace's own proxy"
         shown = proven or tunnel["host"]
-        refuse = lambda reason, secrets=(): (self.audit(flow, "refused", shown, secrets, reason), self._block(flow, 403, reason))
         # The tunnel was opened, checked and resolved for one name. It speaks TLS for that
         # name, or it carries nothing.
         if proven is None:
-            return refuse("this connection is not TLS, so its destination cannot be proven")
+            return shown, "this connection is not TLS, so its destination cannot be proven"
         if proven != tunnel["host"]:
-            return refuse(f"this connection was opened for {tunnel['host']}, not for {proven}")
+            return shown, f"this connection was opened for {tunnel['host']}, not for {proven}"
         destination = self.destination_address(flow)
         if self.is_internal(destination) and str(destination) not in self.internal:
-            return refuse(f"{destination} is an internal address, which a workspace is not carried to")
-        found = self._placeholders(flow)
+            return shown, f"{destination} is an internal address, which a workspace is not carried to"
+        return proven, None
+
+    def _verdict(self, flow, proven, found):
+        """What may be done with a request that carries the placeholders `found`: (reason,
+        names) when it is refused, else (None, the names to put in, the names passed as they
+        are toward a host their secret does not name)."""
         if found:
             claims = self.claimed_names(flow)
             if len(flow.request.headers.get_all("host")) > 1 or any(name != proven for name in claims):
-                return refuse(f"the request names {sorted(set(claims))} as its destination, not only the TLS destination "
-                              f"'{proven}'; refusing to substitute a secret", found)
+                return (f"the request names {sorted(set(claims))} as its destination, not only the TLS destination "
+                        f"'{proven}'; refusing to substitute a secret", found), set(), set()
         suspect = {name for name in found if not self._host_matches(proven, self.secrets[name]["hosts"])}
-        found -= suspect
+        found = found - suspect
         switched_off = sorted(name for name in found if not self.is_on(name))
         if switched_off:
-            return refuse(f"secret {switched_off} is switched off; on the host: "
-                          f"desolate domain {self.domain} secret on {switched_off[0]} [--ttl 30m]", switched_off)
-        body = flow.request.content or b""
-        substituted = body
+            return (f"secret {switched_off} is switched off; on the host: "
+                    f"desolate domain {self.domain} secret on {switched_off[0]} [--ttl 30m]", switched_off), set(), set()
+        return None, found, suspect
+
+    def _put_in_head(self, flow, found):
+        """Each placeholder in `found` replaced by its value in the request's headers (only
+        those its secret names, when it names some) and in its path."""
         for name in found:
             value, allowed = self.secrets[name]["value"], self.secrets[name]["headers"]
-            if allowed is not None:
-                for k, v in list(flow.request.headers.items(multi=True)):
-                    if k.lower() in allowed and name in v:
-                        flow.request.headers[k] = v.replace(name, value)
-                continue
-            if name in flow.request.path:
+            if allowed is None and name in flow.request.path:
                 flow.request.path = flow.request.path.replace(name, value)
             for k, v in list(flow.request.headers.items(multi=True)):
-                if name in v:
+                if (allowed is None or k.lower() in allowed) and name in v:
                     flow.request.headers[k] = v.replace(name, value)
-            if name.encode() in substituted:
-                substituted = substituted.replace(name.encode(), value.encode())
-        if substituted is not body:
-            flow.request.content = substituted
+
+    def _put_in_body(self, body, found):
+        for name in found:
+            if self.secrets[name]["headers"] is None and name.encode() in body:
+                body = body.replace(name.encode(), self.secrets[name]["value"].encode())
+        return body
+
+    def _audit_done(self, flow, proven, found, suspect):
         if suspect:
             self.audit(flow, "leak-suspect", proven, suspect, "a placeholder was sent toward a host its secret does not name; passed unsubstituted")
         if found:
@@ -429,22 +613,146 @@ class DesolateSecrets:
         elif not suspect:
             self.audit(flow, "allowed", proven)
 
+    def requestheaders(self, flow: http.HTTPFlow):
+        """A request whose body is not held: over the bound, or of a length its headers do not
+        fix. Its head is decided here, before it is sent, and its body watched as it goes
+        (Watch). A refusal here kills the flow: a request that streams cannot be answered
+        instead, and its body is not read."""
+        try:
+            self._maybe_reload()
+            size = fixed_length(flow.request, True)
+            if size is not None and size <= self.held:
+                return  # held whole: the request hook decides it, as it always has
+            state = {"refused": False, "found": set(), "suspect": set()}
+            flow.metadata["desolate-stream"] = state
+
+            def refuse(shown, reason, names=()):
+                state["refused"] = True
+                self.audit(flow, "refused", shown, names, reason)
+                if flow.killable:
+                    flow.kill()
+
+            proven, why = self._route(flow)
+            if why:
+                return refuse(proven, why)
+            encoding = flow.request.headers.get("content-encoding", "").strip().lower()
+            if encoding not in ("", "identity"):
+                return refuse(proven, f"the request's body is {encoding}-encoded and is not held whole "
+                              f"(over the bound, or of no fixed length), so what it carries cannot be seen")
+            head = self._placeholders(flow, b"")
+            refusal, found, suspect = self._verdict(flow, proven, head)
+            if refusal:
+                return refuse(proven, *refusal)
+            self._put_in_head(flow, found)
+            state["found"], state["suspect"] = set(found), set(suspect)
+
+            def rule(name):
+                refusal, put, _ = self._verdict(flow, proven, head | {name})
+                return refusal[0] if refusal else "hold" if name in put else None
+
+            def put(body, names):
+                state["found"] |= names
+                return self._put_in_body(body, names)
+
+            def refused(reason, names):
+                refuse(proven, reason, names)
+
+            flow.request.stream = Watch(self._unconfined(), rule, put, refused, self.held,
+                                        holding=size is None, domain=self.domain)
+            state["watch"] = flow.request.stream
+        except Exception:
+            log.exception("request handling failed; refusing the request (fail-closed)")
+            flow.metadata["desolate-stream"] = {"refused": True}
+            if flow.killable:
+                flow.kill()
+
+    def request(self, flow: http.HTTPFlow):
+        try:
+            state = flow.metadata.get("desolate-stream")
+            if state is not None:
+                # Streamed: decided as it went. What it carried is audited now that it is done.
+                if not state["refused"]:
+                    watch = state.get("watch")
+                    passed = watch.passed if watch else set()
+                    self._audit_done(flow, self.proven_host(flow), state["found"], state["suspect"] | passed)
+                return
+            self._request(flow)
+        except Exception:
+            log.exception("request handling failed; refusing the request (fail-closed)")
+            if flow.metadata.get("desolate-stream") is None:
+                self._block(flow, 502, "internal error; request refused")
+
+    def _request(self, flow: http.HTTPFlow):
+        """A request held whole: decided, its names put in, and audited, before it is sent."""
+        self._maybe_reload()
+        proven, why = self._route(flow)
+        refuse = lambda reason, secrets=(): (self.audit(flow, "refused", proven, secrets, reason), self._block(flow, 403, reason))
+        if why:
+            if proven is None:
+                return self._block(flow, 403, why)
+            return refuse(why)
+        body = flow.request.content or b""
+        refusal, found, suspect = self._verdict(flow, proven, self._placeholders(flow, body))
+        if refusal:
+            return refuse(*refusal)
+        self._put_in_head(flow, found)
+        substituted = self._put_in_body(body, found)
+        if substituted is not body:
+            flow.request.content = substituted
+        self._audit_done(flow, proven, found, suspect)
+
+    def _scrub_fields(self, fields):
+        for name, entry in self.secrets.items():
+            value = entry["value"]
+            for k, v in list(fields.items(multi=True)):
+                if value in v:
+                    fields[k] = v.replace(value, name)
+
+    def responseheaders(self, flow: http.HTTPFlow):
+        """A response's head, scrubbed before it is sent; and its body streamed through Scrub
+        when it is not held (over the bound, or of a length its headers do not fix). A
+        streamed body may change length as values are taken out, so its length goes from its
+        head, and HTTP/1.1 carries it chunked."""
+        try:
+            if not flow.response:
+                return
+            self._scrub_fields(flow.response.headers)
+            size = fixed_length(flow.response, False)
+            if size is not None and size <= self.held:
+                return  # held whole: the response hook scrubs it, as it always has
+            code = flow.response.status_code
+            if flow.request.method.upper() == "HEAD" or code < 200 or code in (204, 304):
+                return  # no body follows, whatever its head says
+            encoding = flow.response.headers.get("content-encoding", "")
+            flow.response.stream = Scrub([(e["value"], n) for n, e in self.secrets.items()], encoding)
+            flow.metadata["desolate-streamed-response"] = True
+            if encoding.strip().lower() not in ("", "identity"):
+                del flow.response.headers["content-encoding"]
+            if "content-length" in flow.response.headers:
+                del flow.response.headers["content-length"]
+            # The client's HTTP/1.1 (what it asked with) frames it in chunks; HTTP/2 needs no
+            # length, and an HTTP/1.0 client reads to the close.
+            if flow.request.http_version == "HTTP/1.1":
+                flow.response.headers["transfer-encoding"] = "chunked"
+        except Exception:
+            log.exception("response handling failed; withholding the response (fail-closed)")
+            if flow.killable:
+                flow.kill()
+
     def response(self, flow: http.HTTPFlow):
         try:
             if not flow.response or not self.secrets:
                 return
+            trailers = getattr(flow.response, "trailers", None)
+            if trailers:
+                self._scrub_fields(trailers)
+            if flow.metadata.get("desolate-streamed-response"):
+                return  # its head and body were scrubbed as they went
+            self._scrub_fields(flow.response.headers)
             body = flow.response.content or b""
             scrubbed = body
-            trailers = getattr(flow.response, "trailers", None)
             for name, entry in self.secrets.items():
-                value, bvalue = entry["value"], entry["value"].encode()
-                for k, v in list(flow.response.headers.items(multi=True)):
-                    if value in v:
-                        flow.response.headers[k] = v.replace(value, name)
-                if trailers:
-                    for k, v in list(trailers.items(multi=True)):
-                        if value in v:
-                            trailers[k] = v.replace(value, name)
+                bvalue = entry["value"].encode()
                 if bvalue in scrubbed:
                     scrubbed = scrubbed.replace(bvalue, name.encode())
             if scrubbed is not body:

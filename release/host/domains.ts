@@ -487,7 +487,7 @@ export const domainCommand = async (
   if (second === "net") {
     // desolate domain <d> net [show] | open | enforce | allow <host>... | deny <host>... | allow-internal <ip>
     const [, , action, ...rest] = args;
-    type Policy = { mode: string; hosts: string[]; internal: string[] };
+    type Policy = { mode: string; hosts: string[]; internal: string[]; heldMiB?: number };
     if (action === "recommend") return netRecommend(first, values, out);
     const change =
       action === "open" || action === "enforce"
@@ -498,11 +498,13 @@ export const domainCommand = async (
             ? { deny: rest }
             : action === "allow-internal"
               ? { internal: rest }
-              : null;
+              : action === "hold" && rest.length === 1
+                ? { held: rest[0] }
+                : null;
     if (action && action !== "show" && !change)
       refuse(
         `'net ${action}' is not understood`,
-        `desolate domain ${first} net show | open | enforce | allow <host>... | deny <host>... | allow-internal <address> | recommend`,
+        `desolate domain ${first} net show | open | enforce | allow <host>... | deny <host>... | allow-internal <address> | hold <size>|default | recommend [--all]`,
         EXIT.usage,
       );
     const policy = await rootctl<Policy>(
@@ -518,6 +520,10 @@ export const domainCommand = async (
       out(`  listed, for when it is enforced: ${policy.hosts.join(", ")}`);
     if (policy.internal.length)
       out(`  internal addresses it may reach: ${policy.internal.join(", ")}`);
+    if (policy.heldMiB !== undefined)
+      out(
+        `  its secrets proxy holds a body whole up to ${policy.heldMiB} MiB (desolate domain ${first} net hold default: the stack's)`,
+      );
     return;
   }
   if (second === "secret") {

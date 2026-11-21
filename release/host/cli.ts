@@ -65,7 +65,7 @@ Your repositories and domains:
   desolate domain <slug> spawn [--max <n>|none]                  limit the workspaces its workspaces start (none: no limit, the default; 0: off)
   desolate domain <slug> stats [--json]                          its workspaces, who started each, its limit, this Mac
   desolate domain <slug> env [--from <owner/repo>]               whose devcontainer.json its workspaces run
-  desolate domain <slug> net [open | enforce | allow <host>... | deny <host>...]
+  desolate domain <slug> net [open | enforce | allow <host>... | deny <host>... | hold <size>]
                                                                  the domain's network rules, at its proxies
   desolate net log [<domain>] [--last <n>] [--json]              what each workspace asked to reach, and the verdict
   desolate domain <domain> net recommend [--all]                 what it reached that is not on its list

@@ -16,6 +16,7 @@ import { createServer } from "node:net";
 import * as path from "node:path";
 import { refuse } from "../../shared/exit.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
+import { define, mebibytes, valueOf } from "../../shared/settings.ts";
 import { ROOT } from "../layout.ts";
 import { inbox } from "../outbox.ts";
 import { auditDir, auditEnv } from "./audit.ts";
@@ -48,6 +49,20 @@ import {
 } from "./as-proxy.ts";
 
 const DIR = `${ROOT.state}/proxy`;
+
+/** The most of one request or response the add-on holds whole, to put a secret in it or take
+ *  one out: past it a body streams (secrets_addon.py), and a request body past it that names
+ *  a secret is refused. A body held is in the root VM's memory, and a workspace chooses its
+ *  size: the bound is on what one connection may make the root hold. A domain may set its
+ *  own (`desolate domain <d> net hold <size>`, in its policy). */
+export const HELD_MIB = define({
+  name: "secrets.heldMiB",
+  env: "DESOLATE_SECRETS_HELD_MIB",
+  side: "root",
+  default: 256,
+  parse: mebibytes(1, 2048),
+  why: "How much of one request or response a domain's secrets proxy holds in the root VM's memory to put a secret in or take one out; past it a body streams, and a request past it that names a secret is refused. A domain may set its own: desolate domain <d> net hold <size>.",
+});
 const MITMDUMP = "/opt/desolate/proxy-venv/bin/mitmdump";
 type Store = { domain: string; secrets: Record<string, Omit<Indexed, "name">> };
 export type Running = { port: number; pid: number; hosts: string[] };
@@ -325,11 +340,6 @@ export const ensure = async (domain: string): Promise<Running | null> => {
       // Upstream certificates are checked against this VM's own trust store.
       "--set",
       "ssl_verify_upstream_trusted_ca=/etc/ssl/certs/ca-certificates.crt",
-      // A body is read whole before the add-on sees it (to substitute and to scrub): past
-      // 256 MiB one is refused, not buffered until the root runs out of memory (audit,
-      // 2026-11-20).
-      "--set",
-      "body_size_limit=256m",
       "--set",
       "flow_detail=0",
       "--set",
@@ -344,6 +354,7 @@ export const ensure = async (domain: string): Promise<Running | null> => {
       DESOLATE_POLICY: path.join(proxyDomainDir(domain), "policy.json"),
       DESOLATE_AUDIT: auditDir(domain),
       ...auditEnv(),
+      [HELD_MIB.env]: String(valueOf(HELD_MIB)),
       DESOLATE_LINK_TOKEN: linkTokenFile(domain),
     },
     log,
