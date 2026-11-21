@@ -20,6 +20,7 @@
 // A setting is listed once its file has been imported: what lists them imports the files.
 import { PORTS } from "./limits.ts";
 import { parseMemory } from "./size.ts";
+import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Expect,
@@ -222,7 +223,7 @@ export const valueOf = <T>(setting: Setting<T>): T => {
   const value = setting.parse(text);
   if (value === null)
     throw new Error(
-      `${setting.env} must be ${setting.parse.takes ?? `a value for ${setting.name}`}, not '${text.slice(0, 80)}'`,
+      `${setting.env} must be ${setting.parse.takes ?? `a value for ${setting.name}`}, not '${printable(text, 80)}'`,
     );
   return value;
 };
