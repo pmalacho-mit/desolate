@@ -1952,25 +1952,42 @@ const serve = async () => {
     let spawning: string | null = null;
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
-    // In order, and the end until the root answers: a line landing after the end would mark
-    // it running again, and an end that was lost left it running on the page for ever (T2 19).
-    let sent: Promise<unknown> = Promise.resolve();
-    const report = (lines: string[], done?: number) =>
-      (sent = sent.then(async () => {
+    // One report at a time, what came meanwhile in the next, and the end carrying what is
+    // left: a line landing after the end would mark the action running again. An end the
+    // root did not answer is sent again, a few times: one lost left the action running on
+    // the page for ever (T2 19).
+    let lines: string[] = [];
+    let end: number | undefined;
+    let due = false;
+    let posting: Promise<void> | null = null;
+    const post = async () => {
+      for (let missed = 0; due;) {
+        due = false;
         const body = {
           id: action.id,
-          lines,
-          ...(done === undefined ? {} : { done: true, code: done }),
+          lines: lines.splice(0),
+          ...(end === undefined ? {} : { done: true, code: end }),
         };
-        while (
-          !(await rootHttp("POST", "/host/progress", body).then(
-            () => true,
-            () => false,
-          )) &&
-          done !== undefined
-        )
-          await sleep(2000);
+        const heard = await rootHttp("POST", "/host/progress", body).then(
+          () => true,
+          () => false,
+        );
+        if (heard || !("done" in body)) continue;
+        if (++missed === 10) return log(`the end of ${action.id} did not reach the root`);
+        lines = lastLines([...body.lines, ...lines]);
+        due = true;
+        await sleep(2000);
+      }
+    };
+    const report = (more: string[], done?: number) => {
+      lines = lastLines([...lines, ...more]);
+      if (done !== undefined) end = done;
+      due = true;
+      return (posting ??= post().finally(() => {
+        posting = null;
+        if (due) void report([]);
       }));
+    };
     if (!argv) return void report(["the host does not do that"], 64);
     // A workspace's own request (spawn, close): run only if the workspace it names signed it,
     // with the key only it and this host have (shared/spawn.ts says why not the root's word).
