@@ -448,13 +448,11 @@ describe("T2 section 4.8: the root UI", () => {
       ["constructor", {}],
     ] as [string, Record<string, string>][]) {
       const refused = await action(kind, args);
-      // An option-like title is dropped, not passed on: the domain is made without one.
+      // An option-like title is never passed on, and the domain is not made without it in
+      // silence (it was, until limits 04): refused, saying what a title may be.
       if (kind === "domain.create")
-        assert.deepEqual(
-          [refused.status, (JSON.parse(refused.body) as { command: string }).command],
-          [202, "desolate domain create ok"],
-        );
-      else assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
+        assert.match(refused.body, /that title is not one the dashboard takes/);
+      assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
     }
     assert.equal(
       ws(await state(), "web/one")?.host?.status,
@@ -564,7 +562,7 @@ describe("T2 section 4.8: the root UI", () => {
     const dom = page.stdout;
     assert.match(
       dom,
-      /<div class="card" data-domain="web">[\s\S]*<h3><span class="named domain"[^>]*><span class="kind">domain<\/span><span class="value mono">web<\/span><\/span><\/h3><span class="domain-title"[^>]*>the web app<\/span>/,
+      /<div class="card" data-domain="web">[\s\S]*<h3><span class="named domain"[^>]*><span class="kind">domain<\/span><span class="value mono" title="web">web<\/span><\/span><\/h3><span class="domain-title"[^>]*>the web app<\/span>/,
       dom.slice(0, 600),
     );
     assert.match(
