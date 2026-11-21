@@ -8,6 +8,11 @@
 //     given), a reviewer with nothing to say yet, and a keyring that is only written down
 //     (`approved`, `refused`). Nothing is signed.
 //   - `noShell` is the git terminal's way into the git VM, for a test that never opens one.
+//   - `vmRunning` is the VM layer for the host's questions to the reviewer (host/daemon.ts,
+//     reviewerSummary): each program it is asked to run as root in a VM is a local shell
+//     running `script`; `stillRunning` says how many of those are, and ends them; `firstOf`
+//     reads one line of an answer and leaves the rest unread, its asker still there.
+import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
@@ -144,3 +149,43 @@ export const withSecrets = (): Backend => {
   };
 };
 export const secretsSet = () => given;
+
+// ------------------------------------------------------------------ the reviewer's program
+let started: ChildProcess[] = [];
+/** The VM layer, where every program asked for (`spawn`, with pipes) is `sh -c script` on
+ *  this machine: it writes what a reviewer would, on stdout and stderr, and lives as long. */
+export const vmRunning = (script: string) => {
+  started = [];
+  return {
+    spawn: () => {
+      const child = spawn("sh", ["-c", script], { stdio: ["pipe", "pipe", "pipe"] });
+      started.push(child);
+      return child;
+    },
+    exec: async () => {
+      throw new Error("this VM layer runs programs with spawn only");
+    },
+  } as unknown as { spawn: () => ChildProcess };
+};
+const ended = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
+/** How many of the programs `vmRunning` started are still running, a second after the last
+ *  was asked to end (a kill takes a moment to arrive); then every one is ended. */
+export const stillRunning = async (): Promise<number> => {
+  await Promise.all(
+    started.map((child) =>
+      ended(child)
+        ? null
+        : new Promise((resolve) => {
+            child.once("exit", resolve);
+            setTimeout(resolve, 1000).unref();
+          }),
+    ),
+  );
+  const running = started.filter((child) => !ended(child)).length;
+  for (const child of started) if (!ended(child)) child.kill("SIGKILL");
+  return running;
+};
+/** The first line an answer gives; the rest is left unread, and its asker does not go away
+ *  (the generator is not returned). */
+export const firstOf = async <T>(lines: AsyncGenerator<T>): Promise<T | undefined> =>
+  (await lines.next()).value as T | undefined;
