@@ -17,16 +17,21 @@
 // what the person stored with `desolate settings set`, its default. What is stored is the
 // person's, on the Mac (`storeFile`): a file under the host's home, which no VM's share
 // reaches. A setting read in a VM (side root, workspace or git) is passed in by the host
-// when it starts that VM's services (host/settings.ts `passInward`): a file of root's in the
-// VM's own disk, not on a share, so neither a workspace nor the root's ordinary user can
-// change what another VM, or the host, reads. A process inside a VM can still be started
-// with a variable of its own: that changes only what that process does, as it always could.
+// when it starts that VM (host/settings.ts `passInward`): a file of root's on the VM's own
+// disk, not on a share, so nothing in one VM changes what another VM, or the host, reads. In
+// the root VM that also keeps its ordinary user from changing what the root's services read.
+// (In the git VM and a workspace, whatever runs there may be root there: what is passed in
+// is that VM's own business, never protected from it.) Each side reads only its own store:
+// a setting of the Mac's, read by code that runs in a VM, has no store there (its home is
+// that VM's user's), so only its variable and its default. A process inside a VM can still
+// be started with a variable of its own: that changes only what that process does.
 //
 // A setting is listed once its file has been imported: what lists them imports the files
 // (host/settings.ts finds them by their `define(` calls; there is no list to keep).
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Refusal } from "./exit.ts";
 import { PORTS } from "./limits.ts";
 import { printable } from "./text.ts";
@@ -243,6 +248,26 @@ export const storeFile = (side: Setting<unknown>["side"]): string =>
 /** In a VM, where the host leaves the settings passed in: root's, mode 0644, not a share. */
 export const INWARD = "/etc/desolate/settings.json";
 
+/** Whether the code at `here` (this file, by default) runs in a VM: desolate's code is there
+ *  at /desolate/release (a read-only share) or in root's copy under /opt/desolate. */
+export const inVm = (here: string = fileURLToPath(import.meta.url)): boolean =>
+  here.startsWith("/desolate/") || here.startsWith("/opt/desolate/");
+
+declare namespace inVm {
+  export type Where = Table<
+    typeof inVm,
+    [
+      [args: [here: "/desolate/release/shared/settings.ts"], expected: true],
+      [args: [here: "/opt/desolate/proxy-code/shared/settings.ts"], expected: true],
+      [args: [here: "/Users/ada/desolate/release/shared/settings.ts"], expected: false],
+      [
+        args: [here: "/workspaces/pmalacho-mit/desolate/release/shared/settings.ts"],
+        expected: false,
+      ],
+    ]
+  >;
+}
+
 const read = new Map<string, { at: string; stored: Stored }>();
 
 /** What is stored in `file` (nothing, when there is no file). Read again only when the file
@@ -260,13 +285,16 @@ export const storedIn = (file: string): Stored => {
   }
   const known = read.get(file);
   if (known?.at === at) return known.stored;
+  // A file that cannot be read is said as that (its mode, a directory), not as bad content.
+  const text = fs.readFileSync(file, "utf8");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+    parsed = JSON.parse(text);
   } catch {
     parsed = null;
   }
-  const stored: Stored = {};
+  // No prototype: a name is looked up as itself ("toString" is no setting).
+  const stored: Stored = Object.create(null);
   const object = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
   const ours =
     object &&
@@ -301,7 +329,8 @@ export const lookup = <T>(setting: Setting<T>): { value: T; from: From } => {
       );
     return { value, from: "environment" };
   }
-  const stored = storedIn(storeFile(setting.side))[setting.name];
+  const here = (setting.side === "host") !== inVm();
+  const stored = here ? storedIn(storeFile(setting.side))[setting.name] : undefined;
   if (stored !== undefined) {
     const value = setting.parse(stored.value);
     if (value === null)
