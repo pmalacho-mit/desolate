@@ -291,7 +291,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const port = Number(stack.env.DESOLATE_EDITOR_PORT);
     const link = `http://desolate-git.localhost:${port}/?repo=acme/widgets`;
     const fromElsewhere = `data:text/html,<script>location.href=${encodeURIComponent(JSON.stringify(link))}</script>`;
-    const shown = /desolate git --open|desolate's git VM|refused/;
+    const shown = /desolate ui --open|desolate's git VM|refused/;
     // A browser that never opened `desolate git`'s address: told, in the terminal, what to run.
     const stranger = await openBrowser(
       chrome,
@@ -300,14 +300,14 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     after(() => stranger.close());
     const told = await stranger.load(fromElsewhere, { until: shown, ms: 60_000 });
     assert.doesNotMatch(told.stdout, /refused/, told.stdout.slice(0, 300));
-    assert.match(told.stdout, /desolate git --open/, told.stdout.slice(-600));
+    assert.match(told.stdout, /desolate ui --open/, told.stdout.slice(-600));
     // The person's browser, which opened that address once: the button opens a shell.
     const person = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-git-")));
     after(() => person.close());
     const address = /(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!;
     await person.load(address, { until: /desolate's git VM/, ms: 60_000 });
     const opened = await person.load(fromElsewhere, {
-      until: /desolate's git VM|desolate git --open|refused/,
+      until: /desolate's git VM|desolate ui --open|refused/,
       ms: 60_000,
     });
     assert.match(opened.stdout, /desolate's git VM/, opened.stdout.slice(-600));

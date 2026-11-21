@@ -59,6 +59,34 @@ const withLock = async <T>(key: string, body: () => Promise<T>): Promise<T> => {
   }
 };
 
+/** Fast-forward the checked-out branch of a main checkout to the remote's (as the mirror has it
+ *  now), only when it is behind and nothing else: no commit of its own, no change to a
+ *  tracked file. What was done, or null. */
+const catchUpMain = async (clone: string): Promise<string | null> => {
+  const ran = (args: string[], env?: Record<string, string>) =>
+    run("git", ["-C", clone, ...args], {
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+      timeoutMs: 120_000,
+    });
+  const branch = (await ran(["symbolic-ref", "--quiet", "--short", "HEAD"])).stdout.trim();
+  if (!branch) return null;
+  // origin/* as the mirror has it now: over the share, the root not asked to refresh it.
+  await ran(["fetch", "--quiet", "origin"], { DESOLATE_MIRROR_FRESH: "1" });
+  const remote = `refs/remotes/origin/${branch}`;
+  const [here, there] = [
+    (await ran(["rev-parse", "--verify", "--quiet", "HEAD"])).stdout.trim(),
+    (await ran(["rev-parse", "--verify", "--quiet", remote])).stdout.trim(),
+  ];
+  if (!here || !there || here === there) return null;
+  if ((await ran(["merge-base", "--is-ancestor", "HEAD", remote])).code !== 0) return null;
+  if ((await ran(["status", "--porcelain", "--untracked-files=no"])).stdout.trim())
+    return `${branch}: behind the remote's, and not brought up to it: it has uncommitted changes`;
+  const merged = await ran(["merge", "--ff-only", "--quiet", remote]);
+  return merged.code === 0
+    ? `${branch}: brought up to the remote's (${there.slice(0, 12)})`
+    : `${branch}: behind the remote's, and not brought up to it: ${merged.stderr.trim().split("\n")[0] ?? ""}`;
+};
+
 /** The branch a new domain clone checks out: the remote's default, else what the checkout
  *  starts from. */
 export const firstBranch = (originHead: string, base: string) =>
@@ -207,6 +235,14 @@ const main = async (name: string) => {
       // `git push` offers it again.
       await git(clone, ["config", "push.autoSetupRemote", "true"]);
       if (plan.fetch) await git(clone, ["fetch", "--quiet", "--prune", "origin"]);
+      // The main checkout, when its branch is only behind the remote's (nothing of its own, and
+      // nothing uncommitted): brought up to the remote's, as a new worktree is started from it
+      // (below). Nothing else moves it, so a domain's first workspace came up days behind, on
+      // code that did not have the app yet (dogfooding, 2026-11-20: all three testers).
+      if (checkout.kind === "main") {
+        const caught = await catchUpMain(clone);
+        if (caught) made.push(`${checkout.repo} ${caught}`);
+      }
       if (checkout.kind === "worktree" && !fs.existsSync(path.join(checkout.path, ".git"))) {
         const exists = await run("git", [
           "-C",

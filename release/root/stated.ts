@@ -1366,7 +1366,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       res,
       401,
       "text/plain; charset=utf-8",
-      "desolate: open the dashboard at the address `desolate ui` prints: it carries this dashboard's token\n",
+      "desolate: this browser is not signed in. On the Mac, `desolate ui --open` signs it in to every page (`desolate ui --link` prints the link, for another browser)\n",
     );
   if (req.method === "GET" && STATIC[url.pathname]) {
     const [file, type] = STATIC[url.pathname]!;

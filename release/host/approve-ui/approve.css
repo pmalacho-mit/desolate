@@ -60,8 +60,10 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 .summary li.file { grid-template-columns: minmax(0, 1fr) 4.5em 4.5em; }
 .summary li.file > code { justify-self: start; }
 .summary .who { color: var(--muted); font-size: 12.5px; }
-.summary .add, .summary .del { font: 12.5px var(--mono); text-align: right; }
-.summary .add { color: var(--ok); }
+/* The file list's +N and -N only: a diff's added lines are .add too, and were set right,
+   out of sight (dogfooding, 2026-11-20). */
+.summary li > .add, .summary li > .del { font: 12.5px var(--mono); text-align: right; }
+.summary li > .add { color: var(--ok); }
 .summary .del { color: var(--danger); }
 .summary .error { color: var(--danger); }
 /* The decision stays in view: while a card is taller than the window, its buttons stay at the
