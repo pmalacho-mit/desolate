@@ -463,5 +463,7 @@ Then, on GitHub, delete the deploy keys titled `desolate read (host ...)` and
 - **Something in a workspace cannot reach a host**: that is usually the point. Its requests,
   and why each was refused, are in `desolate net log you--app`; `desolate domain you--app net
   allow <host>` lets one through.
-- **A push was refused at approval**, or timed out: it waits two minutes; run it again.
+- **A push was refused at approval**, or timed out: a `git push` waits for you for as long as
+  it runs (stop it, and it is off the approval page); `desolate push` waits two minutes for
+  your answer at its prompt. Run it again.
 - What desolate has got wrong before, and how it was found: [`incidents.md`](incidents.md).

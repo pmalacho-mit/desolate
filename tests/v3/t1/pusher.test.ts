@@ -9,7 +9,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Writable } from "node:stream";
 import { after, before, describe, it } from "node:test";
-import { advertised, pkt, reported, Uncertain, updateRef } from "../../../release/root/pusher.ts";
+import { Writable as WritableStream } from "node:stream";
+import {
+  advertised,
+  pkt,
+  reported,
+  Uncertain,
+  updateRef,
+  handOverBy,
+  receive,
+  uploadWatched,
+  write,
+} from "../../../release/root/pusher.ts";
+import { createServer, connect } from "node:net";
+import type { Socket } from "node:net";
 
 const ZERO = "0".repeat(40);
 let dir = "";
@@ -198,5 +211,123 @@ describe("T1 the pusher speaks receive-pack, and asks for one ref update", () =>
       (error: Error) => error instanceof Uncertain,
     );
     assert.equal(tipOf("main"), landed);
+  });
+});
+
+// Uploads end when they stall, not when they are long (R4): the forge is remote, and the one
+// timer it is allowed is "nothing moved for N". Each with its control: the same upload,
+// moving, outlives N however long it runs.
+describe("T1 the pusher's uploads: stopped when nothing moves, never for taking long", () => {
+  const PACE = { idleMs: 400, everyMs: 300, pollMs: 50 };
+  const progress = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "lfs-progress-")), "p");
+  // A stand-in for git-lfs: writes a progress line as git-lfs does (one per 32 KiB sent), at
+  // `every` seconds, `lines` times, then exits; or says nothing, and hangs.
+  const lfs = (lines: number, every: number) => [
+    "-c",
+    `for i in $(seq 1 ${lines}); do echo "upload 1/1 $((i * 32768))/${lines * 32768} obj" >> "$GIT_LFS_PROGRESS"; sleep ${every}; done`,
+  ];
+
+  it("control: an upload that keeps moving runs past the idle bound, and says how far it is", async () => {
+    const said: string[] = [];
+    const started = Date.now();
+    const up = await uploadWatched(
+      "sh",
+      lfs(8, 0.15),
+      { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      progress(),
+      { objects: 1, bytes: 8 * 32768 },
+      (line) => said.push(line),
+      PACE,
+    );
+    assert.equal(up.stalled, null);
+    assert.equal(up.code, 0);
+    assert.ok(Date.now() - started > PACE.idleMs * 2, "it ran longer than the idle bound");
+    assert.ok(
+      said.some((line) =>
+        /^uploading: [01] of 1 LFS object\(s\) up, \d+ KiB of 256 KiB$/.test(line),
+      ),
+      said.join("\n"),
+    );
+  });
+
+  it("an upload that stops moving is stopped, with everything it started, and says where it stood", async () => {
+    const up = await uploadWatched(
+      "sh",
+      ["-c", 'echo "upload 1/1 32768/65536 obj" >> "$GIT_LFS_PROGRESS"; sleep 30'],
+      { PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      progress(),
+      { objects: 1, bytes: 65536 },
+      () => {},
+      PACE,
+    );
+    assert.equal(
+      up.stalled,
+      "nothing was sent for 0.4 s (0 of 1 LFS object(s) up, 32 KiB of 64 KiB)",
+    );
+    assert.notEqual(up.code, 0);
+  });
+
+  it("a forge that stops taking the pack is given up on; control: one that takes it slowly is not", async () => {
+    // A sink that never drains once full: the forge stopped reading.
+    const stuck = new WritableStream({ highWaterMark: 4, write: () => {} });
+    await assert.rejects(write(stuck, Buffer.alloc(64), 200), /the forge took nothing for 0.2 s/);
+    // One that takes each chunk after a while, though all of it takes longer than the bound.
+    const slow = new WritableStream({
+      highWaterMark: 4,
+      write: (_chunk, _encoding, done) => void setTimeout(done, 80),
+    });
+    const started = Date.now();
+    for (let i = 0; i < 5; i++) await write(slow, Buffer.alloc(64), 200);
+    assert.ok(Date.now() - started > 200, "it took longer than the bound, and was not stopped");
+  });
+});
+
+// Past the claim the approval's clock has stopped: what the root's user hands the pusher must
+// all come by a time set from its size, or a byte a minute would land the push days later.
+describe("T1 the pusher takes a push by its time, however it trickles", () => {
+  /** A socket the pusher reads, and its sender's end. */
+  const pair = async () => {
+    const at = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pusher-pair-")), "s");
+    let taken: Socket | undefined;
+    const server = createServer((socket) => void (taken = socket));
+    await new Promise<void>((resolve) => server.listen(at, resolve));
+    const sender = connect(at);
+    await new Promise<void>((resolve) => sender.once("connect", () => resolve()));
+    while (!taken) await new Promise((resolve) => setImmediate(resolve));
+    return { reader: taken, sender, close: () => (sender.destroy(), server.close()) };
+  };
+  /** A byte every 50 ms, well inside the idle bound, `bytes` of them. */
+  const trickle = (sender: Socket, bytes: number) => {
+    let sent = 0;
+    const timer = setInterval(() => {
+      if (sent++ < bytes) sender.write(Buffer.from("x"));
+      else clearInterval(timer);
+    }, 50);
+    return () => clearInterval(timer);
+  };
+
+  it("control: a trickle that ends in its time is taken whole", async () => {
+    const { reader, sender, close } = await pair();
+    const stop = trickle(sender, 6);
+    const got = await receive(reader, Buffer.alloc(0), 6, () => {}, Date.now() + 5_000);
+    assert.equal(got.sha256.length, 64);
+    stop();
+    close();
+  });
+
+  it("one that is still going at its time is refused, though it never paused for long", async () => {
+    const { reader, sender, close } = await pair();
+    const stop = trickle(sender, 100);
+    await assert.rejects(
+      receive(reader, Buffer.alloc(0), 100, () => {}, Date.now() + 400),
+      /the push was not handed over in the time it is given/,
+    );
+    stop();
+    close();
+  });
+
+  it("the time is the approval's two minutes and as long again as the bytes take at 10 MiB/s", () => {
+    assert.equal(handOverBy(0, 0), 120_000);
+    assert.equal(handOverBy(2 * 1024 ** 3, 0), 120_000 + 205_000);
   });
 });
