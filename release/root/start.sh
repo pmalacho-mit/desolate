@@ -17,6 +17,9 @@ NODE="node --disable-warning=ExperimentalWarning"
 # there. (Before: `install -d -o <user> $STATE/secrets` as root followed a planted link,
 # and gave the user any directory it named, /usr/local/bin included.)
 as_user() { runuser -u "$USER_NAME" -- "$@"; }
+# A domain's name is a slug: shared/names.ts's isSlug, clause for clause. Shell cannot import
+# it, so T1 (`scripts`) reads this line and compares the two, name by name.
+is_slug() { [[ $1 =~ ^[a-z0-9][a-z0-9-]{0,39}$ && $1 != *- && $1 != *--*--* && $1 != xn--* && $1 != *---* ]]; }
 
 # Lima runs every command from the host over one ssh connection per VM, and sshd allows ten
 # sessions on a connection by default: a workspace's link, the dashboard and desolate's own
@@ -75,7 +78,7 @@ id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx desolate-reviewer && gpasswd -d "$U
 id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx desolate-proxy && gpasswd -d "$USER_NAME" desolate-proxy >/dev/null
 for domain_dir in /desolate/domains/*/; do
   domain=$(basename "$domain_dir")
-  [[ $domain =~ ^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$ ]] && [[ $domain != *--*--* && $domain != xn--* && $domain != *---* ]] || continue
+  is_slug "$domain" || { printf 'start.sh: %q in /desolate/domains is not a domain (its name is not one): no proxies made for it\n' "$domain" >&2; continue; }
   bash "$HERE/proxy-user.sh" "$USER_UID" "$domain" >/dev/null
 done
 # THE SHARES ARE CLOSED TO EVERY OTHER USER HERE. On vz, a file in a share reports as owned
@@ -112,27 +115,41 @@ LAYOUT=2
 # the release's, which only the host can change (a read-only share).
 CODE=$(cd "$HERE/.." && find root shared -type f \( -name '*.ts' -o -name '*.py' -o -name '*.sh' \) -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
 if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2>/dev/null)" != "$CODE" ]; then
-  for svc in rootd stated rootctl; do
-    [ -f "$RUN/$svc.pid" ] && { kill -- "-$(cat "$RUN/$svc.pid")" 2>/dev/null || true; }
+  groups=()
+  for svc in rootd stated rootctl pusher reviewer; do
+    [ -f "$RUN/$svc.pid" ] && { groups+=("$(cat "$RUN/$svc.pid")"); kill -- "-$(cat "$RUN/$svc.pid")" 2>/dev/null || true; }
     rm -f "$RUN/$svc.pid"
   done
   pkill -u desolate-keyring 2>/dev/null || true
   rm -rf "$RUN/keyring" "$RUN/keyring.pid" "$RUN/keyring-write"
-  [ -f "$RUN/pusher.pid" ] && { kill -- "-$(cat "$RUN/pusher.pid")" 2>/dev/null || true; }
   pkill -KILL -u desolate-pusher 2>/dev/null || true
-  rm -rf "$RUN/pusher" "$RUN/pusher.pid"
-  [ -f "$RUN/reviewer.pid" ] && { kill -- "-$(cat "$RUN/reviewer.pid")" 2>/dev/null || true; }
+  rm -rf "$RUN/pusher" "$RUN/pusher.pid" "$RUN/pusher.ended"
   pkill -KILL -u desolate-reviewer 2>/dev/null || true
-  rm -rf "$RUN/reviewer" "$RUN/reviewer.pid" "$RUN/keyring-review"
+  rm -rf "$RUN/reviewer" "$RUN/reviewer.pid" "$RUN/reviewer.ended" "$RUN/keyring-review"
   # The proxies too (rootd started them; bootstrap gives each running workspace a new one).
   # (By where they run from now, root's copy, and where they once did: an audit found that
   # matching only the old place left updated proxies running their old code.)
-  pkill -f "/opt/desolate/proxy-code/root/proxy/proxy.ts" 2>/dev/null || true
-  pkill -f "$HERE/proxy/proxy.ts" 2>/dev/null || true
-  pkill -f /opt/desolate/proxy-venv/bin/mitmdump 2>/dev/null || true
+  proxies=("/opt/desolate/proxy-code/root/proxy/proxy.ts" "$HERE/proxy/proxy.ts" /opt/desolate/proxy-venv/bin/mitmdump)
+  for proxy in "${proxies[@]}"; do pkill -f "$proxy" 2>/dev/null || true; done
   [ -d "$STATE" ] && as_user bash -c 'rm -f "$1"/proxy/running/*.json "$1"/proxy/secrets/*.json' _ "$STATE" 2>/dev/null || true
   rm -f /var/lib/desolate-proxies/domains/*/secrets-proxy.json
-  sleep 1
+  # Nothing new starts until every one of them is gone: what was told to end is waited for,
+  # by its processes, for as long as it takes. (Before: one second, and then on, whether or
+  # not the old code had stopped.) No count here: how long a start may take is the host's to
+  # say, which waits for this script; this says what it is waiting for, for the host to show.
+  old_left() {
+    { for group in ${groups[@]+"${groups[@]}"}; do pgrep -g "$group"; done
+      for user in desolate-keyring desolate-pusher desolate-reviewer; do pgrep -u "$user"; done
+      for proxy in "${proxies[@]}"; do pgrep -f "$proxy"; done; true; } 2>/dev/null | sort -u | paste -sd, -
+  }
+  said=$SECONDS
+  while left=$(old_left) && [ -n "$left" ]; do
+    if [ $((SECONDS - said)) -ge 5 ]; then
+      said=$SECONDS
+      echo "start.sh: waiting for the services of the code before this update to end: $(ps -o pid=,user=,comm= -p "$left" 2>/dev/null | tr -s ' \n' ' ;')" >&2
+    fi
+    sleep 0.1
+  done
 fi
 install -d -m 0755 -o "$USER_NAME" -g "$USER_GROUP" "$STATE"
 # Keys made before the keyring moved out of $STATE: taken across once, and only if what is
@@ -202,7 +219,7 @@ install -d -m 0755 -o root -g root /var/lib/desolate-proxies/secrets
 for old in /var/lib/desolate-proxies/domains/*/secrets.json; do
   [ -f "$old" ] || continue
   domain=$(basename "$(dirname "$old")")
-  [[ $domain =~ ^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$ ]] || continue
+  is_slug "$domain" || continue
   if [ ! -e "/var/lib/desolate-proxies/secrets/$domain.json" ]; then
     as_user cat "$old" | $NODE "$HERE/proxy/secret-store.ts" "$domain" import >/dev/null \
       || { echo "start.sh: the domain $domain's secrets could not be taken over; they are still in $old" >&2; exit 1; }
@@ -306,11 +323,26 @@ if ! alive "$RUN/keyring.pid"; then
     $NODE "$HERE/keyring.ts" >>"$SYS/keyring.log" 2>&1 </dev/null &
   echo $! >"$RUN/keyring.pid"
 fi
-for _ in $(seq 1 100); do [ -S "$RUN/keyring/control.sock" ] && break; sleep 0.1; done
-[ -S "$RUN/keyring/control.sock" ] || { echo "start.sh: the keyring did not start; see $SYS/keyring.log" >&2; tail -5 "$SYS/keyring.log" >&2; exit 1; }
-# The pusher and the reviewer, kept running by root: one request per process (pusher.ts,
-# reviewer.ts), and before each start every process of that user is killed, so nothing a
-# request's git started outlives it. Their logs are root's files.
+# A service is waited for until it listens, for as long as it is still trying to: the wait
+# ends when its socket is there, or when the service itself has ended without one. There is no
+# count in it. (Before: ten seconds, which a cold VM under load can take, and the start was
+# then refused with the service a moment from listening.) How long a start may take is the
+# host's to say, which waits for this script; every five seconds this says what it waits for.
+listening() { # listening <name> <socket> <pid file> [<file whose change says the service ended>]
+  local name=$1 socket=$2 pid=$3 ended=${4:-/dev/null} before since=$SECONDS said=$SECONDS
+  before=$(cat "$ended" 2>/dev/null || true)
+  until [ -S "$socket" ]; do
+    if ! alive "$pid" || [ "$(cat "$ended" 2>/dev/null)" != "$before" ]; then
+      echo "start.sh: the $name ended before it was listening; see $SYS/$name.log" >&2; tail -5 "$SYS/$name.log" >&2; exit 1
+    fi
+    if [ $((SECONDS - said)) -ge 5 ]; then said=$SECONDS; echo "start.sh: the $name is still starting ($((SECONDS - since)) s)" >&2; fi
+    sleep 0.1
+  done
+}
+listening keyring "$RUN/keyring/control.sock" "$RUN/keyring.pid"
+# The pusher and the reviewer, kept running by root (kept.sh): one request per process
+# (pusher.ts, reviewer.ts), and before each start every process of that user is killed, so
+# nothing a request's git started outlives it. Their logs are root's files.
 kept_alone() { # kept_alone <user> <home> <script> <socket> <user|session>
   # user: every process of the user is killed before each start (the pusher: nothing a push
   # started outlives it). session: only the service's own session (the reviewer, whose
@@ -318,28 +350,29 @@ kept_alone() { # kept_alone <user> <home> <script> <socket> <user|session>
   local user=$1 home=$2 script=$3 socket=$4 kill=$5 name
   name=$(basename "$script" .ts)
   if ! alive "$RUN/$name.pid"; then
-    setsid bash -c 'exec >>"$1" 2>&1; while :; do [ "$5" = user ] && pkill -KILL -u "$2" 2>/dev/null; sleep 0.2
-        setsid runuser -u "$2" -- env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME="$3" \
-          node --disable-warning=ExperimentalWarning "$4" </dev/null & child=$!
-        wait "$child"; [ "$5" = session ] && pkill -KILL -s "$child" 2>/dev/null
-        sleep 0.5; done' _ "$SYS/$name.log" "$user" "$home" "$PROXY_CODE/root/$script" "$kill" </dev/null >/dev/null 2>&1 &
+    rm -f "$RUN/$name.ended"
+    setsid bash "$HERE/kept.sh" "$name" once "$RUN/$name.ended" \
+      bash -c '[ "$4" = user ] && pkill -KILL -u "$1" 2>/dev/null; sleep 0.2
+        setsid runuser -u "$1" -- env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME="$2" \
+          node --disable-warning=ExperimentalWarning "$3" </dev/null & child=$!
+        wait "$child"; code=$?; [ "$4" = session ] && pkill -KILL -s "$child" 2>/dev/null
+        sleep 0.5; exit "$code"' _ "$user" "$home" "$PROXY_CODE/root/$script" "$kill" </dev/null >>"$SYS/$name.log" 2>&1 &
     echo $! >"$RUN/$name.pid"
   fi
-  for _ in $(seq 1 100); do [ -S "$socket" ] && break; sleep 0.1; done
-  [ -S "$socket" ] || { echo "start.sh: the $name did not start; see $SYS/$name.log" >&2; tail -5 "$SYS/$name.log" >&2; exit 1; }
+  listening "$name" "$socket" "$RUN/$name.pid" "$RUN/$name.ended"
 }
 kept_alone desolate-pusher "$PUSHER_HOME" pusher.ts "$RUN/pusher/control.sock" user
 kept_alone desolate-reviewer "$REVIEWER_HOME" reviewer.ts "$RUN/reviewer/control.sock" session
 ln -sf "$HERE/git-remote-desolate" /usr/local/bin/git-remote-desolate
 ln -sf "$HERE/git-remote-desolate-push" /usr/local/bin/git-remote-desolate-push
-# rootd and the state service are kept running: if one ends, it is started again and its
-# log says so. (The keyring is not: a keyring that has stopped signs nothing, which is the
-# safe way for it to be wrong, and `desolate doctor` says it is down.)
+# rootd and the state service are kept running (kept.sh): if one ends, it is started again
+# and its log says so. (The keyring is not: a keyring that has stopped signs nothing, which
+# is the safe way for it to be wrong, and `desolate doctor` says it is down.)
 # Its log is opened by the user, in the user's directory: root opens nothing there.
 kept() { # kept <name> <script>
   setsid runuser -u "$USER_NAME" -- env HOME="$USER_HOME" GIT_CONFIG_GLOBAL="$SYS/gitconfig" \
-    bash -c 'exec >>"$1/$2.log" 2>&1 || exit 1; name=$2; shift 2; while :; do "$@"; echo "$name: ended with $? at $(date -u +%FT%TZ); starting it again" >&2; sleep 2; done' \
-    _ "$STATE" "$1" $NODE "$HERE/$2" "${@:3}" </dev/null >/dev/null 2>&1 &
+    bash -c 'exec >>"$1/$2.log" 2>&1 || exit 1; shift 2; exec bash "$@"' \
+    _ "$STATE" "$1" "$HERE/kept.sh" "$1" always "" $NODE "$HERE/$2" "${@:3}" </dev/null >/dev/null 2>&1 &
   echo $! >"$RUN/$1.pid"
 }
 alive "$RUN/rootd.pid" || kept rootd rootd.ts
