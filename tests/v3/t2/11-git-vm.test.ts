@@ -538,7 +538,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     ]);
     assert.match(
       fetched.stdout,
-      /asking the root to refresh acme\/widgets[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/,
+      /the root is refreshing acme\/widgets from its remote[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/,
       fetched.stdout,
     );
   });

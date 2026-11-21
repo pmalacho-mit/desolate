@@ -11,7 +11,9 @@ const domain = params.get("domain") || "";
 const branch = params.get("branch") || "";
 document.getElementById("where").textContent = repo ? `/git/${repo}${branch ? ` on ${branch}, as ${domain} has it` : ""}` : "/git";
 const term = new Terminal({
-  cursorBlink: true, scrollback: 5000, allowProposedApi: false, macOptionIsMeta: true,
+  // (How much it keeps to scroll back through is the setting git.scrollbackLines: the host
+  // says it with the shell, below.)
+  cursorBlink: true, allowProposedApi: false, macOptionIsMeta: true,
   fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 13,
   linkHandler: { activate: () => {}, allowNonHttpProtocols: false },
 });
@@ -28,6 +30,42 @@ const unb64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 // looking: said only in the header, it left a terminal with a cursor and nothing else
 // (dogfooding, 2026-11-17: opened from the dashboard by a browser without this page's cookie).
 const note = (text) => term.write(`\x1b[2m${text.replace(/\n/g, "\r\n")}\x1b[0m\r\n`);
+const button = (label, onClick) => {
+  const made = document.createElement("button");
+  made.type = "button";
+  made.textContent = label;
+  made.addEventListener("click", onClick, { once: true });
+  document.querySelector("header").insertBefore(made, document.getElementById("status"));
+  return made;
+};
+const ago = (since) => {
+  const minutes = Math.max(0, Math.round((Date.now() - since) / 60_000));
+  return minutes < 1 ? "just now" : minutes < 120 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+};
+
+// A shell whose tab went (closed, a laptop's lid, a reload) is still there, as it was: when
+// this page opens, it says so and offers to go back to it, before it opens another.
+const offerLeft = async () => {
+  let body = null;
+  try {
+    const answer = await fetch("/sessions", { credentials: "same-origin", headers: window.desolateKey.headers });
+    body = answer.ok ? await answer.json() : null;
+  } catch {
+    /* the host says why when a shell is asked for */
+  }
+  const left = body && Array.isArray(body.left) ? body.left : [];
+  if (!left.length) return start();
+  note(`${left.length === 1 ? "A shell" : `${left.length} shells`} you left without closing ${left.length === 1 ? "is" : "are"} still open in the git VM:`);
+  const made = [];
+  const choose = (then) => () => { for (const b of made) b.remove(); then(); };
+  for (const s of left) {
+    note(`  in ${s.where}, left ${ago(s.since)}`);
+    made.push(button(`Back to the shell in ${s.where} (${ago(s.since)})`, choose(() => attach(s.id, s.token, body))));
+  }
+  made.push(button("New shell", choose(start)));
+  status.textContent = "waiting for you";
+};
+
 const start = async () => {
   status.textContent = "starting...";
   const slow = setTimeout(() => note("Starting the git VM and your clone there: the first time takes a minute or two..."), 1500);
@@ -49,10 +87,23 @@ const start = async () => {
       : `The shell did not start: ${body.error || `HTTP ${answer.status}`}`);
     return;
   }
-  const { id, token } = body;
+  attach(body.id, body.token, body);
+};
+
+/** Read shell `id` and type into it. `bounds`: what the host said of it (shell input in base64
+ *  characters a request, and the lines to keep for scrolling back). */
+const attach = (id, token, bounds) => {
+  if (Number.isInteger(bounds.scrollback) && bounds.scrollback > 0) term.options.scrollback = bounds.scrollback;
+  // A paste larger than one request is sent in parts, in order: base64 is 4 characters for 3 bytes.
+  const part = Math.max(3, Math.floor((Number(bounds.input) || 4) / 4) * 3);
   const encoder = new TextEncoder();
   let queue = Promise.resolve();
-  const send = (bytes) => { queue = queue.then(() => post(`/session/${id}/input`, { token, data: b64(bytes) })).catch(() => {}); };
+  const send = (bytes) => {
+    for (let at = 0; at < bytes.length; at += part) {
+      const piece = bytes.subarray(at, at + part);
+      queue = queue.then(() => post(`/session/${id}/input`, { token, data: b64(piece) })).catch(() => {});
+    }
+  };
   term.onData((data) => send(encoder.encode(data)));
   term.onBinary((data) => send(Uint8Array.from(data, (c) => c.charCodeAt(0) & 255)));
   const resize = () => { fit.fit(); post(`/session/${id}/resize`, { token, cols: term.cols, rows: term.rows }).catch(() => {}); };
@@ -61,23 +112,20 @@ const start = async () => {
   stream.onopen = () => { status.textContent = ""; resize(); term.focus(); };
   stream.onmessage = (event) => term.write(unb64(event.data));
   stream.addEventListener("end", () => { status.textContent = "the shell ended: reload for another"; stream.close(); });
-  // No reconnecting by itself: a reconnect would replay what the shell printed.
-  stream.onerror = () => { stream.close(); status.textContent = "disconnected: reload for another shell"; };
+  // No reconnecting by itself: a reconnect would replay what the shell printed into what this
+  // tab shows already. The shell itself stays: a reload offers it back, as it was.
+  stream.onerror = () => { stream.close(); status.textContent = "disconnected: reload this page to go back to the shell"; };
 };
 // An address that names a domain's branch changes the clone: the terminal checks that branch
 // out (git-vm.ts checkoutOffered). Any page can send the browser to such an address, so the
 // page says what it would do and waits for the person's click (audit, 2026-11-20). An address
-// with no branch only opens a shell, and starts at once.
+// with no branch only opens a shell: at once, or after offering back one left open.
 if (domain && branch) {
   note(`This address asks to check out ${branch} of ${repo}, as the domain ${domain} has it, in your clone in the git VM.`);
   note("Opened from the dashboard's Open in git, that is what you asked for. If you did not open it, close this tab.");
-  const go = document.createElement("button");
-  go.type = "button";
-  go.textContent = `Check out ${branch} from ${domain}`;
-  go.addEventListener("click", () => { go.remove(); start(); }, { once: true });
-  document.querySelector("header").insertBefore(go, document.getElementById("status"));
+  const go = button(`Check out ${branch} from ${domain}`, () => { go.remove(); start(); });
   status.textContent = "waiting for you";
-} else start();
+} else offerLeft();
 
 // Pushes waiting for approval, beside the terminal: the approval page itself (its /embed),
 // in a frame of its own origin. This page gives it its address and learns from it how many
