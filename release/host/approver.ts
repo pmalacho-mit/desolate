@@ -30,6 +30,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatSigned, parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
+import { formatBytes } from "../shared/limits.ts";
+import { printable } from "../shared/text.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome } from "../.harness/home.ts";
@@ -152,14 +154,6 @@ declare namespace init {
   >;
 }
 
-/** A pack's size, as a person reads it. */
-const formatSize = (bytes: number) =>
-  bytes < 1024 * 1024
-    ? `${Math.max(1, Math.round(bytes / 1024))} KiB`
-    : `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-
-const clean = (text: string) => text.replace(/[^\x20-\x7e]/g, "?").slice(0, 300);
-
 /** Ask the person, and sign the approval text if they say yes: the keyring's challenge with
  *  what the reviewer says the push sends (shared/approval.ts, signedFor). Everything shown is
  *  read out of the very text that gets signed. A push that replaces the remote's branch is
@@ -197,7 +191,7 @@ export const sign = async (
     push.onto
       ? `  onto        ${push.onto}  (the remote's ${push.branch} now: it moves from this to the commit, or not at all)`
       : `  onto        none: the remote has no ${push.branch} yet`,
-    `  pack        ${push.pack.slice(0, 12)}${size === undefined ? "" : `, ${formatSize(size)}`}  (made by desolate's reviewer: nothing else is sent)`,
+    `  pack        ${push.pack.slice(0, 12)}${size === undefined ? "" : `, ${formatBytes(size)}`}  (made by desolate's reviewer: nothing else is sent)`,
     `  LFS         ${push.lfs.count} object(s), only those its commits point to`,
     ...(replaces
       ? [
@@ -206,7 +200,9 @@ export const sign = async (
       : []),
     ...(summary
       ? [
-          ...summary.slice(0, 60).map((line) => `  ${clean(line)}`.trimEnd()),
+          // Every line, whole (what is signed can be read: R1), made safe for the terminal,
+          // which wraps a long one. A name in another script is shown as itself.
+          ...summary.map((line) => `  ${printable(line)}`.trimEnd()),
           "              (desolate's reviewer, in the root)",
         ]
       : []),

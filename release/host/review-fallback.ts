@@ -2,8 +2,8 @@
 // that answers with one JSON object instead of the stream (shared/review-account.ts), read
 // as the stream would be. The host is written against the stream; this file is all that
 // knows the old answer, and its one caller is host/daemon.ts's reviewerSummary. To remove
-// it: delete this file, its harness (.harness/host-review-fallback.ts) and the two places
-// in reviewerSummary marked FALLBACK.
+// it: delete this file, its harness (host-review-fallback.ts, beside the others) and the
+// places in host/daemon.ts marked FALLBACK, and its line in tests/v3/features.ts.
 //
 // What the old reviewer cannot do, this says, in the account's own terms, and never makes
 // up: its lists are cut (the newest 50 commits, 200 files) and it has no further page; its
@@ -187,7 +187,10 @@ declare namespace lineOf {
   export type NoAccount = Table<
     typeof lineOf,
     [
-      [args: [old: { ok: false; error: "bad object" }, asked: Asked_], expected: { error: "bad object" }],
+      [
+        args: [old: { ok: false; error: "bad object" }, asked: Asked_],
+        expected: { error: "bad object" },
+      ],
       [
         args: [old: { ok: true }, asked: Asked_],
         expected: { error: "the reviewer gave no account of what the push sends" },
@@ -279,10 +282,7 @@ declare namespace withOld {
               typeof withOld,
               [
                 asked: Push,
-                stream: Invoke<
-                  typeof chunks,
-                  [parts: ['{"ok":false,"error":"bad', ' object"}\n']]
-                >,
+                stream: Invoke<typeof chunks, [parts: ['{"ok":false,"error":"bad', ' object"}\n']]>,
               ]
             >,
           ]
@@ -391,7 +391,10 @@ declare namespace oldAnswer {
       [
         lines: Invoke<
           typeof oldAnswer,
-          [request: { op: "diff"; key: Key; of: "net" }, ask: Invoke<typeof oldReviewer, [says: Old]>]
+          [
+            request: { op: "diff"; key: Key; of: "net" },
+            ask: Invoke<typeof oldReviewer, [says: Old]>,
+          ]
         >,
       ]
     >,
