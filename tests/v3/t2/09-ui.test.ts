@@ -902,7 +902,7 @@ describe("T2 section 4.8: the root UI", () => {
     assert.match(
       stack.desolate("ui").stdout,
       new RegExp(
-        `^dashboard    http://${HOST}:${port}/\\?tkn=${token}\napprovals    http://desolate-approve\\.localhost:${port}/\\?tkn=[0-9a-f]{48}\n$`,
+        `^dashboard    http://${HOST}:${port}/\\?tkn=${token}\napprovals    http://desolate-approve\\.localhost:${port}/\\?tkn=[0-9a-f]{48}\nto sign this browser in to every page at once: desolate ui --open \\(or --link, to print the link\\)\n$`,
       ),
     );
     assert.equal(
