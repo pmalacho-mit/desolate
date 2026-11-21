@@ -53,7 +53,6 @@ import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } fro
 import type { Backend as ApprovalBackend } from "./approve-web.ts";
 import { accountLines } from "../shared/review-account.ts";
 import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
-import { isOldKey, oldAnswer, withOld } from "./review-fallback.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
@@ -322,12 +321,10 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
     try {
       child = backend().spawn(ROOT_VM, argv, { root: true });
     } catch {
-      // FALLBACK, until host/vm/lima.ts offers `spawn` as root in the root VM (limits ticket
-      // 11, #183: this ticket's pull request has the exact change). With `exec` the answer
-      // arrives when it is whole: no progress is seen on the way, and a request that is
-      // dropped is not ended in the root. It is still not ended for being long (R4).
+      // Until the VM layer can stream as root in the root VM (host/vm/lima.ts, the owner's
+      // decision): `exec`, whose answer comes whole, with no progress, and is not ended early.
       const result = await backend().exec(ROOT_VM, argv, { root: true, input });
-      ended = Promise.resolve({ code: result.code, stderr: result.stderr });
+      ended = Promise.resolve({ code: result.code, stderr: lastWords(result.stderr) });
       ranOut = true;
       return void (yield result.stdout);
     }
@@ -340,7 +337,7 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
       // The end of it is where a program says why it stopped; a reviewer that logs for an
       // hour is not held whole. What was dropped is marked (R1).
       stderr += chunk;
-      if (stderr.length > 2 * REVIEWER_WORDS) stderr = `${CUT}\n${stderr.slice(-REVIEWER_WORDS)}`;
+      if (stderr.length > 2 * REVIEWER_WORDS) stderr = lastWords(stderr);
     });
     // Whoever asked went away: the connection is dropped, and the reviewer's end of it
     // closing is what stops the work there.
@@ -365,6 +362,8 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
  *  KiB of text is a long stack trace many times over. It is the host's memory this bounds,
  *  against a program in a VM. */
 const REVIEWER_WORDS = 64 * 1024;
+const lastWords = (text: string) =>
+  text.length > REVIEWER_WORDS ? `${CUT}\n${text.slice(-REVIEWER_WORDS)}` : text;
 /** Where the whole of the last such error is kept (shared/text.ts, failure). */
 const REVIEWER_FAILURE = path.join(paths.logs, "reviewer-failure.txt");
 const keepFailure = (whole: string): string | null => {
@@ -389,13 +388,8 @@ export async function* reviewerSummary(
   request: AccountRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<AccountLine, void, void> {
-  // FALLBACK (review-fallback.ts): more of an account that the old reviewer gave.
-  if (request.op !== "account" && isOldKey(request.key))
-    return yield* oldAnswer(request, (again) => reviewerAsked(again, signal).bytes);
   const asked = reviewerAsked(request, signal);
-  // FALLBACK (review-fallback.ts): the old reviewer's one JSON object, read as the stream.
-  const bytes = request.op === "account" ? withOld(request, asked.bytes) : asked.bytes;
-  for await (const line of accountLines(bytes)) {
+  for await (const line of accountLines(asked.bytes)) {
     if (signal?.aborted) return;
     if (!("error" in line)) {
       yield line;
@@ -419,11 +413,6 @@ declare namespace reviewerSummary {
     branch: "issue/12";
     commit: "1111111111111111111111111111111111111111";
     onto: null;
-  };
-  type Sends = {
-    pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    size: 100;
-    lfs: [];
   };
   /** the reviewer's lines as it writes them: what it is doing, while it does it, and then
    *  its account, which ends the answer. (Here the reviewer is a program that says these
@@ -629,43 +618,6 @@ declare namespace reviewerSummary {
       >
     >,
   ];
-  /** FALLBACK (review-fallback.ts, to go with it): a VM layer that cannot stream as root
-   *  answers when the reviewer is done, and a reviewer of the old kind answers with one JSON
-   *  object; both are read as the stream's one answer */
-  export type OldWay = Given<
-    [
-      Mock<"./stack.ts">,
-      Call<
-        Mocked<typeof backend>,
-        "mockReturnValue",
-        [
-          value: Invoke<
-            typeof vmAnswering,
-            [
-              code: 0,
-              stdout: '{"ok":true,"commits":[],"files":[],"fastForward":null,"sends":{"pack":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","size":100,"lfs":[]}}\n',
-              stderr: "",
-            ]
-          >,
-        ]
-      >,
-    ],
-    Expect<
-      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
-      "matches",
-      [
-        {
-          account: {
-            warnings: [];
-            commits: { items: []; total: 0; from: 0 };
-            files: { items: []; total: 0; from: 0 };
-            fastForward: null;
-            sends: Sends;
-          };
-        },
-      ]
-    >
-  >;
 }
 
 const approvalBackend = (): ApprovalBackend => {

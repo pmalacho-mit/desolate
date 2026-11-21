@@ -78,7 +78,6 @@ export const FEATURES: Feature[] = [
       "release/host/approver.ts",
       "release/host/approver/",
       "release/host/approve-web.ts",
-      "release/host/review-fallback.ts",
       "release/host/approve-ui/approve.css",
       "release/host/approve-ui/approve.html",
       "release/host/approve-ui/approve.js",
