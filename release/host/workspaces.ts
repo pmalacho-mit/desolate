@@ -275,6 +275,8 @@ export const startServices = async (plan: WorkspacePlan) => {
   step("its proxy");
   await connectWorkspace({ ...plan, proxy: proxy.socket });
   step("its link");
+  // Its settings, as the person stored them on the Mac, before what reads them starts.
+  await (await import("./settings.ts")).passInward(plan.vm, "workspace");
   const services = await b.exec(
     plan.vm,
     [

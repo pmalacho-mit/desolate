@@ -126,12 +126,12 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
     root: true,
     timeoutMs: 120_000,
   });
-  await passInward(GIT_VM, "git");
   if (provisioned.code !== 0)
     refuse(
       `the git VM could not be set up: ${(provisioned.stderr || provisioned.stdout).trim().slice(-300)}`,
       "desolate doctor",
     );
+  await passInward(GIT_VM, "git");
   // Who you are, for your commits: the Mac's own git identity, unless the git VM has one
   // already (yours to change there: git config --global user.name ...).
   const mine = (key: string) =>
