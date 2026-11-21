@@ -528,10 +528,15 @@ export const stop = async (
   const first = await Promise.race([over.then(() => "ended" as const), answer]);
   asking.abort();
   asker.close();
+  process.stdin.pause();
   if (first === "ended") {
     process.stderr.write("\n");
     return ended(said(await over).exit);
   }
+  // Let go of the waiting holder client at once, as attach does: it must not keep this
+  // process, and the person's prompt, waiting.
+  for (const stream of [waiting.stdin, waiting.stdout, waiting.stderr]) stream?.destroy();
+  waiting.unref();
   waiting.kill();
   if (first === "kill") return kill();
   out(

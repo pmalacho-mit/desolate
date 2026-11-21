@@ -161,7 +161,11 @@ describe("T1 the agent holder: its log, reads of it, and stop", () => {
   it("a name is the host's: lower-case letters, digits and dashes, at most NAMES.slug", () => {
     const long = "a".repeat(NAMES.slug + 1);
     assert.match(holder("log", long).stderr, /at most 40/);
-    assert.notEqual(holder("log", "a".repeat(NAMES.slug)).stderr, "", "(no such agent, but a name)");
+    assert.notEqual(
+      holder("log", "a".repeat(NAMES.slug)).stderr,
+      "",
+      "(no such agent, but a name)",
+    );
     assert.doesNotMatch(holder("log", "a".repeat(NAMES.slug)).stderr, /at most/);
   });
 });
