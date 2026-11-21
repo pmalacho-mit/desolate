@@ -286,17 +286,23 @@ const forget = (action: Action) => {
  *  (and is handed to every poll) until the host reports on it: a poll whose connection
  *  died takes nothing with it. The host runs each id once. */
 const waiters = new Set<() => void>();
-/** The oldest of them, a page at a time: the rest are handed over once these are reported on.
- *  An action's arguments are at most about 25 KiB (shared/actions.ts, ARGUMENT), so a page
- *  stays far inside what the host reads of one answer (daemon.ts, STATE_ANSWER_BYTES), and a
- *  flood of a domain's requests cannot make that answer one the host refuses whole. */
-const queued = () =>
-  actions
-    .filter((action) => action.state === "queued" && action.kind !== "offer.push")
-    .slice(0, PAGE);
+/** The oldest of them, as many as fit in REQUESTS_BYTES (one at least, which BODY_BYTES
+ *  bounds): the rest are handed over once these are reported on. A quarter of what the host
+ *  reads of one answer (daemon.ts, STATE_ANSWER_BYTES), so a flood of large requests, the
+ *  dashboard's or a domain's, never makes that answer one the host refuses whole. */
+const REQUESTS_BYTES = 4 * 1024 * 1024;
+const queued = () => {
+  const out: Action[] = [];
+  let bytes = 0;
+  for (const action of actions) {
+    if (action.state !== "queued" || action.kind === "offer.push") continue;
+    bytes += Buffer.byteLength(JSON.stringify(action));
+    if (out.length > 0 && bytes > REQUESTS_BYTES) break;
+    out.push(action);
+  }
+  return out;
+};
 
-/** `summary`: where the push came from, in the root's user's words: made safe, and fitted to
- *  a line by the page. */
 const pendingApprovals = () =>
   pendingIn(APPROVALS).map(({ approval, summary }) => ({
     repo: approval.repo,
@@ -969,7 +975,7 @@ const act = (
   if (SIGNED_KINDS.has(kind) && !from.signed)
     return { error: `'${kind}' is asked for by a workspace, not from the dashboard` };
   const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  // What is kept is what was checked: a push's four names, or what hostArgv took.
+  // A push keeps its four names; any other action, the arguments hostArgv took.
   const record = (command: string, kept: Record<string, string>): Action => {
     const action: Action = {
       id,

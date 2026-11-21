@@ -400,6 +400,8 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   type Asking = {
     stop: AbortController;
     since: number;
+    /** The lists asked for of the root before it was asked about (`rootListAfter`). */
+    born: number;
     progress: { phase: string; done?: number; of?: number } | null;
     answer: { account: Account } | { error: string } | null;
     /** The page was given the answer (/pending): from here it may be signed. */
@@ -424,6 +426,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     const asking: Asking = {
       stop: new AbortController(),
       since: Date.now(),
+      born: looks,
       progress: { phase: "waiting for another push's account" },
       answer: null,
       listed: false,
@@ -505,12 +508,12 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   };
   /** What the page is told of the pushes the root lists: each push's parsed text, the token
    *  over it, and the reviewer's account. A push the root no longer lists is dropped here. */
-  const answerFor = (listed: Waiting[], token: string) => {
+  const answerFor = (listed: Waiting[], look: number, token: string) => {
     // A text the root no longer lists is a push that is gone (approved, refused, or given
     // up): its question to the reviewer is dropped, and so is what it answered.
     const now = new Set(listed.map((w) => digestOf(w.message)));
     for (const [digest, asking] of reviews)
-      if (!now.has(digest)) {
+      if (!now.has(digest) && asking.born < look) {
         asking.stop.abort();
         reviews.delete(digest);
       }
@@ -570,19 +573,30 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       ),
     );
   /** The root's list once it is not the one `since` tags, for as long as `signal` holds. */
+  /** The root's list once it is not the one `since` tags, for as long as `signal` holds.
+   *  `look`: when it was asked for, in lists asked for (`answerFor` drops only the reviews of
+   *  pushes asked about before it: another page's may come from a later list). */
+  let looks = 0;
   const rootListAfter = async (
     since: string,
     signal: AbortSignal,
-  ): Promise<{ tag: string; pending: Waiting[] }> => {
-    if (backend.waitPending) return backend.waitPending(since, signal);
+  ): Promise<{ tag: string; pending: Waiting[]; look: number }> => {
+    const look = ++looks;
+    if (backend.waitPending) return { ...(await backend.waitPending(since, signal)), look };
     for (;;) {
       const pending = await backend.pending();
       const tag = digestOf(pending.map((w) => w.message).join("\n"));
-      if (tag !== since || signal.aborted) return { tag, pending };
+      if (tag !== since || signal.aborted) return { tag, pending, look };
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 1000);
-        signal.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, 1000);
+        signal.addEventListener("abort", done, { once: true });
       });
+      if (signal.aborted) return { tag, pending, look };
     }
   };
   return async (req: IncomingMessage, res: ServerResponse) => {
@@ -819,24 +833,25 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       res.once("close", () => gone.abort());
       try {
         let root = await rootListAfter("", gone.signal);
+        // One wait on the root at a time, kept across a reviewer's news: each wake is not
+        // another call into the root.
+        let fromRoot: ReturnType<typeof rootListAfter> | null = null;
         for (;;) {
-          const out = answerFor(root.pending, token);
+          const out = answerFor(root.pending, root.look, token);
           const tag = tagOfAnswer(out);
           if (since === null || tag !== since) return json(res, 200, { pending: out, tag });
+          fromRoot ??= rootListAfter(root.tag, gone.signal);
           const round = new AbortController();
-          const either = AbortSignal.any([gone.signal, round.signal]);
           const next = await Promise.race([
-            rootListAfter(root.tag, either),
+            fromRoot,
             new Promise<null>((resolve) => {
               const wake = () => resolve(null);
               moved.add(wake);
-              either.addEventListener("abort", () => (moved.delete(wake), resolve(null)), {
-                once: true,
-              });
+              round.signal.addEventListener("abort", () => moved.delete(wake), { once: true });
             }),
           ]).finally(() => round.abort());
           if (gone.signal.aborted) return;
-          if (next) root = next;
+          if (next) [root, fromRoot] = [next, null];
         }
       } catch (error) {
         if (gone.signal.aborted) return;

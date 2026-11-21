@@ -685,6 +685,34 @@ describe("T1 the approval page", () => {
     }
   });
 
+  it("two pages: one that waits on an older list does not drop a push the other has just been shown", async () => {
+    const late = { ...push, branch: "issue/21", nonce: "b".repeat(32) };
+    const lateMessage = formatApproval(late);
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    await listedNow();
+    dropped.length = 0;
+    slow = late.branch;
+    try {
+      const first = held(`/pending?since=${await tagNow()}`);
+      await moment();
+      // The push comes; the other page (the frame beside the git terminal) sees it first, and
+      // its reviewer's news wakes the first page, whose own wait on the root has not answered.
+      listed = [...listed, { message: lateMessage, at: "2026-11-12T00:00:00Z" }];
+      await call("GET", "/pending", asPage());
+      await moment();
+      assert.deepEqual(dropped, [], "the push the first page's list is older than is kept");
+      first.gone();
+      // CONTROL: a list asked for after it, without it, does drop it.
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+      await call("GET", "/pending", asPage());
+      assert.deepEqual(dropped, [late.branch]);
+    } finally {
+      slow = "";
+      release();
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
   it("a wait lives as long as the page's request: the root's wait ends when the page goes", async () => {
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
     await listedNow();
