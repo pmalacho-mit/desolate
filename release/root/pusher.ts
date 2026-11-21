@@ -12,7 +12,7 @@
 // it, here, with the write agent in reach: a bug in git's pack parsing that compromised the
 // root's user could have been sent straight on to this one (the audit of that version said
 // so). Now nothing the root's user sends is parsed in this process, beyond one JSON line
-// (at most 1 MiB, read by node's own parser) that says how many bytes follow:
+// (at most LIMIT.header, read by node's own parser) that says how many bytes follow:
 //   - the pack is taken whole and hashed, never read, and goes to the remote only if it is
 //     the pack the person approved (the reviewer made it, of the approved commits' own
 //     objects): no other object rides along. The forge's git reads it;
@@ -41,7 +41,8 @@
 //     then each LFS object's bytes in that order, then N bytes of pack. `lfsListed` is every
 //     LFS object the approved commits point to (the reviewer's list, whose digest the person
 //     signed); `lfs` is those of them the root holds, sent
-//                                       -> {"ok":true,...} | {"ok":false,"error","moved"}
+//                                       -> {"progress":"..."}\n lines while it uploads, then
+//                                          {"ok":true,...} | {"ok":false,"error","moved"}
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
@@ -50,9 +51,11 @@ import type { Socket } from "node:net";
 import * as path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { lfsDigest } from "../shared/approval.ts";
+import { FORGE, formatBytes, over } from "../shared/limits.ts";
 import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
-import { ask } from "./keyring-client.ts";
+import { printable, tail } from "../shared/text.ts";
+import { hold } from "./keyring-client.ts";
 import { GITCONFIG, KEYRING, PINNED_FORGE, PUSHER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
@@ -66,14 +69,32 @@ import type {
 import type { aBrokenPack, aPack, forgeSaying } from "../.harness/root-forge.ts";
 import type { emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 
+/** What the pusher takes, from the root's ordinary user (the header, the pack, an LFS object:
+ *  not trusted) and from the forge (`advertised`). */
 const LIMIT = {
-  header: 1024 * 1024,
-  pack: 2 * 1024 ** 3,
-  lfs: 5 * 1024 ** 3,
-  objects: 2000,
+  /** The one JSON line the root's user sends (send.ts), read by node's own parser. Its size is
+   *  what bounds the list of LFS objects in it: there is no count (docs/v3/limits.md). The
+   *  list is the reviewer's, which reaches the root's user in a line of at most 1 MiB
+   *  (review-client.ts, `packFor`), about 78 bytes an object; here it is twice, as
+   *  `lfsListed` and as the objects sent with their sizes, about 170 bytes an object: so
+   *  4 MiB takes any list the reviewer can give, and a push is never refused for it after the
+   *  person approved it. */
+  header: 4 * 1024 * 1024,
+  pack: FORGE.packBytes,
+  lfs: FORGE.lfsObjectBytes,
+  /** Everything the forge says in one push, its ref list and its report together: a forge
+   *  with about 600,000 refs. */
   advertised: 64 * 1024 * 1024,
-  idleMs: 60_000,
 } as const;
+/** The one idle bound (R4), against the two peers this waits on that it does not trust to
+ *  end: the root's user sending a push (each chunk must come within it), and the forge taking
+ *  one (each LFS chunk, each chunk of the pack). Not a total: a push takes as long as it
+ *  takes while it moves. A minute: longer than any pause a working link makes (ssh's own
+ *  keepalive gives up on a dead one in 45 s, below), short enough that a stall is said while
+ *  the person is still there. */
+const IDLE_MS = 60_000;
+/** How often a long step says how far it is (to the one who handed the push over). */
+const PROGRESS_MS = 10_000;
 const ZERO = "0".repeat(40);
 // One line per message, always starting with the time: no log line can read as an event.
 const log = (message: string) =>
@@ -97,7 +118,7 @@ const emit = (result: Record<string, unknown>) => {
       : {
           type: result.uncertain === true ? "push-uncertain" : "push-failed",
           ...base,
-          error: String(result.error ?? "").slice(0, 300),
+          error: String(result.error ?? ""),
         };
   process.stdout.write(`EVENT ${JSON.stringify(line)}\n`);
 };
@@ -210,8 +231,12 @@ const sshOptions = (identity: string) => [
   `UserKnownHostsFile=${PINNED_FORGE.knownHosts}`,
   "-o",
   "ConnectTimeout=20",
+  // A link that died is given up on after three unanswered keepalives, 45 s: what ends a
+  // push whose pack is sent while the forge works on it, saying nothing (no side-band).
   "-o",
   "ServerAliveInterval=15",
+  "-o",
+  "ServerAliveCountMax=3",
 ];
 const env = (extra: Record<string, string> = {}) => ({
   PATH: process.env.PATH ?? "/usr/bin:/bin",
@@ -370,13 +395,13 @@ export const reported = (
   if (text[0] !== "unpack ok")
     return {
       ok: false,
-      error: `the forge could not unpack what was sent (${(text[0] ?? "no report").slice(0, 200)})`,
+      error: `the forge could not unpack what was sent (${printable(text[0] ?? "no report", 200)})`,
     };
   if (text.slice(1).includes(`ok ${ref}`)) return { ok: true };
   const ng = text.find((line) => line.startsWith(`ng ${ref} `));
   return {
     ok: false,
-    error: `the forge refused the update: ${ng ? ng.slice(ref.length + 4, ref.length + 204) : "no answer for the branch"}`,
+    error: `the forge refused the update: ${ng ? printable(ng.slice(ref.length + 4), 200) : "no answer for the branch"}`,
   };
 };
 
@@ -455,7 +480,7 @@ export const updateRef = async (
   const caps = (refs[0]!.split("\0")[1] ?? "").trim().split(" ");
   if (!caps.includes("report-status") || !caps.includes("ofs-delta"))
     throw new Error(
-      `the forge does not offer what desolate's push needs (report-status, ofs-delta): ${caps.join(" ").slice(0, 200)}`,
+      `the forge does not offer what desolate's push needs (report-status, ofs-delta): ${printable(caps.join(" "), 200)}`,
     );
   await write(
     forge.stdin,
@@ -717,7 +742,7 @@ declare namespace updateRef {
 
 // ---------------------------------------------------------------- what arrives
 /** Exactly `count` bytes from a socket, each chunk to `sink` (a file, the forge), hashed on
- *  the way. Gives up when nothing arrives for a minute. */
+ *  the way. Gives up when nothing arrives for IDLE_MS. */
 const receive = (
   socket: Socket,
   first: Buffer,
@@ -741,7 +766,7 @@ const receive = (
     };
     const arm = () => {
       clearTimeout(idle);
-      idle = setTimeout(() => fail(new Error("nothing arrived for a minute")), LIMIT.idleMs);
+      idle = setTimeout(() => fail(new Error(`nothing arrived for ${IDLE_MS / 1000} s`)), IDLE_MS);
     };
     const take = async (chunk: Buffer) => {
       const part = chunk.subarray(0, left);
@@ -756,7 +781,7 @@ const receive = (
       stop();
       resolve({ rest, sha256: hash.digest("hex") });
     };
-    // The minute is the sender's: it runs while waiting for bytes, not while the forge (or
+    // The idle time is the sender's: it runs while waiting for bytes, not while the forge (or
     // the disk) takes the last chunk.
     const onData = (chunk: Buffer) => {
       socket.pause();
@@ -778,36 +803,142 @@ const receive = (
     }, fail);
   });
 
-const write = (stream: Writable, chunk: Buffer) =>
+/** `chunk` onto `stream`, settled once the stream has taken it. With `idleMs`, a stream that
+ *  takes nothing for that long is given up on: the forge stopped reading. */
+export const write = (stream: Writable, chunk: Buffer, idleMs?: number) =>
   new Promise<void>((resolve, reject) => {
     if (stream.destroyed || stream.writableEnded)
       return reject(new Error("the forge stopped listening"));
     if (stream.write(chunk)) return resolve();
-    const onError = (error: Error) => reject(error);
+    let timer: NodeJS.Timeout | undefined;
+    const onError = (error: Error) => (clearTimeout(timer), reject(error));
     stream.once("error", onError);
     stream.once("drain", () => {
+      clearTimeout(timer);
       stream.off("error", onError);
       resolve();
     });
+    if (idleMs !== undefined)
+      timer = setTimeout(() => {
+        stream.off("error", onError);
+        reject(new Error(`the forge took nothing for ${idleMs / 1000} s`));
+      }, idleMs);
   });
+
+/** How a watched upload is paced: given up on after `idleMs` with nothing moved, said every
+ *  `everyMs`, looked at every `pollMs`. Not the defaults only so a test need not take minutes. */
+export type Pace = { idleMs: number; everyMs: number; pollMs: number };
+const PACE: Pace = { idleMs: IDLE_MS, everyMs: PROGRESS_MS, pollMs: 1000 };
+
+/** `git lfs push` (`command` and `args`), ended when nothing has moved for `pace.idleMs`, and
+ *  saying how far it is every `pace.everyMs` (`say`). What moved is read from the file git-lfs
+ *  writes its progress to (GIT_LFS_PROGRESS, `progress`): a line for every 32 KiB it sends,
+ *  "upload <n>/<of> <sent>/<size> <name>" (measured with git-lfs 3.3.0, Debian's: 245 lines for
+ *  an 8 MB object sent at 330 KB/s, the first after 32 KiB). So a long upload that moves is
+ *  never stopped, and one that stalls is, however long it ran first. `objects` and `bytes`:
+ *  what is being sent, to say it against. */
+export const uploadWatched = async (
+  command: string,
+  args: string[],
+  env: Record<string, string>,
+  progress: string,
+  sending: { objects: number; bytes: number },
+  say: (line: string) => void,
+  pace: Pace = PACE,
+): Promise<{ code: number; stderr: string; stalled: string | null }> => {
+  fs.writeFileSync(progress, "", { mode: 0o600 });
+  const stop = new AbortController();
+  const each = new Map<string, { sent: number; size: number }>();
+  let read = 0;
+  let partial = "";
+  let moved = Date.now();
+  let said = Date.now();
+  let stalled: string | null = null;
+  const far = () => {
+    let up = 0;
+    let sent = 0;
+    for (const object of each.values()) {
+      sent += object.sent;
+      if (object.sent === object.size) up++;
+    }
+    return `${up} of ${sending.objects} LFS object(s) up, ${formatBytes(sent)} of ${formatBytes(sending.bytes)}`;
+  };
+  const look = () => {
+    let size = 0;
+    try {
+      size = fs.statSync(progress).size;
+    } catch {
+      /* not there yet */
+    }
+    if (size > read) {
+      const fd = fs.openSync(progress, "r");
+      try {
+        const chunk = Buffer.alloc(size - read);
+        fs.readSync(fd, chunk, 0, chunk.length, read);
+        read = size;
+        const lines = (partial + chunk.toString("utf8")).split("\n");
+        partial = lines.pop() ?? "";
+        for (const line of lines) {
+          const step = /^upload \d+\/\d+ (\d+)\/(\d+) (.*)$/.exec(line);
+          if (step) each.set(step[3]!, { sent: Number(step[1]), size: Number(step[2]) });
+        }
+      } finally {
+        fs.closeSync(fd);
+      }
+      moved = Date.now();
+    }
+    if (Date.now() - moved >= pace.idleMs) {
+      stalled = `nothing was sent for ${pace.idleMs / 1000} s (${far()})`;
+      stop.abort();
+    } else if (Date.now() - said >= pace.everyMs) {
+      said = Date.now();
+      say(`uploading: ${far()}`);
+    }
+  };
+  const timer = setInterval(look, pace.pollMs);
+  try {
+    const done = await run(command, args, {
+      env: { ...env, GIT_LFS_PROGRESS: progress },
+      signal: stop.signal,
+    });
+    return { code: done.code, stderr: done.stderr, stalled };
+  } finally {
+    clearInterval(timer);
+  }
+};
 
 // ---------------------------------------------------------------- one push
 const lfsPath = (dir: string, oid: string) =>
   path.join(dir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
 
+/** One push: the approval `request.approval` names, claimed from the keyring for as long as
+ *  this runs (the claim is this connection to it, closed in the `finally`, and by the kernel
+ *  if this process dies first), and then the push itself (`pushClaimed`). */
 const push = async (
   socket: Socket,
   request: Record<string, unknown>,
   rest: Buffer,
 ): Promise<Record<string, unknown>> => {
   const id = String(request.approval ?? "");
-  const reply = await ask(KEYRING.pusher, { op: "approval", id });
-  if (reply.ok !== true)
-    return {
-      ok: false,
-      error: `the keyring holds no live approval ${id.slice(0, 40)}: nothing was pushed`,
-    };
-  const approved = reply.approval as Approved;
+  const claim = await hold(KEYRING.pusher, { op: "approval", id });
+  try {
+    if (claim.answer.ok !== true)
+      return {
+        ok: false,
+        error: `the keyring holds no live approval ${id.slice(0, 40)}: nothing was pushed`,
+      };
+    return await pushClaimed(socket, request, rest, claim.answer.approval as Approved);
+  } finally {
+    claim.release();
+  }
+};
+
+const pushClaimed = async (
+  socket: Socket,
+  request: Record<string, unknown>,
+  rest: Buffer,
+  approved: Approved,
+): Promise<Record<string, unknown>> => {
   current = {
     repo: approved.repo,
     ref: approved.ref,
@@ -825,29 +956,35 @@ const push = async (
     !/^[0-9a-f]{64}$/.test(String(approved.lfs?.digest))
   )
     return { ok: false, error: "the keyring's approval is not well formed" };
+  // Said to the one who handed the push over (send.ts), before the answer.
+  const say = (text: string) => {
+    if (!socket.destroyed && socket.writable)
+      socket.write(JSON.stringify({ progress: text }) + "\n");
+  };
   const packSize = Number(request.pack);
   const lfs = Array.isArray(request.lfs)
     ? (request.lfs as { oid?: unknown; size?: unknown }[])
     : [];
-  if (!Number.isInteger(packSize) || packSize < 32 || packSize > LIMIT.pack)
-    return { ok: false, error: "a pack is a whole number of bytes, at most 2 GiB" };
-  if (
-    lfs.length > LIMIT.objects ||
-    lfs.some(
-      (o) =>
-        !isLfsOid(o.oid) ||
-        !Number.isInteger(o.size) ||
-        (o.size as number) < 0 ||
-        (o.size as number) > LIMIT.lfs,
-    )
-  )
-    return { ok: false, error: "LFS objects are named by sha256, with a size of at most 5 GiB" };
+  if (!Number.isInteger(packSize) || packSize < 32)
+    return { ok: false, error: "a pack is a whole number of bytes, at least a pack's 32" };
+  if (packSize > LIMIT.pack)
+    return {
+      ok: false,
+      error: `${over("the pack", LIMIT.pack, packSize, "bytes", "a push to the forge may carry")}: nothing was pushed`,
+    };
+  if (lfs.some((o) => !isLfsOid(o.oid) || !Number.isInteger(o.size) || (o.size as number) < 0))
+    return { ok: false, error: "LFS objects are named by sha256, with a size in bytes" };
+  const large = lfs.find((o) => (o.size as number) > LIMIT.lfs);
+  if (large)
+    return {
+      ok: false,
+      error: `${over(`the LFS object ${String(large.oid).slice(0, 12)}`, LIMIT.lfs, large.size as number, "bytes", "the forge stores")}: nothing was pushed`,
+    };
   // The LFS objects the person approved (their ids' digest is in the text they signed): the
   // whole list, which must be that one, and of it only those the root holds go up.
   // Each as `<oid> <size>`: the size its pointer says, which the object sent must have.
   const listed = Array.isArray(request.lfsListed) ? (request.lfsListed as unknown[]) : [];
   if (
-    listed.length > LIMIT.objects ||
     !listed.every(
       (entry) => typeof entry === "string" && /^[0-9a-f]{64} [0-9]{1,12}$/.test(entry),
     ) ||
@@ -935,7 +1072,8 @@ const push = async (
     if (lfs.length > 0) {
       const url = `ssh://${forge.user}@${forge.host}:${forge.port}/${repo.owner}/${repo.name}.git`;
       log(`${approved.repo}: uploading ${lfs.length} LFS object(s)`);
-      const up = await run(
+      say(`uploading ${lfs.length} LFS object(s)`);
+      const up = await uploadWatched(
         "git",
         [
           "--git-dir",
@@ -958,18 +1096,24 @@ const push = async (
           "--object-id",
           ...lfs.map((o) => o.oid as string),
         ],
-        {
-          env: env({ GIT_DIR: dir, GIT_SSH_COMMAND: ["ssh", ...sshOptions(identity)].join(" ") }),
-          timeoutMs: 1_800_000,
-        },
+        env({ GIT_DIR: dir, GIT_SSH_COMMAND: ["ssh", ...sshOptions(identity)].join(" ") }),
+        path.join(work, "lfs-progress"),
+        { objects: lfs.length, bytes: lfs.reduce((sum, o) => sum + (o.size as number), 0) },
+        say,
       );
-      if (up.code !== 0)
+      if (up.stalled)
         return {
           ok: false,
-          error: `the LFS objects did not upload, so the commit was not pushed: ${up.stderr.trim().split("\n").slice(-2).join(" | ")}`,
+          error: `the LFS upload stopped moving: ${up.stalled}, so the commit was not pushed`,
         };
+      if (up.code !== 0) {
+        const last = tail(up.stderr.trim(), 2);
+        return {
+          ok: false,
+          error: `the LFS objects did not upload, so the commit was not pushed: ${last.before ? `(${last.before} earlier lines) ` : ""}${printable(last.text.replace(/\n/g, " | "), 600)}`,
+        };
+      }
     }
-
     // The one ref update, and the pack as it came.
     const ssh = spawn(
       "ssh",
@@ -986,7 +1130,6 @@ const push = async (
     ssh.stderr.on("data", (chunk: Buffer) => (stderr = (stderr + chunk.toString()).slice(-4000)));
     ssh.stdin.on("error", () => {});
     const exited = new Promise<number>((resolve) => ssh.on("close", (code) => resolve(code ?? 1)));
-    const timer = setTimeout(() => ssh.kill("SIGKILL"), 1_800_000);
     try {
       const result = await updateRef(
         ssh,
@@ -994,9 +1137,18 @@ const push = async (
         approved.onto,
         approved.commit,
         async (sink) => {
-          // The approved pack, as checked above: its bytes, never read.
-          for await (const chunk of fs.createReadStream(packFile))
-            await write(sink, chunk as Buffer);
+          // The approved pack, as checked above: its bytes, never read. Each chunk must be
+          // taken within IDLE_MS; how long the whole takes is the link's.
+          let sent = 0;
+          let said = Date.now();
+          for await (const chunk of fs.createReadStream(packFile)) {
+            await write(sink, chunk as Buffer, IDLE_MS);
+            sent += (chunk as Buffer).length;
+            if (Date.now() - said >= PROGRESS_MS) {
+              said = Date.now();
+              say(`sending the pack: ${formatBytes(sent)} of ${formatBytes(packSize)}`);
+            }
+          }
         },
       );
       ssh.stdin.end();
@@ -1007,7 +1159,7 @@ const push = async (
     } catch (error) {
       ssh.kill("SIGKILL");
       const said = stderr.trim()
-        ? ` (ssh: ${stderr.trim().split("\n").slice(-2).join(" | ").slice(0, 300)})`
+        ? ` (ssh: ${printable(tail(stderr.trim(), 2).text.replace(/\n/g, " | "), 300)})`
         : "";
       if (error instanceof Uncertain)
         return {
@@ -1016,11 +1168,8 @@ const push = async (
           error: `${error.message}${said}: the push may have reached the remote; \`desolate fetch ${approved.repo}\` shows whether ${approved.ref} is at ${approved.commit.slice(0, 12)}`,
         };
       return { ok: false, error: `${(error as Error).message}${said}: nothing was pushed` };
-    } finally {
-      clearTimeout(timer);
     }
   } finally {
-    await ask(KEYRING.pusher, { op: "revoke", id }).catch(() => {});
     fs.rmSync(work, { recursive: true, force: true });
   }
 };
@@ -1033,11 +1182,19 @@ const handle = (socket: Socket) => {
   const onData = (chunk: Buffer) => {
     head = Buffer.concat([head, chunk]);
     const end = head.indexOf(10);
-    if (end < 0) return head.length > LIMIT.header ? socket.destroy() : undefined;
+    const answer = (value: Record<string, unknown>) => socket.end(JSON.stringify(value) + "\n");
+    if (end > LIMIT.header || (end < 0 && head.length > LIMIT.header)) {
+      socket.off("data", onData);
+      // Said, not dropped: what is over is the list of LFS objects one push can carry.
+      return answer({
+        ok: false,
+        error: `the push's request is over the ${formatBytes(LIMIT.header)} the pusher reads: it names more LFS objects than one push can carry, so nothing was pushed`,
+      });
+    }
+    if (end < 0) return;
     socket.off("data", onData);
     socket.pause();
     const rest = head.subarray(end + 1);
-    const answer = (value: Record<string, unknown>) => socket.end(JSON.stringify(value) + "\n");
     let request: Record<string, unknown>;
     try {
       request = JSON.parse(head.subarray(0, end).toString("utf8")) as Record<string, unknown>;

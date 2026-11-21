@@ -12,7 +12,8 @@ import { isBranch, repoId } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
 import type { Repo } from "../shared/names.ts";
 import { git } from "./git.ts";
-import { ask } from "./keyring-client.ts";
+import { startOf } from "../shared/lock.ts";
+import { hold } from "./keyring-client.ts";
 import { APPROVALS, clonePath, KEYRING } from "./layout.ts";
 import { allOffers } from "./offers.ts";
 import { afterPush } from "./pushed.ts";
@@ -23,20 +24,11 @@ import { send } from "./send.ts";
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
 
-export const WAIT_MS = Number(process.env.DESOLATE_APPROVAL_WAIT_MS) || 110_000;
-
-/** The live approval for this push, if the person gave one: its id, and what it pushes (the
- *  commit, or the squash of it they chose). */
-const approvedId = async (
-  push: Record<string, unknown>,
-): Promise<{ id: string; commit: string; pack: string } | null> => {
-  const reply = await ask(KEYRING.control, { op: "approved", ...push });
-  return reply.ok === true
-    ? { id: String(reply.id), commit: String(reply.commit), pack: String(reply.pack) }
-    : null;
-};
-
-/** Returns null when pushed, or why not (one line). `say` is for the person waiting. */
+/** Returns null when pushed, or why not (one line). `say` is for the person waiting.
+ *  It waits for the person for as long as it is waited for (R4): until they approve or refuse
+ *  it on the host, or `signal` fires (whoever asked went away), or this process ends. Its
+ *  request to the keyring is held on a connection of this process's, so whichever ends it,
+ *  the request is gone with it, and nothing can approve it after (keyring.ts). */
 export const pushCommit = async (
   repo: Repo,
   commit: string,
@@ -44,6 +36,7 @@ export const pushCommit = async (
   forced: boolean,
   from: string,
   say: (line: string) => void,
+  signal?: AbortSignal,
 ): Promise<string | null> => {
   const name = repoId(repo);
   const clone = clonePath(repo);
@@ -70,54 +63,108 @@ export const pushCommit = async (
       ? `the remote's ${branch} is the squash of ${squashed.slice(0, 12)}, a commit of this branch, pushed before. To build on it, run \`${catchUp(branch, squashed)}\` in the workspace, on the branch you pushed, then push again; or push with + to replace it`
       : `the remote's ${branch} has commits this does not (non-fast-forward): fetch and rebase, or push with + to replace it`;
   }
-  const push = { repo: name, ref: branch, commit, onto };
-  let approval = await approvedId(push);
-  if (!approval) {
-    // What the approval page shows of this push is the reviewer's (reviewer.ts): it gets the
-    // objects first, before the challenge's two minutes start. It makes the pack the push
-    // sends, too, which the approval names: a reviewer that cannot be reached stops the push.
-    const unreviewed = await submitForReview(repo, commit);
-    if (unreviewed)
-      return `the reviewer was not sent this push (${unreviewed}), and a push is approved only as the reviewer describes it: desolate doctor`;
-    const challenge = await ask(KEYRING.control, { op: "challenge", ...push });
-    const nonce = parseApproval(challenge.message)?.nonce;
-    if (challenge.ok !== true || !nonce)
-      return String(challenge.error ?? "the keyring gave no challenge");
+  // What the approval page shows of this push is the reviewer's (reviewer.ts): it gets the
+  // objects first. It makes the pack the push sends, too, which the approval names: a
+  // reviewer that cannot be reached stops the push.
+  const unreviewed = await submitForReview(repo, commit);
+  if (unreviewed)
+    return `the reviewer was not sent this push (${unreviewed}), and a push is approved only as the reviewer describes it: desolate doctor`;
+  if (signal?.aborted) return GONE;
+  const heard: { approved?: Approved; dropped?: string; ended?: boolean } = {};
+  let wake = () => {};
+  const held = await hold(
+    KEYRING.control,
+    { op: "challenge", repo: name, ref: branch, commit, onto, hold: true },
+    (line) => {
+      const said = line.approved as Record<string, unknown> | undefined;
+      if (said && typeof said === "object" && typeof said.id === "string")
+        heard.approved = { id: said.id, commit: String(said.commit), pack: String(said.pack) };
+      else if (line.dropped) heard.dropped = String(line.error ?? "the keyring dropped it");
+      wake();
+    },
+  );
+  try {
+    const nonce = parseApproval(held.answer.message)?.nonce;
+    if (held.answer.ok !== true || !nonce)
+      return String(held.answer.error ?? "the keyring gave no challenge");
+    void held.ended.then(() => ((heard.ended = true), wake()));
     const request = path.join(APPROVALS, `${nonce}.json`);
     // Whole or not at all: a half-written request read as broken would be thrown away, and
-    // this push would take that for a refusal.
+    // this push would take that for a refusal. It names this process: the list shows it while
+    // the process lives (approvals.ts).
     fs.writeFileSync(
       `${request}.tmp`,
-      JSON.stringify({ message: challenge.message, summary: from, at: new Date().toISOString() }),
+      JSON.stringify({
+        message: held.answer.message,
+        summary: from,
+        at: new Date().toISOString(),
+        pid: process.pid,
+        start: startOf(process.pid),
+      }),
       { mode: 0o600 },
     );
     fs.renameSync(`${request}.tmp`, request);
     say(
-      `desolate: this push needs your approval, given on the host, outside every VM.\n  ${name}  ${branch}  ${commit}\n  On the host: the approval page (desolate approve --web prints it), or run  desolate approve\n  waiting up to ${Math.round(WAIT_MS / 1000)} s ...`,
+      `desolate: this push needs your approval, given on the host, outside every VM.\n  ${name}  ${branch}  ${commit}\n  On the host: the approval page (desolate approve --web prints it), or run  desolate approve\n  waiting for it for as long as this push waits; stopping the push takes it off the list ...`,
     );
     let refused = false;
+    const onAbort = () => wake();
+    signal?.addEventListener("abort", onAbort);
     try {
-      for (const until = Date.now() + WAIT_MS; Date.now() < until && !approval && !refused;) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        approval = await approvedId(push);
-        // Refused on the page: the request is gone, and no approval came.
-        refused = !approval && !fs.existsSync(request);
+      // The approval comes on the held connection; a refusal on the page removes the request
+      // (ops.ts, approvals.refuse), which is looked for every half second.
+      while (!heard.approved && !heard.dropped && !heard.ended && !signal?.aborted) {
+        if (!fs.existsSync(request)) {
+          refused = true;
+          break;
+        }
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, 500);
+          wake = () => (clearTimeout(timer), resolve());
+        });
       }
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       fs.rmSync(request, { force: true });
     }
-    if (refused) return "refused on the host, so nothing was pushed";
-    if (!approval) return "no person approved the push on the host, so nothing was pushed";
-  }
-  try {
-    const failed = await send(repo, approval.id, { pack: approval.pack });
+    const approval = heard.approved;
+    if (!approval) {
+      if (refused) return "refused on the host, so nothing was pushed";
+      if (signal?.aborted) return GONE;
+      if (heard.dropped) return `${heard.dropped}, so nothing was pushed`;
+      return "the keyring stopped holding this push's request (it was restarted), so nothing was pushed: push again";
+    }
+    // The approval is this connection's until the pusher claims it; released below, it goes
+    // if the push never began.
+    const failed = await send(
+      repo,
+      { pack: approval.pack },
+      async () => approval.id,
+      (line) => say(`desolate: ${line}`),
+    );
     if (failed) return failed.error.replace(/\n/g, " ");
+    return pushed(repo, commit, branch, approval.commit, say);
   } finally {
-    await ask(KEYRING.control, { op: "revoke", id: approval.id }).catch(() => {});
+    held.release();
   }
-  if (approval.commit !== commit) {
+};
+
+type Approved = { id: string; commit: string; pack: string };
+const GONE = "whoever asked for this push stopped waiting, so nothing was pushed";
+
+/** After the push of `sent` (the commit, or the squash of it the person chose): what the
+ *  person waiting is told, and the root's own records. */
+const pushed = async (
+  repo: Repo,
+  commit: string,
+  branch: string,
+  sent: string,
+  say: (line: string) => void,
+): Promise<null> => {
+  const name = repoId(repo);
+  if (sent !== commit) {
     say(
-      `desolate: pushed squashed into one commit, ${approval.commit}. The branch you pushed still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace, on that branch (what you committed since is kept, on top):`,
+      `desolate: pushed squashed into one commit, ${sent}. The branch you pushed still has the commits that were squashed, so its next push would replace the remote's. To carry on from the squash, in the workspace, on that branch (what you committed since is kept, on top):`,
     );
     say(`desolate:   ${catchUp(branch, commit)}`);
   }
@@ -126,7 +173,7 @@ export const pushCommit = async (
     allOffers().find((o) => o.repo === name && o.branch === branch && o.commit === commit)?.base ??
     repos.registry().repos[name]?.defaultBranch ??
     null;
-  const link = afterPush({ repo: name, branch, commit: approval.commit, base }, say);
+  const link = afterPush({ repo: name, branch, commit: sent, base }, say);
   await repos.fetch(repo).catch(() => {});
   if (link)
     say(`desolate: open a pull request into ${base}, in your browser, as yourself: ${link}`);

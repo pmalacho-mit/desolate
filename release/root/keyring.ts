@@ -10,7 +10,7 @@
 //   read-agent   holds each repository's read key. Signs freely.
 //   write-agent  holds each pushable repository's write key, added with `ssh-add -c`: for
 //                every signature ssh-agent runs keyring-askpass, which allows it only if an
-//                unexpired approval for that repository is on file.
+//                approval for that repository is on file and the pusher has claimed it.
 //
 // AN APPROVAL IS A SIGNATURE MADE OUTSIDE THIS VM. The keyring issues a challenge naming
 // the repository, branch and commit (shared/approval.ts); the approver on the HOST shows it
@@ -136,8 +136,18 @@ const create = (repo: Repo, role: Role): string => {
 };
 
 // ---------------------------------------------------------------- approvals (P2)
-/** `claimed`: the pusher has begun the push (pusherOps). Only then may the write key sign,
- *  and from then the approval lasts as long as a push may (CLAIMED_MS), for that one push. */
+// WHAT LIVES HOW LONG. A request for an approval, and an approval, live as long as something is
+// waiting for them, and that something is a connection to this process: the one who asked
+// (a raw push: root/raw-push.ts) holds its challenge's connection open while it waits for the
+// person, and the pusher holds its claim's open while it pushes. When the connection closes
+// (Ctrl-C, a closed terminal, a process that ended however it ended) what it held goes, at
+// once. The kernel closes a dead process's sockets, so no clock is needed to notice. What
+// nobody holds has a clock instead (CHALLENGE, APPROVAL below), and says why.
+
+/** `claimed`: the pusher has begun the push (pusherOps). Only then may the write key sign, and
+ *  from then the approval lives while the pusher's connection does (`holder`), for that one
+ *  push. Before it, `holder` is the connection of whoever asked for the push, if one does: the
+ *  approval goes when it closes. */
 export type Approval = {
   id: string;
   repo: string;
@@ -149,23 +159,86 @@ export type Approval = {
   /** What the push sends, as the person signed it: the pusher sends nothing else. */
   pack: string;
   lfs: { count: number; digest: string };
-  expires: number;
+  /** Until the claim: when it can no longer be claimed. Claimed: null (it lives while the
+   *  pusher's connection does). */
+  expires: number | null;
   uses: number;
   by: string;
   claimed: boolean;
+  holder: Socket | null;
 };
-const CLAIMED_MS = 35 * 60_000;
 const approvals = new Map<string, Approval>();
-/** A push opens a few ssh connections (the push itself, LFS's authenticate calls), each one
- *  signature. An approval covers that one push: a short life and a small number of uses. */
+/** An approval covers one push, and is claimed by the pusher the moment it is handed the push.
+ *  `lifeMs`: the most time from the person's click to that claim. It is a clock on purpose,
+ *  though the one who asked holds the approval too: the root's ordinary user is that one, and
+ *  without it could keep an approved push and make it land long after the person took it for
+ *  failed (the compare-and-swap on `onto` stops it only if the remote moved). Two minutes
+ *  is the pusher starting between two pushes (root/send.ts asks it again for as long as
+ *  this) and the moment the push takes to begin. `desolate push` copies the pack from the
+ *  reviewer before it files the approval, so that copy is not on this clock; a raw push
+ *  learns which pack only from the approval, and copies it on it (docs/v3/limits/03-push-lifetimes.md).
+ *  `uses`: write-key signatures, all of them the pusher's (only it reaches the write agent):
+ *  one for the receive-pack ssh, and one for each `git-lfs-authenticate` git-lfs makes, once
+ *  for the upload and again each time the token it was given expires (the T2 forge's lasts
+ *  600 s). Eight is a hard bound on what a pusher gone wrong could do with one approval: it
+ *  bounds an LFS upload to about seven token lifetimes, and a push that needs more is refused
+ *  its next signature, in the keyring's audit. */
 export const APPROVAL = { lifeMs: 120_000, uses: 8 } as const;
 
-/** Challenges this keyring issued and nobody has answered yet. Short-lived and few: a
- *  process that asks in a loop gets the oldest ones dropped, not memory. */
-const challenges = new Map<string, { message: string; expires: number }>();
-const CHALLENGE = { lifeMs: 120_000, outstanding: 32 } as const;
+/** Challenges this keyring issued and nobody has answered yet. A held one (`holder`) lives as
+ *  long as its asker's connection; one nobody holds lives `lifeMs`: what `desolate push` asks
+ *  for (root/push.ts `prepare`) and answers in another process, after the person typed or
+ *  touched on the host (the terminal approver's own wait must be shorter: host/approver.ts).
+ *  Few: a process that asks in a loop gets the oldest ones dropped (and their askers told),
+ *  not memory. What an asker gains by holding one for a day is that line on the approval page:
+ *  answering it still takes the person's signature over its exact text, once. */
+type Challenge = { message: string; expires: number | null; holder: Socket | null };
+const challenges = new Map<string, Challenge>();
+export const CHALLENGE = { lifeMs: 120_000, outstanding: 32 } as const;
 
-const challenge = (request: Record<string, unknown>): Record<string, unknown> => {
+/** Connections that hold something (a challenge, an approval): they are not counted against
+ *  LIMIT.concurrent, so pushes waiting for a person never fill the socket. What bounds them is
+ *  what they hold: CHALLENGE.outstanding, and approvals, each a person's signature. */
+const holders = new Set<Socket>();
+const uncounted = new WeakMap<Socket, () => void>();
+const hold = (connection: Socket) => {
+  if (holders.has(connection)) return;
+  holders.add(connection);
+  uncounted.get(connection)?.();
+  connection.once("close", () => released(connection));
+};
+/** Whoever held `connection` stopped waiting: what it held goes. */
+const released = (connection: Socket) => {
+  holders.delete(connection);
+  for (const [nonce, entry] of challenges)
+    if (entry.holder === connection) challenges.delete(nonce);
+  for (const approval of approvals.values())
+    if (approval.holder === connection) {
+      approvals.delete(approval.id);
+      audit({
+        event: "revoked",
+        approval: approval.id,
+        why: approval.claimed
+          ? "the pusher is done with it"
+          : "whoever asked for it stopped waiting before its push began",
+      });
+    }
+};
+const holdsAnything = (connection: Socket) =>
+  [...challenges.values()].some((entry) => entry.holder === connection) ||
+  [...approvals.values()].some((approval) => approval.holder === connection);
+const tell = (connection: Socket | null, line: Record<string, unknown>) => {
+  if (connection && !connection.destroyed) connection.write(JSON.stringify(line) + "\n");
+};
+
+/** A challenge for one push. With `hold: true`, the asker's connection holds it: it has no
+ *  clock, is dropped the moment that connection closes, and the asker is told on it when the
+ *  person approves (`{"approved": ...}`) or when it was dropped for newer ones
+ *  (`{"dropped": ...}`). */
+const challenge = (
+  request: Record<string, unknown>,
+  connection?: Socket,
+): Record<string, unknown> => {
   const repo = parseRepo(request.repo);
   if (
     !repo ||
@@ -176,9 +249,17 @@ const challenge = (request: Record<string, unknown>): Record<string, unknown> =>
     return { ok: false, error: "a challenge names a repository, a branch and a 40-hex commit" };
   if (!fs.existsSync(keyFile(repo, "write")))
     return { ok: false, error: `${repoId(repo)} has no write key: it is not pushable` };
-  for (const [nonce, entry] of challenges) if (entry.expires < Date.now()) challenges.delete(nonce);
-  while (challenges.size >= CHALLENGE.outstanding)
-    challenges.delete(challenges.keys().next().value!);
+  for (const [nonce, entry] of challenges)
+    if (entry.expires !== null && entry.expires < Date.now()) challenges.delete(nonce);
+  while (challenges.size >= CHALLENGE.outstanding) {
+    const [nonce, oldest] = challenges.entries().next().value!;
+    challenges.delete(nonce);
+    tell(oldest.holder, {
+      dropped: nonce,
+      error: `the keyring dropped this push's request: more than ${CHALLENGE.outstanding} were waiting at once`,
+    });
+    if (oldest.holder && !holdsAnything(oldest.holder)) oldest.holder.end();
+  }
   const onto = request.onto ?? null;
   if (onto !== null && (!isCommit(onto) || /^0{40}$/.test(onto)))
     return {
@@ -193,7 +274,13 @@ const challenge = (request: Record<string, unknown>): Record<string, unknown> =>
     onto: onto as string | null,
     nonce,
   });
-  challenges.set(nonce, { message, expires: Date.now() + CHALLENGE.lifeMs });
+  const holder = request.hold === true && connection ? connection : null;
+  challenges.set(nonce, {
+    message,
+    expires: holder ? null : Date.now() + CHALLENGE.lifeMs,
+    holder,
+  });
+  if (holder) hold(holder);
   return { ok: true, message };
 };
 
@@ -389,7 +476,13 @@ const approverKey = (): { key: ReturnType<typeof createPublicKey> } | { error: s
   }
 };
 
-const approve = (request: Record<string, unknown>): Record<string, unknown> => {
+/** The person's answer to a challenge, filed. The approval is held by whoever held the
+ *  challenge, or, with `hold: true`, by this connection (`desolate push`, root/push.ts, whose
+ *  challenge nobody held): it goes when that connection closes before the pusher claims it. */
+const approve = (
+  request: Record<string, unknown>,
+  connection?: Socket,
+): Record<string, unknown> => {
   // The text the person signed: the challenge's fields, and what the push sends, put in by
   // the host from desolate's reviewer (shared/approval.ts).
   const parsed = parseSigned(request.message);
@@ -406,8 +499,8 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
   };
   const issued = challenges.get(parsed.nonce);
   const asked = issued ? parseApproval(issued.message) : null;
-  if (!issued || !asked || issued.expires < Date.now())
-    return refused("that challenge is not outstanding: each lasts two minutes and approves once");
+  if (!issued || !asked || (issued.expires !== null && issued.expires < Date.now()))
+    return refused(NOT_OUTSTANDING);
   // About this challenge's push: its repository, branch and onto, and its commit as it is,
   // or the squash of it the person chose.
   if (!answers(parsed, asked))
@@ -433,6 +526,7 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
   if (!fs.existsSync(keyFile(repo, "write")))
     return refused(`${parsed.repo} has no write key: it is not pushable`);
   const id = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+  const holder = request.hold === true && connection ? connection : issued.holder;
   const approval: Approval = {
     id,
     repo: parsed.repo,
@@ -446,11 +540,21 @@ const approve = (request: Record<string, unknown>): Record<string, unknown> => {
     uses: APPROVAL.uses,
     by: "host approver",
     claimed: false,
+    holder,
   };
   approvals.set(id, approval);
-  audit({ event: "approved", ...approval, expires: new Date(approval.expires).toISOString() });
-  return { ok: true, id, commit: approval.commit, pack: approval.pack };
+  if (holder) hold(holder);
+  const { holder: _, ...recorded } = approval;
+  audit({ event: "approved", ...recorded, expires: new Date(approval.expires!).toISOString() });
+  const answer = { id, commit: approval.commit, pack: approval.pack };
+  // The one who asked learns it on the connection it waits on (raw-push.ts), not by asking.
+  if (issued.holder && issued.holder !== connection)
+    tell(issued.holder, { approved: { nonce: parsed.nonce, ...answer } });
+  return { ok: true, ...answer };
 };
+
+const NOT_OUTSTANDING =
+  "that challenge is not outstanding: each approves once, and only while whoever asked for it waits";
 
 declare namespace approve {
   type Fresh = Invoke<typeof emptyRoot>;
@@ -521,18 +625,9 @@ declare namespace approve {
         { ok: false }
       >,
       Expect<
-        Invoke<
-          typeof approved,
-          [
-            request: {
-              repo: "acme/app";
-              ref: "feature/login";
-              commit: "0123456789abcdef0123456789abcdef01234567";
-            },
-          ]
-        >,
+        Invoke<typeof consume, [request: { repo: "acme/app" }]>,
         "=",
-        { ok: false; error: "no approval on file for that push" }
+        { ok: false; error: "no person has approved a push to acme/app" }
       >,
     ]
   >;
@@ -554,7 +649,7 @@ declare namespace approve {
         "=",
         {
           ok: false;
-          error: "that challenge is not outstanding: each lasts two minutes and approves once";
+          error: "that challenge is not outstanding: each approves once, and only while whoever asked for it waits";
         }
       >,
       Expect<
@@ -572,31 +667,20 @@ declare namespace approve {
   >;
 }
 
-/** Whether a live approval names exactly this push: its commit, or that commit squashed (the
- *  answer then says which commit goes). A raw push's question, while it waits. */
-const approved = (request: Record<string, unknown>): Record<string, unknown> => {
-  for (const approval of approvals.values())
-    if (
-      approval.expires >= Date.now() &&
-      approval.uses > 0 &&
-      approval.repo === request.repo &&
-      approval.ref === request.ref &&
-      (approval.commit === request.commit || approval.squashes === request.commit) &&
-      approval.onto === (request.onto ?? null)
-    )
-      return { ok: true, id: approval.id, commit: approval.commit, pack: approval.pack };
-  return { ok: false, error: "no approval on file for that push" };
-};
-
 /** ssh-agent is about to sign with a write key. Allowed only against a live approval. */
 const consume = (request: Record<string, unknown>): Record<string, unknown> => {
   const repo = String(request.repo ?? "");
+  let spent: Approval | null = null;
   for (const approval of approvals.values()) {
-    if (approval.expires < Date.now() || approval.uses <= 0) {
+    if (approval.expires !== null && approval.expires < Date.now()) {
       approvals.delete(approval.id);
       continue;
     }
     if (approval.repo !== repo || !approval.claimed) continue;
+    if (approval.uses <= 0) {
+      spent = approval;
+      continue;
+    }
     approval.uses -= 1;
     audit({
       event: "signed",
@@ -606,6 +690,13 @@ const consume = (request: Record<string, unknown>): Record<string, unknown> => {
       commit: approval.commit,
     });
     return { ok: true, approval: approval.id };
+  }
+  if (spent) {
+    audit({ event: "refused", repo, approval: spent.id, reason: "its signatures are used" });
+    return {
+      ok: false,
+      error: `the approval of this push to ${repo} has made its ${APPROVAL.uses} signatures`,
+    };
   }
   audit({ event: "refused", repo, reason: "no approval on file" });
   return { ok: false, error: `no person has approved a push to ${repo}` };
@@ -632,14 +723,11 @@ declare namespace consume {
   >;
 }
 
-const revoke = (request: Record<string, unknown>) => {
-  const existed = approvals.delete(String(request.id ?? ""));
-  if (existed) audit({ event: "revoked", approval: request.id });
-  return { ok: true, existed };
-};
-
 // ---------------------------------------------------------------- the sockets
-const publicOps = (request: Record<string, unknown>): Record<string, unknown> => {
+const publicOps = (
+  request: Record<string, unknown>,
+  connection?: Socket,
+): Record<string, unknown> => {
   const { op } = request;
   if (op === "list")
     return { ok: true, keys: held().map(({ repo, role }) => ({ repo: repoId(repo), role })) };
@@ -654,11 +742,9 @@ const publicOps = (request: Record<string, unknown>): Record<string, unknown> =>
     return { ok: true, entries: lines.slice(-last).map((line) => JSON.parse(line)) };
   }
   // Asking for an approval is open to every root process; granting one takes the host
-  // approver's signature. Revoking only ever takes capability away.
-  if (op === "challenge") return challenge(request);
-  if (op === "approve") return approve(request);
-  if (op === "approved") return approved(request);
-  if (op === "revoke") return revoke(request);
+  // approver's signature. Taking one back is closing the connection that holds it.
+  if (op === "challenge") return challenge(request, connection);
+  if (op === "approve") return approve(request, connection);
   if (op === "create" || op === "pubkey") {
     const repo = parseRepo(request.repo);
     if (!repo) return { ok: false, error: `not a repository: ${String(request.repo)}` };
@@ -794,15 +880,19 @@ declare namespace internalOps {
   >;
 }
 
-/** The pusher's questions (root/pusher.ts), on a socket only it reaches: what approval <id>
- *  names, exactly as the person approved it, and revoking it once the push is done. Asking
- *  claims it: one pusher process makes the push it names, once (an approval is claimed at
- *  most once), and only a claimed approval lets the write key sign. A claim lasts as long as
- *  a push may take (LFS objects first can take a while); the pusher revokes it when done. */
-const pusherOps = (request: Record<string, unknown>): Record<string, unknown> => {
+/** The pusher's question (root/pusher.ts), on a socket only it reaches: what approval <id>
+ *  names, exactly as the person approved it. Asking claims it: one pusher process makes the
+ *  push it names, once (an approval is claimed at most once), and only a claimed approval
+ *  lets the write key sign. The claim lives while the connection it was asked on is open, so
+ *  as long as the push takes, LFS objects first, and not a moment after the pusher is done:
+ *  it closes that connection when it ends, and the kernel does if it dies. */
+const pusherOps = (
+  request: Record<string, unknown>,
+  connection?: Socket,
+): Record<string, unknown> => {
   if (request.op === "approval") {
     const approval = approvals.get(String(request.id ?? ""));
-    if (!approval || approval.expires < Date.now() || approval.uses <= 0)
+    if (!approval || (approval.expires !== null && approval.expires < Date.now()))
       return { ok: false, error: "no live approval with that id" };
     if (approval.claimed)
       return {
@@ -818,8 +908,13 @@ const pusherOps = (request: Record<string, unknown>): Record<string, unknown> =>
     } catch {
       return { ok: false, error: `${approval.repo} has no write key` };
     }
+    // The claim is the pusher's connection: the approval lives while it is open, and goes
+    // when it closes, however the push (and the pusher's process) ends.
+    if (!connection) return { ok: false, error: "a claim is held by the pusher's connection" };
     approval.claimed = true;
-    approval.expires = Date.now() + CLAIMED_MS;
+    approval.expires = null;
+    approval.holder = connection;
+    hold(connection);
     audit({
       event: "claimed",
       approval: approval.id,
@@ -841,7 +936,6 @@ const pusherOps = (request: Record<string, unknown>): Record<string, unknown> =>
       },
     };
   }
-  if (request.op === "revoke") return revoke(request);
   return { ok: false, error: `unknown op '${String(request.op)}'` };
 };
 
@@ -852,11 +946,11 @@ declare namespace pusherOps {
     "=",
     { ok: false; error: "no live approval with that id" }
   >;
-  /** and it may revoke one, which only ever takes capability away */
-  export type Revokes = Expect<
+  /** it gives one back by closing the connection it claimed it on: there is no op for it */
+  export type NoRevoke = Expect<
     Invoke<typeof pusherOps, [request: { op: "revoke"; id: "mgx1abc-0123456789ab" }]>,
     "=",
-    { ok: true; existed: false }
+    { ok: false; error: "unknown op 'revoke'" }
   >;
   /** asking for a challenge or filing an approval is the control socket's, not the pusher's */
   export type Only = Table<
@@ -943,7 +1037,7 @@ const LIMIT = { bytes: 4096, concurrent: 16 } as const;
 const serve = (
   socketPath: string,
   mode: number,
-  handle: (request: Record<string, unknown>) => Record<string, unknown>,
+  handle: (request: Record<string, unknown>, connection: Socket) => Record<string, unknown>,
 ): Promise<void> => {
   let open = 0;
   const reply = (connection: Socket, value: unknown) =>
@@ -954,7 +1048,13 @@ const serve = (
       return connection.destroy();
     }
     open++;
-    connection.on("close", () => open--);
+    let counted = true;
+    const uncount = () => {
+      if (counted) open--;
+      counted = false;
+    };
+    uncounted.set(connection, uncount);
+    connection.on("close", uncount);
     connection.on("error", () => connection.destroy());
     let buffer = "";
     connection.on("data", (chunk) => {
@@ -969,7 +1069,7 @@ const serve = (
         buffer = buffer.slice(index + 1);
         if (!line.trim()) continue;
         try {
-          reply(connection, handle(JSON.parse(line)));
+          reply(connection, handle(JSON.parse(line), connection));
         } catch (error) {
           reply(connection, { ok: false, error: `bad request: ${String(error)}` });
         }
