@@ -94,6 +94,21 @@ export const FLAGS = {
   stop: { name: { type: "string" }, kill: { type: "boolean" } },
 } as const;
 
+/** What the holder in the VM says on a stream this process holds while it runs (an answer, an
+ *  error), gathered up to `SAID_MOST`: the VM is not trusted (an agent is root there), and
+ *  what this process holds is bounded by what it is for. A holder's answer is a line of JSON,
+ *  its error a traceback at most; 1 MiB of either is a holder gone wrong, and is said to be. */
+const SAID_MOST = 1024 * 1024;
+const gather = (stream: NodeJS.ReadableStream) => {
+  let text = "";
+  stream.on("data", (chunk: Buffer) => {
+    if (text.length < SAID_MOST) text += chunk.toString("utf8");
+    if (text.length >= SAID_MOST)
+      text = `${text.slice(0, SAID_MOST)}\n(cut at 1 MiB: the rest was not read)`;
+  });
+  return () => text;
+};
+
 /** The holder's error, whole (R1): its last ten lines, made safe, and where all of it is
  *  kept on this Mac when that is not all of it. (Ten, and the file under the host's logs, as
  *  host/failures.ts has them on the branch that brings it: this keeper is to become that
@@ -512,12 +527,10 @@ export const stop = async (
   }
   // A person: the holder answers when the agent has ended, and meanwhile the person is asked.
   const waiting = backend().spawn(w.vm, [...HOLDER(), "stop", name, "--wait"]);
-  let stdout = "";
-  let stderr = "";
-  waiting.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
-  waiting.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+  const stdout = gather(waiting.stdout!);
+  const stderr = gather(waiting.stderr!);
   const over = new Promise<{ code: number; stdout: string; stderr: string }>((resolve) =>
-    waiting.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr })),
+    waiting.on("close", (code) => resolve({ code: code ?? 1, stdout: stdout(), stderr: stderr() })),
   );
   out(`asked agent ${name} in ${at} to stop (Ctrl-C); waiting for it to end.`);
   const { createInterface } = await import("node:readline/promises");
@@ -615,9 +628,10 @@ export const log = async (
   // To a terminal, what a screen needs and no more; to a pipe or file, as it was.
   const filter = process.stdout.isTTY ? terminalFilter() : (bytes: Buffer) => bytes;
   let head: Buffer | null = Buffer.alloc(0);
-  let stderr = "";
-  reading.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+  const stderr = gather(reading.stderr!);
+  let unlike = false;
   reading.stdout!.on("data", (chunk: Buffer) => {
+    if (unlike) return;
     if (head === null) {
       if (!process.stdout.write(filter(chunk))) {
         reading.stdout!.pause();
@@ -627,6 +641,12 @@ export const log = async (
     }
     head = Buffer.concat([head, chunk]);
     const end = head.indexOf(0x0a);
+    // The holder's first line is a hundred bytes of JSON; one that does not end is not one.
+    if (end < 0 && head.length > 64 * 1024) {
+      unlike = true;
+      reading.kill();
+      return;
+    }
     if (end < 0) return;
     const rest = head.subarray(end + 1);
     process.stdout.write(filter(Buffer.from(marks(head.subarray(0, end).toString("utf8"), at))));
@@ -634,9 +654,14 @@ export const log = async (
     if (rest.length) process.stdout.write(filter(rest));
   });
   const code = await new Promise<number>((resolve) => reading.on("close", (c) => resolve(c ?? 1)));
+  if (unlike)
+    refuse(
+      "the VM's agent holder did not answer as one: nothing of its log was shown",
+      `desolate exec ${w.domain}/${w.workspace} --vm -- ls -l .desolate-agents`,
+    );
   if (code !== 0 && head !== null)
     refuse(
-      holderError({ stdout: "", stderr }, name),
+      holderError({ stdout: "", stderr: stderr() }, name),
       `desolate agent list ${w.domain}/${w.workspace}`,
     );
 };
