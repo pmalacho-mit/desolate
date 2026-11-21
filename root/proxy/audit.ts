@@ -4,7 +4,7 @@
 // Every one of the domain's proxies writes it: proxy.ts, one process per running workspace,
 // and the add-on of its secrets proxy (secrets_addon.py). So no writer renames a file: one
 // that did would move, or write over, the file another had just begun (two programs each
-// rotated one audit.log at 64 MiB, each by its own count: limits-triage.md). The log is a
+// rotated one audit.log at 64 MiB, each by its own count: the limits triage, in 422ef78). The log is a
 // series of files instead, audit-1.log, audit-2.log and on. Every writer appends to the
 // newest. The first to find it over its share of the budget begins the next one, by an
 // exclusive create: the others find that one there and move to it. Past the budget the

@@ -122,7 +122,7 @@ type Recommended = {
  *  its log keeps; this shows a page of each list unless --all, and the command it prints
  *  allows exactly the hosts it shows. When that is not all of them it says so before the
  *  command: following a command for the first hundred, then enforcing, cut off the rest
- *  (limits-triage.md). */
+ *  (the limits triage, in 422ef78). */
 export const netRecommend = async (
   domain: string,
   values: Record<string, unknown>,
