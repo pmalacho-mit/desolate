@@ -59,6 +59,9 @@ export const FEATURES: Feature[] = [
     code: [
       "release/root/offers.ts",
       "release/root/reviewer.ts",
+      "release/root/reviewer-account.ts",
+      "release/root/reviewer-git.ts",
+      "release/root/reviewer-packs.ts",
       "release/root/review-ask.ts",
       "release/root/review-client.ts",
       "release/root/push.ts",

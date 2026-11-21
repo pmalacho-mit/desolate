@@ -16,7 +16,8 @@ after(() => fs.rmSync(home, { recursive: true, force: true }));
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const answerOf = async (id: string) => {
   const file = path.join(paths.gitAnswers, `${id}.json`);
-  for (const until = Date.now() + 5000; !fs.existsSync(file) && Date.now() < until; ) await sleep(20);
+  for (const until = Date.now() + 5000; !fs.existsSync(file) && Date.now() < until;)
+    await sleep(20);
   return fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, "utf8")) as unknown) : null;
 };
 

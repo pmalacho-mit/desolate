@@ -589,21 +589,33 @@ describe(
         ).stdout,
       ) as { ok: boolean; message: string };
       assert.equal(challenge.ok, true);
-      const said = JSON.parse(
-        stack.inRoot(
-          ["node", "--disable-warning=ExperimentalWarning", "/desolate/release/root/review-ask.ts"],
-          {
-            root: true,
-            input: JSON.stringify({
-              repo: "acme/widgets",
-              branch: "t4-attack",
-              commit,
-              onto: null,
-            }),
-          },
-        ).stdout,
-      ) as { ok: boolean; error?: string; sends: { pack: string; lfs: string[] } };
-      assert.equal(said.ok, true, String(said.error));
+      // The reviewer's answer is a stream of lines (shared/review-account.ts): what it is
+      // doing, then its account, last.
+      const accounted = JSON.parse(
+        stack
+          .inRoot(
+            [
+              "node",
+              "--disable-warning=ExperimentalWarning",
+              "/desolate/release/root/review-ask.ts",
+            ],
+            {
+              root: true,
+              input: `${JSON.stringify({
+                op: "account",
+                repo: "acme/widgets",
+                branch: "t4-attack",
+                commit,
+                onto: null,
+              })}\n`,
+            },
+          )
+          .stdout.trim()
+          .split("\n")
+          .pop()!,
+      ) as { account?: { sends: { pack: string; lfs: string[] } }; error?: string };
+      assert.ok(accounted.account, String(accounted.error));
+      const said = accounted.account;
       const text = signedFor(challenge.message, {
         commit,
         squashes: null,
