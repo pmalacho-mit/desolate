@@ -253,13 +253,13 @@ export const set = async (
  *  had a setting this one has not is unset too. */
 export const unset = async (name: string | undefined, out: (line: string) => void) => {
   const stored = { ...storedIn(storeFile("host")) };
-  if (name && !(await all()).some((s) => s.name === name) && name in stored) {
+  if (name && !(await all()).some((s) => s.name === name) && Object.hasOwn(stored, name)) {
     delete stored[name];
     save(stored);
     return out(`${name}: no longer stored (no setting has that name now).`);
   }
   const setting = await named(name, "unset");
-  const was = name! in stored;
+  const was = Object.hasOwn(stored, setting.name);
   delete stored[setting.name];
   if (was) save(stored);
   const fallback = listing(setting).default;
@@ -370,7 +370,7 @@ export const passInward = async (vm: string, side: Exclude<Setting<unknown>["sid
     [
       "sh",
       "-c",
-      `umask 022 && install -d -m 0755 -o root -g root ${dir} && cat >${INWARD}.new && chown root:root ${INWARD}.new && mv -f ${INWARD}.new ${INWARD}`,
+      `umask 022 && install -d -m 0755 -o root -g root ${dir} && rm -f ${INWARD}.new && cat >${INWARD}.new && chown root:root ${INWARD}.new && chmod 0644 ${INWARD}.new && mv -f ${INWARD}.new ${INWARD}`,
     ],
     { root: true, input: `${JSON.stringify(inward(side), null, 2)}\n`, timeoutMs: 60_000 },
   );
