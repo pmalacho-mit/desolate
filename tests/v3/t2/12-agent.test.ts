@@ -131,7 +131,7 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     const all = stack.quiet("agent", "log", "dev/w1", "--name", "loud", "--all");
     assert.equal(all.code, 0, all.stderr);
     const head =
-      /^\[desolate: ([\d.]+) MiB of older output was dropped here: the log keeps the newest 1 MiB \(the setting agent\.logMiB\)\]\r\n(\d+)\r\n/.exec(
+      /^\[desolate: ([\d.]+) MiB of older output was dropped here: the log keeps the newest 1\.0 MiB \(the setting agent\.logMiB\)\]\r\n(\d+)\r\n/.exec(
         all.stdout,
       );
     assert.ok(head, all.stdout.slice(0, 300));
