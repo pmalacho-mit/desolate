@@ -11,52 +11,76 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJson } from "../shared/json.ts";
 import type { Checkout, WorkspacePlan } from "../shared/plan.ts";
-import { run, sleep } from "../shared/run.ts";
+import { withLock } from "../shared/lock.ts";
+import { run } from "../shared/run.ts";
+import { printable } from "../shared/text.ts";
 import { urlRules } from "./git-urls.ts";
+import { beating, requester, saying } from "./step.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
+/** How long a git step may say nothing before it is taken as stuck. Not how long it may
+ *  take: a step that reports its progress (`--progress`, below) runs for as long as it has
+ *  something to report (docs/v3/limits.md, R4). What it reads is on a share (the mirror, the
+ *  domain's .git), which is the Mac's disk through the hypervisor: a peer that can stop
+ *  answering. Ten minutes is what every git step here was once given in all, so no step
+ *  that finished before is stopped now. */
+const GIT_QUIET_MS = 600_000;
+
 // (DESOLATE_MIRROR_FRESH: a `--fetch` here follows the host's own refresh of the mirror.)
+const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", DESOLATE_MIRROR_FRESH: "1" };
+
+/** One git command of the init, ended only by its own silence or by the host going away.
+ *  Its failure is git's whole output and then one line that says which command it was: the
+ *  host shows the end of it and keeps all of it (host/workspaces.ts). */
 const git = async (dir: string | null, args: string[]) => {
   const result = await run("git", dir ? ["-C", dir, ...args] : args, {
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", DESOLATE_MIRROR_FRESH: "1" },
-    timeoutMs: 600_000,
+    env: GIT_ENV,
+    idleMs: GIT_QUIET_MS,
+    signal: requester(),
   });
   if (result.code !== 0)
     throw new Error(
-      `git ${args.join(" ")} failed${dir ? ` in ${dir}` : ""}: ${(result.stderr || result.stdout).trim().slice(-800)}`,
+      `${(result.stderr || result.stdout).trim()}\ngit ${args.join(" ")} failed${dir ? ` in ${dir}` : ""}`,
     );
   return result.stdout.trim();
 };
 
-/** The domain's .git is shared by every workspace in it, and two can start at once. A
- *  directory is the lock: mkdir is atomic, on the share too. */
+/** A git command that may be long (a first checkout with its LFS files, a fetch): said
+ *  while it runs, and asked for its progress, which is what its silence is measured by. */
+const longGit = (what: string, dir: string | null, args: string[]) =>
+  saying(what, () => git(dir, args));
+
+/** The domain's .git is shared by every workspace in it, and two can start at once: one
+ *  makes a repository's checkouts at a time. The lock is on the share, so it is held by a
+ *  beat and stale only when its holder has stopped (shared/lock.ts, R5): a first checkout
+ *  that takes twenty minutes keeps it for twenty minutes, and a workspace that died in its
+ *  init leaves it to the next, in ten seconds. Waiting for it has no timer: the host's
+ *  person is told who holds it, and waits or does not. What is done under it is safe to do
+ *  again: each step looks first at what is there. */
 const LOCKS = "/workspaces/.desolate/locks";
-const withLock = async <T>(key: string, body: () => Promise<T>): Promise<T> => {
+const oneAtATime = <T>(key: string, repo: string, body: () => Promise<T>): Promise<T> => {
   fs.mkdirSync(LOCKS, { recursive: true });
-  const lock = path.join(LOCKS, key);
-  for (let waited = 0; ; waited += 200) {
-    try {
-      fs.mkdirSync(lock);
-      break;
-    } catch {
-      // A lock older than two minutes belongs to a workspace that died mid-init.
-      try {
-        if (Date.now() - fs.statSync(lock).mtimeMs > 120_000)
-          fs.rmSync(lock, { recursive: true, force: true });
-      } catch {
-        /* released meanwhile */
-      }
-      if (waited > 180_000)
-        throw new Error(`another workspace has held the init lock on ${key} for three minutes`);
-      await sleep(200);
-    }
-  }
-  try {
-    return await body();
-  } finally {
-    fs.rmSync(lock, { recursive: true, force: true });
-  }
+  let release = () => {};
+  return withLock(
+    path.join(LOCKS, key),
+    async () => {
+      release();
+      return body();
+    },
+    {
+      scope: "share",
+      signal: requester(),
+      // Said for as long as the wait lasts, naming the holder, until the lock is ours (or
+      // another's: then `waiting` is told again).
+      waiting: (holder) => {
+        release();
+        release = beating(
+          `waiting for ${printable(holder.host, 80)} to finish making its checkouts of ${repo} (it began at ${printable(holder.since, 40)})`,
+        );
+      },
+    },
+  ).finally(() => release());
 };
 
 /** Fast-forward the checked-out branch of a main checkout to the remote's (as the mirror has it
@@ -66,7 +90,8 @@ const catchUpMain = async (clone: string): Promise<string | null> => {
   const ran = (args: string[], env?: Record<string, string>) =>
     run("git", ["-C", clone, ...args], {
       ...(env ? { env: { ...process.env, ...env } } : {}),
-      timeoutMs: 120_000,
+      idleMs: GIT_QUIET_MS,
+      signal: requester(),
     });
   const branch = (await ran(["symbolic-ref", "--quiet", "--short", "HEAD"])).stdout.trim();
   if (!branch) return null;
@@ -203,7 +228,7 @@ const main = async (name: string) => {
   for (const checkout of plan.checkouts) {
     const clone = `/workspaces/${checkout.repo}`;
     const mirror = `/desolate/mirrors/${checkout.repo}.git`;
-    await withLock(checkout.repo.replace("/", "--"), async () => {
+    await oneAtATime(checkout.repo.replace("/", "--"), checkout.repo, async () => {
       if (!fs.existsSync(path.join(clone, ".git"))) {
         fs.mkdirSync(path.dirname(clone), { recursive: true });
         await git(null, ["clone", "--shared", "--no-checkout", "--quiet", mirror, clone]);
@@ -220,7 +245,12 @@ const main = async (name: string) => {
           "refs/remotes/origin/HEAD",
         ]).catch(() => "");
         const branch = firstBranch(head, checkout.base);
-        await git(clone, ["checkout", "--quiet", branch]);
+        // (--progress: git says how far it is, files and LFS objects, with no terminal too.)
+        await longGit(`checking out ${branch} in the domain's clone of ${checkout.repo}`, clone, [
+          "checkout",
+          "--progress",
+          branch,
+        ]);
         made.push(`domain clone ${checkout.repo}`);
       }
       // `git push` offers the branch to the root instead (git-remote-desolate-offer): set on
@@ -234,7 +264,13 @@ const main = async (name: string) => {
       // as a new user, 2026-11-16). The refusal that follows sets no upstream, so the next
       // `git push` offers it again.
       await git(clone, ["config", "push.autoSetupRemote", "true"]);
-      if (plan.fetch) await git(clone, ["fetch", "--quiet", "--prune", "origin"]);
+      if (plan.fetch)
+        await longGit(`fetching ${checkout.repo} from its mirror`, clone, [
+          "fetch",
+          "--progress",
+          "--prune",
+          "origin",
+        ]);
       // The main checkout, when its branch is only behind the remote's (nothing of its own, and
       // nothing uncommitted): brought up to the remote's, as a new worktree is started from it
       // (below). Nothing else moves it, so a domain's first workspace came up days behind, on
@@ -252,8 +288,10 @@ const main = async (name: string) => {
           "--quiet",
           `refs/heads/${checkout.branch}`,
         ]);
+        // (Not --quiet, here and below: git then says how far the checkout is.)
+        const adding = `making the worktree of ${checkout.repo} on ${checkout.branch}`;
         if (exists.code === 0)
-          await git(clone, ["worktree", "add", "--quiet", checkout.path, checkout.branch]);
+          await longGit(adding, clone, ["worktree", "add", checkout.path, checkout.branch]);
         else {
           // A local branch that is only behind the remote's (nothing of its own: an ancestor of
           // origin/<it>) is stale, not a choice: nothing moves the main checkout's branch, so
@@ -266,11 +304,18 @@ const main = async (name: string) => {
           // and without --fetch (and for every spawn) a branch started from a main the domain
           // had not fetched in days (dogfooding again, after the fix above). From the mirror,
           // over the share: no network, and the root is not asked to refresh it.
+          // A fetch that fails does not stop the start: the branch then starts from what
+          // the clone last fetched, and that is said.
           if (!from.startsWith("origin/"))
-            await run("git", ["-C", clone, "fetch", "--quiet", "origin"], {
-              env: { ...process.env, DESOLATE_MIRROR_FRESH: "1" },
-              timeoutMs: 120_000,
-            });
+            await longGit(`fetching ${checkout.repo} from its mirror`, clone, [
+              "fetch",
+              "--progress",
+              "origin",
+            ]).catch(() =>
+              process.stderr.write(
+                `${checkout.repo} could not be fetched from its mirror: ${checkout.branch} starts from what this domain last fetched\n`,
+              ),
+            );
           if (
             !from.startsWith("origin/") &&
             (await run("git", ["-C", clone, "rev-parse", "--verify", "--quiet", remote])).code ===
@@ -281,10 +326,9 @@ const main = async (name: string) => {
             from = remote;
           // --no-track: from origin/main, git would make origin/main the new branch's upstream,
           // and a plain `git push` on it would then refuse (its upstream's name is not its own).
-          await git(clone, [
+          await longGit(adding, clone, [
             "worktree",
             "add",
-            "--quiet",
             "--no-track",
             "-b",
             checkout.branch,
@@ -346,5 +390,10 @@ const main = async (name: string) => {
   );
 };
 
+// A failure is its text and then one line, on stderr, and exit 1: the host shows the end of
+// what a step said (not a stack: the line that says what failed is the last one).
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
-  await main(process.argv[2] ?? "");
+  await main(process.argv[2] ?? "").catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });

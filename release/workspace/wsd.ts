@@ -18,8 +18,9 @@ import * as os from "node:os";
 import { createServer } from "node:net";
 import type { Server } from "node:net";
 import { fileURLToPath } from "node:url";
+import { PORTS } from "../shared/limits.ts";
 import { run, sleep } from "../shared/run.ts";
-import { tick as bridgeTick } from "./bridge.ts";
+import { MIRRORS, tick as bridgeTick, unmirrored } from "./bridge.ts";
 import { branches, domainRepos, importDeliveries, syncRepo } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -28,9 +29,14 @@ const SOCKET = "/run/desolate/wsd.sock";
 /** desolate's own listeners in the VM: never offered for forwarding. */
 const INTERNAL = new Set([15080, 15443]);
 
-/** The ports the host may ask this VM to hold: unprivileged ones, each once. */
+/** The VM's own way in (Lima's ssh): a listener here that is nobody's dev server. */
+const SSH = 22;
+
+/** The ports the host may ask this VM to hold: unprivileged ones (PORTS), each once. */
 export const reservable = (wanted: number[]): number[] => [
-  ...new Set(wanted.filter((port) => Number.isInteger(port) && port >= 1024 && port <= 65535)),
+  ...new Set(
+    wanted.filter((port) => Number.isInteger(port) && port >= PORTS.min && port <= PORTS.max),
+  ),
 ];
 
 declare namespace reservable {
@@ -64,9 +70,9 @@ const reserve = (wanted: number[]) => {
   }
 };
 
-/** The ports in `ss -H -ltn` output a dev server holds: on loopback or every address, 1024
- *  and up, not desolate's own and not one this VM holds for the host. */
-export const listenersOf = (ss: string, held: readonly number[]): number[] => {
+/** Each listener in `ss -H -ltn` output that a dev server could be: on loopback or every
+ *  address (not the docker bridge's, not a network interface's). */
+const heardIn = (ss: string): number[] => {
   const ports = new Set<number>();
   for (const line of ss.split("\n")) {
     const local = line.trim().split(/\s+/)[3];
@@ -77,14 +83,23 @@ export const listenersOf = (ss: string, held: readonly number[]): number[] => {
       .slice(0, at)
       .replace(/^\[|\]$/g, "")
       .replace(/%.*$/, "");
-    if (!Number.isInteger(port) || port < 1024 || INTERNAL.has(port) || held.includes(port))
-      continue;
+    if (!Number.isInteger(port) || port < 1 || port > PORTS.max) continue;
     // Loopback and wildcard listeners: what a dev server binds. Not the docker bridge's.
     if (!["0.0.0.0", "127.0.0.1", "*", "::", "::1"].includes(address)) continue;
     ports.add(port);
   }
   return [...ports].sort((a, b) => a - b);
 };
+
+/** The ports in `ss -H -ltn` output a dev server holds: on loopback or every address, from
+ *  PORTS.min up, not desolate's own and not one this VM holds for the host. */
+export const listenersOf = (ss: string, held: readonly number[]): number[] =>
+  heardIn(ss).filter((port) => port >= PORTS.min && !INTERNAL.has(port) && !held.includes(port));
+
+/** The listeners there that are below PORTS.min, which the host never forwards (a port
+ *  below 1024 on the Mac is the system's): named, so that it can be said. Not the VM's ssh. */
+export const lowOf = (ss: string): number[] =>
+  heardIn(ss).filter((port) => port < PORTS.min && port !== SSH);
 
 declare namespace listenersOf {
   /** what a dev server binds, in each spelling ss gives; each port once, in order */
@@ -114,8 +129,28 @@ declare namespace listenersOf {
   >;
 }
 
-const listeners = async () =>
-  listenersOf((await run("ss", ["-H", "-ltn"], { timeoutMs: 5000 })).stdout, [...reserved.keys()]);
+declare namespace lowOf {
+  /** a server on a privileged port, in each spelling: named, once, in order; the VM's ssh,
+   *  the resolver on its own address and everything from 1024 up are not */
+  export type Low = Expect<
+    Invoke<
+      typeof lowOf,
+      [
+        ss: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 [::]:80 [::]:*\nLISTEN 0 511 127.0.0.1:443 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:3000 0.0.0.0:*\n",
+      ]
+    >,
+    "=",
+    [80, 443]
+  >;
+}
+
+/** What is listening here now: what the host may forward, and what it will not. (Five
+ *  seconds for `ss`, which reads the kernel's table in milliseconds: past it the answer is
+ *  an empty list, and the next one, seconds later, is asked again.) */
+const heard = async () => {
+  const ss = (await run("ss", ["-H", "-ltn"], { timeoutMs: 5000 })).stdout;
+  return { listeners: listenersOf(ss, [...reserved.keys()]), low: lowOf(ss) };
+};
 
 /** What the host shows about this workspace without asking again: the editor's token (the
  *  host builds the address) and one line about the devcontainer. */
@@ -127,7 +162,10 @@ const epochOf = (file: string) => {
     return 0;
   }
 };
-const surfaces = (): {
+type Unforwarded = { low: number[]; more: number };
+const surfaces = (
+  unforwarded: Unforwarded,
+): {
   editorToken?: string;
   editorTokenEpoch?: number;
   devcontainer?: string;
@@ -152,7 +190,10 @@ const surfaces = (): {
   try {
     Object.assign(
       out,
-      devcontainerSummary(JSON.parse(fs.readFileSync("/run/desolate/devcontainer.json", "utf8"))),
+      devcontainerSummary(
+        JSON.parse(fs.readFileSync("/run/desolate/devcontainer.json", "utf8")),
+        unforwardedNote(unforwarded),
+      ),
     );
   } catch {
     /* not decided yet */
@@ -160,24 +201,69 @@ const surfaces = (): {
   return out;
 };
 
-/** The one line about the devcontainer the host shows (devcontainer.ts's state), and the
- *  checkout it is in. Throws for a state that is not an object's (not decided yet). */
-export const devcontainerSummary = (d: {
-  state?: string;
-  why?: string;
-  image?: string;
-  remoteUser?: string;
-  checkout?: string;
-}): { devcontainer: string; folder?: string } => {
+/** What to say of listeners that are not forwarded for a bound's sake, or null: the
+ *  privileged ports (in the VM, or in a compose devcontainer's service), and how many of a
+ *  service's listeners came after its last mirror. Each bound by its name and number. */
+export const unforwardedNote = ({ low, more }: Unforwarded): string | null => {
+  const parts = [
+    ...(low.length
+      ? [
+          `${low.length === 1 ? `port ${low[0]} is` : `ports ${low.join(", ")} are`} listening and not forwarded (below ${PORTS.min}: listen on a port from ${PORTS.min} up)`,
+        ]
+      : []),
+    ...(more > 0
+      ? [
+          `${more} of its service's listeners ${more === 1 ? "is" : "are"} not forwarded (past the first ${MIRRORS})`,
+        ]
+      : []),
+  ];
+  return parts.length ? parts.join("; ") : null;
+};
+
+declare namespace unforwardedNote {
+  export type Says = Table<
+    typeof unforwardedNote,
+    [
+      [args: [unforwarded: { low: []; more: 0 }], expected: null],
+      [
+        args: [unforwarded: { low: [80]; more: 0 }],
+        expected: "port 80 is listening and not forwarded (below 1024: listen on a port from 1024 up)",
+      ],
+      [
+        args: [unforwarded: { low: [80, 443]; more: 44 }],
+        expected: "ports 80, 443 are listening and not forwarded (below 1024: listen on a port from 1024 up); 44 of its service's listeners are not forwarded (past the first 256)",
+      ],
+    ]
+  >;
+}
+
+/** The one line about the devcontainer the host shows (devcontainer.ts's state, with its
+ *  note, and `ports`: what is said of listeners that are not forwarded), and the checkout it
+ *  is in. Whole: nothing is cut here (docs/v3/limits.md, R1). The host bounds what a VM says
+ *  and marks its cut, and what shows the line fits it. Throws for a state that is not an
+ *  object's (not decided yet). */
+export const devcontainerSummary = (
+  d: {
+    state?: string;
+    why?: string;
+    image?: string;
+    remoteUser?: string;
+    checkout?: string;
+    note?: string;
+  },
+  ports: string | null = null,
+): { devcontainer: string; folder?: string } => {
+  const notes = [...(d.state === "up" && typeof d.note === "string" ? [d.note] : [])];
+  if (ports) notes.push(ports);
   const out: { devcontainer: string; folder?: string } = {
     devcontainer:
-      d.state === "up"
-        ? `up (${String(d.image).slice(0, 80)}, user ${String(d.remoteUser).slice(0, 40)})`
+      (d.state === "up"
+        ? `up (${String(d.image)}, user ${String(d.remoteUser)})`
         : d.state === "failed"
-          ? `FAILED: ${String(d.why).slice(0, 300)}`
-          : "none",
+          ? `FAILED: ${String(d.why)}`
+          : "none") + (notes.length ? `; note: ${notes.join("; ")}` : ""),
   };
-  if (typeof d.checkout === "string") out.folder = d.checkout.slice(0, 300);
+  if (typeof d.checkout === "string") out.folder = d.checkout;
   return out;
 };
 
@@ -208,22 +294,55 @@ declare namespace devcontainerSummary {
       [args: [d: { state: "booting" }], expected: { devcontainer: "none" }],
     ]
   >;
-  /** written in the VM, so cut to length: an image name, a reason */
-  export type Cut = Expect<
-    Invoke<
-      typeof devcontainerSummary,
+  /** what the devcontainer's own start noted (devcontainer.ts), and what is said of ports
+   *  that are not forwarded: after the state, in the same line */
+  export type Notes = Table<
+    typeof devcontainerSummary,
+    [
       [
-        d: {
-          state: "up";
-          image: "registry.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1";
-          remoteUser: "node";
+        args: [
+          d: {
+            state: "up";
+            image: "service app";
+            remoteUser: "node";
+            note: 'forwardPorts entries that are not forwarded: "web:80" (below 1024: use a port from 1024 up)';
+          },
+          ports: "port 80 is listening and not forwarded (below 1024: listen on a port from 1024 up)",
+        ],
+        expected: {
+          devcontainer: 'up (service app, user node); note: forwardPorts entries that are not forwarded: "web:80" (below 1024: use a port from 1024 up); port 80 is listening and not forwarded (below 1024: listen on a port from 1024 up)';
         },
-      ]
-    >,
-    "=",
-    {
-      devcontainer: "up (registry.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, user node)";
-    }
+      ],
+      /** with no devcontainer the VM's own listeners are still its: said the same way */
+      [
+        args: [
+          d: { state: "none"; why: "no checkout has a devcontainer.json" },
+          ports: "port 80 is listening and not forwarded (below 1024: listen on a port from 1024 up)",
+        ],
+        expected: {
+          devcontainer: "none; note: port 80 is listening and not forwarded (below 1024: listen on a port from 1024 up)";
+        },
+      ],
+    ]
+  >;
+  /** nothing is cut here: a long image name, and a reason that ends by saying where the
+   *  whole log is, arrive whole, and the folder is the path it is */
+  export type Whole = Table<
+    typeof devcontainerSummary,
+    [
+      [
+        args: [
+          d: {
+            state: "up";
+            image: "registry.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1";
+            remoteUser: "node";
+          },
+        ],
+        expected: {
+          devcontainer: "up (registry.example/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa:1, user node)";
+        },
+      ],
+    ]
   >;
 }
 
@@ -236,17 +355,29 @@ const serve = () => {
     connection.on("data", async (chunk) => {
       buffer += chunk.toString();
       const end = buffer.indexOf("\n");
+      // A request is a line of port numbers from the host: every port there is, written
+      // out, is under 64 KiB, so a longer line is not one.
       if (end < 0) return buffer.length > 65536 ? connection.destroy() : undefined;
       let reply: unknown;
       try {
         const request = JSON.parse(buffer.slice(0, end)) as { op?: string; reserve?: unknown };
         if (request.op === "ports") {
           if (Array.isArray(request.reserve)) reserve(request.reserve.map(Number));
+          const { listeners, low } = await heard();
+          // What is listening and will not be forwarded, for a bound's sake: in this VM, and
+          // in a compose devcontainer's service (bridge.ts). In the devcontainer's line,
+          // which the host shows already, and by itself (`unforwarded`) for `desolate ports`.
+          const service = unmirrored();
+          const unforwarded = {
+            low: [...new Set([...low, ...service.low])].sort((a, b) => a - b),
+            more: service.more,
+          };
           reply = {
             ok: true,
-            listeners: await listeners(),
+            listeners,
             reserved: [...reserved.keys()].sort((a, b) => a - b),
-            ...surfaces(),
+            unforwarded,
+            ...surfaces(unforwarded),
           };
         } else reply = { ok: false, error: "unknown op" };
       } catch (error) {
