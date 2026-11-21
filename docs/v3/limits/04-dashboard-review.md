@@ -19,7 +19,8 @@ shows it (`root/ui/dashboard.js`, `.css`, `.html`, and its service `root/stated.
   quickly), cut after a line. `at=N` asks for the page that starts there. `file` (and `was`,
   for a renamed file) asks for that file's diff alone, taken as a literal path.
 - Nothing in a review has a timer (R4). git runs until it is done or until the page's request
-  closes: `stated.ts` aborts on the response's `close`, and `gitBytes`/`git` kill git.
+  closes: `stated.ts` aborts on the response's `close`, and `gitBytes`/`git` kill the git that
+  only reads. The fetch a review starts with runs to its end (it writes the shared clone).
 - A commit picked is checked by git against the review's range (`merge-base --is-ancestor`),
   whichever page it was listed on. Before, it had to be one of the 200 listed.
 - Renames are found (`--find-renames`) the same way for the list, the counts and the text. A
@@ -37,7 +38,7 @@ shows it (`root/ui/dashboard.js`, `.css`, `.html`, and its service `root/stated.
 | root/offers.ts:482 | `Number(size) >= 400` for a possible pointer | named (R3) | `LFS_POINTER_BYTES` (1024). Pointers are read by `git cat-file --batch`, a thousand blobs a git and not one git a blob |
 | root/offers.ts:215-216 | 5 attempts, 700 ms apart, for a branch to show through the share | kept hard | unchanged (the share has no handshake to wait on) |
 | root/offers.ts:117-120 | 5 retries of `git fetch <domain>` on a ref lock | kept | unchanged; a cancelled request stops retrying |
-| root/offers.ts:113, :122 | `timeoutMs: 600_000` on `git fetch <domain>` | eliminated (R4) | no timer: it reads a bundle from a share (work, not a wait on a peer), and it takes `signal`. Its error is `failure()`'s last lines, not `.slice(-400)`. The other rows of this line (repos.ts, the remote helpers) are ticket 5's |
+| root/offers.ts:113, :122 | `timeoutMs: 600_000` on `git fetch <domain>` | eliminated (R4) | no timer: it reads a bundle from a share (work, not a wait on a peer). It is not cancelled either: killed mid-write, git leaves ref locks in the clone every domain shares. Its error is `failure()`'s last lines, not `.slice(-400)`. The other rows of this line (repos.ts, the remote helpers) are ticket 5's |
 | root/stated.ts:1505 | each action argument `value.length <= 200`, else silently dropped | bound kept, refused in words | over `NAMES.branch` (the longest honest argument): `over("the argument 'x'", ...)`; not text: refused by name |
 | root/stated.ts:1099-1105 | body `limit = 262_144` characters, "too large" | kept hard (R7, R8) | `BODY_BYTES` counted in bytes, with its reason and its own message |
 | root/stated.ts:1155, :1187 | `SIGNIN = { ttlMs: 60_000, most: 32 }`, a copy of host/signin.ts | one place (R3) | `shared/signin.ts`. host/signin.ts still holds its own copy: ticket 11 imports it |
