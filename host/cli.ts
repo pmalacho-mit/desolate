@@ -539,7 +539,10 @@ const main = async (argv: string[]): Promise<number> => {
     }
     const shown = await ui();
     if (values.json === true) out(JSON.stringify(shown));
-    else out(`dashboard    ${shown.dashboard}\napprovals    ${shown.approvals}`);
+    else
+      out(
+        `dashboard    ${shown.dashboard}\napprovals    ${shown.approvals}\nto sign this browser in to every page at once: desolate ui --open (or --link, to print the link)`,
+      );
     if (values.open === true) openInBrowser(await signinAddress());
     return EXIT.ok;
   }

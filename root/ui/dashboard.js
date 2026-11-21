@@ -846,7 +846,7 @@ const domainCard = (d) => {
     branchList(d),
     d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); } },
       el("input", { name: "name", placeholder: "name (optional)", pattern: "[a-z0-9][a-z0-9-]{0,39}", "aria-label": "workspace name" }),
-      el("button", { class: firstOne ? "quiet" : "", disabled: busy.has(key), title: "A workspace of its own: a VM with the repositories, each on a branch named after it" }, busy.has(key) ? "Starting..." : "New workspace")) : null,
+      el("button", { class: firstOne ? "quiet" : "", disabled: busy.has(key), title: "A workspace of its own: a VM with the repositories. The first takes each one's default branch (brought up to the remote's when it has nothing of its own); each after it, a branch named after it" }, busy.has(key) ? "Starting..." : "New workspace")) : null,
     // Adding a repository is set apart from making a workspace: it changes the domain.
     d.home ? [el("hr", { class: "split" }), el("div", { class: "inline sub", "data-home-note": "" }, "This is ", el("span", { class: "mono" }, d.home), "'s home domain: it holds that repository alone. ",
       el("button", { class: "quiet small", type: "button", "data-new-domain-with": d.home, onclick: () => openNewDomain([d.home]) }, `New domain with ${d.home}...`), " to work on it with others.")]
@@ -933,8 +933,10 @@ const render = () => {
   newOne.hidden = !newDomain;
   if (newDomain && newOne.firstChild !== newDomain.element) newOne.replaceChildren(newDomain.element);
   if (!newDomain) newOne.replaceChildren();
+  // (replaceChildren writes a null as the text "null", el() does not: the stray "null" under
+  // the domain cards, seen by every tester on 2026-11-20.)
   document.getElementById("domains").replaceChildren(...shown.map(domainCard),
-    shown.length === 0 && state.domains.length ? el("div", { class: "sub" }, `No domain matches “${domainFilter}”.`) : null);
+    ...(shown.length === 0 && state.domains.length ? [el("div", { class: "sub" }, `No domain matches “${domainFilter}”.`)] : []));
   for (const input of document.querySelectorAll("#domains input")) {
     const key = `${input.closest("[data-domain]")?.dataset.domain}:${input.name}`;
     if (typed.has(key)) input.value = typed.get(key);
