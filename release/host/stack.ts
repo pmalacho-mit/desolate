@@ -234,6 +234,8 @@ type Asked = {
   silenceMs: number;
   /** Ended after this long in all, for a call nobody watches. */
   totalMs?: number;
+  /** The total as the caller gave it, when `totalMs` is what is left of it. */
+  wholeMs?: number;
   signal?: AbortSignal;
 };
 /** Why a call was ended from this side. */
@@ -244,20 +246,30 @@ type Stopped = "silent" | "late" | "cancelled" | "flood";
  *  `run` would keep; and says so to `stopped` at once, so the call ends then, whatever the
  *  ended program leaves behind. (On Lima the program is limactl, which runs ssh: killed
  *  alone, it leaves that ssh holding the pipes, and a call that waited for them to close
- *  would wait for as long as a frozen root does. So what it started is killed with it, as
- *  its children: a process group of its own would also keep the terminal's Ctrl-C from it.) */
+ *  would wait for as long as a frozen root does. So the call is settled when it is given up,
+ *  its pipes let go, and the program's own children are killed with it. That is all of what
+ *  it started on this side: a command in the VM that ssh's shared connection carries may run
+ *  on there, as one does whose terminal closed. A process group of its own would also keep
+ *  the terminal's Ctrl-C from it.) */
 const patience = (child: ChildProcess, asked: Asked, stopped: (why: Stopped) => void) => {
   let why: Stopped | null = null;
   const stop = (reason: Stopped) => {
     if (why) return;
     why = reason;
     over();
-    if (child.pid) spawnSync("pkill", ["-KILL", "-P", String(child.pid)], { stdio: "ignore" });
-    child.kill("SIGKILL");
+    end();
+    stopped(reason);
+  };
+  /** The program and its children killed, and its pipes let go. Only while it has not
+   *  exited: after that its pid may be another process's. */
+  const end = () => {
+    if (child.pid && child.exitCode === null && child.signalCode === null) {
+      spawnSync("pkill", ["-KILL", "-P", String(child.pid)], { stdio: "ignore" });
+      child.kill("SIGKILL");
+    }
     child.stdin?.destroy();
     child.stdout?.destroy();
     child.stderr?.destroy();
-    stopped(reason);
   };
   const silence = setTimeout(() => stop("silent"), asked.silenceMs);
   const total =
@@ -275,6 +287,14 @@ const patience = (child: ChildProcess, asked: Asked, stopped: (why: Stopped) => 
     flood: () => stop("flood"),
     why: () => why,
     over,
+    /** After the answer: the program has a moment to end of itself (socat, once the service
+     *  closed), and is then ended, so a root that holds the stream open holds nothing here. */
+    done: () => {
+      over();
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      const later = setTimeout(end, 2_000);
+      child.once("close", () => clearTimeout(later));
+    },
   };
 };
 
@@ -293,7 +313,7 @@ const gaveUp = (op: string, why: Stopped, asked: Asked): Refusal =>
         )
       : why === "late"
         ? new Refusal(
-            `the root did not answer '${op}' within ${span(asked.totalMs!)}: the call was given up. It may have run`,
+            `the root did not answer '${op}' within ${span(asked.wholeMs ?? asked.totalMs!)}: the call was given up. It may have run`,
             "desolate doctor; then look before asking again",
           )
         : new Refusal(
@@ -327,7 +347,7 @@ const viaService = <T>(
     const settle = (answer: Reply<T> | Stopped | null) => {
       if (settled) return;
       settled = true;
-      waiting?.over();
+      waiting?.done();
       if (!child.stdin!.destroyed) child.stdin!.end();
       resolve(answer);
     };
@@ -360,7 +380,8 @@ const viaService = <T>(
           };
           waiting!.heard();
           if (message.accepted) accepted = true;
-          if (typeof message.progress === "string" && !asked.quiet) show(message.progress);
+          if (typeof message.progress === "string" && !asked.quiet && !settled)
+            show(message.progress);
           if (message.reply) settle(message.reply);
           else if (message.stale && !accepted) settle(null);
         } catch {
@@ -434,10 +455,15 @@ const viaExec = <T>(op: string, args: Record<string, unknown>, asked: Asked): Pr
   });
 
 const ask = async <T>(op: string, args: Record<string, unknown>, asked: Asked): Promise<T> => {
+  const began = Date.now();
   const served =
     process.env.DESOLATE_ROOTCTL === "exec" ? null : await viaService<T>(op, args, asked);
   if (typeof served === "string") throw gaveUp(op, served, asked);
-  const reply = served ?? (await viaExec<T>(op, args, asked));
+  // A total is the call's, not each way's: the old way gets what is left of it.
+  const left = asked.totalMs === undefined ? undefined : asked.totalMs - (Date.now() - began);
+  if (left !== undefined && left <= 0) throw gaveUp(op, "late", asked);
+  const reply =
+    served ?? (await viaExec<T>(op, args, { ...asked, totalMs: left, wholeMs: asked.totalMs }));
   if (!reply.ok)
     throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "", reply.code ?? 1);
   return reply.result as T;

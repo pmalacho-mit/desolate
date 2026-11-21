@@ -216,6 +216,8 @@ export const bootstrap = async (
   const fresh = !fs.existsSync(paths.state);
   ensureHome();
   step(fresh, `home ${paths.home}`);
+  // Part of a key archive a stopped destroy left goes now, whatever stops this bootstrap.
+  (await import("./carry.ts")).dropPartial();
 
   const b = backend();
   const missing = (await b.check()).filter((check) => !check.ok && check.name !== "base image");

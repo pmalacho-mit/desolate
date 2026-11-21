@@ -10,9 +10,15 @@ Lima, and what it shows when they fail. The rules are [`../limits.md`](../limits
   of progress, the answer) and given up only after a *silence*: the setting
   `root.silentSeconds` (`DESOLATE_ROOT_SILENT_SECONDS`), 900 by default, so no call the old
   timer let finish is cut, and a fetch that prints its progress for an hour is never cut.
-  `signal` ends a call whose asker went away. The calls nobody watches (the daemon's polls,
-  bootstrap's and doctor's probes) are one table, `BRIEF`, by operation with why each, and
-  are made with `rootctlBrief(op)`. Provisioning a VM (the base, or the root again in place)
+  Only a whole line of the root's counts as hearing from it. `signal` ends a call whose
+  asker went away. The calls nobody watches (the daemon's polls, bootstrap's and doctor's
+  probes) are one table, `BRIEF`, by operation with why each, made with `rootctlBrief(op)`,
+  and keep a *total*: the other end is the root's ordinary user, which is not trusted, and a
+  line now and then would hold a silence timer open forever on a call no person can stop.
+  (`timeoutMs`, for the daemon's calls until ticket 9 moves them, is still a total.) A call
+  given up ends at once, and what it started with it: on Lima the program is limactl, which
+  runs ssh, and its children are killed with it (not a process group of its own, which would
+  keep the terminal's Ctrl-C from it). Provisioning a VM (the base, or the root again in place)
   and carrying the root's state across a rebuild run under no timer: they say each step as
   it starts (`provision.sh`'s `==>` lines) or move bytes, and Ctrl-C stops them.
 - **R1, errors whole.** Every `.slice(-N)` of another layer's output (the root's, limactl's,
@@ -34,7 +40,7 @@ Lima, and what it shows when they fail. The rules are [`../limits.md`](../limits
 
 | where (before) | what it was | answer | what it is now |
 |---|---|---|---|
-| host/stack.ts:192, 250 | `timeoutMs ?? 900_000`, a total on every rootctl call | removed / setting | an idle timer: silence for `root.silentSeconds` (900); progress resets it; `signal` cancels |
+| host/stack.ts:192, 250 | `timeoutMs ?? 900_000`, a total on every rootctl call | removed / setting | an idle timer: silence for `root.silentSeconds` (900); a whole line of progress resets it; `signal` cancels; a caller's `timeoutMs` is a total, as before |
 | host/stack.ts:185 | `socat -t 86400` | removed | socat's stdin is held open until the answer; no timer |
 | host/daemon.ts:418 and the like (ticket 9's) | 30 s / 60 s per call | keep, one table | `BRIEF` in host/stack.ts, by op, with why; `rootctlBrief(op)` (see "Needs from another ticket") |
 | host/stack.ts:258, 296, 313, 334, 359 | `.slice(-400)`, `.slice(-300)` | removed | `because()`; the secret operations show stderr only (stdout may hold the value) |
@@ -60,6 +66,16 @@ Lima, and what it shows when they fail. The rules are [`../limits.md`](../limits
 | host/spawn.ts:207 | `30 * 60_000` | keep, derived (R3) | `2 * FRESH_MS` |
 | host/paths.ts:16-17; host/vm/types.ts:116; host/editor-defaults.ts:22-32, 24; host/env-import.ts:42 | name and size bounds | keep hard | unchanged |
 | the "keep" rows (timeouts of local steps, ControlPersist, sizes) | | keep | unchanged |
+
+## Reviewed
+
+An independent reviewer (fresh context, the diff and the claims to break) found six things,
+all fixed in the same branch: a call given up on Lima waited on limactl's ssh (the pipes
+stayed open); a silence timer refreshed by any byte, which the root's ordinary user could
+use to hold the daemon's calls open forever; a streamed program whose output file failed
+blocked forever on a full pipe; a stopped `destroy` left part of the key archive; an
+`error` event after `accepted` could fall back to the old way and run the operation twice;
+and the T2 silent stand-in ended by itself, so the test would have passed with the first.
 
 ## Measured
 

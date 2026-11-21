@@ -33,6 +33,11 @@ type Out = (line: string) => void;
 export const KEPT_DIR = path.join(paths.home, "root-kept");
 export const KEPT = path.join(KEPT_DIR, "root-state.tgz");
 
+/** Part of an archive, which a `destroy` stopped halfway (Ctrl-C, a crash) left: it holds
+ *  part of the root's keys and is a copy of nothing, so it goes, at the start of a destroy and
+ *  of a bootstrap. */
+export const dropPartial = () => fs.rmSync(`${KEPT}.partial`, { force: true });
+
 /** Whether a file begins as gzip's output does (RFC 1952: 1f 8b): tar's archive, and not
  *  some other text a root that ran no tar printed. */
 const isGzip = (file: string) => {
@@ -64,6 +69,7 @@ const EXCLUDE = [
  *  VM (nothing to keep). Throws when there is one and its state could not be read: the
  *  caller must not remove a root whose keys it could not keep. */
 export const keepRootState = async (out: Out): Promise<boolean> => {
+  dropPartial();
   const b = backend();
   const info = await b.info(ROOT_VM);
   if (info.status === "missing") return false;
@@ -73,8 +79,6 @@ export const keepRootState = async (out: Out): Promise<boolean> => {
   fs.mkdirSync(KEPT_DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(KEPT_DIR, 0o700);
   const partial = `${KEPT}.partial`;
-  // One a `destroy` stopped halfway left (Ctrl-C, a crash) holds part of the keys: gone first.
-  fs.rmSync(partial, { force: true });
   // The archive goes from tar to the file as it comes, so it is whatever size the root's
   // state is (it once came back as one base64 string, which run() stops at 192 MiB). No
   // timer (R4): it reads the root's own disk, and the person who ran `destroy` is waiting.
@@ -221,8 +225,7 @@ const domainsOnHost = () => {
  *  has keys is the truth, and the archive is left where it is, and said. Returns whether
  *  anything was put back; the caller restarts the root's services then. */
 export const restoreRootState = async (out: Out, rootHoldsKeys: boolean): Promise<boolean> => {
-  // Part of an archive a `destroy` stopped halfway left is no copy of anything: not kept.
-  fs.rmSync(`${KEPT}.partial`, { force: true });
+  dropPartial();
   if (!fs.existsSync(KEPT)) return false;
   if (rootHoldsKeys) {
     out(

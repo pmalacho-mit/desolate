@@ -451,7 +451,7 @@ describe("T2 phase 1: the root VM", () => {
       stack.inRoot([
         "bash",
         "-c",
-        `kill $(cat /tmp/stand-in.pid) 2>/dev/null; pkill -f 'bash /tmp/stand-in[.]sh'; cd ${dir} && rm -f rootctl.sock && mv rootctl.sock.real rootctl.sock`,
+        `kill $(cat /tmp/stand-in.pid) 2>/dev/null; pkill -f 'bash /tmp/stand-in[.]sh'; cd ${dir} && if [ -e rootctl.sock.real ]; then rm -f rootctl.sock && mv rootctl.sock.real rootctl.sock; fi`,
       ]);
     stack.env.DESOLATE_ROOT_SILENT_SECONDS = "3";
     try {
@@ -472,9 +472,12 @@ describe("T2 phase 1: the root VM", () => {
       delete stack.env.DESOLATE_ROOT_SILENT_SECONDS;
       unserve();
     }
-    // The control: the real service again, and the setting as it was.
+    // The control: the real service again, and the setting as it was; its socket is back
+    // (not only the old way, which a call would also fall back to).
     const real = stack.desolate("fetch", "acme/widgets");
     assert.equal(real.code, 0, real.stderr);
+    const socket = stack.inRoot(["test", "-S", `${dir}/rootctl.sock`]);
+    assert.equal(socket.code, 0, "the root's CLI service has its socket again");
   });
 
   it("the transcript reads as reviewed", () => {
