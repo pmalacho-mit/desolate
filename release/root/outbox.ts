@@ -256,7 +256,13 @@ export const refsOf = (
 ): { refs: Record<string, string> } | { refused: string } => {
   if (!parseRepo(repo)) return { refused: `'${printable(repo, 100)}' is not a repository` };
   const what = `${repo}'s list of branches (refs.json)`;
-  const dir = openDir(syncDir(domain, repo));
+  // Not opened, and then found there, plain: it appeared between the two looks (a workspace
+  // making it for its first sync, seen through the share a moment apart). Looked at again,
+  // once: what is there and still cannot be opened is not a plain directory. (T4, on vz,
+  // 2026-11-21: an honest first offer was refused for this, with the Mac busy.)
+  let dir = openDir(syncDir(domain, repo));
+  if (!dir && !notThere(outbox(domain), path.join("sync", repo)))
+    dir = openDir(syncDir(domain, repo));
   if (!dir)
     return notThere(outbox(domain), path.join("sync", repo))
       ? { refs: {} }
