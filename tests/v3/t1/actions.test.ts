@@ -65,16 +65,17 @@ describe("T1 the dashboard's requests to the host", () => {
       null,
       "an argument that is not a string is no argument",
     );
-    // A title that looks like an option, or carries a control character, is dropped: the domain is made without it.
-    assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "--help" }), [
+    // A title that looks like an option, or carries a control character, is refused: never
+    // passed on, and never dropped from a domain made without the title the person typed.
+    assert.equal(hostArgv("domain.create", { domain: "dev", title: "--help" }), null);
+    assert.equal(hostArgv("domain.create", { domain: "dev", title: "a\x1b[2Jb" }), null);
+    // The control: a title that is one is passed on, as the person typed it.
+    assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "the web app" }), [
       "domain",
       "create",
       "dev",
-    ]);
-    assert.deepEqual(hostArgv("domain.create", { domain: "dev", title: "a\x1b[2Jb" }), [
-      "domain",
-      "create",
-      "dev",
+      "--title",
+      "the web app",
     ]);
   });
 });
