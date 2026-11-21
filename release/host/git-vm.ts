@@ -31,6 +31,7 @@ import {
 } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { vmSize } from "../shared/size.ts";
+import { passInward, sizeBeforeStart } from "./settings.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
@@ -99,6 +100,7 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
     // Older than this desolate's image: made again. It has no network to be provisioned
     // again in place, and nothing of its own to keep: the person's clones and what it
     // hands the host are on the host (paths.git, gitOut), and its git identity is set below.
+    if (info.status === "stopped") await sizeBeforeStart(GIT_VM, "git");
     if (info.status !== "running") await b.start(GIT_VM);
     const { imageFingerprint, stampOf } = await import("./image.ts");
     const stamp = stampOf(
@@ -117,11 +119,14 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
     await b.ensureImage(log);
     await b.create(gitSpec());
   }
-  if ((await b.info(GIT_VM)).status !== "running") await b.start(GIT_VM);
+  const now = (await b.info(GIT_VM)).status;
+  if (now === "stopped") await sizeBeforeStart(GIT_VM, "git");
+  if (now !== "running") await b.start(GIT_VM);
   const provisioned = await b.exec(GIT_VM, ["bash", `${guest.release}/git/provision.sh`], {
     root: true,
     timeoutMs: 120_000,
   });
+  await passInward(GIT_VM, "git");
   if (provisioned.code !== 0)
     refuse(
       `the git VM could not be set up: ${(provisioned.stderr || provisioned.stdout).trim().slice(-300)}`,

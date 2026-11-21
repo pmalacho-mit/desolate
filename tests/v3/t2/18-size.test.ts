@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { rootVmName } from "../../../release/shared/names.ts";
 import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
@@ -157,6 +158,51 @@ describe("T2: a workspace's size, from its project, and resized", () => {
       { cpus: 3, memoryMiB: 6144 },
       "and it starts with its new size",
     );
+  });
+
+  it("settings: the root VM's size is what `desolate settings set` stored, after the restart it names; the root's own settings are passed in, root's", () => {
+    stack.step("settings");
+    const set = stack.desolate("settings", "set", "root.memoryMiB", "1536m");
+    assert.equal(set.code, 0, set.stderr);
+    assert.match(
+      set.stdout,
+      /^root\.memoryMiB = 1536: the root VM has it when it starts again: desolate down, then desolate bootstrap\.$/m,
+    );
+    assert.equal(stack.desolate("settings", "set", "workspace.cpus", "1").code, 0);
+    // A setting read in the root VM, stored as `set` stores one (this branch defines none of
+    // its own; the reviewer's and rootd's are other tickets'), and one for the git VM, which
+    // the root must not be given.
+    const store = path.join(stack.home, "settings.json");
+    fs.writeFileSync(
+      store,
+      JSON.stringify({
+        ...JSON.parse(fs.readFileSync(store, "utf8")),
+        "root.example": { value: "7", side: "root" },
+        "git.example": { value: "8", side: "git" },
+      }),
+    );
+    const root = rootVmName(stack.instance);
+    assert.notEqual(limits(root).memoryMiB, 1536, "not before the restart");
+    assert.equal(stack.quiet("down").code, 0);
+    const again = bootstrap(stack);
+    assert.equal(again.code, 0, again.stderr + again.stdout);
+    assert.deepEqual(limits(root).memoryMiB, 1536, "the root VM has the size it was set");
+    assert.match(again.stdout, /workspaces {3}1 CPU, /, "and a new workspace, the CPUs set");
+    const passed = stack.inRoot(["cat", "/etc/desolate/settings.json"]);
+    assert.equal(passed.code, 0, passed.stderr);
+    assert.deepEqual(JSON.parse(passed.stdout), { "root.example": { value: "7", side: "root" } });
+    // Root's in the root VM: its ordinary user, which runs what reads a domain's data, cannot
+    // change what the root's services read. CONTROL: root can, so the check can tell.
+    const user = stack.inRoot(["sh", "-c", "echo '{}' > /etc/desolate/settings.json"]);
+    assert.notEqual(user.code, 0, "the root's ordinary user wrote the root's settings");
+    const moved = stack.inRoot(["sh", "-c", "mv /etc/desolate/settings.json /tmp/x"]);
+    assert.notEqual(moved.code, 0, "the root's ordinary user replaced the root's settings");
+    const owner = stack.inRoot(["test", "-w", "/etc/desolate/settings.json"], { root: true });
+    assert.equal(owner.code, 0, "root can write it: the control");
+    assert.deepEqual(JSON.parse(stack.inRoot(["cat", "/etc/desolate/settings.json"]).stdout), {
+      "root.example": { value: "7", side: "root" },
+    });
+    assert.equal(stack.desolate("settings", "unset", "root.memoryMiB").code, 0);
   });
 
   it("the transcript reads as reviewed", () => {
