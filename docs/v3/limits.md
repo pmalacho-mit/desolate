@@ -145,12 +145,13 @@ export const withLock: <T>(
   read that failed, a holder file that is there and could not be read just now), the
   holder is taken for alive.
 - `dir` is there while the lock is held. Beside it, for moments, are others named after it
-  (`<dir>.new-<id>`, `.heir-<id>`, `.gone-<x>`, `.beat-<id>`): whatever sweeps the lock's
+  (`<dir>.new-<id>`, `.heir-<id>` and a right's own `.heir-<id>.heir-<id>`, `.gone-<x>`,
+  `.beat-<id>`): whatever sweeps the lock's
   folder leaves them (as `root/reviewer.ts` sweeps its home at start, by a list of names).
   Something in the lock's place that is no lock of ours (a directory holding other files,
-  a file, a link) is nobody's: it is moved aside, and a directory holding other files is
-  left there as `<dir>.gone-<x>`, never walked to be removed (on a share another side
-  could swap a link into it). One this process may not move is refused at once, as in the
+  a file, a link) is nobody's: it is moved aside, and a directory is left there as
+  `<dir>.gone-<x>`, never reached into (on a share another side could swap a link into
+  it). One this process may not move is refused at once, as in the
   way. A taking whose lock, while being made, another side writes into fails, saying so.
 - `share` (a folder several VMs see, where one cannot see another's processes): the holder
   writes a heartbeat while it lives, from a thread of its own, so work that keeps the
@@ -161,8 +162,14 @@ export const withLock: <T>(
   (its own VM paused) watches again from then. A holder whose whole VM is frozen that long
   while others run loses its lock: what is done under a share lock must be safe to do
   again. A share lock keeps its takers apart; it is not proof against a side that may write
-  the folder and means harm: such a side can always remove the lock. What it cannot do is
-  make a taker write or remove a file outside the lock through a link.
+  the folder and means harm. Such a side can always remove the lock; and since node has no
+  calls relative to an open directory (`openat`, `unlinkat`), one that swaps a link in for
+  `<dir>.new-<id>` or `<dir>.gone-<x>` in the moment after it appears can still make a
+  taker create its holder file in, or unlink files named `holder` or `beat` from, the
+  folder the link leads to. What is in the lock's place itself is never followed: a link
+  or a file there is unlinked itself, and nothing inside a directory that is no lock of
+  ours is touched. **So a share lock belongs in a folder only desolate's own processes
+  write**, and a ticket that puts one where an agent can write says why that is safe.
 - Waiting (the default) has no timer in it (R4): it waits for as long as its caller does,
   tells `waiting` who holds the lock so the caller can say so, and stops when `signal` fires.
   A signal that fired while the lock was being taken stops the work from beginning; once
