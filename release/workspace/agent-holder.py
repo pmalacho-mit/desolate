@@ -335,13 +335,14 @@ def start(name, directory, command, most):
         os.unlink(error)
     except OSError:
         pass
-    # Detach: the holder outlives the session that started it.
+    # Detach: the holder outlives the session that started it. It says it is listening on a
+    # pipe: an agent may end (and its socket go) before anyone could look for the socket.
+    ready_r, ready_w = os.pipe()
     if os.fork():
-        for _ in range(100):
-            time.sleep(0.05)
-            if os.path.exists(sock_path) or os.path.exists(error):
-                break
-        if not os.path.exists(sock_path):
+        os.close(ready_w)
+        # Binding a socket takes milliseconds: 5 s is a holder that will not.
+        heard = select.select([ready_r], [], [], 5.0)[0] and os.read(ready_r, 1)
+        if not heard:
             try:
                 with open(error) as f:
                     sys.exit("agent-holder: it did not start:\n" + f.read())
@@ -350,6 +351,7 @@ def start(name, directory, command, most):
         with open(state) as f:
             print(f.read())
         return
+    os.close(ready_r)
     os.setsid()
     if os.fork():
         os._exit(0)
@@ -357,7 +359,7 @@ def start(name, directory, command, most):
     for fd in (0, 1, 2):
         os.dup2(devnull, fd)
     try:
-        hold(name, directory, command, most or disk_share(STATE))
+        hold(name, directory, command, most or disk_share(STATE), ready_w)
     except BaseException:
         import traceback
         with open(error, "w") as f:
@@ -365,7 +367,7 @@ def start(name, directory, command, most):
     os._exit(0)
 
 
-def hold(name, directory, command, most):
+def hold(name, directory, command, most, ready):
     sock_path, _, _ = paths(name)
     log = Log(name, most)
     pid, master = pty.fork()
@@ -384,6 +386,8 @@ def hold(name, directory, command, most):
     os.chmod(sock_path, 0o600)
     server.listen(8)
     server.setblocking(False)
+    os.write(ready, b"1")
+    os.close(ready)
     clients = {}  # socket -> pending input text
     last_tick = 0.0
     child_done = False
@@ -531,9 +535,10 @@ def attach(name):
 
 
 def show_log(name, how, value):
-    """The log, to stdout: first a line of JSON, {"first", "from", "end", "most"} (byte
-    offsets: what is kept starts at `first`, so `first` bytes were dropped; what follows
-    starts at `from`), then the bytes. `how`: "all", "lines" (the last `value`) or "since"
+    """The log, to stdout: first a line of JSON, {"first", "from", "before", "end", "most"}
+    (byte offsets: what is kept starts at `first`, so `first` bytes were dropped; what follows
+    starts at `from`; `before` is how much is kept before it, 0 when it starts at the oldest
+    line kept; `most`, the log's most), then the bytes. `how`: "all", "lines" (the last `value`) or "since"
     (unix time `value`)."""
     parts = opened(name)
     if not parts:
@@ -547,12 +552,13 @@ def show_log(name, how, value):
                 sys.exit(f"agent-holder: '{name}' was started before its log noted times: --all or --lines")
         else:
             start = parts[0][0]
+        oldest = start == parts[0][0]
         # What was dropped ended mid-line, most likely: what is kept is read from a line's start.
-        if start == parts[0][0]:
+        if oldest:
             start = line_start(parts, start)
         out = sys.stdout.buffer
-        meta = {"first": parts[0][0], "from": start, "end": parts[-1][0] + parts[-1][2],
-                "most": read_state(name).get("logMost")}
+        meta = {"first": parts[0][0], "from": start, "before": 0 if oldest else start - parts[0][0],
+                "end": parts[-1][0] + parts[-1][2], "most": read_state(name).get("logMost")}
         out.write((json.dumps(meta) + "\n").encode())
         read_from(parts, start, out.write)
         out.flush()

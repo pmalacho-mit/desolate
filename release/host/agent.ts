@@ -4,18 +4,31 @@
 //   desolate agent start <domain>/<workspace> [--name <n>] [--checkout <owner/repo>] -- <command...>
 //   desolate agent attach <domain>/<workspace> [--name <n>]     Ctrl-] detaches; it keeps running
 //   desolate agent list [<domain>[/<workspace>]] [--json]
-//   desolate agent log <domain>/<workspace> [--name <n>]        what it printed (its last 2 MiB)
-//   desolate agent stop <domain>/<workspace> [--name <n>]
+//   desolate agent log <domain>/<workspace> [--name <n>] [--all | --lines <n> | --since <when>]
+//   desolate agent stop <domain>/<workspace> [--name <n>] [--kill]
 //
-// No tmux: your terminal draws the agent's output itself, so its scrollback, selection and
-// copy are your terminal's (replayed on attach: what the agent printed recently is there to
-// scroll back through). Many agents can run at once, one or more per workspace, each in its
-// own VM: `desolate agent list` shows them all.
+// "agent" is the command's name: any long-running program is one (a dev server, a watcher, a
+// coding agent). No tmux: your terminal draws the agent's output itself, so its scrollback,
+// selection and copy are your terminal's (replayed on attach: the end of its log is there to
+// scroll back through). Its log keeps the newest of what it printed, up to the setting
+// agent.logMiB, and is read for as long as it is there, after the agent has ended too. Many
+// agents can run at once, one or more per workspace, each in its own VM: `desolate agent list`
+// shows them all.
+//
+// What the holder in the VM says (its errors, its log, its list) is the VM's, where an agent
+// is root: made safe before it reaches a terminal. A holder started before this file (its log
+// one file, cut at 64 MiB) is still talked to: the socket's protocol is the same, and every
+// command here runs the holder's file anew (workspace/agent-holder.py says how).
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
-import { parseRepo } from "../shared/names.ts";
+import { formatBytes, NAMES } from "../shared/limits.ts";
+import { andMore, listed, PAGE } from "../shared/listed.ts";
+import { parseRepo, SLUG } from "../shared/names.ts";
+import { define, mebibytes, valueOf } from "../shared/settings.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
-import { printable } from "../shared/text.ts";
-import { guest } from "./paths.ts";
+import { CUT, failure, printable } from "../shared/text.ts";
+import { guest, paths } from "./paths.ts";
 import { backend, rootctl } from "./stack.ts";
 import type {
   Expect,
@@ -55,6 +68,57 @@ type Agent = {
 const HOLDER = () => [`python3`, "-I", `${guest.release}/workspace/agent-holder.py`];
 const DETACH = 0x1d; // Ctrl-]
 
+/** How much of what an agent printed its log keeps: the newest, the oldest dropped past it.
+ *  Unset, the holder works it out from the disk the log is on (a twentieth of it), which the
+ *  host does not know. */
+export const LOG_MOST = define<number | null>({
+  name: "agent.logMiB",
+  env: "DESOLATE_AGENT_LOG_MIB",
+  side: "host",
+  default: null,
+  parse: mebibytes(1, 1024 * 1024),
+  why: "The most of an agent's output its log keeps, in MiB: past it the oldest is dropped, and the log says so. Unset, a twentieth of its workspace's disk.",
+});
+
+/** The flags of each `desolate agent` verb (host/cli.ts parses them with these). */
+export const FLAGS = {
+  start: { name: { type: "string" }, checkout: { type: "string" } },
+  attach: { name: { type: "string" } },
+  list: {},
+  log: {
+    name: { type: "string" },
+    all: { type: "boolean" },
+    lines: { type: "string" },
+    since: { type: "string" },
+  },
+  stop: { name: { type: "string" }, kill: { type: "boolean" } },
+} as const;
+
+/** The holder's error, whole (R1): its end, made safe, and where all of it is kept on this
+ *  Mac when that is not all of it. */
+const holderError = (said: { stdout: string; stderr: string }, what: string) =>
+  failure((said.stderr || said.stdout).replace(/^agent-holder: /, ""), 20, (whole) => {
+    fs.mkdirSync(paths.logs, { recursive: true });
+    const file = path.join(
+      paths.logs,
+      `agent-${what}-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`,
+    );
+    fs.writeFileSync(file, whole);
+    return file;
+  });
+
+declare namespace holderError {
+  /** what the holder said, without its own prefix, made safe; short enough to be whole */
+  export type Short = Expect<
+    Invoke<
+      typeof holderError,
+      [said: { stdout: ""; stderr: "agent-holder: 'web' is not running\n" }, what: "web"]
+    >,
+    "=",
+    "'web' is not running"
+  >;
+}
+
 const target = async (value: string | undefined): Promise<Workspace> => {
   const [domain, workspace] = String(value ?? "").split("/");
   if (!domain || !workspace)
@@ -74,8 +138,12 @@ const target = async (value: string | undefined): Promise<Workspace> => {
 };
 const nameOf = (value: unknown) => {
   const name = typeof value === "string" ? value : "agent";
-  if (!/^[a-z0-9][a-z0-9-]{0,39}$/.test(name))
-    refuse(`'${name}' is not an agent name`, "lower-case letters, digits and dashes", EXIT.usage);
+  if (!SLUG.test(name))
+    refuse(
+      `'${printable(name)}' is not an agent name`,
+      `lower-case letters, digits and dashes, at most ${NAMES.slug}`,
+      EXIT.usage,
+    );
   return name;
 };
 
@@ -94,7 +162,7 @@ declare namespace nameOf {
       "=",
       {
         message: "'../agent' is not an agent name";
-        fix: "lower-case letters, digits and dashes";
+        fix: "lower-case letters, digits and dashes, at most 40";
         code: 64;
       }
     >,
@@ -128,15 +196,12 @@ export const start = async (
       EXIT.usage,
     );
   const name = nameOf(options.name);
-  const started = await backend().exec(
-    w.vm,
-    [...HOLDER(), "start", name, checkout!.path, "--", ...command],
-    { timeoutMs: 60_000 },
-  );
-  // (What the VM says is the VM's: made printable before it reaches a terminal.)
+  const started = await backend().exec(w.vm, holderStart(name, checkout!.path, command), {
+    timeoutMs: 60_000,
+  });
   if (started.code !== 0)
     refuse(
-      `the agent did not start: ${printable((started.stderr || started.stdout).trim().slice(-600), 300)}`,
+      `the agent did not start: ${holderError(started, name)}`,
       `desolate agent list ${w.domain}/${w.workspace}`,
     );
   if (json) return out(started.stdout.trim());
@@ -182,6 +247,20 @@ declare namespace start {
   ];
 }
 
+/** The holder's start, with the log's most when the person set one. */
+const holderStart = (name: string, dir: string, command: string[]) => {
+  const most = valueOf(LOG_MOST);
+  return [
+    ...HOLDER(),
+    "start",
+    name,
+    dir,
+    ...(most === null ? [] : ["--log-most", String(most * 1024 * 1024)]),
+    "--",
+    ...command,
+  ];
+};
+
 /** An agent in a workspace that was just made (`desolate up ... -- <command...>`, and what a
  *  workspace's `desolate spawn` runs): named "agent", in its first checkout. The command is
  *  argv, to the holder in the VM; nothing on the host reads it. Returns the agent's name. */
@@ -189,18 +268,76 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
   const checkout = w.checkouts[0];
   if (!checkout)
     refuse(`${w.domain}/${w.workspace} has no checkout to run it in`, `desolate list ${w.domain}`);
-  const started = await backend().exec(
-    w.vm,
-    [...HOLDER(), "start", "agent", checkout!.path, "--", ...command],
-    { timeoutMs: 60_000 },
-  );
+  const started = await backend().exec(w.vm, holderStart("agent", checkout!.path, command), {
+    timeoutMs: 60_000,
+  });
   if (started.code !== 0)
     refuse(
-      `the workspace is up, but its agent did not start: ${printable((started.stderr || started.stdout).trim().slice(-600), 300)}`,
+      `the workspace is up, but its agent did not start: ${holderError(started, "agent")}`,
       `desolate agent start ${w.domain}/${w.workspace} -- <command...>`,
     );
   return "agent";
 };
+
+type Row = Agent & { workspace: string };
+
+/** The rows of a VM's account of its agents that are well formed: the VM's (an agent is root
+ *  there), so only rows of the expected shape, every string made printable, a time that is
+ *  not one dropped. */
+const rowsOf = (given: unknown, workspace: string): Row[] => {
+  const iso = (v: unknown) =>
+    typeof v === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(v) ? v : null;
+  const rows: Row[] = [];
+  for (const a of (Array.isArray(given) ? given : []) as Agent[]) {
+    if (
+      typeof a?.name !== "string" ||
+      !SLUG.test(a.name) ||
+      !["running", "exited", "lost"].includes(String(a.state))
+    )
+      continue;
+    rows.push({
+      name: a.name,
+      state: String(a.state),
+      workspace,
+      command: [printable((Array.isArray(a.command) ? a.command : []).map(String).join(" "))],
+      started: iso(a.started) ?? "",
+      lastOutput: iso(a.lastOutput),
+      exit: Number.isInteger(a.exit) ? a.exit : null,
+      ...(iso(a.ended) ? { ended: iso(a.ended)! } : {}),
+    });
+  }
+  return rows.sort((a, b) => a.name.localeCompare(b.name));
+};
+
+/** A line fitted to a terminal `width` columns wide, the cut marked; whole when the width is
+ *  not known (a pipe, a file: whatever reads it has all of it). Counted in code points, as
+ *  what an agent's command holds is made printable before (one column each, mostly: a wide
+ *  character takes two, and the terminal wraps what is still too long). */
+export const fitted = (line: string, width: number | undefined): string => {
+  const points = [...line];
+  if (!width || points.length <= width) return line;
+  return points.slice(0, Math.max(0, width - 1)).join("") + CUT;
+};
+
+declare namespace fitted {
+  export type Fits = Table<
+    typeof fitted,
+    [
+      /** to a pipe: whole */
+      [
+        args: [line: "  acme/w1  web  running  npm run dev -- --port 5173", width: undefined],
+        expected: "  acme/w1  web  running  npm run dev -- --port 5173",
+      ],
+      /** to a terminal: as wide as it is, and the mark says it was cut */
+      [
+        args: [line: "  acme/w1  web  running  npm run dev -- --port 5173", width: 30],
+        expected: "  acme/w1  web  running  npm …",
+      ],
+      /** short enough: as it is */
+      [args: [line: "  acme/w1  web", width: 30], expected: "  acme/w1  web"],
+    ]
+  >;
+}
 
 export const list = async (only: string | undefined, out: Out, json: boolean) => {
   const [domain, workspace] = String(only ?? "").split("/");
@@ -213,7 +350,7 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
   const running = new Set(
     (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
   );
-  const rows: (Agent & { workspace: string })[] = [];
+  const found: Row[][] = [];
   const { isOwnVm } = await import("./workspaces.ts");
   await Promise.all(
     all
@@ -225,51 +362,41 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
               (!workspace || w.workspace === workspace) && running.has(w.vm) && isOwnVm(d.slug, w),
           )
           .map(async (w) => {
-            const listed = await b.exec(w.vm, [...HOLDER(), "list"], { timeoutMs: 30_000 });
+            const said = await b.exec(w.vm, [...HOLDER(), "list"], { timeoutMs: 30_000 });
+            let given: unknown = [];
             try {
-              // The VM's account of its agents is the VM's (an agent is root there): only rows of the
-              // expected shape, every string made printable, the command cut short.
-              const iso = (v: unknown) =>
-                typeof v === "string" && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(v) ? v : null;
-              for (const a of (JSON.parse(listed.stdout.trim() || "[]") as Agent[]).slice(0, 50)) {
-                if (
-                  typeof a?.name !== "string" ||
-                  !/^[a-z0-9][a-z0-9-]{0,39}$/.test(a.name) ||
-                  !["running", "exited", "lost"].includes(String(a.state))
-                )
-                  continue;
-                rows.push({
-                  name: a.name,
-                  state: String(a.state),
-                  workspace: `${d.slug}/${w.workspace}`,
-                  command: [
-                    printable(
-                      (Array.isArray(a.command) ? a.command : []).map(String).join(" "),
-                      120,
-                    ),
-                  ],
-                  started: iso(a.started) ?? "",
-                  lastOutput: iso(a.lastOutput),
-                  exit: Number.isInteger(a.exit) ? a.exit : null,
-                  ...(iso(a.ended) ? { ended: iso(a.ended)! } : {}),
-                });
-              }
+              given = JSON.parse(said.stdout.trim() || "[]");
             } catch {
               /* no agents there */
             }
+            const rows = rowsOf(given, `${d.slug}/${w.workspace}`);
+            if (rows.length) found.push(rows);
           }),
       ),
   );
-  rows.sort((a, b2) => a.workspace.localeCompare(b2.workspace) || a.name.localeCompare(b2.name));
-  if (json) return out(JSON.stringify(rows));
-  if (rows.length === 0)
+  found.sort((a, b2) => a[0]!.workspace.localeCompare(b2[0]!.workspace));
+  // A script gets every agent; a person, a page of each workspace's, and how many more.
+  if (json) return out(JSON.stringify(found.flat()));
+  if (found.length === 0)
     return out("no agents. Start one: desolate agent start <domain>/<workspace> -- <command...>");
   const ago = (when: string | null) =>
     when ? `${Math.max(0, Math.round((Date.now() - Date.parse(when)) / 1000))} s ago` : "never";
-  for (const a of rows)
-    out(
-      `  ${a.workspace}  ${a.name}  ${a.state}${a.exit !== null && a.exit !== undefined ? ` (exit ${a.exit})` : ""}  started ${ago(a.started)}, last output ${ago(a.lastOutput)}  ${a.command.join(" ").slice(0, 60)}`,
-    );
+  const width = process.stdout.isTTY ? process.stdout.columns : undefined;
+  for (const rows of found) {
+    const page = listed(rows, 0, PAGE);
+    for (const a of page.items)
+      out(
+        fitted(
+          `  ${a.workspace}  ${a.name}  ${a.state}${a.exit !== null ? ` (exit ${a.exit})` : ""}  started ${ago(a.started)}, last output ${ago(a.lastOutput)}  ${a.command.join(" ")}`,
+          width,
+        ),
+      );
+    const rest = andMore(page, "agent");
+    if (rest)
+      out(
+        `  ${rows[0]!.workspace}: ${rest} (every one: desolate agent list ${rows[0]!.workspace} --json)`,
+      );
+  }
 };
 
 declare namespace list {
@@ -329,35 +456,202 @@ declare namespace list {
   >;
 }
 
-export const stop = async (where: string | undefined, options: { name?: string }, out: Out) => {
+/** `desolate agent stop`: Ctrl-C, as a person ends a program, and then whatever the person
+ *  says. Nothing kills it on a clock (docs/v3/limits.md, question 2): on a terminal it says
+ *  that it is waiting and asks whether to kill it, for as long as the person waits; a script
+ *  is told whether it ended, and says `--kill` to end it at once. */
+export const stop = async (
+  where: string | undefined,
+  options: { name?: string; kill?: boolean },
+  out: Out,
+) => {
   const w = await target(where);
   const name = nameOf(options.name);
-  const stopped = await backend().exec(w.vm, [...HOLDER(), "stop", name], { timeoutMs: 30_000 });
-  if (stopped.code !== 0)
-    refuse(
-      printable((stopped.stderr || stopped.stdout).trim().replace(/^agent-holder: /, ""), 300),
-      `desolate agent list ${w.domain}/${w.workspace}`,
+  const at = `${w.domain}/${w.workspace}`;
+  const again = `desolate agent stop ${at}${name === "agent" ? "" : ` --name ${name}`} --kill`;
+  const said = (ran: { code: number; stdout: string; stderr: string }) => {
+    if (ran.code !== 0) refuse(holderError(ran, name), `desolate agent list ${at}`);
+    try {
+      const answer = JSON.parse(ran.stdout.trim()) as { ended?: unknown; exit?: unknown };
+      return {
+        ended: answer.ended === true,
+        exit: Number.isInteger(answer.exit) ? answer.exit : null,
+      };
+    } catch {
+      return { ended: false, exit: null };
+    }
+  };
+  const ended = (exit: unknown) =>
+    out(`agent ${name} in ${at} has ended${exit === null ? "" : ` (exit ${exit})`}`);
+  const kill = async () => {
+    // A kill ends its process group at once; the holder answers when the agent's terminal
+    // closes. (A holder from before kills 3 s after the Ctrl-C it is also sent.)
+    const killed = said(
+      await backend().exec(w.vm, [...HOLDER(), "stop", name, "--kill", "--wait"], {
+        timeoutMs: 30_000,
+      }),
     );
-  out(`asked agent ${name} in ${w.domain}/${w.workspace} to stop`);
+    if (!killed.ended)
+      refuse(
+        `agent ${name} in ${at} was killed, and its terminal is still open: something it started outside its process group holds it`,
+        `desolate exec ${at} -- ps -ef`,
+      );
+    ended(killed.exit);
+  };
+  if (options.kill) return kill();
+  if (!(process.stdin.isTTY && process.stderr.isTTY)) {
+    const asked = said(
+      await backend().exec(w.vm, [...HOLDER(), "stop", name], { timeoutMs: 30_000 }),
+    );
+    if (asked.ended) return ended(asked.exit);
+    return out(
+      `asked agent ${name} in ${at} to stop (Ctrl-C); it has not ended yet. To end it at once: ${again}`,
+    );
+  }
+  // A person: the holder answers when the agent has ended, and meanwhile the person is asked.
+  const waiting = backend().spawn(w.vm, [...HOLDER(), "stop", name, "--wait"]);
+  let stdout = "";
+  let stderr = "";
+  waiting.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+  waiting.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+  const over = new Promise<{ code: number; stdout: string; stderr: string }>((resolve) =>
+    waiting.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr })),
+  );
+  out(`asked agent ${name} in ${at} to stop (Ctrl-C); waiting for it to end.`);
+  const { createInterface } = await import("node:readline/promises");
+  const asker = createInterface({ input: process.stdin, output: process.stderr });
+  const asking = new AbortController();
+  const answer = asker
+    .question("Kill it now? [y/N] ", { signal: asking.signal })
+    .then((text) => (/^\s*y(es)?\s*$/i.test(text) ? "kill" : "leave"))
+    .catch(() => "ended" as const);
+  const first = await Promise.race([over.then(() => "ended" as const), answer]);
+  asking.abort();
+  asker.close();
+  if (first === "ended") {
+    process.stderr.write("\n");
+    return ended(said(await over).exit);
+  }
+  waiting.kill();
+  if (first === "kill") return kill();
+  out(
+    `not killed: it may still be ending (desolate agent list ${at}). To end it at once: ${again}`,
+  );
 };
 
-export const log = async (where: string | undefined, options: { name?: string }) => {
+/** `--since 10m` (s, m, h, d: that long before `now`) or a date and time, as unix seconds;
+ *  null when it is neither. */
+export const sinceOf = (text: string, now: number): number | null => {
+  const ago = /^\s*(\d{1,9})\s*([smhd])\s*$/.exec(text);
+  if (ago)
+    return (
+      Math.floor(now / 1000) - Number(ago[1]) * { s: 1, m: 60, h: 3600, d: 86400 }[ago[2] as "s"]
+    );
+  const at = /^\d{4}-\d\d-\d\d/.test(text.trim()) ? Date.parse(text.trim()) : NaN;
+  return Number.isNaN(at) ? null : Math.floor(at / 1000);
+};
+
+declare namespace sinceOf {
+  export type Spellings = Table<
+    typeof sinceOf,
+    [
+      /** a while ago */
+      [args: [text: "10m", now: 1795280000000], expected: 1795279400],
+      [args: [text: "2h", now: 1795280000000], expected: 1795272800],
+      [args: [text: "1d", now: 1795280000000], expected: 1795193600],
+      /** a date and time (UTC unless it says) */
+      [args: [text: "2026-11-21T09:00:00Z", now: 1795280000000], expected: 1795251600],
+      /** neither */
+      [args: [text: "yesterday", now: 1795280000000], expected: null],
+      [args: [text: "10", now: 1795280000000], expected: null],
+    ]
+  >;
+}
+
+/** `desolate agent log`: what it printed, from its log in the VM, streamed (not held here: a
+ *  log may be gigabytes). To a terminal, its last page of lines unless asked for more; to a
+ *  pipe or a file, all of it. Before the bytes, the holder sends one line of JSON saying what
+ *  is kept and where this read starts: a cut is said (R1) from that. */
+export const log = async (
+  where: string | undefined,
+  options: { name?: string; all?: boolean; lines?: string; since?: string },
+) => {
+  const usage = "--all, --lines <n> or --since <10m, 2h, 1d, or a date and time>";
+  if (
+    [options.all, options.lines, options.since].filter((o) => o !== undefined && o !== false)
+      .length > 1
+  )
+    refuse("which part of the log?", `one of ${usage}`, EXIT.usage);
+  let how: string[];
+  if (options.lines !== undefined) {
+    if (!/^\s*\d{1,9}\s*$/.test(options.lines) || Number(options.lines) < 1)
+      refuse(
+        `--lines '${printable(options.lines)}' is not a number of lines`,
+        "--lines 200",
+        EXIT.usage,
+      );
+    how = ["--lines", String(Number(options.lines))];
+  } else if (options.since !== undefined) {
+    const since = sinceOf(options.since, Date.now());
+    if (since === null)
+      refuse(
+        `--since '${printable(options.since)}' is not a time`,
+        "--since 10m, 2h, 1d, or 2026-11-21T09:00",
+        EXIT.usage,
+      );
+    how = ["--since", String(Math.max(0, since!))];
+  } else how = options.all || !process.stdout.isTTY ? ["--all"] : ["--lines", String(PAGE)];
   const w = await target(where);
   const name = nameOf(options.name);
-  const shown = await backend().exec(
-    w.vm,
-    ["bash", "-c", 'tail -c 2097152 "$HOME/.desolate-agents/$1.log"', "_", name],
-    { timeoutMs: 30_000 },
-  );
-  if (shown.code !== 0)
+  const at = `${w.domain}/${w.workspace}${name === "agent" ? "" : ` --name ${name}`}`;
+  const reading = backend().spawn(w.vm, [...HOLDER(), "log", name, ...how]);
+  // To a terminal, what a screen needs and no more; to a pipe or file, as it was.
+  const filter = process.stdout.isTTY ? terminalFilter() : (bytes: Buffer) => bytes;
+  let head: Buffer | null = Buffer.alloc(0);
+  let stderr = "";
+  reading.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+  reading.stdout!.on("data", (chunk: Buffer) => {
+    if (head === null) {
+      if (!process.stdout.write(filter(chunk))) {
+        reading.stdout!.pause();
+        process.stdout.once("drain", () => reading.stdout!.resume());
+      }
+      return;
+    }
+    head = Buffer.concat([head, chunk]);
+    const end = head.indexOf(0x0a);
+    if (end < 0) return;
+    const rest = head.subarray(end + 1);
+    process.stdout.write(filter(Buffer.from(marks(head.subarray(0, end).toString("utf8"), at))));
+    head = null;
+    if (rest.length) process.stdout.write(filter(rest));
+  });
+  const code = await new Promise<number>((resolve) => reading.on("close", (c) => resolve(c ?? 1)));
+  if (code !== 0 && head !== null)
     refuse(
-      `no agent '${name}' in ${w.domain}/${w.workspace}`,
+      holderError({ stdout: "", stderr }, name),
       `desolate agent list ${w.domain}/${w.workspace}`,
     );
-  // To a terminal, what a screen needs and no more; to a pipe or file, as it was.
-  process.stdout.write(
-    process.stdout.isTTY ? terminalFilter()(Buffer.from(shown.stdout, "utf8")) : shown.stdout,
-  );
+};
+
+/** What is said of a read of the log, from the holder's first line: on stderr, how much came
+ *  before what is shown; in the log itself, where older output was dropped. Answers what goes
+ *  before the log's bytes. */
+const marks = (meta: string, at: string): string => {
+  let m: { first?: unknown; before?: unknown; most?: unknown } = {};
+  try {
+    m = JSON.parse(meta);
+  } catch {
+    /* said nothing: nothing to say */
+  }
+  const n = (v: unknown) => (Number.isSafeInteger(v) && (v as number) > 0 ? (v as number) : 0);
+  if (n(m.before))
+    process.stderr.write(
+      `desolate: ${formatBytes(n(m.before))} of earlier output is not shown (all of it: desolate agent log ${at} --all)\n`,
+    );
+  else if (n(m.first))
+    return `[desolate: ${formatBytes(n(m.first))} of older output was dropped here: the log keeps the newest${n(m.most) ? ` ${formatBytes(n(m.most))}` : ""} (the setting agent.logMiB)]\r\n`;
+  return "";
 };
 
 /** Your terminal, attached: raw, its size passed on, Ctrl-] to let go. */
