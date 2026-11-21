@@ -1,5 +1,5 @@
 // Workspaces, from the host: up, list, stop, rm, exec.
-import { forTerminal, printableLines } from "../shared/text.ts";
+import { failure, forTerminal, printable } from "../shared/text.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -29,7 +29,10 @@ import {
   parseMemory,
 } from "../shared/size.ts";
 import type { ProjectSize, Size } from "../shared/size.ts";
+import { RUN_MAX } from "../shared/run.ts";
+import type { RunResult } from "../shared/run.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
+import { BEAT_MS, elapsed } from "../shared/step.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
@@ -275,13 +278,98 @@ declare namespace sizeFlags {
   ];
 }
 
-/** What a workspace VM printed is the workspace's text. On its way to the person's
- *  terminal it is text: nothing in it may move the cursor, retitle the window or write the
- *  clipboard. (`desolate exec` is different: there the person asked for the VM's output.) */
-const said = (text: string) => printableLines(text);
+/** How an error a workspace's VM gave is shown (docs/v3/limits.md, R1): its last `lines`
+ *  lines, made safe, and, when that is not all of it, how much was left out and where the
+ *  whole of it is kept: under the host's logs, a file for each, the person's alone. */
+const fromVm = (plan: WorkspacePlan, what: string, output: string, lines: number) =>
+  failure(output.trim(), lines, (whole) => {
+    fs.mkdirSync(paths.logs, { recursive: true, mode: 0o700 });
+    const file = path.join(
+      paths.logs,
+      `${plan.domain}--${plan.workspace}-${what}-${new Date().toISOString().replace(/[:.]/g, "-")}.txt`,
+    );
+    fs.writeFileSync(file, whole, { mode: 0o600 });
+    return file;
+  });
+
+/** How many beats (shared/step.ts: a step in the VM says it is still running every
+ *  BEAT_MS) the host lets go by with no line before it takes the step as stopped: two
+ *  minutes. A step that is running is never stopped for being slow; one whose VM stopped
+ *  answering (it froze, its ssh went, the program hung before it could say so) is not waited
+ *  on for ever. A VM busy with a build still runs a timer every ten seconds: twelve of them
+ *  missed is not load. */
+const QUIET_BEATS = 12;
+
+/** Whoever is watching this start as it happens, and how what a step says reaches them: the
+ *  dashboard (DESOLATE_PROGRESS: a `progress:` line each), a person at a terminal (each
+ *  step on a line of its own, and its "still ..." in place), or nobody (a script: only the
+ *  answer, as before). */
+const watcher = (): ((line: string) => void) => {
+  if (process.env.DESOLATE_PROGRESS)
+    return (line) => void process.stderr.write(`progress:   ${printable(line)}\n`);
+  if (!process.stderr.isTTY) return () => {};
+  let inPlace = false;
+  return (line) => {
+    const beat = line.startsWith("still ");
+    process.stderr.write(`${inPlace ? "\r\x1b[K" : ""}  ${printable(line)}${beat ? "" : "\n"}`);
+    inPlace = beat;
+  };
+};
+
+/** Run a step of a start in the workspace's VM (init.ts, devcontainer.ts) for as long as it
+ *  runs: it has no deadline (docs/v3/limits.md, R4: the person waiting owns that, and can
+ *  Ctrl-C). It says what it is doing, and that it still is, a line at a time on stderr; each
+ *  line goes to `shown`, and one QUIET_BEATS' time with none ends it, said as run() says
+ *  it. What it writes is the VM's, so it is held to run()'s bound on each stream. The
+ *  answer's stderr is what it said, without its "still ..." lines. */
+const stepInVm = (plan: WorkspacePlan, argv: string[], shown: (line: string) => void) =>
+  new Promise<RunResult>((resolve) => {
+    const child = backend().spawn(plan.vm, argv);
+    child.stdin?.end();
+    let [stdout, stderr, partial, ended] = ["", "", "", ""];
+    const end = (why: string) => {
+      ended ||= why;
+      child.kill("SIGTERM");
+    };
+    const quietMs = QUIET_BEATS * BEAT_MS;
+    const quiet = setTimeout(
+      () => end(`\n(nothing from the workspace's VM for ${elapsed(quietMs)}: stopped)`),
+      quietMs,
+    );
+    const take = (chunk: Buffer, into: "stdout" | "stderr") => {
+      quiet.refresh();
+      if (stdout.length + stderr.length + chunk.length > RUN_MAX)
+        return end(`\n(more than ${RUN_MAX} bytes from the workspace's VM: stopped)`);
+      if (into === "stdout") return void (stdout += chunk.toString());
+      const lines = (partial + chunk.toString()).split("\n");
+      partial = lines.pop()!;
+      for (const line of lines) {
+        shown(line);
+        if (!line.startsWith("still ")) stderr += `${line}\n`;
+      }
+    };
+    child.stdout!.on("data", (chunk: Buffer) => take(chunk, "stdout"));
+    child.stderr!.on("data", (chunk: Buffer) => take(chunk, "stderr"));
+    child.on("error", (error) => {
+      clearTimeout(quiet);
+      resolve({ code: 127, stdout, stderr: `${stderr}${partial}${error.message}` });
+    });
+    child.on("close", (code) => {
+      clearTimeout(quiet);
+      resolve({
+        code: ended ? 128 : (code ?? 128),
+        stdout,
+        stderr: `${stderr}${partial}${ended}`,
+      });
+    });
+  });
+
+/** What `up` and `start` add for an editor that was not listening yet when they went on. */
+const STILL_STARTING = "   (still starting: it opens once it listens)";
 
 export const startServices = async (plan: WorkspacePlan) => {
   const b = backend();
+  const shown = watcher();
   // Each step's time, for whoever is watching (DESOLATE_PROGRESS): where a start goes.
   let at = Date.now();
   const step = (name: string) => {
@@ -301,6 +389,8 @@ export const startServices = async (plan: WorkspacePlan) => {
   step("its proxy");
   await connectWorkspace({ ...plan, proxy: proxy.socket });
   step("its link");
+  // start.sh (and its docker step, below) start the VM's own services: a few seconds, and
+  // five minutes is the bound on a VM that is not answering (they say nothing as they go).
   const services = await b.exec(
     plan.vm,
     [
@@ -314,21 +404,21 @@ export const startServices = async (plan: WorkspacePlan) => {
   step("its services (start.sh)");
   if (services.code !== 0)
     throw new Error(
-      `the workspace's services did not start: ${said((services.stderr || services.stdout).trim().slice(-600))}`,
+      `the workspace's services did not start: ${fromVm(plan, "services", services.stderr || services.stdout, 10)}`,
     );
   // Its key, for what it asks of the host through the root (host/spawn.ts).
   await (await import("./spawn.ts")).giveIdentity(b, plan.vm);
   // start.sh puts the user in the docker group; what the host runs next must have it.
   await b.refreshSessions?.(plan.vm, services.stdout.includes("desolate: sessions raised"));
-  const init = await b.exec(
-    plan.vm,
+  const init = await stepInVm(
+    plan,
     [...NODE, `${guest.release}/workspace/init.ts`, plan.workspace],
-    { timeoutMs: 900_000 },
+    shown,
   );
   step("its checkouts (init.ts)");
   if (init.code !== 0)
     throw new Error(
-      `the workspace could not make its checkouts: ${said((init.stderr || init.stdout).trim().slice(-800))}`,
+      `the workspace could not make its checkouts: ${fromVm(plan, "checkouts", init.stderr || init.stdout, 10)}`,
     );
   // A docker daemon only where one is wanted: a checkout with a spec (start.sh says how).
   if (plan.checkouts.some((c) => locateSpec(paths.domainRepos(plan.domain), c)))
@@ -346,17 +436,21 @@ export const startServices = async (plan: WorkspacePlan) => {
   // The project's devcontainer, then the editor (which runs in it when it can). Neither
   // fails the workspace: without them it is the VM itself, and `up` says which it is.
   step("docker");
-  const dev = await b.exec(
-    plan.vm,
+  const dev = await stepInVm(
+    plan,
     [...NODE, `${guest.release}/workspace/devcontainer.ts`, plan.workspace],
-    { timeoutMs: 3_700_000 },
+    shown,
   );
   step("the devcontainer");
-  const devcontainer = said(
-    /^devcontainer: (.*)$/m.exec(dev.stdout)?.[1]?.trim().slice(0, 500) ??
-      `FAILED: ${(dev.stderr || dev.stdout).trim().slice(-300) || "it said nothing"}`,
-  );
+  // Its one line, whole as the VM said it (bounded only against a flood, and a cut is
+  // marked): the terminal wraps it, the dashboard fits it.
+  const line = /^devcontainer: (.*)$/m.exec(dev.stdout)?.[1]?.trim();
+  const devcontainer = line
+    ? printable(line)
+    : `FAILED: ${fromVm(plan, "devcontainer", dev.stderr || dev.stdout, 2).replace(/\n/g, " ") || "it said nothing"}`;
   // (With the time the host last retired the tokens: a token older than that is made again.)
+  // editor.sh waits a minute at most for the editor to listen, and then says it is still
+  // starting; five minutes is the bound on a VM that is not answering.
   const editor = await b.exec(
     plan.vm,
     [
@@ -374,9 +468,11 @@ export const startServices = async (plan: WorkspacePlan) => {
     editorDown:
       editor.code === 0
         ? null
-        : said(
-            (editor.stderr || editor.stdout).trim().split("\n").slice(-2).join(" ").slice(0, 300),
-          ) || "the editor did not start",
+        : fromVm(plan, "editor", editor.stderr || editor.stdout, 2).replace(/\n/g, " ") ||
+          "the editor did not start",
+    // Not listening yet after editor.sh's minute, and not stopped either: it is there once it
+    // listens.
+    editorStarting: editor.code === 0 && /^editor: still starting$/m.test(editor.stdout),
     devcontainer,
   };
 };
@@ -508,6 +604,7 @@ export const up = async (
       "desolate bootstrap (it provisions the base again: minutes, once)",
     );
   let editorDown: string | null = null;
+  let editorStarting = false;
   let devcontainer = "";
   if (options.name === "template")
     refuse(
@@ -621,7 +718,7 @@ export const up = async (
     made = true;
     await b.start(plan.vm);
     phase("VM booted");
-    ({ editorDown, devcontainer } = await startServices(plan));
+    ({ editorDown, editorStarting, devcontainer } = await startServices(plan));
     phase("services, checkouts, devcontainer and editor");
   } catch (error) {
     // A workspace that did not come up holds no checkout, and leaves no proxy or link.
@@ -684,7 +781,7 @@ export const up = async (
   out(`  devcontainer ${devcontainer}`);
   out(
     "url" in opened
-      ? `  editor       ${opened.url}`
+      ? `  editor       ${opened.url}${editorStarting ? STILL_STARTING : ""}`
       : `  editor       NOT AVAILABLE: ${opened.error}`,
   );
   out(`  dev servers  ${urls.dev}:<port>   (the port it listens on inside, nothing to declare)`);
@@ -1117,7 +1214,7 @@ export const start = async (target: string | undefined, out: Out) => {
   }
   if (info.status === "suspended") await b.resume(w.vm);
   else if (info.status !== "running") await b.start(w.vm);
-  const { devcontainer, editorDown } = await startServices(w);
+  const { devcontainer, editorDown, editorStarting } = await startServices(w);
   await rootctl(
     "workspace.state",
     { domain: w.domain, name: w.workspace, state: "up" },
@@ -1129,6 +1226,7 @@ export const start = async (target: string | undefined, out: Out) => {
   if (w.size) out(`  size         ${describeSize(w.size)}`);
   out(`  devcontainer ${devcontainer}`);
   if (editorDown) out(`  editor       NOT AVAILABLE: ${editorDown}`);
+  else if (editorStarting) out(`  editor${STILL_STARTING}`);
 };
 
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
@@ -1152,23 +1250,83 @@ done`;
     { timeoutMs: 120_000 },
   );
   if (looked.code !== 0)
-    return [`it could not be looked at: ${said(looked.stderr.trim().slice(-200))}`];
+    return [
+      `it could not be looked at: ${fromVm(w, "unsaved", looked.stderr, 3).replace(/\n/g, " ")}`,
+    ];
+  return lostIn(
+    looked.stdout,
+    w.checkouts.map((c) => c.path),
+  );
+};
+
+/** What the VM's look (above) says would be lost, in words: each line names what, and the
+ *  checkout (one of `checkouts`, the paths the host asked about). A line that is not one of those
+ *  is not passed over: a remove must not read as safe because of what it could not read. */
+export const lostIn = (stdout: string, checkouts: readonly string[]): string[] => {
   const say: Record<string, string> = {
     UNSYNCED: "its branches could not be written out for the root",
     UNCOMMITTED: "uncommitted changes or untracked files in",
     STASHED: "stashed changes in",
     UNREADABLE: "a checkout git could not read:",
   };
-  return looked.stdout
-    .split("\n")
-    .map((line) =>
-      /^(UNSYNCED|UNCOMMITTED|STASHED|UNREADABLE)(?: (\/workspaces\/\S{1,300}))?$/.exec(
-        line.trim(),
-      ),
-    )
-    .filter((m) => m !== null)
-    .map((m) => `${say[m![1]!]}${m![2] ? ` ${m![2]}` : ""}`);
+  const lost: string[] = [];
+  let unread = 0;
+  for (const line of stdout.split("\n").map((l) => l.trim())) {
+    if (!line) continue;
+    const [word, ...rest] = line.split(" ");
+    const where = rest.join(" ");
+    if (word === "UNSYNCED" && !where) lost.push(say.UNSYNCED!);
+    else if (word && word !== "UNSYNCED" && say[word] && checkouts.includes(where))
+      lost.push(`${say[word]} ${where}`);
+    else unread++;
+  }
+  if (unread)
+    lost.push(
+      `${unread} line${unread === 1 ? "" : "s"} of its answer could not be read, so something may be lost that is not named here`,
+    );
+  return lost;
 };
+
+declare namespace lostIn {
+  /** each line read, against the checkouts asked about */
+  export type Read = Expect<
+    Invoke<
+      typeof lostIn,
+      [
+        stdout: "UNSYNCED\nUNCOMMITTED /workspaces/acme/app\nSTASHED /workspaces/acme/app\n",
+        checkouts: ["/workspaces/acme/app"],
+      ]
+    >,
+    "=",
+    [
+      "its branches could not be written out for the root",
+      "uncommitted changes or untracked files in /workspaces/acme/app",
+      "stashed changes in /workspaces/acme/app",
+    ]
+  >;
+  /** nothing said: nothing lost */
+  export type Clean = Expect<
+    Invoke<typeof lostIn, [stdout: "\n", checkouts: ["/workspaces/a"]]>,
+    "=",
+    []
+  >;
+  /** a line that is not one of them, or names a checkout not asked about, is counted, not
+   *  dropped: the answer then never reads as clean */
+  export type Unread = Expect<
+    Invoke<
+      typeof lostIn,
+      [
+        stdout: "UNCOMMITTED /workspaces/other\nwhat is this\nUNCOMMITTED /workspaces/a\n",
+        checkouts: ["/workspaces/a"],
+      ]
+    >,
+    "=",
+    [
+      "uncommitted changes or untracked files in /workspaces/a",
+      "2 lines of its answer could not be read, so something may be lost that is not named here",
+    ]
+  >;
+}
 
 /** What a workspace held that a remove would lose, as last looked at, kept on the host for the
  *  dashboard's Delete: the daemon looks while the workspace runs, and `stop` looks once more

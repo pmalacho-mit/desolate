@@ -15,7 +15,7 @@ import { withLock } from "../shared/lock.ts";
 import { run } from "../shared/run.ts";
 import { printable } from "../shared/text.ts";
 import { urlRules } from "./git-urls.ts";
-import { beating, requester, saying } from "./step.ts";
+import { beating, requester, saying } from "../shared/step.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -30,6 +30,29 @@ const GIT_QUIET_MS = 600_000;
 // (DESOLATE_MIRROR_FRESH: a `--fetch` here follows the host's own refresh of the mirror.)
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", DESOLATE_MIRROR_FRESH: "1" };
 
+/** git's output with its progress settled: a line that git rewrote in place (`\r`, as
+ *  `--progress` does) is what it last said there. */
+export const settled = (output: string): string =>
+  output
+    .split("\n")
+    .map((line) => line.split("\r").filter(Boolean).at(-1) ?? "")
+    .join("\n");
+
+declare namespace settled {
+  export type Lines = Table<
+    typeof settled,
+    [
+      [
+        args: [
+          output: "Updating files:  50% (1/2)\rUpdating files: 100% (2/2)\rUpdating files: 100% (2/2), done.\nfatal: x\n",
+        ],
+        expected: "Updating files: 100% (2/2), done.\nfatal: x\n",
+      ],
+      [args: [output: "a\r\nb"], expected: "a\nb"],
+    ]
+  >;
+}
+
 /** One git command of the init, ended only by its own silence or by the host going away.
  *  Its failure is git's whole output and then one line that says which command it was: the
  *  host shows the end of it and keeps all of it (host/workspaces.ts). */
@@ -41,7 +64,7 @@ const git = async (dir: string | null, args: string[]) => {
   });
   if (result.code !== 0)
     throw new Error(
-      `${(result.stderr || result.stdout).trim()}\ngit ${args.join(" ")} failed${dir ? ` in ${dir}` : ""}`,
+      `${settled(result.stderr || result.stdout).trim()}\ngit ${args.join(" ")} failed${dir ? ` in ${dir}` : ""}`,
     );
   return result.stdout.trim();
 };

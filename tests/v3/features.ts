@@ -167,6 +167,7 @@ export const FEATURES: Feature[] = [
       "release/shared/size.ts",
       "release/shared/spawn.ts",
       "release/workspace/init.ts",
+      "release/shared/step.ts",
       "release/workspace/start.sh",
       "release/workspace/wsd.ts",
       "release/workspace/wsctl.ts",

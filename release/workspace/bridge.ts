@@ -6,9 +6,10 @@
 // primary service, is the way into it (its header says why); this is the VM's side. Every
 // second, while the devcontainer is a compose one that is up:
 //   - each TCP port listening in the primary service (from PORTS.min up, and no more than
-//     MIRRORS of them) gets a listener of the same number on the VM's 127.0.0.1, which carries each connection to it: a dev server
-//     in the app service, on its loopback or not, is then a listener in the VM as it would
-//     be in a single container, and is forwarded by the same rules;
+//     MIRRORS of them) gets a listener of the same number on the VM's 127.0.0.1, which
+//     carries each connection to it: a dev server in the app service, on its loopback or
+//     not, is then a listener in the VM as it would be in a single container, and is
+//     forwarded by the same rules;
 //   - each `forwardPorts` entry written `service:port` (devcontainer.ts reads them) gets one
 //     too, reaching that service by its name from inside the app's network;
 //   - what the services publish (`ports:` in the compose file) needs nothing: docker's own
@@ -51,7 +52,8 @@ class Slow extends Error {}
 
 /** One request to svcnet.ts. Both bounds are against what answers in the project's
  *  container: three seconds for a list a few lines long from a socket in this VM (it
- *  answers in a millisecond), and 64 KiB, which is every port there is, written out. */
+ *  answers in a millisecond), and 64 KiB, which holds a list of 10,000 ports, far more than
+ *  there are mirrors. */
 const ask = (socket: string, line: string): Promise<string> =>
   new Promise((resolve, reject) => {
     const conn = connect(socket);

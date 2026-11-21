@@ -38,7 +38,15 @@ GIT_DIR_=$(git -c core.hooksPath=/dev/null -c core.fsmonitor=false rev-parse --a
   || die "not inside a git repository"
 FILE="$GIT_DIR_/desolate-status.json"
 NOTE="$GIT_DIR_/desolate-note.md"
+# The bounds are shared/limits.ts's (this script cannot import it; a T1 test checks that
+# they agree): NAMES.status, a status line in characters (code points), and NAMES.noteBytes,
+# a note in bytes, which the root reads whole for every checkout it lists.
+STATUS_MAX=200
 NOTE_MAX=16384
+
+# How many characters (code points) the UTF-8 text "$1" is: its bytes that do not continue
+# a character. (LC_ALL is C here, so ${#x} and wc -m count bytes.)
+chars() { printf '%s' "$1" | tr -d '\200-\277' | wc -c | tr -d ' '; }
 
 # One JSON string: backslash, quote and control characters escaped, anything
 # else (UTF-8 included) as itself.
@@ -63,7 +71,8 @@ case "${1:-}" in
     shift; color=$1; shift
     case "$color" in gray|blue|green|yellow|orange|red) ;; *) die "'$color' is not a colour (gray, blue, green, yellow, orange, red)" ;; esac
     message="$*"
-    [ "${#message}" -le 200 ] || echo "desolate-status: the message is over 200 characters; it is shown cut" >&2
+    n=$(chars "$message")
+    [ "$n" -le "$STATUS_MAX" ] || echo "desolate-status: the message is $n characters, over the $STATUS_MAX allowed; it is shown cut" >&2
     tmp="$FILE.$$"
     printf '{"color":"%s","message":%s,"updated":"%s"}\n' \
       "$color" "$(json_str "$message")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
@@ -79,9 +88,14 @@ case "${1:-}" in
     if [ "${1:-}" = --clear ]; then rm -f "$NOTE"; exit 0; fi
     tmp="$NOTE.$$"
     if [ $# -gt 0 ]; then printf '%s\n' "$*" > "$tmp"; else cat > "$tmp"; fi
-    if [ "$(wc -c < "$tmp")" -gt "$NOTE_MAX" ]; then
-      head -c "$NOTE_MAX" "$tmp" > "$tmp.cut" && mv -f "$tmp.cut" "$tmp"
-      echo "desolate-status: the note is over $NOTE_MAX bytes; it was cut" >&2
+    n=$(wc -c < "$tmp" | tr -d ' ')
+    if [ "$n" -gt "$NOTE_MAX" ]; then
+      # Cut between characters, never inside one (a character's last bytes, when the cut
+      # fell among them, go with its first), and marked: it ends in "…" (3 bytes).
+      lead=$(printf '\300-\377'); cont=$(printf '\200-\277')
+      { head -c "$((NOTE_MAX - 3))" "$tmp" | sed "\$s/[$lead][$cont]*\$//"; printf '\342\200\246\n'; } > "$tmp.cut"
+      mv -f "$tmp.cut" "$tmp"
+      echo "desolate-status: the note is $n bytes, over the $NOTE_MAX allowed; it was cut, and ends in …" >&2
     fi
     mv -f "$tmp" "$NOTE" ;;
   board)
@@ -106,6 +120,7 @@ case "${1:-}" in
     for admin in "$common"/worktrees/*; do
       [ -d "$admin" ] || continue
       gone=""
+      # (40: NAMES.slug, a workspace's name.)
       owner=$(sed -n 's/^workspace \([A-Za-z0-9_-]\{1,40\}\)$/\1/p' "$admin/locked" 2>/dev/null | head -n 1)
       if [ -n "$owner" ] && [ -f "$stats" ] && ! grep -Eq "\"workspace\": ?\"$owner\"" "$stats"; then
         gone="  (its workspace, $owner, was removed: this is its last word)"

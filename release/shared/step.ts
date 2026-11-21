@@ -1,9 +1,9 @@
 // What a step of a workspace's start says while it runs, and how it learns that nobody is
 // waiting for it any more (docs/v3/limits.md, R4: patience belongs to whoever is waiting).
 //
-// The steps a start runs in the VM (init.ts, devcontainer.ts) have no timer of their own:
+// The steps a start runs in the VM (workspace/init.ts, devcontainer.ts) have no timer of their own:
 // how long a start may take is the host's to decide, where the person is waiting
-// (host/workspaces.ts). What they owe the host is on stderr, a line at a time:
+// (host/workspaces.ts, which reads them). What they owe the host is on stderr, a line at a time:
 //   - what they are doing, when they begin it, and every BEAT_MS that they still are, with
 //     how long so far. The host shows the person those lines, and takes a workspace that has
 //     said nothing for many beats' time as stopped: so a step that is running is never
@@ -13,7 +13,7 @@
 // host giving up on a silent VM), which the next line written here finds.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { saidDuring } from "../.harness/workspace-step.ts";
+import type { saidDuring } from "../.harness/shared-step.ts";
 
 /** How often a running step says that it still is: often enough that the person sees a
  *  start is alive before wondering, and that a cancelled start is noticed within this long;

@@ -355,8 +355,9 @@ const serve = () => {
     connection.on("data", async (chunk) => {
       buffer += chunk.toString();
       const end = buffer.indexOf("\n");
-      // A request is a line of port numbers from the host: every port there is, written
-      // out, is under 64 KiB, so a longer line is not one.
+      // A request is a line from the host: the ports it asks this VM to hold, a few of
+      // them (a JSON list of 10,000 ports is under 64 KiB). A longer line is not one, and is
+      // not kept growing in this daemon's memory.
       if (end < 0) return buffer.length > 65536 ? connection.destroy() : undefined;
       let reply: unknown;
       try {

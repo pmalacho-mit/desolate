@@ -50,7 +50,7 @@ import type { WorkspacePlan } from "../shared/plan.ts";
 import { run, sleep } from "../shared/run.ts";
 import { printable } from "../shared/text.ts";
 import { urlRules } from "./git-urls.ts";
-import { requester, saying } from "./step.ts";
+import { requester, saying } from "../shared/step.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { projectWith, specWithSettingsOf } from "../.harness/workspace-files.ts";

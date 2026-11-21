@@ -1,6 +1,6 @@
-// Harness for the in-source tests of workspace/step.ts: a step that takes a given time, and
+// Harness for the in-source tests of shared/step.ts: a step that takes a given time, and
 // what it said meanwhile.
-import { saying } from "../workspace/step.ts";
+import { saying } from "../shared/step.ts";
 
 /** Runs a step named `what` whose work takes `workMs` and answers "done", with a beat every
  *  `beatMs`: the work's answer, and each line the step said. */
