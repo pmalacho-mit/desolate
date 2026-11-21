@@ -1,6 +1,6 @@
 // The desolate command, on the host. It drives everything, holds no key, and runs no git on
 // desolate's repositories (P4).
-import { forTerminal, printable } from "../shared/text.ts";
+import { forTerminal } from "../shared/text.ts";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -65,10 +65,10 @@ Your repositories and domains:
   desolate domain <slug> spawn [--max <n>|none]                  limit the workspaces its workspaces start (none: no limit, the default; 0: off)
   desolate domain <slug> stats [--json]                          its workspaces, who started each, its limit, this Mac
   desolate domain <slug> env [--from <owner/repo>]               whose devcontainer.json its workspaces run
-  desolate domain <slug> net [open | enforce | allow <host>... | deny <host>...]
+  desolate domain <slug> net [open | enforce | allow <host>... | deny <host>... | hold <size>]
                                                                  the domain's network rules, at its proxies
-  desolate net log [<domain>] [--json]                           what each workspace asked to reach, and the verdict
-  desolate domain <domain> net recommend                         what it reached that is not on its list
+  desolate net log [<domain>] [--last <n>] [--json]              what each workspace asked to reach, and the verdict
+  desolate domain <domain> net recommend [--all]                 what it reached that is not on its list
   desolate domain <domain> secret set <NAME> --hosts <h>[,...] [--headers <h>[,...]] | copy <NAME> --from <d> | list | off | on [--ttl 30m] | rm | show
                                                                  a secret: the value on stdin, the name in workspaces
   desolate domain <domain> secret import <.env> [--dry-run] [--print-env | --in-place] [--choose KEY=secret:<host>[@<header>] | KEY=value]
@@ -79,7 +79,9 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
   desolate agent start <domain>/<workspace> [--name <n>] [--checkout <repo>] -- <command...>
                                                                  any program kept running in a workspace (a dev server,
                                                                  a watcher, a coding agent), with its terminal; no tmux
-  desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   your terminal on it; Ctrl-] detaches
+  desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   attach: your terminal on it; Ctrl-] detaches
+  desolate agent log <domain>/<workspace> [--all | --lines <n> | --since <10m|date>]   what it printed
+  desolate agent stop <domain>/<workspace> [--kill]              Ctrl-C, then asks; --kill ends it at once
   desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
 
 Hearing about it, and scripting it:
@@ -101,6 +103,9 @@ The stack itself:
   desolate doctor [--json]                                       check it; every failure names its fix
   desolate down                                                  stop every VM and the daemon; remove nothing
   desolate destroy [--all]                                       remove the VMs (--all: and ~/.desolate)
+  desolate settings [--json] | set <name> <value> | unset <name>
+                                                                 what depends on this Mac or on you (VM sizes, how many
+                                                                 of things): each one's value, default and why
   desolate root shell                                            the root's terminal: git on the root clones
   desolate completion                                            tab completion for zsh and bash (below)
   desolate help                                                  this text
@@ -368,32 +373,16 @@ const main = async (argv: string[]): Promise<number> => {
       "print-env": { type: "boolean" },
       "in-place": { type: "boolean" },
       choose: { type: "string", multiple: true },
+      all: { type: "boolean" },
     });
     const { domainCommand } = await import("./domains.ts");
     await domainCommand(positionals, values, out);
     return EXIT.ok;
   }
   if (verb === "net" && rest[0] === "log") {
-    const { values, positionals } = flags(rest.slice(1), {});
-    const { rootctl } = await import("./stack.ts");
-    const entries = await rootctl<
-      {
-        time: string;
-        domain: string;
-        workspace: string;
-        host: string;
-        port: number;
-        verdict: string;
-        reason?: string;
-        secrets?: string[];
-      }[]
-    >("net.log", { domain: positionals[0] }, { quiet: true });
-    if (values.json === true) out(JSON.stringify(entries));
-    else
-      for (const e of entries)
-        out(
-          `${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
-        );
+    const { values, positionals } = flags(rest.slice(1), { last: { type: "string" } });
+    const { netLog } = await import("./domains.ts");
+    await netLog(positionals[0], values, out);
     return EXIT.ok;
   }
   if (verb === "up") {
@@ -557,6 +546,12 @@ const main = async (argv: string[]): Promise<number> => {
     await down(out);
     return EXIT.ok;
   }
+  if (verb === "settings") {
+    const { values, positionals } = flags(rest, {});
+    const { settings } = await import("./settings.ts");
+    await settings(positionals, values.json === true, out);
+    return EXIT.ok;
+  }
   if (verb === "completion") {
     const fs = await import("node:fs");
     const { RELEASE_DIR } = await import("./paths.ts");
@@ -702,11 +697,14 @@ const main = async (argv: string[]): Promise<number> => {
     const dash = rest.indexOf("--");
     const own = dash >= 0 ? rest.slice(0, dash) : rest;
     const command = dash >= 0 ? rest.slice(dash + 1) : [];
-    const { values, positionals } = flags(own, {
-      name: { type: "string" },
-      checkout: { type: "string" },
-    });
     const agents = await import("./agent.ts");
+    // Each verb's own flags (host/agent.ts's FLAGS); before a verb, any of them.
+    const { values, positionals } = flags(
+      own,
+      own[0] && own[0] in agents.FLAGS
+        ? agents.FLAGS[own[0] as keyof typeof agents.FLAGS]
+        : Object.assign({}, ...Object.values(agents.FLAGS)),
+    );
     const [sub, where] = positionals;
     if (sub === "start")
       await agents.start(
@@ -723,8 +721,18 @@ const main = async (argv: string[]): Promise<number> => {
       return agents.attach(where, { name: values.name as string | undefined });
     else if (sub === "list") await agents.list(where, out, values.json === true);
     else if (sub === "stop")
-      await agents.stop(where, { name: values.name as string | undefined }, out);
-    else if (sub === "log") await agents.log(where, { name: values.name as string | undefined });
+      await agents.stop(
+        where,
+        { name: values.name as string | undefined, kill: values.kill === true },
+        out,
+      );
+    else if (sub === "log")
+      await agents.log(where, {
+        name: values.name as string | undefined,
+        all: values.all === true,
+        lines: values.lines as string | undefined,
+        since: values.since as string | undefined,
+      });
     else
       refuse(
         "desolate agent what?",

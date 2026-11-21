@@ -8,7 +8,7 @@ import { createServer, request } from "node:http";
 import type { AddressInfo, Server } from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { after, before, describe, it } from "node:test";
+import { after, before, describe, it, mock } from "node:test";
 
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-approve-"));
 process.env.DESOLATE_HOME = home;
@@ -55,39 +55,108 @@ const refused: string[] = [];
 let server: Server;
 let port = 0;
 
+/** What desolate's reviewer says, as its stream (shared/review-account.ts): an account for
+ *  each push by its branch, a page of a list, a diff. `slow`: the branch whose account waits
+ *  until `release` is called, saying what it is doing meanwhile. `dropped`: the questions
+ *  whose asker went away. */
+const account = (extra: Record<string, unknown> = {}) => ({
+  key: "k-12",
+  warnings: [],
+  commits: {
+    items: [{ commit: "a".repeat(40), subject: "<img src=x onerror=alert(1)>", author: "agent" }],
+    total: 101,
+    from: 0,
+  },
+  files: { items: [], total: 0, from: 0 },
+  between: { items: [], total: 0, from: 0 },
+  sends: SENDS,
+  fastForward: null,
+  base: null,
+  remote: null,
+  ...extra,
+});
+let slow = "";
+/** The branch whose account names another pack each time it is asked (`changing`). */
+let changing = "";
+let asked_ = 0;
+let release = () => {};
+const dropped: string[] = [];
+const asks: Record<string, unknown>[] = [];
+async function* reviewer(
+  asked: Record<string, unknown> & { op: string },
+  signal: AbortSignal,
+): AsyncGenerator<never> {
+  asks.push(asked);
+  const drop = () => dropped.push(String(asked.branch ?? asked.op));
+  signal.addEventListener("abort", drop, { once: true });
+  try {
+    yield* answering(asked, signal);
+  } finally {
+    signal.removeEventListener("abort", drop);
+  }
+}
+async function* answering(
+  asked: Record<string, unknown> & { op: string },
+  signal: AbortSignal,
+): AsyncGenerator<never> {
+  if (asked.op === "page")
+    return void (yield {
+      page: {
+        commits: {
+          items: [{ commit: "c".repeat(40), subject: "the 101st", author: "agent" }],
+          total: 101,
+          from: asked.from,
+        },
+      },
+    } as never);
+  if (asked.op === "diff")
+    return void (yield {
+      diff: {
+        text: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
+        from: asked.from,
+        next: null,
+        total: 44,
+      },
+    } as never);
+  if (asked.branch === slow) {
+    yield { progress: { phase: "packing", done: 1200, of: 8000 } } as never;
+    await new Promise<void>((resolve) => {
+      release = resolve;
+      signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    if (signal.aborted) return;
+  }
+  if (asked.branch === unreviewed.branch) return void (yield { error: "bad object" } as never);
+  if (asked.branch === changing)
+    return void (yield {
+      account: account({ sends: { ...SENDS, pack: String(++asked_).repeat(64).slice(0, 64) } }),
+    } as never);
+  if (asked.branch === other.branch)
+    return void (yield {
+      account: account({
+        key: "k-13",
+        fastForward: false,
+        squash: {
+          commit: "5".repeat(40),
+          parent: null,
+          count: 2,
+          message: "x\n",
+          author: "agent",
+          committer: "agent",
+          dates: "",
+          sends: SQUASH_SENDS,
+        },
+      }),
+    } as never);
+  yield { account: account() } as never;
+}
+
 before(async () => {
   server = createServer(
     handler(
       {
         pending: async () => listed,
-        summary: async (asked) =>
-          asked.nonce === unreviewed.nonce
-            ? { ok: false, error: "bad object" }
-            : asked.nonce === other.nonce
-              ? {
-                  ok: true,
-                  fastForward: false,
-                  sends: SENDS,
-                  squash: {
-                    commit: "5".repeat(40),
-                    parent: null,
-                    count: 2,
-                    message: "x\n",
-                    sends: SQUASH_SENDS,
-                  },
-                }
-              : {
-                  ok: true,
-                  commits: [
-                    {
-                      commit: "a".repeat(40),
-                      subject: "<img src=x onerror=alert(1)>",
-                      author: "agent",
-                    },
-                  ],
-                  diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
-                  sends: SENDS,
-                },
+        summary: (asked, signal) => reviewer(asked, signal),
         approve: async (m) => void approved.push(m),
         refuse: async (m) => void refused.push(m),
         issues: async () => issuesListed,
@@ -131,15 +200,21 @@ const call = (
       (res) => {
         let text = "";
         res.on("data", (chunk) => (text += chunk));
-        res.on("end", () =>
-          resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }),
-        );
+        res.on("end", () => {
+          // What the page was last given for each push: its click names that account.
+          if (url === "/pending" && res.statusCode === 200)
+            for (const p of (JSON.parse(text) as { pending: { nonce: string; shown?: string }[] })
+              .pending)
+              if (p.shown) lastShown.set(p.nonce, p.shown);
+          resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text });
+        });
       },
     );
     req.on("error", reject);
     req.end(body);
   });
 
+const lastShown = new Map<string, string>();
 let cookie = "";
 /** The page key the sign-in page carried, which the page's script keeps and sends. */
 let storedKey = "";
@@ -150,11 +225,12 @@ const approve = (body: Record<string, unknown>, headers: Record<string, string> 
     "POST",
     "/approve",
     { ...asPage(), origin: ORIGIN, "content-type": "application/json", ...headers },
-    JSON.stringify(body),
+    JSON.stringify({ shown: lastShown.get(String(body.nonce)), ...body }),
   );
 const good = () => ({
   nonce: push.nonce,
   token: pushToken(approveToken(), message),
+  shown: lastShown.get(push.nonce),
   commit: push.commit,
 });
 
@@ -258,32 +334,95 @@ describe("T1 the approval page", () => {
     const listed = await call("GET", "/pending", asPage());
     assert.equal(listed.status, 200);
     const body = JSON.parse(listed.body) as {
-      pending: { nonce: string; token: string; summary: { commits: { subject: string }[] } }[];
+      pending: {
+        nonce: string;
+        token: string;
+        review: { account: { key?: string; commits: { items: { subject: string }[] } } };
+      }[];
     };
     assert.equal(body.pending.length, 1);
     assert.equal(body.pending[0]!.token, pushToken(approveToken(), message));
     assert.equal(
-      body.pending[0]!.summary.commits[0]!.subject,
+      "key" in body.pending[0]!.review.account,
+      false,
+      "the account's key is the host's, to ask the reviewer with",
+    );
+    assert.equal(
+      body.pending[0]!.review.account.commits.items[0]!.subject,
       "<img src=x onerror=alert(1)>",
       "passed on as JSON text; the page sets it as text, never markup",
     );
     assert.match(String(listed.headers["content-type"]), /^application\/json/);
   });
 
-  it("the diff: not in the list polled every second, but on asking, for the push the page showed and no other", async () => {
+  it("the diff and the rest of a list: not in the list polled every second, but on asking, for the push the page showed and no other", async () => {
     const listed = JSON.parse((await call("GET", "/pending", asPage())).body) as {
-      pending: { summary: Record<string, unknown> }[];
+      pending: { review: { account: Record<string, unknown> } }[];
     };
-    assert.equal(listed.pending[0]!.summary.hasDiff, true);
-    assert.equal("diff" in listed.pending[0]!.summary, false, "the list carries no diff");
-    const ask = (nonce: string, token: string, headers: Record<string, string> = asPage()) =>
-      call("GET", `/diff?nonce=${nonce}&token=${token}`, headers);
-    const shown = await ask(push.nonce, pushToken(approveToken(), message));
+    assert.equal("diff" in listed.pending[0]!.review.account, false, "the list carries no diff");
+    const ask = (
+      nonce: string,
+      token: string,
+      headers: Record<string, string> = asPage(),
+      what = "/diff?from=0",
+    ) => call("GET", `${what}&nonce=${nonce}&token=${token}`, headers);
+    const right = pushToken(approveToken(), message);
+    const shown = await ask(push.nonce, right);
     assert.equal(shown.status, 200, shown.body);
     assert.deepEqual(
       JSON.parse(shown.body),
-      { diff: "diff --git a/x b/x\n+<script>alert(1)</script>\n", cut: false },
+      {
+        diff: {
+          text: "diff --git a/x b/x\n+<script>alert(1)</script>\n",
+          from: 0,
+          next: null,
+          total: 44,
+        },
+      },
       "JSON text; the page sets it as text",
+    );
+    assert.deepEqual(
+      asks.at(-1),
+      { op: "diff", key: "k-12", of: "net", from: 0 },
+      "asked of the reviewer under the key of the account the page was given",
+    );
+    // By file, by commit, a page of a list: each asked of the reviewer as it was asked here.
+    assert.equal(
+      (await ask(push.nonce, right, asPage(), "/diff?file=a%2Fb.ts&from=7")).status,
+      200,
+    );
+    assert.deepEqual(asks.at(-1), { op: "diff", key: "k-12", of: { file: "a/b.ts" }, from: 7 });
+    assert.equal(
+      (await ask(push.nonce, right, asPage(), `/diff?commit=${"a".repeat(40)}`)).status,
+      200,
+    );
+    assert.deepEqual(asks.at(-1), {
+      op: "diff",
+      key: "k-12",
+      of: { commit: "a".repeat(40) },
+      from: 0,
+    });
+    const more = await ask(push.nonce, right, asPage(), "/page?list=commits&from=1");
+    assert.equal(more.status, 200, more.body);
+    assert.equal(
+      (JSON.parse(more.body) as { page: { items: { subject: string }[] } }).page.items[0]!.subject,
+      "the 101st",
+    );
+    assert.deepEqual(asks.at(-1), { op: "page", key: "k-12", list: "commits", from: 1 });
+    assert.equal(
+      (await ask(push.nonce, right, asPage(), "/page?list=secrets&from=0")).status,
+      400,
+      "a list an account does not have",
+    );
+    assert.equal(
+      (await ask(push.nonce, right, asPage(), "/diff?commit=HEAD")).status,
+      400,
+      "not a commit",
+    );
+    assert.equal(
+      (await ask(push.nonce, right, asPage(), "/diff?from=-1")).status,
+      400,
+      "not a place in it",
     );
     assert.equal(
       (await ask(push.nonce, pushToken(approveToken(), `${message}x`))).status,
@@ -313,6 +452,128 @@ describe("T1 the approval page", () => {
       "another site",
     );
   });
+
+  it("a slow reviewer: the page says what it is doing, and its account, three minutes on, is shown and signs", async () => {
+    const slowPush = { ...push, branch: "issue/16", nonce: "6".repeat(32) };
+    const slowMessage = formatApproval(slowPush);
+    slow = slowPush.branch;
+    listed = [{ message: slowMessage, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    mock.timers.enable({ apis: ["Date"], now: Date.now() });
+    try {
+      await listedNow();
+      mock.timers.tick(3 * 60_000);
+      const waiting = JSON.parse((await call("GET", "/pending", asPage())).body) as {
+        pending: { review: unknown }[];
+      };
+      assert.deepEqual(waiting.pending[0]!.review, {
+        working: { phase: "packing", done: 1200, of: 8000, seconds: 180 },
+      });
+      const click = () =>
+        approve({
+          nonce: slowPush.nonce,
+          token: pushToken(approveToken(), slowMessage),
+          commit: slowPush.commit,
+        });
+      const early = await click();
+      assert.equal(early.status, 409, "while it works, nothing signs");
+      assert.match(early.body, /has not shown desolate's reviewer's account/);
+      release();
+      await listedNow();
+      const signs = await click();
+      assert.equal(signs.status, 200, signs.body);
+      assert.deepEqual(approved, [
+        signedFor(slowMessage, { commit: slowPush.commit, squashes: null, ...SENDS }),
+      ]);
+      assert.deepEqual(dropped, [], "nothing was dropped while the push waited");
+    } finally {
+      mock.timers.reset();
+      slow = "";
+      approved.length = 0;
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
+  it("a push that leaves the list: its question to the reviewer is dropped; one still listed is not", async () => {
+    const gone = { ...push, branch: "issue/17", nonce: "7".repeat(32) };
+    const goneMessage = formatApproval(gone);
+    slow = gone.branch;
+    dropped.length = 0;
+    try {
+      listed = [
+        { message, at: "2026-11-12T00:00:00Z" },
+        { message: goneMessage, at: "2026-11-12T00:00:00Z" },
+      ];
+      await listedNow();
+      assert.deepEqual(dropped, [], "control: both listed, neither dropped");
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      assert.deepEqual(dropped, [gone.branch], "the one gone, and only it");
+      const again = JSON.parse((await call("GET", "/pending", asPage())).body) as {
+        pending: { review: { account?: unknown } }[];
+      };
+      assert.ok(again.pending[0]!.review.account, "the one still listed keeps its account");
+    } finally {
+      slow = "";
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
+  it("the push leaves the list and comes back, and the reviewer gives another account: the page's click, for the one it showed, signs nothing", async () => {
+    const again = { ...push, branch: "issue/18", nonce: "8".repeat(32) };
+    const againMessage = formatApproval(again);
+    changing = again.branch;
+    approved.length = 0;
+    try {
+      listed = [{ message: againMessage, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      const shownFirst = lastShown.get(again.nonce)!;
+      // Gone from the list (another page's poll saw it go), and back: asked again.
+      listed = [];
+      await call("GET", "/pending", asPage());
+      listed = [{ message: againMessage, at: "2026-11-12T00:00:00Z" }];
+      await call("GET", "/pending", asPage());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // ...and given, but to a request whose answer never reached the page that is clicked.
+      await call("GET", "/pending", asPage());
+      const click = (shown: string) =>
+        approve({
+          nonce: again.nonce,
+          token: pushToken(approveToken(), againMessage),
+          commit: again.commit,
+          shown,
+        });
+      const stale = await click(shownFirst);
+      assert.equal(stale.status, 409, stale.body);
+      assert.match(stale.body, /not the account of this push the page has now/);
+      assert.equal((await click("")).status, 409, "and with none, nothing");
+      assert.deepEqual(approved, [], "nothing signed");
+      const control = await click(lastShown.get(again.nonce)!);
+      assert.equal(control.status, 200, `control: the account it has now signs: ${control.body}`);
+      assert.equal(approved.length, 1);
+      assert.match(approved[0]!, /\npack: 2{64}\n/, "the pack of the account shown last");
+    } finally {
+      changing = "";
+      approved.length = 0;
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    }
+  });
+
+  it("a body over its bound is refused as too large, not as not JSON", async () => {
+    const big = await approve({ ...good(), pad: "x".repeat(5000) });
+    assert.equal(big.status, 413, big.body);
+    assert.match(big.body, /the request is 5 KiB, over the 4 KiB this page takes/);
+    const notJson = await call(
+      "POST",
+      "/approve",
+      { ...asPage(), origin: ORIGIN, "content-type": "application/json" },
+      "{nope",
+    );
+    assert.equal(notJson.status, 400, "control: a small body that is not JSON is that");
+    assert.match(notJson.body, /not JSON/);
+    assert.deepEqual(approved, []);
+  });
+
   it("nothing signs without everything: a form, another origin, no push token, a made-up push, another commit", async () => {
     assert.equal(
       (await approve(good(), { "content-type": "application/x-www-form-urlencoded" })).status,
@@ -553,6 +814,9 @@ describe("T1 the approval page", () => {
       "the git terminal's origin cannot approve with the key",
     );
     assert.equal(approved.length, before);
+    // (The account of this push was dropped when the list changed under the last test: the
+    // frame lists it again, as its own poll does, before it may be signed.)
+    await listedNow();
     const fromFrame = await call(
       "POST",
       "/approve",

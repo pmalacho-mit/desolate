@@ -48,6 +48,12 @@ export const PROXY_CODE = process.env.DESOLATE_PROXY_CODE ?? "/opt/desolate/prox
 /** What a domain's proxies write: theirs, readable by the root's user. */
 export const proxyOutDir = (domain: string) => `${ROOT.proxies}/out/${domain}`;
 
+/** A workspace's VM's name, which names its proxy's socket (`<vm>.sock`, in its domain's
+ *  out/). names.ts makes them short and opaque (`dsl-<instance>-<10 hex>`): this is the
+ *  shape of one as a file name, and nothing that could leave the directory. Checked by the
+ *  root that starts a proxy (manage.ts) and by the proxy itself (proxy.ts). */
+export const VM_NAME = /^[a-z0-9-]{1,60}$/;
+
 /** `command` as the proxies' user, with exactly `env` (sudo resets the rest), detached, its
  *  output to `log`. The pid is sudo's, which waits for the command and ends with it. */
 export const spawnAsProxy = (

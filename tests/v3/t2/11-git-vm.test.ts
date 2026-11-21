@@ -233,25 +233,37 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       token: string;
       branch: string;
       commit: string;
-      summary: { waiting?: boolean; ok: boolean; commits?: { subject: string }[] };
+      shown?: string;
+      review: {
+        working?: unknown;
+        error?: string;
+        account?: { commits: { items: { subject: string }[] } };
+      };
     };
     let push: Waiting | undefined;
     for (let i = 0; i < 120 && !push; i++) {
       push = (
         JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
-      ).pending.find((p) => p.branch === "from-git" && !p.summary.waiting);
+      ).pending.find((p) => p.branch === "from-git" && !p.review.working);
       if (!push) await sleep(250);
     }
     assert.ok(push, "the push waits on the approval page");
     assert.equal(push!.commit, commit);
-    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary));
+    assert.ok(push!.review.account, JSON.stringify(push!.review));
     assert.deepEqual(
-      push!.summary.commits!.map((c) => c.subject),
+      push!.review.account!.commits.items.map((c) => c.subject),
       ["from the git VM"],
       "the reviewer says what it is",
     );
     assert.equal(
-      (await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status,
+      (
+        await approvals.post("/approve", {
+          nonce: push!.nonce,
+          token: push!.token,
+          shown: push!.shown,
+          commit,
+        })
+      ).status,
       200,
     );
     await screen(/\* \[new branch\]\s+HEAD -> from-git/, 60_000);
@@ -320,16 +332,21 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const told = await stranger.load(fromElsewhere, { until: shown, ms: 60_000 });
     assert.doesNotMatch(told.stdout, /refused/, told.stdout.slice(0, 300));
     assert.match(told.stdout, /desolate ui --open/, told.stdout.slice(-600));
-    // The person's browser, which opened that address once: the button opens a shell.
+    // The person's browser, which opened that address once: a shell opens. Then the button,
+    // in the same browser, after that tab went: the shell it left is still open, and offered.
     const person = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-git-")));
     after(() => person.close());
     const address = /(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!;
     await person.load(address, { until: /desolate's git VM/, ms: 60_000 });
     const opened = await person.load(fromElsewhere, {
-      until: /desolate's git VM|desolate ui --open|refused/,
+      until: /Back to the shell in|desolate's git VM|desolate ui --open|refused/,
       ms: 60_000,
     });
-    assert.match(opened.stdout, /desolate's git VM/, opened.stdout.slice(-600));
+    assert.match(
+      opened.stdout,
+      /Back to the shell in \/git\/acme\/widgets[\s\S]*New shell/,
+      opened.stdout.slice(-600),
+    );
   });
 
   it("a link in the out-box is not followed: the host neither reads, moves nor writes what it names", async () => {
@@ -371,6 +388,76 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     );
   });
 
+  it("a push the forge would refuse is refused in the git VM at once, with the bound and the size, and leaves nothing", () => {
+    // An LFS object over the forge's largest (sparse: nothing that size is written), named by
+    // a pointer in a commit. The old helper read it whole to hash it, and the host refused it
+    // as "not a plain file" after the bundle was made and copied.
+    const oid = "e".repeat(64);
+    const started = Date.now();
+    const ran = stack.inVm(gitVm(), [
+      "bash",
+      "-c",
+      `cd /git/acme/widgets && git switch -q -c too-big origin/main && printf 'version https://git-lfs.github.com/spec/v1\\noid sha256:${oid}\\nsize 5368709121\\n' > huge.bin && git add huge.bin && git -c user.name=p -c user.email=p@example.invalid commit -qm huge && mkdir -p .git/lfs/objects/ee/ee && truncate -s 5368709121 .git/lfs/objects/ee/ee/${oid} && git push origin HEAD:refs/heads/too-big 2>&1; echo "left: $(ls /desolate/out | wc -l)"; rm -f .git/lfs/objects/ee/ee/${oid}; git switch -q main; git branch -q -D too-big`,
+    ]);
+    assert.match(
+      ran.stdout,
+      /the LFS object eeeeeeeeeeee is 5368709121 bytes, over the 5368709120 the forge stores/,
+      ran.stdout + ran.stderr,
+    );
+    assert.match(ran.stdout, /left: 0$/m, "nothing was bundled or copied into the out-box");
+    assert.ok(Date.now() - started < 60_000, "refused at once, not after a wait");
+    assert.equal(forgeRefs("acme/widgets")["too-big"], undefined);
+  });
+
+  it("a push of 1,500 LFS objects from the git VM reaches the approval page and the remote", async () => {
+    // The control is the old host: its 64 KiB bound on the request was met at about 970
+    // objects, and it removed such a request unanswered, so git push waited 20 minutes.
+    const port = Number(stack.env.DESOLATE_EDITOR_PORT);
+    const started = stack.inVm(gitVm(), [
+      "bash",
+      "-c",
+      "cd /git/acme/widgets && git switch -q -c many-lfs origin/main && git lfs track '*.bin' >/dev/null && mkdir many && for i in $(seq 1500); do echo \"object $i\" > many/$i.bin; done && git add .gitattributes many && git -c user.name=p -c user.email=p@example.invalid commit -qm 'many LFS objects' && git rev-parse HEAD && (setsid nohup git push origin HEAD:refs/heads/many-lfs > /tmp/many-lfs.log 2>&1 &)",
+    ]);
+    assert.equal(started.code, 0, started.stdout + started.stderr);
+    const commit = started.stdout.trim().split("\n").pop()!;
+    const approvals = client("desolate-approve.localhost", port);
+    await approvals.login(
+      /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!,
+    );
+    type Waiting = {
+      nonce: string;
+      token: string;
+      branch: string;
+      summary: { waiting?: boolean; ok: boolean };
+    };
+    let push: Waiting | undefined;
+    for (let i = 0; i < 480 && !push; i++) {
+      push = (
+        JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
+      ).pending.find((p) => p.branch === "many-lfs" && !p.summary.waiting);
+      if (!push) await sleep(250);
+    }
+    const log = () => stack.inVm(gitVm(), ["cat", "/tmp/many-lfs.log"]).stdout;
+    assert.ok(push, `the push waits on the approval page: ${log()}`);
+    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary).slice(0, 800));
+    assert.equal(
+      (await approvals.post("/approve", { nonce: push!.nonce, token: push!.token, commit })).status,
+      200,
+    );
+    let said = "";
+    for (let i = 0; i < 720 && !/\[new branch\]/.test(said); i++) {
+      said = log();
+      if (!/\[new branch\]/.test(said)) await sleep(250);
+    }
+    assert.match(said, /\* \[new branch\]\s+HEAD -> many-lfs/, said);
+    assert.equal(forgeRefs("acme/widgets")["many-lfs"], commit, "the remote has that commit");
+    const first = stack
+      .inVm(gitVm(), ["bash", "-c", "printf 'object 1\\n' | sha256sum | cut -d' ' -f1"])
+      .stdout.trim();
+    assert.doesNotThrow(() => stack.forge("lfs-has", "acme/widgets", first), "and its LFS objects");
+    stack.inVm(gitVm(), ["bash", "-c", "cd /git/acme/widgets && git switch -q main"]);
+  });
+
   it("a new branch at a commit the remote has already (main's, which two of its refs name) is described, not left blank", async () => {
     // Found recording the demo: the reviewer was sent origin/HEAD and origin/main at one
     // commit, and refused the whole bundle; the page could not say what the push was.
@@ -389,18 +476,18 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       token: string;
       branch: string;
       commit: string;
-      summary: { waiting?: boolean; ok: boolean; error?: string; commits?: unknown[] };
+      review: { working?: unknown; error?: string; account?: { commits: { items: unknown[] } } };
     };
     let push: Waiting | undefined;
     for (let i = 0; i < 120 && !push; i++) {
       push = (
         JSON.parse((await approvals.get("/pending")).body) as { pending: Waiting[] }
-      ).pending.find((p) => p.branch === "same-as-main" && !p.summary.waiting);
+      ).pending.find((p) => p.branch === "same-as-main" && !p.review.working);
       if (!push) await sleep(250);
     }
     assert.ok(push, "the push waits on the approval page");
-    assert.equal(push!.summary.ok, true, JSON.stringify(push!.summary));
-    assert.deepEqual(push!.summary.commits, [], "no commit the remote does not have");
+    assert.ok(push!.review.account, JSON.stringify(push!.review));
+    assert.deepEqual(push!.review.account!.commits.items, [], "no commit the remote does not have");
     assert.equal(
       (
         await approvals.post("/refuse", {
@@ -487,7 +574,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     ]);
     assert.match(
       fetched.stdout,
-      /asking the root to refresh acme\/widgets[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/,
+      /the root is refreshing acme\/widgets from its remote[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/,
       fetched.stdout,
     );
   });
@@ -517,16 +604,16 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const terminal = client("desolate-git.localhost", port);
     await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
     const first = async (body: Record<string, string>) => {
-      // (Six shells at most, each ending half a minute after its last reader: this suite's
-      // earlier ones, and these, wait their turn as a person closing a tab would.)
-      let opened = await terminal.post("/session", body);
-      for (let i = 0; i < 20 && opened.status === 429; i++) {
-        await sleep(3000);
-        opened = await terminal.post("/session", body);
-      }
+      const opened = await terminal.post("/session", body);
       assert.equal(opened.status, 200, opened.body);
       const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
       const stream = await terminal.get(`/session/${id}/stream?token=${token}`, 1500);
+      // (Done with it, as a person is: a shell whose tab closes stays open, for the tab to
+      // come back to.)
+      await terminal.post(`/session/${id}/input`, {
+        token,
+        data: Buffer.from("exit\n").toString("base64"),
+      });
       return stream.body
         .split("\n")
         .filter((line) => line.startsWith("data: "))
@@ -558,6 +645,39 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       await first({ repo: "acme/widgets", domain: "--all", branch: "from-git" }),
       /desolate: /,
     );
+  });
+
+  it("a shell survives its tab closing: past the half minute that ended it, the page is offered it back, as it was", async () => {
+    const terminal = client("desolate-git.localhost", Number(stack.env.DESOLATE_EDITOR_PORT));
+    await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
+    const opened = await terminal.post("/session", { repo: "acme/widgets" });
+    assert.equal(opened.status, 200, opened.body);
+    const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
+    const type = (text: string) =>
+      terminal.post(`/session/${id}/input`, { token, data: Buffer.from(text).toString("base64") });
+    const read = async (ms: number) =>
+      (await terminal.get(`/session/${id}/stream?token=${token}`, ms)).body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => Buffer.from(line.slice(6), "base64").toString())
+        .join("");
+    assert.equal((await type("KEPT=$((6*7)); cd /git/acme/widgets/.git\n")).status, 200);
+    await read(1500);
+    // The tab has closed. The host ended such a shell 30 s after, looking every 5 s.
+    await sleep(40_000);
+    const listed = await terminal.get("/sessions");
+    assert.equal(listed.status, 200, listed.body);
+    const left = (JSON.parse(listed.body) as { left: { id: string; token: string }[] }).left;
+    assert.ok(
+      left.some((s) => s.id === id && s.token === token),
+      `the page is offered it back: ${listed.body}`,
+    );
+    assert.equal((await type('echo "kept-$KEPT in $PWD"\n')).status, 200, "it still takes input");
+    let said = "";
+    for (let i = 0; i < 20 && !/kept-42 in \/git\/acme\/widgets\/\.git/.test(said); i++)
+      said = await read(700);
+    assert.match(said, /kept-42 in \/git\/acme\/widgets\/\.git/, said.slice(-800));
+    await type("exit\n");
   });
 
   it("an offered branch's new LFS file checks out in the git VM, from the root's store, whole", async () => {

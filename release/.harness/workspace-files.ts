@@ -16,3 +16,9 @@ export const projectWith = (files: string[]): string => {
   }
   return dir;
 };
+
+/** A devcontainer spec whose customizations.vscode.settings are exactly `bytes` bytes as
+ *  JSON: one setting, with a value as long as that takes. */
+export const specWithSettingsOf = (bytes: number): Record<string, unknown> => ({
+  customizations: { vscode: { settings: { x: "y".repeat(bytes - '{"x":""}'.length) } } },
+});

@@ -26,9 +26,13 @@ import { fileURLToPath } from "node:url";
 import { run } from "../../shared/run.ts";
 import type { RunResult } from "../../shared/run.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
+import { printable } from "../../shared/text.ts";
+import { define, valueOf, whole } from "../../shared/settings.ts";
+import { because } from "../failures.ts";
 import { imageFingerprint } from "../image.ts";
 import { INSTANCE, paths, RELEASE_DIR } from "../paths.ts";
 import { duplexOf, parseSs } from "./fake.ts";
+import { runStreamed } from "./stream.ts";
 import { socatAddress } from "./types.ts";
 import { shareRefused } from "./shares.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
@@ -44,6 +48,7 @@ import type {
   cloneCall,
   confinement,
   madeWithoutLinkToken,
+  stepsSaid,
 } from "../../.harness/host-lima.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -66,6 +71,30 @@ const baseStamp = () => {
   } catch {
     return null;
   }
+};
+/** How long Lima waits for a VM it started to be up (its ssh answering, its own checks
+ *  passed). Lima must be given a number, and the right one is this Mac's: seconds on Apple's
+ *  hypervisor, minutes where QEMU emulates every instruction (a Linux host with no KVM). One
+ *  setting where there were three numbers (10, 20 and 30 minutes, for the base started
+ *  again, the base's first start and any other VM, none with a reason): thirty, the most
+ *  patient of them. */
+export const BOOT_MINUTES = define({
+  name: "vm.bootMinutes",
+  env: "DESOLATE_VM_BOOT_MINUTES",
+  side: "host",
+  default: 30,
+  parse: whole(1, 24 * 60),
+  why: "How long Lima waits for a VM it started to come up before it gives up: more on a machine where VMs boot slowly (QEMU without KVM).",
+});
+/** `limactl start`'s own `--timeout`, and the time after which a limactl that did not keep
+ *  to it is ended: one number, the setting, and the second derived from it. Lima's is the
+ *  bound that is meant to end a start (it says what it was waiting for, and leaves the VM
+ *  in a state it knows); ten minutes past it, limactl itself is taken to be stuck. Ten,
+ *  because Lima's clock starts when the VM does, and before that a first start downloads
+ *  Lima's Ubuntu image: the old pairs left five to ten minutes between the two. */
+const boot = () => {
+  const minutes = valueOf(BOOT_MINUTES);
+  return { flag: `${minutes}m`, timeoutMs: (minutes + 10) * 60_000 };
 };
 /** What the guest connects to for its link, per backend. */
 const QEMU_LINK = "tcp:192.168.5.100:15000";
@@ -213,6 +242,38 @@ declare namespace unmounted {
   >;
 }
 
+/** A line provision.sh printed, for the person waiting on it: its steps (`==> packages`) are
+ *  said, as what is being done now; anything else it prints is kept for a failure's text
+ *  and not shown (apt's and npm's own lines differ from run to run). */
+export const provisionStep = (line: string, log: (line: string) => void) => {
+  const step = /^==> (.+)$/.exec(line);
+  if (step) log(`  ${printable(step[1])}`);
+};
+
+declare namespace provisionStep {
+  /** a step is said; the tools' own chatter is not */
+  export type Steps = Expect<
+    Invoke<
+      typeof stepsSaid,
+      [
+        lines: [
+          "==> packages",
+          "Get:1 http://archive.ubuntu.com noble InRelease",
+          "==> node 22.11.0",
+        ],
+      ]
+    >,
+    "=",
+    ["  packages", "  node 22.11.0"]
+  >;
+  /** what a VM printed is text, not commands for the terminal */
+  export type Safe = Expect<
+    Invoke<typeof stepsSaid, [lines: ["==> docker\u001b[2J"]]>,
+    "=",
+    ["  docker?[2J"]
+  >;
+}
+
 export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
   const imageDir = process.env.DESOLATE_IMAGE_DIR ?? path.join(paths.images, arch);
@@ -249,6 +310,8 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     args: string[],
     options: {
       timeoutMs?: number;
+      signal?: AbortSignal;
+      idleMs?: number;
       input?: string | Buffer;
       extraEnv?: Record<string, string>;
       inheritStderr?: boolean;
@@ -257,6 +320,8 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     run(LIMACTL, ["--tty=false", ...args], {
       env: env(options.extraEnv),
       timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      idleMs: options.idleMs,
       input: options.input,
       inheritStderr: options.inheritStderr,
     });
@@ -264,7 +329,11 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     const result = await lima(args, options);
     if (result.code !== 0)
       throw new Error(
-        `limactl ${args.slice(0, 3).join(" ")} failed (exit ${result.code}): ${(result.stderr || result.stdout).trim().split("\n").slice(-6).join(" | ").slice(-900)}`,
+        because(
+          `limactl ${args.slice(0, 3).join(" ")} failed (exit ${result.code})`,
+          `limactl-${args[0]}`,
+          result.stderr || result.stdout,
+        ),
       );
     return result.stdout;
   };
@@ -473,7 +542,11 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const again = put.code === 0 ? await probe() : put;
       if (again.code !== 0)
         throw new Error(
-          `cannot reach root in ${name}: ssh as root was refused and its login user could not install the key (${(again.stderr || again.stdout).trim().split("\n").slice(-2).join(" | ")}). Only the first bootstrap can install that key (root/start.sh then takes the login user's sudo away for good), so ${LIMA_HOME}/_config/user.pub or root's authorized_keys in ${name} has changed since. Its keys are on its own disk: make it again (desolate destroy, then bootstrap) only after adding new deploy keys is acceptable.`,
+          because(
+            `cannot reach root in ${name}: ssh as root was refused and its login user could not install the key. Only the first bootstrap can install that key (root/start.sh then takes the login user's sudo away for good), so ${LIMA_HOME}/_config/user.pub or root's authorized_keys in ${name} has changed since. Its keys are on its own disk: make it again (desolate destroy, then bootstrap) only after adding new deploy keys is acceptable. What was said`,
+            "root-ssh",
+            again.stderr || again.stdout,
+          ),
         );
     }
     rootReady.add(name);
@@ -537,11 +610,15 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   };
 
   /** Wait for every share to be mounted as the spec says; stop the VM and refuse if one
-   *  is mounted the wrong way, or is still missing after a minute. */
+   *  is mounted the wrong way, or is still missing after a minute. A minute of the clock
+   *  that runs while this process does (so a Mac that slept through the wait did not use it
+   *  up), looks included: counted in sleeps alone, with each look allowed thirty seconds,
+   *  "a minute" could be far more. Mounting is the guest's own first step after ssh answers
+   *  (measured on the M1: under a second), so a share missing after a minute is not late. */
   const sharesReady = async (name: string, m: Meta) => {
     const fsType = kind === "qemu" ? "9p" : "virtiofs";
     let last = { missing: m.spec.shares.map((share) => share.guest), wrong: [] as string[] };
-    for (let waited = 0; waited <= 60_000; waited += 250) {
+    for (const began = performance.now(); performance.now() - began <= 60_000;) {
       const mounts = await lima(["shell", "--workdir", "/", name, "cat", "/proc/mounts"], {
         timeoutMs: 30_000,
       });
@@ -712,8 +789,14 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const fingerprint = imageFingerprint();
       const provision = async (what: string) => {
         log(`provisioning it${what} (packages, node, docker, the editor server): several minutes`);
-        const provisioned = await lima(
+        // No timer (R4): it downloads packages over this Mac's link, however slow, and the
+        // person at the terminal is the one waiting. It says each step as it starts it
+        // (provision.sh's `==>` lines), so a wait is a wait on something named, and Ctrl-C
+        // stops it: provision.sh is idempotent, and bootstrap runs it again.
+        return runStreamed(
+          LIMACTL,
           [
+            "--tty=false",
             "shell",
             "--workdir",
             "/",
@@ -725,10 +808,11 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
             "bash",
             "/desolate/release/image/provision.sh",
           ],
-          { timeoutMs: 3_600_000, inheritStderr: true },
+          { env: env(), lines: (line) => provisionStep(line, log) },
         );
-        return provisioned;
       };
+      // What provision.sh said when it failed: its errors are on stderr, its steps on stdout.
+      const provisionSaid = (result: RunResult) => `${result.stdout}\n${result.stderr}`;
       if (fs.existsSync(path.join(LIMA_HOME, BASE, "lima.yaml"))) {
         const stamp = baseStamp();
         if (stamp === fingerprint) return log(`base VM ${BASE} present, image ${fingerprint}`);
@@ -738,12 +822,16 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         log(
           `base VM ${BASE} was provisioned from ${stamp ? `image ${stamp}` : "an unstamped image"}; this desolate's is ${fingerprint}`,
         );
-        await limaOk(["start", BASE, "--timeout", "10m"], { timeoutMs: 900_000 });
+        await limaOk(["start", BASE, "--timeout", boot().flag], { timeoutMs: boot().timeoutMs });
         const again = await provision(" again");
         await limaOk(["stop", BASE], { timeoutMs: 300_000 });
         if (again.code !== 0)
           throw new Error(
-            `provisioning the base VM again failed (it is left as it was, still older): ${again.stdout.trim().split("\n").slice(-5).join(" | ")}`,
+            because(
+              "provisioning the base VM again failed (it is left as it was, still older)",
+              "provision-base",
+              provisionSaid(again),
+            ),
           );
         fs.writeFileSync(path.join(LIMA_HOME, BASE, STAMP), `${fingerprint}\n`);
         return;
@@ -757,19 +845,22 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
             );
         fs.writeFileSync(file, baseYaml());
         log(`creating the base VM from ${imageDir}`);
-        await limaOk(["create", `--name=${BASE}`, file], { timeoutMs: 1_200_000 });
+        // No timer (R4): Lima copies the image's disk on this machine, and reaches nothing.
+        await limaOk(["create", `--name=${BASE}`, file]);
         return;
       }
       // vz: boot Lima's pinned Ubuntu image once, provision it with the same script the
       // Linux image is built from, and stop it. Every VM is then a copy-on-write clone.
       fs.writeFileSync(file, baseYaml());
       log("creating the base VM from Lima's pinned Ubuntu image (downloads it the first time)");
-      await limaOk(["start", `--name=${BASE}`, "--timeout", "20m", file], { timeoutMs: 1_500_000 });
+      await limaOk(["start", `--name=${BASE}`, "--timeout", boot().flag, file], {
+        timeoutMs: boot().timeoutMs,
+      });
       const provisioned = await provision("");
       if (provisioned.code !== 0) {
         await lima(["delete", "-f", BASE]);
         throw new Error(
-          `provisioning the base VM failed: ${provisioned.stdout.trim().split("\n").slice(-5).join(" | ")}`,
+          because("provisioning the base VM failed", "provision-base", provisionSaid(provisioned)),
         );
       }
       await limaOk(["stop", BASE], { timeoutMs: 300_000 });
@@ -812,7 +903,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         await limaOk(["edit", "--set", `.portForwards = ${yq(NO_FORWARDS)}`, name], {
           timeoutMs: 120_000,
         });
-      const args = ["start", "--timeout", "30m", name];
+      const args = ["start", "--timeout", boot().flag, name];
       if (kind === "vz") {
         const file = path.join(LIMA_HOME, name, "confine.sb");
         // After sharesPlain: the profile names each share where it must be.
@@ -820,11 +911,15 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         // The host process starts under the profile and keeps it for its whole life.
         const result = await run("sandbox-exec", ["-f", file, LIMACTL, "--tty=false", ...args], {
           env: env(),
-          timeoutMs: 2_400_000,
+          timeoutMs: boot().timeoutMs,
         });
         if (result.code !== 0)
           throw new Error(
-            `could not start ${name} confined: ${(result.stderr || result.stdout).trim().split("\n").slice(-4).join(" | ")}. If it says "Failed to issue sandbox extension", a share of it changed after desolate checked it: see desolate doctor, and ${path.join(LIMA_HOME, name, "ha.stderr.log")}`,
+            because(
+              `could not start ${name} confined. If what follows says "Failed to issue sandbox extension", a share of it changed after desolate checked it: see desolate doctor, and ${path.join(LIMA_HOME, name, "ha.stderr.log")}. limactl said`,
+              "limactl-start",
+              result.stderr || result.stdout,
+            ),
           );
         return sharesReady(name, m);
       }
@@ -832,7 +927,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         kind === "qemu" && cut
           ? { DESOLATE_QEMU_EGRESS: "none", DESOLATE_QEMU_LINK: m.spec.sockets[0]?.host ?? "" }
           : {};
-      await limaOk(args, { timeoutMs: 2_400_000, extraEnv });
+      await limaOk(args, { timeoutMs: boot().timeoutMs, extraEnv });
       if (cut && kind === "qemu") {
         // Not taken on trust: the QEMU that is running must be the restricted one.
         const pid = fs.readFileSync(path.join(LIMA_HOME, name, "qemu.pid"), "utf8").trim();
@@ -917,18 +1012,26 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     async exec(name, argv, options = {}): Promise<RunResult> {
-      if (options.root && isRootVm(name)) {
-        await ensureRootSsh(name);
-        return run("ssh", rootSshArgs(name, argv, options), {
+      const asRoot = options.root === true && isRootVm(name);
+      if (asRoot) await ensureRootSsh(name);
+      const [command, args] = asRoot
+        ? ["ssh", rootSshArgs(name, argv, options)]
+        : [LIMACTL, ["--tty=false", ...shellArgs(name, argv, options)]];
+      // A long step a person waits on, or an archive: streamed, and under no timer (stream.ts).
+      if (options.lines || options.stdoutTo || options.stdinFrom)
+        return runStreamed(command, args, {
           env: env(),
           input: options.input,
-          timeoutMs: options.timeoutMs,
-          inheritStderr: options.inheritStderr,
+          lines: options.lines,
+          stdoutTo: options.stdoutTo,
+          stdinFrom: options.stdinFrom,
         });
-      }
-      return lima(shellArgs(name, argv, options), {
+      return run(command, args, {
+        env: env(),
         input: options.input,
         timeoutMs: options.timeoutMs,
+        signal: options.signal,
+        idleMs: options.idleMs,
         inheritStderr: options.inheritStderr,
       });
     },
@@ -1040,21 +1143,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         ["-F", path.join(LIMA_HOME, name, "ssh.config"), "-O", "exit", `lima-${name}`],
         { env: env(), timeoutMs: 30_000 },
       );
-    },
-
-    async logs(name) {
-      const tail = (file: string) => {
-        try {
-          return fs
-            .readFileSync(path.join(LIMA_HOME, name, file), "utf8")
-            .split("\n")
-            .slice(-60)
-            .join("\n");
-        } catch {
-          return "";
-        }
-      };
-      return `${tail("ha.stderr.log")}\n${tail("serial.log")}`;
     },
   };
   return backend;

@@ -170,8 +170,10 @@ const approvals = (req: IncomingMessage, res: ServerResponse, url: URL) => {
       return json(res, { pending });
     case "/issues":
       return json(res, { issues });
-    case "/diff":
-      return json(res, { diff, cut: false });
+    case "/diff": {
+      const bytes = Buffer.byteLength(diff);
+      return json(res, { diff: { text: diff, from: 0, next: null, total: bytes } });
+    }
     default:
       return json(res, { ok: true });
   }

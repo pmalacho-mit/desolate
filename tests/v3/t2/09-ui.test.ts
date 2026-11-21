@@ -460,13 +460,11 @@ describe("T2 section 4.8: the root UI", () => {
       ["constructor", {}],
     ] as [string, Record<string, string>][]) {
       const refused = await action(kind, args);
-      // An option-like title is dropped, not passed on: the domain is made without one.
+      // An option-like title is never passed on, and the domain is not made without it in
+      // silence (it was, until limits 04): refused, saying what a title may be.
       if (kind === "domain.create")
-        assert.deepEqual(
-          [refused.status, (JSON.parse(refused.body) as { command: string }).command],
-          [202, "desolate domain create ok"],
-        );
-      else assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
+        assert.match(refused.body, /that title is not one the dashboard takes/);
+      assert.equal(refused.status, 400, `${kind} ${JSON.stringify(args)}`);
     }
     assert.equal(
       ws(await state(), "web/one")?.host?.status,
@@ -592,7 +590,7 @@ describe("T2 section 4.8: the root UI", () => {
     const dom = page.stdout;
     assert.match(
       dom,
-      /<div class="card" data-domain="web">[\s\S]*<h3><span class="named domain"[^>]*><span class="kind">domain<\/span><span class="value mono">web<\/span><\/span><\/h3><span class="domain-title"[^>]*>the web app<\/span>/,
+      /<div class="card" data-domain="web">[\s\S]*<h3><span class="named domain"[^>]*><span class="kind">domain<\/span><span class="value mono" title="web">web<\/span><\/span><\/h3><span class="domain-title"[^>]*>the web app<\/span>/,
       dom.slice(0, 600),
     );
     assert.match(
@@ -730,10 +728,22 @@ describe("T2 section 4.8: the root UI", () => {
     );
     const review = JSON.parse(
       (await http("GET", "/review?domain=web&repo=acme%2Fapp&branch=fix")).body,
-    ) as { commit: string; commits: { subject: string }[]; files: string[]; pushable: boolean };
+    ) as {
+      commit: string;
+      commits: { items: { subject: string }[]; total: number };
+      changes: { items: { path: string }[]; total: number };
+      pushable: boolean;
+    };
     assert.deepEqual(
-      [review.commit, review.commits.map((c) => c.subject), review.files, review.pushable],
-      [commit, ["fix: the thing"], ["README.md"], true],
+      [
+        review.commit,
+        review.commits.items.map((c) => c.subject),
+        review.commits.total,
+        review.changes.items.map((c) => c.path),
+        review.changes.total,
+        review.pushable,
+      ],
+      [commit, ["fix: the thing"], 1, ["README.md"], 1, true],
     );
     // Not the commit that was reviewed: refused before anything is asked.
     assert.equal(
@@ -817,7 +827,7 @@ describe("T2 section 4.8: the root UI", () => {
     );
     const diff = JSON.parse(
       (await http("GET", "/diff?domain=web&repo=acme%2Fapp&branch=markup")).body,
-    ) as { commit: string; text: string; truncated: boolean };
+    ) as { commit: string; text: string; from: number; next: number | null; total: number };
     assert.equal(
       diff.commit,
       tip,
@@ -827,7 +837,11 @@ describe("T2 section 4.8: the root UI", () => {
       diff.text,
       /^diff --git a\/README\.md b\/README\.md\n[\s\S]*\n\+<img src=x onerror=alert\(1\)>\n/,
     );
-    assert.equal(diff.truncated, false);
+    assert.deepEqual(
+      [diff.from, diff.next, diff.total],
+      [0, null, Buffer.byteLength(diff.text)],
+      "one page, the whole diff: its size is the bytes sent",
+    );
     assert.equal(
       (await http("GET", "/diff?domain=web&repo=acme%2Fapp&branch=no-such")).status,
       400,
@@ -858,23 +872,35 @@ describe("T2 section 4.8: the root UI", () => {
       ),
     );
     const picked = (from: string, to: string) =>
-      http("GET", `/diff?domain=web&repo=acme%2Fapp&branch=markup&from=${from}&to=${to}`);
+      http("GET", `/diff?domain=web&repo=acme%2Fapp&branch=markup&pickFrom=${from}&pickTo=${to}`);
+    // (The files a pick changes: the review's next page of its files, for those commits.)
+    const pickedFiles = async (from: string, to: string) =>
+      (
+        JSON.parse(
+          (
+            await http(
+              "GET",
+              `/review/more?domain=web&repo=acme%2Fapp&branch=markup&list=files&pickFrom=${from}&pickTo=${to}`,
+            )
+          ).body,
+        ) as { changes: { items: { path: string }[]; total: number } }
+      ).changes;
     const one = JSON.parse((await picked(next, next)).body) as {
       commit: string;
       text: string;
-      pick: { from: string; to: string; changes: { path: string }[] };
+      pick: { from: string; to: string };
     };
     assert.equal(one.commit, next, "still the branch's commit, the one Push names");
     assert.deepEqual(
-      one.pick.changes.map((c) => c.path),
+      (await pickedFiles(next, next)).items.map((c) => c.path),
       ["SECOND.md"],
       "that commit's file alone",
     );
     assert.doesNotMatch(one.text, /README\.md/, "and its diff alone");
-    const both = JSON.parse((await picked(tip, next)).body) as {
-      pick: { changes: { path: string }[] };
-    };
-    assert.deepEqual(both.pick.changes.map((c) => c.path).sort(), ["README.md", "SECOND.md"]);
+    assert.deepEqual((await pickedFiles(tip, next)).items.map((c) => c.path).sort(), [
+      "README.md",
+      "SECOND.md",
+    ]);
     assert.match((await picked(next, tip)).body, /not in order/, "a run backwards is refused");
     assert.equal((await picked(next, tip)).status, 400);
     assert.equal(
@@ -884,7 +910,7 @@ describe("T2 section 4.8: the root UI", () => {
     );
     assert.equal((await picked("HEAD", next)).status, 400, "a name, not a commit");
     assert.equal(
-      (await http("GET", `/diff?domain=web&repo=acme%2Fapp&branch=markup&from=${next}`)).status,
+      (await http("GET", `/diff?domain=web&repo=acme%2Fapp&branch=markup&pickFrom=${next}`)).status,
       400,
       "half a run",
     );
@@ -950,6 +976,88 @@ describe("T2 section 4.8: the root UI", () => {
       "0 0",
       "no editor's server runs in the root VM",
     );
+  });
+
+  it("a branch of 250 commits: the review counts every one, pages them, and the 41st is pickable", async () => {
+    stack.step("a long branch, counted and paged");
+    // (Before, the root listed 200 and every count said 200; the page let a person pick from
+    // the first 40, and `desolate review` said "a push would send 200 commit(s)".)
+    const work = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      'git switch -q -c long main && for i in $(seq 1 250); do echo $i > f$i.txt && git add f$i.txt && git -c user.name=t -c user.email=t@example.test commit -qm "commit $i"; done && desolate offer && git rev-parse HEAD',
+    );
+    assert.equal(work.code, 0, work.stderr);
+    const tip = work.stdout.trim().split("\n").pop()!;
+    assert.ok(
+      await until(async () =>
+        (await state()).offers.some((o) => o.branch === "long" && o.commit === tip),
+      ),
+    );
+    type Page<T> = { items: T[]; total: number; from: number };
+    type Commit = { commit: string; subject: string };
+    const at = "domain=web&repo=acme%2Fapp&branch=long";
+    const review = JSON.parse((await http("GET", `/review?${at}`)).body) as {
+      commits: Page<Commit>;
+      changes: Page<{ path: string }>;
+      pushCommits: number;
+    };
+    assert.deepEqual(
+      [review.commits.total, review.pushCommits, review.commits.items.length, review.changes.total],
+      [250, 250, 100, 250],
+      "every commit and file counted; a page of each listed",
+    );
+    assert.equal(review.commits.items[0]!.subject, "commit 250", "newest first");
+    const more = async (list: string, from: number) =>
+      JSON.parse((await http("GET", `/review/more?${at}&list=${list}&from=${from}`)).body) as {
+        commit: string;
+        commits?: Page<Commit>;
+        changes?: Page<{ path: string }>;
+      };
+    const second = await more("commits", 100);
+    assert.equal(second.commit, tip, "the next page says which commit it read");
+    assert.deepEqual(
+      [second.commits!.from, second.commits!.items[0]!.subject, second.commits!.total],
+      [100, "commit 150", 250],
+    );
+    const last = await more("commits", 200);
+    assert.deepEqual(
+      [last.commits!.items.length, last.commits!.items.at(-1)!.subject],
+      [50, "commit 1"],
+      "the last page ends at the first commit",
+    );
+    assert.equal((await more("files", 200)).changes!.items.length, 50);
+    // The 41st: picked alone, its own change.
+    const forty1 = review.commits.items[40]!;
+    assert.equal(forty1.subject, "commit 210");
+    const its = JSON.parse(
+      (await http("GET", `/diff?${at}&pickFrom=${forty1.commit}&pickTo=${forty1.commit}`)).body,
+    ) as { text: string };
+    assert.match(its.text, /^diff --git a\/f210\.txt b\/f210\.txt\n/);
+    assert.doesNotMatch(its.text, /f209\.txt|f211\.txt/);
+    // desolate review says the same numbers.
+    const said = stack.desolate("review", "web", "acme/app", "long");
+    assert.equal(said.code, 0, said.stderr);
+    assert.match(said.stdout, /a push would send 250 commit\(s\)/);
+    assert.match(said.stdout, /\.\.\. and 220 more commits/);
+    assert.match(said.stdout, /\.\.\. and 210 more files/);
+    // On the page: the counts are the totals, a page of commits is listed, each a button, and
+    // the rest are asked for.
+    const shown = /data-commits-more=""/;
+    let page = await browser(`once&review&${at}`, shown, 1000);
+    for (let i = 0; i < 4 && !shown.test(page.stdout); i++)
+      page = await browser(`once&review&${at}`, shown, 1000);
+    assert.match(page.stdout, /All 250 commits, combined/, page.stdout.slice(0, 800));
+    assert.match(page.stdout, />250 commits</);
+    assert.match(page.stdout, /and 150 more commits/);
+    assert.match(page.stdout, /Files changed \(250\)/);
+    assert.match(page.stdout, /and 150 more files/);
+    const picks = [...page.stdout.matchAll(/data-pick="([0-9a-f]{40})"/g)].map((m) => m[1]);
+    assert.equal(picks.length, 100);
+    assert.equal(picks[40], forty1.commit, "the 41st is a button, as the first is");
   });
 
   it("Delete from the dashboard removes only a workspace with nothing to lose", async () => {

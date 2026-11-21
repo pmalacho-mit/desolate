@@ -5,6 +5,15 @@ desolate bootstrap: backend vz, instance <instance>
   + home <home>
     creating the base VM from Lima's pinned Ubuntu image (downloads it the first time)
     provisioning it (packages, node, docker, the editor server): several minutes
+      packages
+      node 24.18.0
+      devcontainer CLI 0.88.0
+      mitmproxy 11.0.2 (the root's proxies)
+      git-subrepo 0.4.9 (for desolate upstream)
+      editor server (VSCodium 1.116.02821)
+      git: system settings a domain clone needs (section 4.2)
+      desolate's directories and identity
+      done
   + base image
   + config: backend vz, forge stand-in (<forge>:22)
     approver: a software key in <home>/approver; every push will ask on your terminal
@@ -24,7 +33,7 @@ bootstrap: 8 step(s) done.
   ok   socket paths fit: the longest fits in 103 bytes
   ok   VMs forward nothing by themselves: every running VM refuses Lima's own forwarding
   ok   VMs started confined: every running VM's host process may hand it only its own shares
-  ok   base image: the base VM dsl-<instance>-base, provisioned from this desolate's image (c08540b98ebefa8d)
+  ok   base image: the base VM dsl-<instance>-base, provisioned from this desolate's image (a22e2585d69b97f9)
   ok   root VM running: dsl-<instance>-root
   ok   approver: terminal; pushes are approved on this host
   ok   root: keyring answers: 0 key(s) held

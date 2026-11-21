@@ -8,22 +8,24 @@
 //      host reads.
 //   3. The host hands it to the root, which checks every object (as it does a domain's),
 //      and pushes it as a raw push is: after you approve it on the approval page.
-//   4. The host leaves the answer here; this prints it.
+//   4. The host says what it does with it, and leaves the answer here; this prints both.
 //
-// No key, no network, nothing of the root's to run: this VM can ask, and that is all.
-import { createHash, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
+// No key, no network, nothing of the root's to run: this VM can ask, and that is all. The
+// bounds the host and the forge hold a push to (shared/git-out-box.ts, shared/limits.ts) are checked
+// here first, before anything is bundled or copied: a push they would refuse is refused here,
+// with the bound and the size. And it waits for the answer for as long as you do: Ctrl-C (or
+// closing the terminal) withdraws it.
+import { createHash } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
+import { named, newId, requester, requestRefusal } from "../shared/git-out-box.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
-const OUT = "/desolate/out";
-/** The host's answers: a directory this VM can read and not write. */
-const ANSWERS = "/desolate/answers";
-const WAIT_MS = 20 * 60_000;
 const POINTER =
   /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
 const fail = (message: string): never => {
@@ -80,8 +82,9 @@ declare namespace remoteOf {
 /** Where a push of `repo` reads and writes, in the git VM. */
 type Remote = { repo: string; domain: string | null; mirror: string; gitDir: string };
 
-const git = (args: string[], input?: string) =>
-  spawnSync("git", args, { encoding: "utf8", input, maxBuffer: 256 * 1024 * 1024 });
+/** git, for what answers in a line or a list of refs. A list the size of a history is read
+ *  as a stream (lfsOf), never held here. */
+const git = (args: string[], input?: string) => spawnSync("git", args, { encoding: "utf8", input });
 
 /** The remote's branches, as the mirror last saw them. */
 const mirrorRefs = (at: Remote) =>
@@ -131,25 +134,57 @@ declare namespace domainRefLines {
 const remoteRefs = (at: Remote) =>
   at.domain === null ? mirrorRefs(at) : domainRefs(at, at.domain);
 
-/** The LFS objects a commit's history adds to what the mirror has. */
-const lfsOf = (commit: string, have: string[]) => {
-  const ids = git(["rev-list", "--objects", commit, ...have.map((id) => `^${id}`)])
-    .stdout.split("\n")
-    .map((line) => line.split(" ")[0]!)
-    .filter((id) => /^[0-9a-f]{40}$/.test(id));
-  if (ids.length === 0) return [];
-  const sizes = git(
-    ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
-    ids.join("\n") + "\n",
-  ).stdout;
+/** The LFS objects a commit's history adds to what the mirror has: each blob small enough to
+ *  be a pointer (git-lfs's own cutoff), read as git lists it. One pipeline, streamed: the
+ *  objects of a whole history (a first push) are never held as one text. */
+const lfsOf = async (commit: string, have: string[]): Promise<string[]> => {
+  const child = spawn(
+    "bash",
+    [
+      "-c",
+      'set -o pipefail; git rev-list --objects --no-object-names "$@" | git cat-file --buffer --batch-check="%(objecttype) %(objectsize) %(objectname)" | awk -v most="$MOST" \'$1 == "blob" && $2 < most { print $3 }\' | git cat-file --buffer --batch',
+      "_",
+      commit,
+      ...have.map((id) => `^${id}`),
+    ],
+    { env: { ...process.env, MOST: String(LFS_POINTER_BYTES) }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  let stderr = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    if (stderr.length < 4096) stderr += chunk.toString("utf8");
+  });
   const oids = new Set<string>();
-  for (const line of sizes.split("\n")) {
-    const [id, type, size] = line.split(" ");
-    if (type !== "blob" || Number(size) >= 400) continue;
-    const oid = pointerOid(git(["cat-file", "blob", id!]).stdout);
-    if (oid) oids.add(oid);
+  // `cat-file --batch`: "<id> blob <size>\n", the blob, "\n"; each under LFS_POINTER_BYTES.
+  let held = Buffer.alloc(0);
+  for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
+    held = Buffer.concat([held, chunk]);
+    for (;;) {
+      const end = held.indexOf(10);
+      if (end < 0) break;
+      const size = Number(/ blob (\d+)$/.exec(held.subarray(0, end).toString("latin1"))?.[1]);
+      if (!Number.isInteger(size) || held.length < end + 1 + size + 1) break;
+      const oid = pointerOid(held.subarray(end + 1, end + 1 + size).toString("utf8"));
+      if (oid) oids.add(oid);
+      held = held.subarray(end + 1 + size + 1);
+    }
   }
+  const code = await new Promise<number>((resolve) => child.on("close", (c) => resolve(c ?? 1)));
+  if (code !== 0) throw new Error(`git could not list what the push adds: ${stderr.trim()}`);
   return [...oids];
+};
+
+/** A file's sha256, read in parts: an LFS object may be larger than node holds at once. */
+const sha256Of = (file: string) => {
+  const hash = createHash("sha256");
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(1024 * 1024);
+    for (let read; (read = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0;)
+      hash.update(buffer.subarray(0, read));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
 };
 
 /** The LFS object a blob points to, when the blob is git-lfs's pointer exactly. */
@@ -337,71 +372,133 @@ declare namespace commandOf {
   >;
 }
 
-const pushOne = async (at: Remote, spec: string): Promise<string> => {
+/** What one push carries past what the remote has, checked against the bounds the host and
+ *  the forge hold it to before anything is bundled (R3): the request's size, and each LFS
+ *  object's. The bundle's own size is known once it is made, and checked then, before the
+ *  request is written. A refusal is the sentence for the bound that was hit. */
+export const pushRefusal = (
+  request: Record<string, unknown>,
+  lfs: { oid: string; bytes: number }[],
+): string | null => {
+  const refused = requestRefusal(JSON.stringify(request));
+  if (refused) return `${refused}: it names ${lfs.length} LFS objects; push fewer at once`;
+  for (const { oid, bytes } of lfs)
+    if (bytes > FORGE.lfsObjectBytes)
+      return over(
+        `the LFS object ${oid.slice(0, 12)}`,
+        FORGE.lfsObjectBytes,
+        bytes,
+        "bytes",
+        "the forge stores",
+      );
+  return null;
+};
+
+declare namespace pushRefusal {
+  /** within every bound: nothing to say */
+  export type Within = Expect<
+    Invoke<
+      typeof pushRefusal,
+      [
+        request: { repo: "acme/app"; lfs: [] },
+        lfs: [
+          { oid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"; bytes: 12 },
+        ],
+      ]
+    >,
+    "=",
+    null
+  >;
+  /** an LFS object over what the forge stores, named by its id */
+  export type TooLarge = Expect<
+    Invoke<
+      typeof pushRefusal,
+      [
+        request: { repo: "acme/app"; lfs: [] },
+        lfs: [
+          {
+            oid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+            bytes: 6442450944;
+          },
+        ],
+      ]
+    >,
+    "=",
+    "the LFS object 0123456789ab is 6.0 GiB, over the 5 GiB the forge stores"
+  >;
+}
+
+const pushOne = async (
+  at: Remote,
+  spec: string,
+  box: ReturnType<typeof requester>,
+): Promise<string> => {
   const asked = refspecOf(spec);
   if ("error" in asked) return asked.error;
   const { forced, source, target, branch } = asked;
   const { repo, domain, gitDir } = at;
   const commit = git(["rev-parse", "--verify", "--quiet", `${source}^{commit}`]).stdout.trim();
   if (!/^[0-9a-f]{40}$/.test(commit)) return `error ${target} no such commit`;
-  const id = randomBytes(8).toString("hex");
+  const id = newId();
+  const names = named(id);
   const ref = `refs/desolate/out/${id}`;
   // What need not travel: what the mirror has (a domain's clone borrows the mirror too).
   const have = mirrorRefs(at)
     .map((line) => line.split(" ")[0]!)
     .filter((tip) => git(["cat-file", "-e", `${tip}^{commit}`]).status === 0);
   try {
+    // LFS objects the mirror lacks, from this clone's store (one it does not have is not
+    // sent: the remote may have it already), and the request that names them: checked first.
+    const lfs: { oid: string; file: string; bytes: number }[] = [];
+    for (const oid of await lfsOf(commit, have)) {
+      const file = path.join(gitDir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (stat?.isFile()) lfs.push({ oid, file, bytes: stat.size });
+    }
+    const request = {
+      repo,
+      branch,
+      commit,
+      forced,
+      lfs: lfs.map(({ oid }) => oid),
+      ...(domain === null ? {} : { domain }),
+    };
+    const refused = pushRefusal(request, lfs);
+    if (refused) return `error ${target} ${refused}`;
     git(["update-ref", ref, commit]);
-    const bundle = path.join(OUT, `${id}.bundle`);
-    let made = git([
-      "bundle",
-      "create",
-      "--quiet",
-      `${bundle}.part`,
-      ref,
-      ...have.map((tip) => `^${tip}`),
-    ]);
+    const bundle = box.leave(names.bundle);
+    const part = box.leave(`${names.bundle}.part`);
+    let made = git(["bundle", "create", "--quiet", part, ref, ...have.map((tip) => `^${tip}`)]);
     // A commit the remote has already (a new branch at it): the bundle carries its history.
     if (made.status !== 0 && /empty bundle/i.test(made.stderr))
-      made = git(["bundle", "create", "--quiet", `${bundle}.part`, ref]);
-    if (made.status !== 0)
-      return `error ${target} could not bundle the commit: ${made.stderr.trim().split("\n").pop()}`;
-    fs.renameSync(`${bundle}.part`, bundle);
-    // LFS objects the mirror lacks, from this clone's store.
-    const lfs: string[] = [];
-    for (const oid of lfsOf(commit, have)) {
-      const file = path.join(gitDir, "lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
-      if (!fs.existsSync(file)) continue;
-      if (createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== oid)
+      made = git(["bundle", "create", "--quiet", part, ref]);
+    if (made.status !== 0) {
+      box.withdraw();
+      return `error ${target} could not bundle the commit: ${made.stderr.trim().replace(/\n/g, " ")}`;
+    }
+    const bytes = fs.statSync(part).size;
+    if (bytes > FORGE.packBytes) {
+      box.withdraw();
+      return `error ${target} ${over("the push's bundle", FORGE.packBytes, bytes, "bytes", "a push to the forge may carry")}`;
+    }
+    fs.renameSync(part, bundle);
+    for (const { oid, file } of lfs) {
+      if (sha256Of(file) !== oid) {
+        box.withdraw();
         return `error ${target} the LFS object ${oid.slice(0, 12)} here does not hash to its name`;
-      fs.copyFileSync(file, path.join(OUT, `${id}.${oid}.lfs`));
-      lfs.push(oid);
-    }
-    const request = path.join(OUT, `${id}.json`);
-    fs.writeFileSync(
-      `${request}.part`,
-      JSON.stringify({ repo, branch, commit, forced, lfs, ...(domain === null ? {} : { domain }) }),
-    );
-    fs.renameSync(`${request}.part`, request);
-    process.stderr.write(
-      domain === null
-        ? `desolate: handed to the root. Approve it beside this terminal (in the browser tab), or on the approval page (desolate approve --web).\n  ${repo}  ${branch}  ${commit}\n`
-        : `desolate: handed to the root, for ${domain}: its workspaces see it as root/${branch} within seconds.\n  ${repo}  ${branch}  ${commit}\n`,
-    );
-    const result = path.join(ANSWERS, `${id}.json`);
-    for (const until = Date.now() + WAIT_MS; Date.now() < until;) {
-      if (fs.existsSync(result)) {
-        const answer = JSON.parse(fs.readFileSync(result, "utf8")) as {
-          pushed?: boolean;
-          error?: string;
-          said?: string[];
-        };
-        for (const line of answer.said ?? []) process.stderr.write(`${line}\n`);
-        return answerLine(target, answer);
       }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      fs.copyFileSync(file, box.leave(names.lfs(oid)));
     }
-    return `error ${target} the host did not answer in ${WAIT_MS / 60_000} minutes; nothing is known to be pushed (git fetch origin shows)`;
+    const answer = (await box.ask(id, request, (line) => process.stderr.write(`${line}\n`))) as {
+      pushed?: boolean;
+      error?: string;
+      said?: string[];
+    };
+    for (const line of answer.said ?? []) process.stderr.write(`${line}\n`);
+    return answerLine(target, answer);
+  } catch (error) {
+    box.withdraw();
+    return `error ${target} ${(error as Error).message.replace(/\n/g, " ")}`;
   } finally {
     git(["update-ref", "-d", ref]);
   }
@@ -415,6 +512,8 @@ const main = async (address: string) => {
     mirror: `/desolate/mirrors/${remote.repo}.git`,
     gitDir: git(["rev-parse", "--absolute-git-dir"]).stdout.trim(),
   };
+  // What this leaves in the out-box, and the request it asks: withdrawn if it is stopped.
+  const box = requester();
   const input = readline.createInterface({ input: process.stdin, terminal: false });
   const say = (text: string) => process.stdout.write(text);
   let batch: string[] = [];
@@ -424,7 +523,7 @@ const main = async (address: string) => {
     else if (command === "list") say([...remoteRefs(at), ""].join("\n") + "\n");
     else if (command === "end") {
       if (batch.length === 0) break;
-      for (const spec of batch) say((await pushOne(at, spec)) + "\n");
+      for (const spec of batch) say((await pushOne(at, spec, box)) + "\n");
       say("\n");
       batch = [];
     } else if ("push" in command) batch.push(command.push);

@@ -75,7 +75,9 @@ install with `npm install --legacy-peer-deps` (npm's peer resolution crashes on 
   the base image `desolate/base:latest`:
   - on Linux: `sudo release/image/build.sh --out <dir>` (from the Ubuntu archive; imports it);
   - where Docker Hub is reachable: `docker build -t desolate/base:latest -f release/image/Dockerfile release`
-    (works on an M1, arm64).
+    (works on an M1, arm64). It fetches the editor server from GitHub's releases, and fails
+    when it cannot; where GitHub cannot be reached, add `--build-arg DESOLATE_IMAGE_EDITOR=none`
+    (on Linux, `build.sh --no-editor`) for an image that says it has no editor.
 - **T3:** also Lima >= 2.0 (`limactl` on PATH), `qemu-system-<arch>`, `socat`, `uidmap`, and
   `DESOLATE_IMAGE_DIR=<dir>` pointing at what `build.sh` wrote.
 

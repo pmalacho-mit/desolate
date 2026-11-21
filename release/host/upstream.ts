@@ -9,10 +9,11 @@
 // the git VM's, and the push waits for your approval on the approval page like any other.
 import { spawnSync } from "node:child_process";
 import { EXIT, refuse } from "../shared/exit.ts";
+import { isRef } from "../shared/git-out-box.ts";
 import { isCommit, parseRepo, repoId } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { downstreamBranch } from "../shared/suede.ts";
-import { forTerminal, printable } from "../shared/text.ts";
+import { forTerminal, printable, printableLines } from "../shared/text.ts";
 import { ensureGitClone, ensureGitVm, GIT_VM } from "./git-vm.ts";
 import { guest } from "./paths.ts";
 import { backend, config, rootctl } from "./stack.ts";
@@ -292,12 +293,7 @@ export const upstreamCommand = async (
     parseRepo(dependencyName) ??
     refuse(`'${printable(dependencyName, 100)}' is not a repository`, USAGE, EXIT.usage);
   const from = typeof values.from === "string" ? values.from : null;
-  if (
-    from !== null &&
-    (!/^[A-Za-z0-9_][A-Za-z0-9._/-]{0,199}$/.test(from) ||
-      from.includes("..") ||
-      from.includes("@{"))
-  )
+  if (from !== null && !isRef(from))
     refuse(`'${printable(from, 100)}' is not a branch or a commit`, USAGE, EXIT.usage);
   const remote = typeof values.remote === "string" ? values.remote : null;
   // Which repositories desolate holds, and which it may push: the root's word.
@@ -325,22 +321,19 @@ export const upstreamCommand = async (
   await ensureGitVm((line) => process.stderr.write(`${forTerminal(line)}\n`));
   const clone = await ensureGitClone(consumer);
   // The consumer commit, so the branch can be waited on: what the git VM's command will take.
-  const resolved = await backend().exec(
-    GIT_VM,
-    [
-      "bash",
-      "-c",
-      'cd "$1" || exit 1; case "$2" in */*) r=${2%%/*}; git remote | grep -qx -- "$r" && git fetch --quiet -- "$r";; esac; git rev-parse --verify --quiet "$2^{commit}"',
-      "_",
-      clone,
-      from ?? "HEAD",
-    ],
-    { timeoutMs: 600_000 },
-  );
+  // (A fetch from this Mac's own disk, and a rev-parse: as long as it takes, while you wait.)
+  const resolved = await backend().exec(GIT_VM, [
+    "bash",
+    "-c",
+    'cd "$1" || exit 1; case "$2" in */*) r=${2%%/*}; git remote | grep -qx -- "$r" && git fetch --quiet -- "$r";; esac; git rev-parse --verify --quiet "$2^{commit}"',
+    "_",
+    clone,
+    from ?? "HEAD",
+  ]);
   const commit = resolved.stdout.trim();
   if (!isCommit(commit))
     refuse(
-      `${repoId(consumer)} has no ${printable(from ?? "HEAD", 100)} in your git VM clone`,
+      `${repoId(consumer)} has no ${printable(from ?? "HEAD", 100)} in your git VM clone${resolved.stderr.trim() ? `: git said\n${printableLines(resolved.stderr.trim())}` : ""}`,
       `desolate git ${repoId(consumer)}, then git fetch <domain>`,
     );
 

@@ -33,17 +33,8 @@ done
 [ $# -gt 0 ] || usage
 
 # 1. A name for the workspace: the task's first words (`add-a-shout-greeting`), with a
-#    number after it if the domain already has a workspace of that name.
-if [ -z "$name" ]; then
-  base=$(printf '%s' "$task" | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-*//; s/-*$//')
-  if [ ${#base} -gt 30 ]; then   # at most 30 characters, in whole words where it can
-    cut=${base:0:31} whole=${cut%-*}
-    if [ "$whole" != "$cut" ] && [ ${#whole} -ge 12 ]; then base=$whole; else base=${base:0:30}; base=${base%-}; fi
-  fi
-  base=${base:-task} name=$base
-  taken=$(desolate list "$domain" --json | jq -r '.[].workspaces[].workspace')
-  for n in 2 3 4 5 6 7 8 9; do grep -qxF "$name" <<<"$taken" || break; name="${base:0:27}-$n"; done
-fi
+#    number after them if the domain already has a workspace of that name (name.sh).
+[ -n "$name" ] || name=$("$here/name.sh" "$domain" "$task")
 branch=${branch:-task/$name}
 
 # 2. The workspace: a VM with the repository checked out on the branch (with --checkout: that

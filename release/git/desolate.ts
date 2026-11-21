@@ -9,18 +9,17 @@
 //                                   change to a vendored dependency, proposed to the
 //                                   dependency as a push you approve (upstream.ts)
 //
-// The request goes the way a push does: a file in /desolate/out, the host's answer in
-// /desolate/answers. It names a repository and nothing else.
+// The request goes the way a push does (shared/git-out-box.ts): a file in /desolate/out, the host's
+// answer in /desolate/answers. It names a repository and nothing else, and is waited for as
+// long as you wait: Ctrl-C withdraws it.
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { newId, requester } from "../shared/git-out-box.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
-const OUT = "/desolate/out";
-const ANSWERS = "/desolate/answers";
 const REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const fail = (message: string, fix?: string): never => {
   process.stderr.write(`desolate: ${message}\n${fix ? `  fix: ${fix}\n` : ""}`);
@@ -86,28 +85,6 @@ const repoOf = (named: string | undefined): string => {
   );
 };
 
-const ask = async (
-  request: Record<string, unknown>,
-  waitMs: number,
-): Promise<Record<string, unknown>> => {
-  const id = randomBytes(8).toString("hex");
-  const file = path.join(OUT, `${id}.json`);
-  fs.writeFileSync(`${file}.part`, JSON.stringify(request));
-  fs.renameSync(`${file}.part`, file);
-  const answer = path.join(ANSWERS, `${id}.json`);
-  for (
-    const until = Date.now() + waitMs;
-    Date.now() < until;
-    await new Promise((resolve) => setTimeout(resolve, 250))
-  )
-    if (fs.existsSync(answer))
-      return JSON.parse(fs.readFileSync(answer, "utf8")) as Record<string, unknown>;
-  return fail(
-    `the host did not answer in ${waitMs / 60_000} minutes`,
-    "on the Mac: desolate doctor",
-  );
-};
-
 /** The exit code of `desolate` with no verb it knows: 0 when the usage was asked for. */
 export const usageExit = (verb: string | undefined) => (verb && verb !== "help" ? 64 : 0);
 
@@ -129,8 +106,9 @@ const main = async (argv: string[]) => {
     const dir = `/git/${repo}`;
     if (!fs.existsSync(path.join(dir, ".git")))
       fail(`no clone of ${repo} here`, `on the Mac: desolate git ${repo}`);
-    process.stderr.write(`desolate: asking the root to refresh ${repo} from its remote...\n`);
-    const reply = await ask({ op: "fetch", repo }, 10 * 60_000);
+    const reply = await requester().ask(newId(), { op: "fetch", repo }, (line) =>
+      process.stderr.write(`${line}\n`),
+    );
     for (const line of Array.isArray(reply.said) ? reply.said : [])
       process.stderr.write(`${String(line)}\n`);
     if (reply.fetched !== true)

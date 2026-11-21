@@ -16,7 +16,8 @@ import { after, before, describe, it } from "node:test";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-git-"));
 process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31598";
-const { gitToken, handler } = await import("../../../release/host/git-web.ts");
+const { gitToken, handler, INPUT_CHARS } = await import("../../../release/host/git-web.ts");
+const { TERMINAL } = await import("../../../release/shared/limits.ts");
 
 const NAME = "desolate-git.localhost";
 const ORIGIN = `http://${NAME}:31598`;
@@ -261,5 +262,124 @@ describe("T1 the git terminal", () => {
       ["python3", "-I", "/desolate/release/git/terminal.py", "/git"],
       "a name that is not a repository opens at /git, nowhere else",
     );
+  });
+
+  it("a shell whose tab went is not ended: the page is offered it back, with what it printed; an ended one is not offered", async () => {
+    const listed = async () => {
+      const answer = await call("GET", "/sessions", page());
+      assert.equal(answer.status, 200, answer.body);
+      return JSON.parse(answer.body) as {
+        input: number;
+        scrollback: number;
+        left: { id: string; token: string; where: string; since: number }[];
+      };
+    };
+    assert.equal(
+      (await call("GET", "/sessions", { cookie, "sec-fetch-site": "same-origin" })).status,
+      401,
+      "the cookie alone lists nothing",
+    );
+    const opened = await post("/session", { repo: "acme/widgets" });
+    const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
+    await post(`/session/${id}/input`, {
+      token,
+      data: Buffer.from("left here\n").toString("base64"),
+    });
+    // Read, then the tab goes (a closed tab: its stream ends).
+    await call("GET", `/session/${id}/stream?token=${token}`, page(), undefined, 300);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // (The old page ended such a shell half a minute later, whatever it was doing.)
+    const offered = await listed();
+    assert.equal(offered.input, INPUT_CHARS, "the page is told how much one request carries");
+    assert.equal(offered.scrollback, 5000);
+    const back = offered.left.find((s) => s.id === id);
+    assert.deepEqual(back && { token: back.token, where: back.where }, {
+      token,
+      where: "/git/acme/widgets",
+    });
+    const again = await call("GET", `/session/${id}/stream?token=${token}`, page(), undefined, 300);
+    assert.match(
+      again.body
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => Buffer.from(line.slice(6), "base64").toString())
+        .join(""),
+      /i bGVmdCBoZXJlCg==/,
+      "what it printed before is replayed to the tab that came back",
+    );
+    children.at(-1)!.kill("SIGKILL");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(
+      (await listed()).left.find((s) => s.id === id),
+      undefined,
+      "an ended shell is not offered",
+    );
+  });
+
+  it("how many shells at once is the setting git.shells, and the refusal says so and what to do", async () => {
+    process.env.DESOLATE_GIT_SHELLS = "1";
+    try {
+      const refused = await post("/session", { repo: "acme/widgets" });
+      assert.equal(refused.status, 429, refused.body);
+      assert.match(
+        refused.body,
+        /shells are open already, the most at once \(the setting git\.shells: DESOLATE_GIT_SHELLS\)\. \d+ of them no tab is reading: reload this page to go back to one/,
+      );
+    } finally {
+      delete process.env.DESOLATE_GIT_SHELLS;
+    }
+    assert.equal((await post("/session", { repo: "acme/widgets" })).status, 200, "the default");
+  });
+
+  it("a size or input past the host's bound is refused with the bound", async () => {
+    const opened = await post("/session", {});
+    const { id, token } = JSON.parse(opened.body) as { id: string; token: string };
+    const big = await post(`/session/${id}/resize`, {
+      token,
+      cols: TERMINAL.cols + 1,
+      rows: 10,
+    });
+    assert.equal(big.status, 400);
+    assert.match(big.body, /at most 1000 by 500/);
+    const much = await post(`/session/${id}/input`, { token, data: "A".repeat(INPUT_CHARS + 4) });
+    assert.equal(much.status, 400);
+    assert.match(
+      much.body,
+      /at most 65536 characters a request \(the page sends a paste in parts\)/,
+    );
+  });
+
+  it("terminal.py's bounds are the host's, by name", () => {
+    const py = fs.readFileSync(
+      path.join(import.meta.dirname, "../../../release/git/terminal.py"),
+      "utf8",
+    );
+    const terminal =
+      /^TERMINAL = \{"cols": (\d+), "rows": (\d+)\}  # shared\/limits\.ts TERMINAL$/m.exec(py);
+    assert.deepEqual(terminal && [Number(terminal[1]), Number(terminal[2])], [
+      TERMINAL.cols,
+      TERMINAL.rows,
+    ]);
+    const input = /^INPUT_CHARS = (\d+) \* (\d+)  # host\/git-web\.ts INPUT_CHARS/m.exec(py);
+    assert.equal(input && Number(input[1]) * Number(input[2]), INPUT_CHARS);
+  });
+
+  it("terminal.py drops a protocol line longer than the host sends, and reads the next", async () => {
+    const child = spawn("python3", ["-I", "release/git/terminal.py", os.tmpdir()], {
+      cwd: path.join(import.meta.dirname, "../../.."),
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { PATH: process.env.PATH, HOME: home },
+    });
+    children.push(child);
+    let said = "";
+    child.stdout.on("data", (chunk) => (said += chunk));
+    // More than a line can be, unended (the old far end held it all), then a typed line.
+    child.stdin.write("i " + "A".repeat(INPUT_CHARS * 3));
+    child.stdin.write("AAAA\n");
+    child.stdin.write(`i ${Buffer.from("echo read-$((40+2))\n").toString("base64")}\n`);
+    for (const until = Date.now() + 10_000; !said.includes("read-42") && Date.now() < until;)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    child.kill("SIGKILL");
+    assert.match(said, /read-42/, said.slice(-500));
   });
 });

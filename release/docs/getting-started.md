@@ -350,6 +350,13 @@ git log --oneline you--app/feature/greet-by-name    # each domain is a remote
 git push origin you--app/feature/greet-by-name:refs/heads/feature/greet-by-name
 ```
 
+A shell in the git terminal stays open when its tab closes (or the laptop sleeps): open the
+terminal again and it offers the shell back, as you left it. `exit` ends one. At most six are
+open at once (the setting `git.shells`, `DESOLATE_GIT_SHELLS`; the lines a tab keeps to scroll
+back through are `git.scrollbackLines`). `git push` and `desolate fetch` wait for as long as
+you do, and say what the host is doing meanwhile; Ctrl-C withdraws a push until it is handed
+to the root, after which you decline it on the approval page.
+
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
 it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes
@@ -361,6 +368,11 @@ What the approval page shows, and the two choices it may add:
   though, so a file one commit added and a later one took out again is in the history. The
   page lists those files, and **Show each commit whole** shows every commit on its own:
   who wrote it, when, its whole message and its diff.
+- **Nothing is cut.** A long list shows a page and a **Show more** for the rest; a long
+  diff, a page and **Show more of it**. Every warning, and every file that changes what runs
+  on the forge, is shown before you approve. A large push takes the reviewer a while: the
+  page says what it is doing ("packing (1,200 of 8,000), 2 min") and waits as long as you
+  do. Approve arms once it has said what the push sends.
 - **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
   the last commit's files, on what the branch builds on, with a message listing every
   commit. Nothing that was in between reaches the remote. The workspace's branch still has
@@ -458,5 +470,7 @@ Then, on GitHub, delete the deploy keys titled `desolate read (host ...)` and
 - **Something in a workspace cannot reach a host**: that is usually the point. Its requests,
   and why each was refused, are in `desolate net log you--app`; `desolate domain you--app net
   allow <host>` lets one through.
-- **A push was refused at approval**, or timed out: it waits two minutes; run it again.
+- **A push was refused at approval**, or timed out: a `git push` waits for you for as long as
+  it runs (stop it, and it is off the approval page); `desolate push` waits two minutes for
+  your answer at its prompt. Run it again.
 - What desolate has got wrong before, and how it was found: [`incidents.md`](incidents.md).

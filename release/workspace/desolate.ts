@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { NAMES } from "../shared/limits.ts";
 import { isBranch, parseRepo, repoId } from "../shared/names.ts";
 import { run, sleep } from "../shared/run.ts";
 import { checkoutsOf, IDENTITY_FILE, KEY, sign } from "../shared/spawn.ts";
@@ -206,6 +207,33 @@ const SPAWN_HELP = `${SPAWN_USAGE}\n  --name      its name (else one made from t
 
 /** `desolate spawn ...`: what the host is asked to make. No name: one made from this
  *  workspace's. The command is words after `--`, never a shell string. */
+/** The name a spawned workspace gets when it is not given one: its parent's, and four hex
+ *  digits to keep it apart from its siblings. The parent's part is cut to leave room for
+ *  them within a name's length (NAMES.slug), and never ends in a dash (as domainNameFor
+ *  does): cutting the whole would cut the digits, and two children of a long-named parent
+ *  would then have one name. */
+export const spawnedName = (parent: string, suffix: string): string =>
+  `${parent.slice(0, NAMES.slug - suffix.length - 1).replace(/-+$/, "")}-${suffix}`;
+
+declare namespace spawnedName {
+  export type Names = Table<
+    typeof spawnedName,
+    [
+      [args: [parent: "fix-login", suffix: "3f2a"], expected: "fix-login-3f2a"],
+      /** a long parent: its part is cut, the digits are whole, and the name is a name */
+      [
+        args: [parent: "the-forty-character-name-of-a-workspace1", suffix: "3f2a"],
+        expected: "the-forty-character-name-of-a-works-3f2a",
+      ],
+      /** a cut that would end in a dash ends before it */
+      [
+        args: [parent: "abcdefghijklmnopqrstuvwxyzabcdefgh-ijkl", suffix: "3f2a"],
+        expected: "abcdefghijklmnopqrstuvwxyzabcdefgh-3f2a",
+      ],
+    ]
+  >;
+}
+
 export const spawnArgs = (
   args: string[],
 ):
@@ -630,8 +658,7 @@ const main = async (argv: string[]) => {
         process.exit(0);
       }
       if ("refused" in asked) return fail(asked.refused, asked.fix);
-      const name =
-        asked.name ?? `${workspace.workspace}-${randomBytes(2).toString("hex")}`.slice(0, 40);
+      const name = asked.name ?? spawnedName(workspace.workspace, randomBytes(2).toString("hex"));
       r = {
         op: "spawn",
         domain: workspace.domain,
