@@ -78,6 +78,7 @@ id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx desolate-reviewer && gpasswd -d "$U
 # root's user's membership of its group.)
 id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx desolate-proxy && gpasswd -d "$USER_NAME" desolate-proxy >/dev/null
 for domain_dir in /desolate/domains/*/; do
+  [ -d "$domain_dir" ] || continue   # no domains: the pattern itself
   domain=$(basename "$domain_dir")
   is_slug "$domain" || { printf 'start.sh: %q in /desolate/domains is not a domain (its name is not one): no proxies made for it\n' "$domain" >&2; continue; }
   bash "$HERE/proxy-user.sh" "$USER_UID" "$domain" >/dev/null
@@ -135,7 +136,7 @@ if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2
   [ -d "$STATE" ] && as_user bash -c 'rm -f "$1"/proxy/running/*.json "$1"/proxy/secrets/*.json' _ "$STATE" 2>/dev/null || true
   rm -f /var/lib/desolate-proxies/domains/*/secrets-proxy.json
   # Nothing new starts until every one of them is gone: what was told to end is waited for,
-  # by its processes, for as long as it takes. (Before: one second, and then on, whether or
+  # by its processes. (Before: one second, and then on, whether or
   # not the old code had stopped.) No count here: how long a start may take is the host's to
   # say, which waits for this script; this says what it is waiting for, for the host to show.
   # A zombie is gone: it holds nothing, and runs nothing. (Where nothing reaps orphans, as in
@@ -147,8 +148,18 @@ if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2
       for proxy in "${proxies[@]}"; do pgrep -f "$proxy"; done; true; } 2>/dev/null | sort -u | paste -sd, -)
     [ -z "$pids" ] || ps -o pid=,stat= -p "$pids" 2>/dev/null | awk '$2 !~ /^Z/ { print $1 }' | paste -sd, -
   }
-  said=$SECONDS
+  # What has not ended five seconds after it was asked to is ended: a process that ignores
+  # SIGTERM (one any local user can start, under a proxy's name) must not keep the new code
+  # from starting. Past that, only what cannot be killed is left (stuck in the kernel), and
+  # the wait for it is the host's to bound.
+  said=$SECONDS asked=$SECONDS killed=''
   while left=$(old_left) && [ -n "$left" ]; do
+    if [ $((SECONDS - asked)) -ge 5 ]; then
+      [ -n "$killed" ] || echo "start.sh: the services of the code before this update did not end when asked; killing them: $(ps -o pid=,user=,comm= -p "$left" 2>/dev/null | tr -s ' \n' ' ;')" >&2
+      killed=1
+      # shellcheck disable=SC2086  # one pid a word
+      kill -KILL ${left//,/ } 2>/dev/null || true
+    fi
     if [ $((SECONDS - said)) -ge 5 ]; then
       said=$SECONDS
       echo "start.sh: waiting for the services of the code before this update to end: $(ps -o pid=,user=,comm= -p "$left" 2>/dev/null | tr -s ' \n' ' ;')" >&2
@@ -224,7 +235,7 @@ install -d -m 0755 -o root -g root /var/lib/desolate-proxies/secrets
 for old in /var/lib/desolate-proxies/domains/*/secrets.json; do
   [ -f "$old" ] || continue
   domain=$(basename "$(dirname "$old")")
-  is_slug "$domain" || continue
+  is_slug "$domain" || { printf 'start.sh: %q is not a domain: its secrets were not taken over, and are still in %q\n' "$domain" "$old" >&2; continue; }
   if [ ! -e "/var/lib/desolate-proxies/secrets/$domain.json" ]; then
     as_user cat "$old" | $NODE "$HERE/proxy/secret-store.ts" "$domain" import >/dev/null \
       || { echo "start.sh: the domain $domain's secrets could not be taken over; they are still in $old" >&2; exit 1; }
@@ -333,9 +344,10 @@ fi
 # count in it. (Before: ten seconds, which a cold VM under load can take, and the start was
 # then refused with the service a moment from listening.) How long a start may take is the
 # host's to say, which waits for this script; every five seconds this says what it waits for.
-listening() { # listening <name> <socket> <pid file> [<file whose change says the service ended>]
-  local name=$1 socket=$2 pid=$3 ended=${4:-/dev/null} before since=$SECONDS said=$SECONDS
-  before=$(cat "$ended" 2>/dev/null || true)
+# (A service just started by this script has failed when its <ended> file is there at all.)
+listening() { # listening <name> <socket> <pid file> [<file whose change says the service ended> [fresh]]
+  local name=$1 socket=$2 pid=$3 ended=${4:-/dev/null} before='' since=$SECONDS said=$SECONDS
+  [ "${5:-}" = fresh ] || before=$(cat "$ended" 2>/dev/null || true)
   until [ -S "$socket" ]; do
     if ! alive "$pid" || [ "$(cat "$ended" 2>/dev/null)" != "$before" ]; then
       echo "start.sh: the $name ended before it was listening; see $SYS/$name.log" >&2; tail -5 "$SYS/$name.log" >&2; exit 1
@@ -352,19 +364,24 @@ kept_alone() { # kept_alone <user> <home> <script> <socket> <user|session>
   # user: every process of the user is killed before each start (the pusher: nothing a push
   # started outlives it). session: only the service's own session (the reviewer, whose
   # one-shot summaries for the host run as the same user, beside it).
-  local user=$1 home=$2 script=$3 socket=$4 kill=$5 name
+  # After each run too: what a push started never waits out a pause before a restart. And its
+  # socket goes with it, so a service that ended is never taken for one that listens (root
+  # removes a name in the service's directory: rm follows no link).
+  local user=$1 home=$2 script=$3 socket=$4 kill=$5 name fresh=''
   name=$(basename "$script" .ts)
   if ! alive "$RUN/$name.pid"; then
     rm -f "$RUN/$name.ended"
+    fresh=fresh
     setsid bash "$HERE/kept.sh" "$name" once "$RUN/$name.ended" \
       bash -c '[ "$4" = user ] && pkill -KILL -u "$1" 2>/dev/null; sleep 0.2
         setsid runuser -u "$1" -- env -i PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 HOME="$2" \
           node --disable-warning=ExperimentalWarning "$3" </dev/null & child=$!
         wait "$child"; code=$?; [ "$4" = session ] && pkill -KILL -s "$child" 2>/dev/null
-        sleep 0.5; exit "$code"' _ "$user" "$home" "$PROXY_CODE/root/$script" "$kill" </dev/null >>"$SYS/$name.log" 2>&1 &
+        [ "$4" = user ] && pkill -KILL -u "$1" 2>/dev/null; rm -f "$5"
+        sleep 0.5; exit "$code"' _ "$user" "$home" "$PROXY_CODE/root/$script" "$kill" "$socket" </dev/null >>"$SYS/$name.log" 2>&1 &
     echo $! >"$RUN/$name.pid"
   fi
-  listening "$name" "$socket" "$RUN/$name.pid" "$RUN/$name.ended"
+  listening "$name" "$socket" "$RUN/$name.pid" "$RUN/$name.ended" $fresh
 }
 kept_alone desolate-pusher "$PUSHER_HOME" pusher.ts "$RUN/pusher/control.sock" user
 kept_alone desolate-reviewer "$REVIEWER_HOME" reviewer.ts "$RUN/reviewer/control.sock" session
