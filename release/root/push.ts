@@ -6,10 +6,10 @@
 //       nothing to send), then the keyring's challenge for exactly
 //       this push. Prints one JSON object.
 //   node push.ts run <same arguments> --message <base64> --signature <base64>
-//       the challenge, signed by the host's approver. The pack is copied from the reviewer;
-//       the keyring files the approval if the signature verifies, held by this process
-//       until the pusher claims it; then LFS objects go up, then the commit; the approval
-//       goes when the pusher is done. The write key signs none of it without that approval.
+//       the challenge, signed by the host's approver. The keyring files the approval if
+//       the signature verifies, held by this process until the pusher claims it; then LFS
+//       objects go up, then the commit; the approval goes when the pusher is done. The write
+//       key signs none of it without that approval.
 //
 // Nothing here can make the signature: the approver's key is not in this VM (P2).
 import * as fs from "node:fs";
@@ -20,7 +20,6 @@ import { isCommit, parseRepo } from "../shared/names.ts";
 import { isDownstream } from "../shared/suede.ts";
 import { withLock } from "../shared/lock.ts";
 import { ask, hold } from "./keyring-client.ts";
-import type { Held } from "./keyring-client.ts";
 import { git } from "./git.ts";
 import { clonePath, KEYRING, ROOT } from "./layout.ts";
 import { offersOf, review, withdraw } from "./offers.ts";
@@ -481,24 +480,18 @@ const main = async () => {
   await withLock(
     lock,
     async () => {
-      // The approval is held by this connection until the pusher claims it, and is filed only
-      // once the pack is copied from the reviewer (send.ts): that copy is not on its clock.
-      let held: Held | null = null;
+      // The approval is held by this connection until the pusher claims it: it goes with this
+      // process if the push never began.
+      const held = await hold(KEYRING.control, { op: "approve", message, signature, hold: true });
       try {
-        const failed = await send(
-          repo,
-          { pack: signed.pack },
-          async () => {
-            held = await hold(KEYRING.control, { op: "approve", message, signature, hold: true });
-            if (held.answer.ok !== true)
-              throw new Refusal(
-                `the keyring did not accept the approval (${String(held.answer.error)}), so nothing was pushed`,
-                "desolate doctor, then push again",
-                EXIT.unconfirmed,
-              );
-            return String(held.answer.id);
-          },
-          (line) => process.stderr.write(`${line}\n`),
+        if (held.answer.ok !== true)
+          throw new Refusal(
+            `the keyring did not accept the approval (${String(held.answer.error)}), so nothing was pushed`,
+            "desolate doctor, then push again",
+            EXIT.unconfirmed,
+          );
+        const failed = await send(repo, String(held.answer.id), { pack: signed.pack }, (line) =>
+          process.stderr.write(`${line}\n`),
         );
         if (failed)
           throw new Refusal(
@@ -508,7 +501,7 @@ const main = async () => {
               : "try the push again; desolate doctor",
           );
       } finally {
-        await (held as Held | null)?.release();
+        await held.release();
       }
     },
     {

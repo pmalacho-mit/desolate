@@ -81,7 +81,9 @@ const forgeHasLfs = (repo: string, id: string) => {
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** A raw `git push` in the root's terminal, left waiting for the person as it would be, in a
- *  session of its own; `stop` is the person's Ctrl-C (SIGINT to its process group). */
+ *  session of its own; `stop` ends its process group, as a closed terminal does (SIGTERM: a
+ *  job started in the background of a shell with no job control ignores SIGINT, so Ctrl-C's
+ *  signal would not reach it here). */
 const rawPushWaiting = async (spec: string, name: string) => {
   const log = `/tmp/${name}.log`;
   inRootClone(
@@ -94,12 +96,12 @@ const rawPushWaiting = async (spec: string, name: string) => {
     if (!waiting) await sleep(250);
   }
   assert.ok(waiting, said());
-  return { said, stop: () => inRootClone(`kill -INT -- -$(cat ${log}.pid)`) };
+  return { said, stop: () => inRootClone(`kill -TERM -- -$(cat ${log}.pid)`) };
 };
 /** Waits until nothing is waiting for the person on the host (or a few seconds pass). */
 const nothingWaits = async () => {
   for (let i = 0; i < 40; i++) {
-    if (/nothing is waiting for approval/.test(stack.desolate("approve").stdout)) return true;
+    if (/nothing is waiting for approval/.test(stack.quiet("approve").stdout)) return true;
     await sleep(250);
   }
   return false;
@@ -301,7 +303,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     assert.match(cli.stderr, /there is no terminal to ask on/);
     assert.match(cli.stderr, /no person confirmed the push, so nothing was pushed/);
     // 2. Raw git in the root clone: it asks for an approval on the host, and waits for as long
-    //    as it is waited for; none comes, and stopped (Ctrl-C), it takes its request with it.
+    //    as it is waited for; none comes, and stopped, it takes its request with it.
     const raw = await rawPushWaiting(`${commit}:refs/heads/issue/12`, "automation-push");
     assert.match(raw.said(), /needs your approval, given on the host, outside every VM/);
     raw.stop();
@@ -1105,7 +1107,7 @@ echo "$c1 $c2 $c3 $c4"`);
     const def = await rawPushWaiting(`${commit}:refs/heads/main`, "main-push");
     assert.doesNotMatch(def.said(), /default branch/);
     assert.match(def.said(), /this push needs your approval[\s\S]*acme\/widgets {2}main/);
-    // It waits for as long as its asker does, and no longer: stopped (the person's Ctrl-C),
+    // It waits for as long as its asker does, and no longer: stopped (its terminal closed),
     // its request goes from the host's list, and the keyring will not take an answer to it,
     // even one signed with the approver's key. (Control: while it waited, the keyring held it,
     // refusing an answer only for its signature.)

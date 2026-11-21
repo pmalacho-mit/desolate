@@ -89,6 +89,8 @@ export const ask = async (
   timeoutMs = 10_000,
 ): Promise<Record<string, unknown>> => {
   const { answer, connection } = await first(socketPath, request, timeoutMs);
+  // What fails after the answer (a reset as it closes) is nothing to this asker.
+  connection.on("error", () => {});
   connection.end();
   connection.resume();
   return answer;
@@ -143,6 +145,8 @@ export const hold = async (
       } catch {
         // Not a line of the keyring's: what it holds is no longer to be trusted as held.
         connection.destroy();
+        buffer = "";
+        return;
       }
     }
   };

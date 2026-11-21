@@ -26,7 +26,7 @@ for (const [name, dir] of [
 fs.mkdirSync(path.join(home, "sys", "keyring", "acme", "app"), { recursive: true });
 fs.writeFileSync(path.join(home, "sys", "keyring", "acme", "app", "write"), "a private key");
 
-const { publicOps, CHALLENGE } = await import("../../../release/root/keyring.ts");
+const { publicOps, serve, CHALLENGE } = await import("../../../release/root/keyring.ts");
 const { parseApproval, signedFor } = await import("../../../release/shared/approval.ts");
 
 const NOT_OUTSTANDING =
@@ -102,7 +102,11 @@ describe("T1 a push's request lives as long as its asker waits", () => {
       assert.match(String(late.error), /approver/);
       // What holding it for a day gained: nothing a signature over its exact text does not.
       assert.equal(late.ok, false);
-      assert.equal(answer(unheld.message).error, NOT_OUTSTANDING, "control: a clock for the unheld");
+      assert.equal(
+        answer(unheld.message).error,
+        NOT_OUTSTANDING,
+        "control: a clock for the unheld",
+      );
     } finally {
       mock.timers.reset();
       asker.destroy();
@@ -112,7 +116,11 @@ describe("T1 a push's request lives as long as its asker waits", () => {
   it("whoever asked goes away (its connection closes): the request goes, and cannot be approved", async () => {
     const { keyringEnd, asker, closed } = await connection();
     const held = ask(true, keyringEnd);
-    assert.notEqual(answer(held.message).error, NOT_OUTSTANDING, "control: while it waits, it is outstanding");
+    assert.notEqual(
+      answer(held.message).error,
+      NOT_OUTSTANDING,
+      "control: while it waits, it is outstanding",
+    );
     const again = ask(true, keyringEnd);
     asker.destroy();
     await closed;
@@ -133,5 +141,66 @@ describe("T1 a push's request lives as long as its asker waits", () => {
     ]);
     assert.equal(answer(held.message).error, NOT_OUTSTANDING);
     asker.destroy();
+  });
+
+  it("pushes waiting for a person never fill the socket; a connection that stops holding counts again", async () => {
+    const at = path.join(home, "run", "served.sock");
+    const served = await serve(at, 0o600, publicOps);
+    after(() => served.close());
+    /** A connection, its lines, and the first of them once one comes. */
+    const open = async () => {
+      // Its own side left open when the keyring ends its: as a process that means to keep a
+      // connection would.
+      const socket = connect({ path: at, allowHalfOpen: true });
+      await new Promise<void>((resolve) => socket.once("connect", () => resolve()));
+      const lines: Record<string, unknown>[] = [];
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString();
+        for (let i; (i = buffer.indexOf("\n")) >= 0; buffer = buffer.slice(i + 1))
+          lines.push(JSON.parse(buffer.slice(0, i)) as Record<string, unknown>);
+      });
+      socket.on("error", () => {});
+      const said = async (request: Record<string, unknown>) => {
+        const before = lines.length;
+        socket.write(JSON.stringify(request) + "\n");
+        for (let t = 0; lines.length === before; t++) {
+          if (t === 400)
+            throw new Error(
+              `no answer to ${JSON.stringify(request)} (closed: ${socket.destroyed})`,
+            );
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        return lines[before]!;
+      };
+      return { socket, said, lines };
+    };
+    const request = {
+      op: "challenge",
+      repo: "acme/app",
+      ref: "main",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      hold: true,
+    };
+    // Sixteen pushes, each holding its request, as many as the socket takes connections.
+    const waiting = [];
+    for (let i = 0; i < 16; i++) {
+      const one = await open();
+      assert.equal((await one.said(request)).ok, true);
+      waiting.push(one);
+    }
+    const another = await open();
+    assert.equal((await another.said({ op: "list" })).ok, true, "a seventeenth is still answered");
+    another.socket.destroy();
+    // Each request dropped for newer ones: the connections, left open by their side, are
+    // ordinary again, and fill the socket as sixteen idle ones would.
+    for (let i = 0; i < CHALLENGE.outstanding; i++) ask(false);
+    const refused = await open();
+    assert.deepEqual(await refused.said({ op: "list" }), {
+      ok: false,
+      error: "too many connections",
+    });
+    for (const one of waiting) one.socket.destroy();
+    refused.socket.destroy();
   });
 });

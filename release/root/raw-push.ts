@@ -69,7 +69,11 @@ export const pushCommit = async (
   const unreviewed = await submitForReview(repo, commit);
   if (unreviewed)
     return `the reviewer was not sent this push (${unreviewed}), and a push is approved only as the reviewer describes it: desolate doctor`;
-  if (signal?.aborted) return GONE;
+  // A caller that cannot yet say when its asker went away (ops.ts's `git.push`, the remote
+  // helper) waits as long as the longest asker does: the git VM's push helper, which gives up
+  // after 20 minutes (git/git-remote-desolate-out.ts). Past that nobody waits, said or not.
+  signal ??= AbortSignal.timeout(UNSAID_MS);
+  if (signal.aborted) return GONE;
   const heard: { approved?: Approved; dropped?: string; ended?: boolean } = {};
   let wake = () => {};
   const held = await hold(
@@ -136,11 +140,8 @@ export const pushCommit = async (
     }
     // The approval is this connection's until the pusher claims it; released below, it goes
     // if the push never began.
-    const failed = await send(
-      repo,
-      { pack: approval.pack },
-      async () => approval.id,
-      (line) => say(`desolate: ${line}`),
+    const failed = await send(repo, approval.id, { pack: approval.pack }, (line) =>
+      say(`desolate: ${line}`),
     );
     if (failed) return failed.error.replace(/\n/g, " ");
     return pushed(repo, commit, branch, approval.commit, say);
@@ -151,6 +152,7 @@ export const pushCommit = async (
 
 type Approved = { id: string; commit: string; pack: string };
 const GONE = "whoever asked for this push stopped waiting, so nothing was pushed";
+const UNSAID_MS = 20 * 60_000;
 
 /** After the push of `sent` (the commit, or the squash of it the person chose): what the
  *  person waiting is told, and the root's own records. */

@@ -16,9 +16,13 @@ import {
   reported,
   Uncertain,
   updateRef,
+  handOverBy,
+  receive,
   uploadWatched,
   write,
 } from "../../../release/root/pusher.ts";
+import { createServer, connect } from "node:net";
+import type { Socket } from "node:net";
 
 const ZERO = "0".repeat(40);
 let dir = "";
@@ -275,5 +279,55 @@ describe("T1 the pusher's uploads: stopped when nothing moves, never for taking 
     const started = Date.now();
     for (let i = 0; i < 5; i++) await write(slow, Buffer.alloc(64), 200);
     assert.ok(Date.now() - started > 200, "it took longer than the bound, and was not stopped");
+  });
+});
+
+// Past the claim the approval's clock has stopped: what the root's user hands the pusher must
+// all come by a time set from its size, or a byte a minute would land the push days later.
+describe("T1 the pusher takes a push by its time, however it trickles", () => {
+  /** A socket the pusher reads, and its sender's end. */
+  const pair = async () => {
+    const at = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "pusher-pair-")), "s");
+    let taken: Socket | undefined;
+    const server = createServer((socket) => void (taken = socket));
+    await new Promise<void>((resolve) => server.listen(at, resolve));
+    const sender = connect(at);
+    await new Promise<void>((resolve) => sender.once("connect", () => resolve()));
+    while (!taken) await new Promise((resolve) => setImmediate(resolve));
+    return { reader: taken, sender, close: () => (sender.destroy(), server.close()) };
+  };
+  /** A byte every 50 ms, well inside the idle bound, `bytes` of them. */
+  const trickle = (sender: Socket, bytes: number) => {
+    let sent = 0;
+    const timer = setInterval(() => {
+      if (sent++ < bytes) sender.write(Buffer.from("x"));
+      else clearInterval(timer);
+    }, 50);
+    return () => clearInterval(timer);
+  };
+
+  it("control: a trickle that ends in its time is taken whole", async () => {
+    const { reader, sender, close } = await pair();
+    const stop = trickle(sender, 6);
+    const got = await receive(reader, Buffer.alloc(0), 6, () => {}, Date.now() + 5_000);
+    assert.equal(got.sha256.length, 64);
+    stop();
+    close();
+  });
+
+  it("one that is still going at its time is refused, though it never paused for long", async () => {
+    const { reader, sender, close } = await pair();
+    const stop = trickle(sender, 100);
+    await assert.rejects(
+      receive(reader, Buffer.alloc(0), 100, () => {}, Date.now() + 400),
+      /the push was not handed over in the time it is given/,
+    );
+    stop();
+    close();
+  });
+
+  it("the time is the approval's two minutes and as long again as the bytes take at 10 MiB/s", () => {
+    assert.equal(handOverBy(0, 0), 120_000);
+    assert.equal(handOverBy(2 * 1024 ** 3, 0), 120_000 + 205_000);
   });
 });

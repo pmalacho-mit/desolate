@@ -172,11 +172,10 @@ const approvals = new Map<string, Approval>();
  *  `lifeMs`: the most time from the person's click to that claim. It is a clock on purpose,
  *  though the one who asked holds the approval too: the root's ordinary user is that one, and
  *  without it could keep an approved push and make it land long after the person took it for
- *  failed (the compare-and-swap on `onto` stops it only if the remote moved). Two minutes
- *  is the pusher starting between two pushes (root/send.ts asks it again for as long as
- *  this) and the moment the push takes to begin. `desolate push` copies the pack from the
- *  reviewer before it files the approval, so that copy is not on this clock; a raw push
- *  learns which pack only from the approval, and copies it on it (docs/v3/limits/03-push-lifetimes.md).
+ *  failed (the compare-and-swap on `onto` stops it only if the remote moved). The pusher
+ *  carries the same reasoning past the claim (pusher.ts, `handOverBy`). Two minutes is copying
+ *  the pack from the reviewer (the pack is known only from the approval), the pusher starting
+ *  between two pushes (root/send.ts asks it again for as long as this), and the push's start.
  *  `uses`: write-key signatures, all of them the pusher's (only it reaches the write agent):
  *  one for the receive-pack ssh, and one for each `git-lfs-authenticate` git-lfs makes, once
  *  for the upload and again each time the token it was given expires (the T2 forge's lasts
@@ -198,13 +197,17 @@ export const CHALLENGE = { lifeMs: 120_000, outstanding: 32 } as const;
 
 /** Connections that hold something (a challenge, an approval): they are not counted against
  *  LIMIT.concurrent, so pushes waiting for a person never fill the socket. What bounds them is
- *  what they hold: CHALLENGE.outstanding, and approvals, each a person's signature. */
+ *  what they hold: CHALLENGE.outstanding, and approvals, each a person's signature. One that
+ *  stops holding anything and stays open (its challenge dropped for newer ones, its approval
+ *  claimed by the pusher) is counted again (`settle`), so it is bounded as any idle
+ *  connection is (the adversarial review of this change: else a loop of hold-then-evict left
+ *  uncounted connections without end). */
 const holders = new Set<Socket>();
-const uncounted = new WeakMap<Socket, () => void>();
+const counting = new WeakMap<Socket, { uncount: () => void; recount: () => void }>();
 const hold = (connection: Socket) => {
   if (holders.has(connection)) return;
   holders.add(connection);
-  uncounted.get(connection)?.();
+  counting.get(connection)?.uncount();
   // On the asker's end, before this side closes: so an asker that waits for the close (the
   // pusher, done) knows what it held is gone, and its record (audit) written.
   connection.once("end", () => released(connection));
@@ -230,6 +233,20 @@ const released = (connection: Socket) => {
 const holdsAnything = (connection: Socket) =>
   [...challenges.values()].some((entry) => entry.holder === connection) ||
   [...approvals.values()].some((approval) => approval.holder === connection);
+/** `connection` may have stopped holding anything: if so, it is an ordinary connection again. */
+const settle = (connection: Socket | null) => {
+  if (!connection || !holders.has(connection) || holdsAnything(connection)) return;
+  holders.delete(connection);
+  counting.get(connection)?.recount();
+};
+/** Approvals that can no longer be claimed, gone (and their holders settled). */
+const expire = () => {
+  for (const approval of approvals.values())
+    if (approval.expires !== null && approval.expires < Date.now()) {
+      approvals.delete(approval.id);
+      settle(approval.holder);
+    }
+};
 const tell = (connection: Socket | null, line: Record<string, unknown>) => {
   if (connection && !connection.destroyed) connection.write(JSON.stringify(line) + "\n");
 };
@@ -262,6 +279,7 @@ const challenge = (
       error: `the keyring dropped this push's request: more than ${CHALLENGE.outstanding} were waiting at once`,
     });
     if (oldest.holder && !holdsAnything(oldest.holder)) oldest.holder.end();
+    settle(oldest.holder);
   }
   const onto = request.onto ?? null;
   if (onto !== null && (!isCommit(onto) || /^0{40}$/.test(onto)))
@@ -526,8 +544,13 @@ const approve = (
   if (!valid) return refused("the approval's signature is not the host approver's");
   challenges.delete(parsed.nonce);
   const repo = parseRepo(parsed.repo)!;
-  if (!fs.existsSync(keyFile(repo, "write")))
-    return refused(`${parsed.repo} has no write key: it is not pushable`);
+  if (!fs.existsSync(keyFile(repo, "write"))) {
+    // The nonce is spent: whoever waits on it is told, rather than left waiting.
+    const why = `${parsed.repo} has no write key: it is not pushable`;
+    tell(issued.holder, { dropped: parsed.nonce, error: why });
+    settle(issued.holder);
+    return refused(why);
+  }
   const id = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
   const holder = request.hold === true && connection ? connection : issued.holder;
   const approval: Approval = {
@@ -674,11 +697,8 @@ declare namespace approve {
 const consume = (request: Record<string, unknown>): Record<string, unknown> => {
   const repo = String(request.repo ?? "");
   let spent: Approval | null = null;
+  expire();
   for (const approval of approvals.values()) {
-    if (approval.expires !== null && approval.expires < Date.now()) {
-      approvals.delete(approval.id);
-      continue;
-    }
     if (approval.repo !== repo || !approval.claimed) continue;
     if (approval.uses <= 0) {
       spent = approval;
@@ -895,9 +915,9 @@ const pusherOps = (
   connection?: Socket,
 ): Record<string, unknown> => {
   if (request.op === "approval") {
+    expire();
     const approval = approvals.get(String(request.id ?? ""));
-    if (!approval || (approval.expires !== null && approval.expires < Date.now()))
-      return { ok: false, error: "no live approval with that id" };
+    if (!approval) return { ok: false, error: "no live approval with that id" };
     if (approval.claimed)
       return {
         ok: false,
@@ -915,10 +935,12 @@ const pusherOps = (
     // The claim is the pusher's connection: the approval lives while it is open, and goes
     // when it closes, however the push (and the pusher's process) ends.
     if (!connection) return { ok: false, error: "a claim is held by the pusher's connection" };
+    const asker = approval.holder;
     approval.claimed = true;
     approval.expires = null;
     approval.holder = connection;
     hold(connection);
+    settle(asker);
     audit({
       event: "claimed",
       approval: approval.id,
@@ -1038,18 +1060,23 @@ const internalOps = (request: Record<string, unknown>): Record<string, unknown> 
 
 const LIMIT = { bytes: 4096, concurrent: 16 } as const;
 
-const serve = (
+/** One of the keyring's sockets, answering a line of JSON with a line (exported for T1). */
+export const serve = (
   socketPath: string,
   mode: number,
   handle: (request: Record<string, unknown>, connection: Socket) => Record<string, unknown>,
-): Promise<void> => {
+): Promise<ReturnType<typeof createServer>> => {
   let open = 0;
   const reply = (connection: Socket, value: unknown) =>
     connection.write(JSON.stringify(value) + "\n");
   const server = createServer((connection) => {
     if (open >= LIMIT.concurrent) {
-      reply(connection, { ok: false, error: "too many connections" });
-      return connection.destroy();
+      // Ended after the answer, not destroyed with it: destroying loses what was not yet sent.
+      connection.on("error", () => connection.destroy());
+      return void connection.end(
+        JSON.stringify({ ok: false, error: "too many connections" }) + "\n",
+        () => connection.destroy(),
+      );
     }
     open++;
     let counted = true;
@@ -1057,7 +1084,11 @@ const serve = (
       if (counted) open--;
       counted = false;
     };
-    uncounted.set(connection, uncount);
+    const recount = () => {
+      if (!counted && !connection.destroyed) open++;
+      counted = !connection.destroyed;
+    };
+    counting.set(connection, { uncount, recount });
     connection.on("close", uncount);
     connection.on("error", () => connection.destroy());
     let buffer = "";
@@ -1091,7 +1122,7 @@ const serve = (
     });
     server.listen(socketPath, () => {
       process.umask(before);
-      resolve();
+      resolve(server);
     });
   });
 };

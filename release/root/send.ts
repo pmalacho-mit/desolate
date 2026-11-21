@@ -172,13 +172,12 @@ declare namespace withPusher {
  *  approval names, whatever this sends; what this sends is what makes that possible, and the
  *  pusher takes nothing else: the pack desolate's reviewer made of the approved commits (its
  *  digest is in the approval), and of the LFS objects those commits point to, the ones this
- *  clone holds. `approval` gives the approval's id once the pack is here: `desolate push`
- *  files it only then, so that copying a large pack is not on the clock between the person's
- *  click and the pusher's claim (keyring.ts, APPROVAL); a raw push has it already. */
+ *  clone holds. Copying the pack from the reviewer is on the approval's clock (keyring.ts,
+ *  APPROVAL): the pack is known only from the approval. `say` is told how far the pusher is. */
 export const send = async (
   repo: Repo,
+  approval: string,
   push: { pack: string },
-  approval: () => Promise<string>,
   say: (line: string) => void,
 ): Promise<Failed | null> => {
   const clone = clonePath(repo);
@@ -219,10 +218,9 @@ export const send = async (
       files.push(file);
     }
     files.push(pack);
-    const id = await approval();
     const reply = await withPusher(() =>
       handOver(
-        { op: "push", approval: id, pack: fs.statSync(pack).size, lfs, lfsListed: made.lfs },
+        { op: "push", approval, pack: fs.statSync(pack).size, lfs, lfsListed: made.lfs },
         files,
         say,
       ),
