@@ -66,11 +66,13 @@ declare namespace shown {
  *  text when it is UTF-8, and when it is not, as git quotes it (each byte past ASCII as
  *  `\ooo`), so that it does not read as another name. A UTF-8 name with a quote or a
  *  backslash is quoted too, as git does, so that none reads as a quoted one; and one that
- *  starts or ends in a space, which on a page reads as the name without it. */
+ *  starts or ends in a space (or the blank Braille pattern, which printable keeps), which on
+ *  a page reads as the name without it. */
 export const named = (raw: string): string => {
   const bytes = Buffer.from(raw, "latin1");
   const text = bytes.toString("utf8");
-  if (Buffer.from(text, "utf8").equals(bytes) && !/["\\]|^\s|\s$/u.test(text)) return shown(text);
+  if (Buffer.from(text, "utf8").equals(bytes) && !/["\\]|^[\s\u2800]|[\s\u2800]$/u.test(text))
+    return shown(text);
   const quoted = [...raw].map((c) =>
     c >= "\x80" ? `\\${c.charCodeAt(0).toString(8)}` : c === '"' || c === "\\" ? `\\${c}` : c,
   );
@@ -89,6 +91,7 @@ declare namespace named {
       [args: [raw: '"caf\\351.txt"'], expected: '"\\"caf\\\\351.txt\\""'],
       /** and one with a space at its end, which would read as the name without it */
       [args: [raw: "package.json "], expected: '"package.json "'],
+      [args: [raw: "README.md\u00e2\u00a0\u0080"], expected: '"README.md\\342\\240\\200"'],
       [args: [raw: "a b.txt"], expected: "a b.txt"],
     ]
   >;
@@ -172,8 +175,14 @@ const COMMON =
  *  such a path, and as written it is not. A small check, to say so beside the name: what is
  *  pushed does not depend on it. */
 export const lookalike = (path: string): boolean => {
-  const folded = [...path.normalize("NFKD").replace(/\p{M}/gu, "")]
-    .map((c) => LOOKS.get(c) ?? c)
+  if (!/[^\x00-\x7f]/.test(path)) return false;
+  // A character at a time, each as one at most: a character NFKD makes many of (U+FDFA is
+  // eighteen) is left as it is, so the check costs what the name's length does.
+  const folded = [...path]
+    .map((c) => {
+      const as = LOOKS.get(c) ?? c.normalize("NFKD").replace(/\p{M}/gu, "");
+      return [...as].length === 1 ? as : c;
+    })
     .join("");
   const known = (p: string) => SENSITIVE.test(p) || COMMON.test(p);
   return known(folded) && !known(path);

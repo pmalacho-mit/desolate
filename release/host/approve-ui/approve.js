@@ -125,11 +125,12 @@ const post = async (what, card, squash) => {
 };
 
 // The diff, as text: each line a text node in a span classed by its first character.
-// Characters that reorder or hide what is shown (bidi controls, zero-width ones) and controls
-// (a commit message's escapes; a carriage return, but for the one that ends a line): in a
-// diff a person approves from, each is shown as itself, named, so the line reads as git
-// stores it.
-const unhidden = (line) => line.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]|\r(?!\n|$)/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
+// What reorders or hides what is shown (controls, bidi and other format characters, what
+// shows nothing: the classes shared/text.ts's printable replaces, and the blank Braille
+// pattern), but for a tab and a carriage return that ends a line: in a diff a person
+// approves from, each is shown as itself, named, so the line reads as git stores it.
+const HIDES = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u2800\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
+const unhidden = (line) => line.replace(HIDES, (c, at) => c === "\t" || c === "\n" || (c === "\r" && (at + 1 === line.length || line[at + 1] === "\n")) ? c : `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
 const kindOf = (line) => line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
 /** git's text, a line a span; given `tokens` (shared/ui/highlight.js), each line of code in
  *  its syntax's colours, its text unchanged. */

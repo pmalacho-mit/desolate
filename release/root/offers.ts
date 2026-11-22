@@ -879,10 +879,12 @@ const countIn = async (clone: string, range: string) =>
   Number((await gitOk(clone, ["rev-list", "--count", range])).trim()) || 0;
 
 /** A commit's message after its subject, as the review shows it on asking: its lines kept,
- *  made safe, and bounded against a flood as any one text is (SAFE_MOST), the cut marked. */
+ *  made safe, and bounded against a flood as any one text is (SAFE_MOST), the cut marked
+ *  (also when what was cut is only spaces before more: the fresh review of this change). */
 const bodyOf = (body: string) => {
-  const chars = [...printableLines(body.slice(0, SAFE_MOST * 4).trimEnd())];
-  return chars.length > SAFE_MOST
+  const long = body.length > SAFE_MOST * 4;
+  const chars = [...printableLines(long ? body.slice(0, SAFE_MOST * 4) : body.trimEnd())];
+  return long || chars.length > SAFE_MOST
     ? `${chars.slice(0, SAFE_MOST - 1).join("")}${CUT}`
     : chars.join("");
 };

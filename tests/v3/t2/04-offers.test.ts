@@ -1741,10 +1741,18 @@ echo "=====waits"; cat /tmp/waits.lines`,
       );
       const seen = await opened("web-plain", plain);
       assert.equal(seen.commit, `${plain.slice(0, 12)} notes: an ordinary change  by Ada Lovelace`);
-      assert.deepEqual(seen.files.map((f) => [f.name, f.sensitive, f.looks]).sort(), [
-        ["docs/café.md", false, ""],
-        ["notes/plain.md", false, ""],
-      ]);
+      // (The files `commit` itself changes against the remote's main are listed too: theirs.)
+      const own = ["docs/café.md", "notes/plain.md"];
+      const base = seen.files.map((f) => f.name).filter((name) => !own.includes(name));
+      const ours = (files: typeof seen.files) => files.filter((f) => !base.includes(f.name));
+      assert.deepEqual(
+        seen.files.filter((f) => own.includes(f.name)).map((f) => [f.name, f.sensitive, f.looks]),
+        own.map((name) => [name, false, ""]),
+      );
+      assert.ok(
+        seen.files.every((f) => !f.sensitive && !f.looks),
+        JSON.stringify(seen.files),
+      );
       assert.match(seen.whole, /Author: {5}Ada Lovelace <someone@example\.invalid>\n/);
       assert.match(
         seen.whole,
@@ -1783,7 +1791,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       const LOOKS = "its name has letters that look like others";
       // (In the reviewer's order: what runs on the forge, then the lookalikes, then git's.)
       assert.deepEqual(
-        shown.files.map((f) => [f.name, f.sensitive, f.looks]),
+        ours(shown.files).map((f) => [f.name, f.sensitive, f.looks]),
         [
           [".github/workflows/real.yml", true, ""],
           [".github\u2215workflows\u2215x.yml", false, LOOKS],
@@ -1794,7 +1802,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
           ['"package.json "', false, ""],
         ],
       );
-      for (const f of shown.files) {
+      for (const f of ours(shown.files)) {
         assert.doesNotMatch(f.name, /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/);
         assert.ok(
           ![
