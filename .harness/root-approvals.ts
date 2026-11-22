@@ -16,3 +16,7 @@ export const aRequestIn = (
   const start = writer === "waiting" ? startOf(pid) : "not when it started";
   writeJsonIn("state", `approvals/${name}`, { ...value, pid, start });
 };
+
+/** `aRequestIn`, by a writer that is waiting, `ms` from now: what a wait for the list sees come. */
+export const aRequestLater = (name: string, ms: number, value: Record<string, unknown>) =>
+  void setTimeout(() => aRequestIn(name, "waiting", value), ms);

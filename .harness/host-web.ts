@@ -61,6 +61,10 @@ export const ask = (
         );
         return res;
       },
+      // (A connection that never closes: what waits on one waits for its answer.)
+      once() {
+        return this;
+      },
       write(chunk: string | Buffer) {
         text += chunk.toString();
         return true;
