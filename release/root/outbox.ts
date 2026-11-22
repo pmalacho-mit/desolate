@@ -67,18 +67,19 @@ type Dir = { at: (name: string) => string; names: () => string[]; close: () => v
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /** Open a directory under the domains' share and prove it is the one asked for; else why
- *  not, in a few words ("a link", "not there"), for a refusal and a log to say. */
-export const openDir = (dir: string): Dir | string => {
-  // The share may show a directory a moment before it lets it be opened, or before the
-  // descriptor's path is the one it has (T4, on vz, 2026-11-21: an honest first offer
-  // refused). Looked at again only while every directory on the way is a plain one, with
-  // every check made again each time: a few tries, a second at most.
+ *  not, in a few words ("a link", "not there"), for a refusal and a log to say. Never throws.
+ *  `settle`: the share may show a directory a moment before it lets it be opened (T4, on vz,
+ *  2026-11-21: an honest first offer refused), so it is looked at again while every
+ *  directory on the way is a plain one, every check made again each time: a few tries, a
+ *  second at most, blocking. Only for a process of one domain's own (git-remote-desolate),
+ *  never rootd's or the state service's loop, which every domain waits on. */
+export const openDir = (dir: string, settle = false): Dir | string => {
   for (let tries = 1; ; tries++) {
     const opened = openOnce(dir);
     const unsettled =
       typeof opened === "string" &&
       [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
-    if (!unsettled || tries === OPEN_TRIES || !plainWay(dir)) return opened;
+    if (!settle || !unsettled || tries === OPEN_TRIES || !plainWay(dir)) return opened;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
   }
 };
@@ -90,14 +91,18 @@ const OPENED_ELSEWHERE = "opened at another path than asked: a link on the way";
 const PAUSE = new Int32Array(new SharedArrayBuffer(4));
 
 /** Whether every directory from the domains' share down to `dir` is there and a plain one
- *  (no link), as lstat sees it now. */
+ *  (no link), as lstat sees it now: false on anything else, a failure too. */
 const plainWay = (dir: string): boolean => {
   let at = ROOT.domains;
-  for (const part of ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)]) {
-    at = path.join(at, part);
-    if (!fs.lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) return false;
+  try {
+    for (const part of ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)]) {
+      at = path.join(at, part);
+      if (!fs.lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) return false;
+    }
+    return true;
+  } catch {
+    return false;
   }
-  return true;
 };
 
 const openOnce = (dir: string): Dir | string => {
@@ -144,8 +149,9 @@ const openOnce = (dir: string): Dir | string => {
           .sort(),
       close: () => fs.closeSync(held),
     };
-  } catch (error) {
-    return `not opened (${String(error)})`;
+  } catch {
+    // (No more than that: what threw names the root's own paths, and this reaches the domain.)
+    return "not opened";
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
@@ -258,11 +264,15 @@ const syncDir = (domain: string, repo: string) => path.join(outbox(domain), "syn
  *  that leads nowhere among them) is something there, and not taken for nothing. */
 const notThere = (base: string, below: string): boolean => {
   let at = base;
-  for (const part of ["", ...below.split("/")]) {
-    at = path.join(at, part);
-    const stat = fs.lstatSync(at, { throwIfNoEntry: false });
-    if (!stat) return true;
-    if (!stat.isDirectory()) return false;
+  try {
+    for (const part of ["", ...below.split("/")]) {
+      at = path.join(at, part);
+      const stat = fs.lstatSync(at, { throwIfNoEntry: false });
+      if (!stat) return true;
+      if (!stat.isDirectory()) return false;
+    }
+  } catch {
+    /* something there that is in the way (a component swapped for a file): not nothing */
   }
   return false;
 };
@@ -280,10 +290,11 @@ const notThere = (base: string, below: string): boolean => {
 export const refsOf = (
   domain: string,
   repo: string,
+  settle = false,
 ): { refs: Record<string, string> } | { refused: string } => {
   if (!parseRepo(repo)) return { refused: `'${printable(repo, 100)}' is not a repository` };
   const what = `${repo}'s list of branches (refs.json)`;
-  const dir = openDir(syncDir(domain, repo));
+  const dir = openDir(syncDir(domain, repo), settle);
   if (typeof dir === "string")
     return notThere(outbox(domain), path.join("sync", repo))
       ? { refs: {} }

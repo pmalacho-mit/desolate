@@ -308,7 +308,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.rmSync(`${lfs}/${oid}`, { force: true });
   });
 
-  it("a directory the share shows before it lets it be opened is looked at again, a second at most; a link never", async () => {
+  it("a directory the share shows before it lets it be opened is looked at again by the fetch, a second at most; a link never; the root's own loops never", async () => {
     // A share a moment inconsistent (vz's virtiofs, T4 2026-11-21: an honest first offer
     // refused): lstat shows the directory, and opening it fails, `failing` times.
     const { createRequire, syncBuiltinESMExports } = await import("node:module");
@@ -323,16 +323,36 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       }) as typeof fs.openSync;
       syncBuiltinESMExports();
     };
-    const restore = () => ((real.openSync = open), syncBuiltinESMExports());
+    const lstat = real.lstatSync;
+    const restore = () => (
+      (real.openSync = open),
+      (real.lstatSync = lstat),
+      syncBuiltinESMExports()
+    );
     const late = `${domains}/t1-dom/outbox/sync/acme/late`;
     fs.mkdirSync(late, { recursive: true });
     fs.writeFileSync(`${late}/refs.json`, JSON.stringify({ refs: { main: "c".repeat(40) } }));
     try {
       opening(late, 2);
-      assert.deepEqual(refs("acme/late"), { main: "c".repeat(40) }, "taken once it opens");
+      assert.deepEqual(
+        outbox.refsOf("t1-dom", "acme/late", true),
+        { refs: { main: "c".repeat(40) } },
+        "the fetch takes it once it opens",
+      );
+      opening(late, 2);
+      const once = Date.now();
+      assert.deepEqual(
+        outbox.refsOf("t1-dom", "acme/late"),
+        {
+          refused:
+            "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
+        },
+        "the control: rootd and the dashboard, which every domain waits on, do not wait",
+      );
+      assert.ok(Date.now() - once < 100);
       opening(late, 100);
       const started = Date.now();
-      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late"), {
+      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
         refused:
           "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
       });
@@ -347,11 +367,24 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       fs.symlinkSync(path.join(work, "state"), late);
       opening(late, 100);
       const linkAt = Date.now();
-      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late"), {
+      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
         refused:
           "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
       });
       assert.ok(Date.now() - linkAt < 100, "a link on the way is no reason to look again");
+      // The way swapped for a file between two looks (lstat then fails): an answer, no throw.
+      restore();
+      fs.rmSync(late);
+      fs.mkdirSync(late);
+      opening(late, 100);
+      real.lstatSync = ((file: fs.PathLike, ...rest: never[]) => {
+        if (String(file) === late)
+          throw Object.assign(new Error("ENOTDIR: not a directory"), { code: "ENOTDIR" });
+        return (lstat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+      }) as typeof fs.lstatSync;
+      syncBuiltinESMExports();
+      assert.equal(outbox.openDir(late, true), "not there");
+      assert.ok("refused" in outbox.refsOf("t1-dom", "acme/late", true));
     } finally {
       restore();
       fs.rmSync(late, { recursive: true, force: true });
