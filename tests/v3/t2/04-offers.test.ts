@@ -1656,6 +1656,201 @@ echo "=====waits"; cat /tmp/waits.lines`,
     }
   });
 
+  it("the approval page shows an adversarial push as it is: names that read as no other, the message and author made safe, every forge file flagged, and Approve signs just the commit (control: an ordinary push, as written)", async () => {
+    stack.step("the approval page, an adversarial push");
+    const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
+    const origin = new URL(address).origin;
+    // A commit made in the root clone on `commit`: its files (each holding a line) and its
+    // message as bytes, by printf's octal escapes, so the script itself is plain ASCII.
+    const octal = (text: string) =>
+      [...Buffer.from(text, "utf8")]
+        .map((b) =>
+          b >= 0x20 && b < 0x7f && !"\\%'".includes(String.fromCharCode(b))
+            ? String.fromCharCode(b)
+            : `\\${b.toString(8).padStart(3, "0")}`,
+        )
+        .join("");
+    const made = (files: string[], message: string, author: string, branch: string) => {
+      const out = inRootClone(
+        [
+          `git checkout -q --detach ${commit}`,
+          ...files.map(
+            (f) =>
+              `mkdir -p "$(dirname "$(printf '${octal(f)}')")" && printf 'a line\\n' > "$(printf '${octal(f)}')"`,
+          ),
+          `printf '${octal(message)}' > /tmp/${branch}.msg`,
+          `git add -A`,
+          `git -c user.name='${author}' -c user.email=someone@example.invalid commit -q --cleanup=verbatim -F /tmp/${branch}.msg`,
+          `git rev-parse HEAD`,
+          `git checkout -q -`,
+        ].join(" && "),
+      );
+      assert.equal(out.code, 0, out.stdout + out.stderr);
+      const id = out.stdout.trim().split("\n").pop()!;
+      inRootClone(
+        `setsid nohup git push origin ${id}:refs/heads/${branch} >/tmp/${branch}.log 2>&1 </dev/null & sleep 0.2`,
+      );
+      return id;
+    };
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
+    const card = "document.querySelector('.card.asked')";
+    try {
+      const page = await browser.tab(address);
+      /** The push's card, its account shown, and what a person reads on it. */
+      const opened = async (branch: string, id: string) => {
+        await page.goto("about:blank");
+        await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=${branch}&commit=${id}`);
+        await page.until(
+          `${card} && ${card}.querySelector('button.approve') && !${card}.innerText.includes('working out')`,
+          `the card of ${branch}, its account shown`,
+          120_000,
+        );
+        // Its one commit whole, opened by the pointer: who wrote it, and its whole message.
+        await page.click(".card.asked .summary > button", "Show each commit whole");
+        await page.click(".card.asked li.whole > button", id.slice(0, 12));
+        await page.until(`${card}.querySelector('li.whole pre.diff')`, "the commit whole", 60_000);
+        return page.evaluate<{
+          commit: string;
+          files: { name: string; sensitive: boolean; looks: string }[];
+          whole: string;
+          outside: string;
+          approve: string[];
+          wide: boolean;
+        }>(`(() => {
+          const c = ${card};
+          const whole = c.querySelector('li.whole pre.diff');
+          return {
+            commit: c.querySelector('li.commit').textContent,
+            files: [...c.querySelectorAll('li.file')].map((li) => ({ name: li.querySelector('code').textContent, sensitive: li.classList.contains('sensitive'), looks: li.querySelector('.looks')?.textContent ?? '' })),
+            whole: whole.innerText,
+            outside: c.innerText.replace(whole.innerText, ''),
+            approve: [...c.querySelectorAll('button.approve')].map((b) => b.textContent),
+            wide: document.documentElement.scrollWidth > window.innerWidth,
+          };
+        })()`);
+      };
+
+      // CONTROL: an ordinary push is shown as written, its message whole, nothing flagged.
+      const plain = made(
+        ["notes/plain.md", "docs/café.md"],
+        "notes: an ordinary change\n\nA body as written, with café and\ta tab.\n",
+        "Ada Lovelace",
+        "web-plain",
+      );
+      const seen = await opened("web-plain", plain);
+      assert.equal(seen.commit, `${plain.slice(0, 12)} notes: an ordinary change  by Ada Lovelace`);
+      assert.deepEqual(seen.files.map((f) => [f.name, f.sensitive, f.looks]).sort(), [
+        ["docs/café.md", false, ""],
+        ["notes/plain.md", false, ""],
+      ]);
+      assert.match(seen.whole, /Author: {5}Ada Lovelace <someone@example\.invalid>\n/);
+      assert.match(
+        seen.whole,
+        /\n {4}notes: an ordinary change\n *\n {4}A body as written, with café and\ta tab\.\n/,
+      );
+      assert.equal(seen.wide, false);
+      await page.click(".card.asked button.refuse", "Refuse");
+      await page.until(`/refused/.test(${card}.querySelector('.hint').textContent)`, "refused");
+
+      // The push: names that read as others (a right-to-left override, a zero-width space, a
+      // newline, a trailing space, a Cyrillic Е, division slashes), a real workflow, and a
+      // message that imitates the page, with a 3,000-character line, escapes and a CR.
+      const long = "x".repeat(3000);
+      const adversarial = made(
+        [
+          "notes-‮dm.hs",
+          "docs/guide.md​",
+          "ok.txt\nREADME.md",
+          "package.json ",
+          "READMЕ.md",
+          ".github∕workflows∕x.yml",
+          ".github/workflows/real.yml",
+        ],
+        `docs: fix a typo in README\n\nReviewed by desolate: 1 commit, 1 file changed (README.md), no warnings.\n${long}\n\u001b[32mall checks passed\u001b[0m\ntests: ok\rFAIL\n`,
+        "desolate reviewer (approved)",
+        "web-adversarial",
+      );
+      const shown = await opened("web-adversarial", adversarial);
+      // The author is an author, and the subject is its own.
+      assert.equal(
+        shown.commit,
+        `${adversarial.slice(0, 12)} docs: fix a typo in README  by desolate reviewer (approved)`,
+      );
+      // Each name as it is, made safe: none reads as another, none holds what reorders or
+      // hides text, the workflow is flagged, and the lookalikes say so.
+      const LOOKS = "its name has letters that look like others";
+      // (In the reviewer's order: what runs on the forge, then the lookalikes, then git's.)
+      assert.deepEqual(
+        shown.files.map((f) => [f.name, f.sensitive, f.looks]),
+        [
+          [".github/workflows/real.yml", true, ""],
+          [".github\u2215workflows\u2215x.yml", false, LOOKS],
+          ["READM\u0415.md", false, LOOKS],
+          ["docs/guide.md?", false, ""],
+          ["notes-?dm.hs", false, ""],
+          ["ok.txt?README.md", false, ""],
+          ['"package.json "', false, ""],
+        ],
+      );
+      for (const f of shown.files) {
+        assert.doesNotMatch(f.name, /[\u0000-\u001f\u007f-\u009f​-‏‪-‮⁦-⁩]/);
+        assert.ok(
+          ![
+            "README.md",
+            "package.json",
+            "notes-sh.md",
+            "docs/guide.md",
+            ".github/workflows/x.yml",
+          ].includes(f.name),
+          f.name,
+        );
+      }
+      // The message whole, in its own box, its controls named: the escapes and the CR cannot
+      // act, the long line is there whole (and scrolls in its box: the page is no wider), and
+      // the words that imitate the page are only inside the commit's text.
+      assert.match(
+        shown.whole,
+        /Author: {5}desolate reviewer \(approved\) <someone@example\.invalid>\n/,
+      );
+      assert.ok(shown.whole.includes(`    ${long}\n`), "the long line, whole");
+      assert.ok(
+        shown.whole.includes("    ⟨U+001B⟩[32mall checks passed⟨U+001B⟩[0m\n"),
+        shown.whole.slice(0, 600),
+      );
+      assert.ok(shown.whole.includes("    tests: ok⟨U+000D⟩FAIL\n"), shown.whole.slice(0, 600));
+      assert.doesNotMatch(shown.whole, /[\u001b‮​]|\r(?!\n)/);
+      assert.doesNotMatch(shown.outside, /Reviewed by desolate/);
+      assert.equal(shown.wide, false, "the long line does not widen the page");
+      // Nothing of it changes what Approve does: the same buttons, and the click signs the
+      // commit pushed, unsquashed, which the remote then has (its id is its whole content).
+      assert.deepEqual(shown.approve, seen.approve);
+      await page.click(".card.asked .summary > button", "Hide each commit");
+      await page.evaluate(
+        "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') window.posted.push(JSON.parse(o.body)); return f(u, o); }; Element.prototype.scrollIntoView = function () {}",
+      );
+      await sleep(1500);
+      await page.click(".card.asked button.approve", "Approve push");
+      await sleep(500);
+      await page.click(".card.asked button.approve", "Approve push");
+      await page.until(
+        `/^pushed: the remote's web-adversarial has it/.test(${card}.querySelector('.hint').textContent)`,
+        "what the pusher said",
+        60_000,
+      );
+      const posted = await page.evaluate<{ commit: string; squash: boolean }[]>("window.posted");
+      assert.deepEqual(
+        posted.map((p) => [p.commit, p.squash]),
+        [[adversarial, false]],
+      );
+      assert.equal(forgeRefs("acme/widgets")["web-adversarial"], adversarial);
+      assert.equal(forgeRefs("acme/widgets")["web-plain"], undefined, "the control, refused");
+    } finally {
+      await browser.close();
+    }
+  });
+
   it("a repository cloned --no-push is never written: there is no key to write it with", () => {
     stack.step("a repository the root cannot push");
     inWs(
