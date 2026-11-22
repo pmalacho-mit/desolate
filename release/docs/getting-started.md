@@ -138,7 +138,9 @@ On the dashboard (`desolate ui --open`), a domain with no workspaces offers **Wo
 main**: one on the default branch, the domain's own checkout of each repository. **New
 workspace** on its card makes another, with the name you type (`w1`, `w2`... if none), each
 repository on a new branch of that name from its default branch; the line under it says so
-before you click. Or, for a branch you name:
+before you click, and whose `devcontainer.json` it runs: when more than one repository has
+one, choose there (the default is the domain's, which `desolate domain <d> env --from <repo>`
+sets). Or, for a branch you name:
 
 ```bash
 desolate up you--app --name greet --branch feature/greet-by-name
@@ -356,7 +358,7 @@ Two ways, and both end with you approving the exact commit:
   **pushed**, with **Open pull request** (GitHub's page for it, in your browser, as you).
   When the pull request is merged, **Fetch now** beside it shows it at once (the root also
   looks every 15 minutes): the row then says **merged into main**, and how to carry on in
-  the workspace: `git fetch && git switch --no-track -c <next-branch> origin/main`.
+  each checkout that is merged: `git fetch && git switch --no-track -c <next-branch> origin/main`.
   The default branch is pushed the same way: the review says so in red at its top, since a
   push there changes it on the remote with no pull request first.
 - **Open in git**, in the review: the git terminal, on that branch as the workspace has it

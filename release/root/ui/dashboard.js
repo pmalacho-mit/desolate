@@ -445,11 +445,20 @@ const moreDiff = async () => {
 /** Review any branch a domain has (offered or not), against the remote's default branch
  *  ("origin") or the domain's own copy of it ("domain"). The target names only a domain, a
  *  repository and a branch: what is shown is read in the root. */
+/** What the open review was read against: the remote as last fetched, and the branch's
+ *  commit, what was pushed of it and where it landed. When one changes, it is read again (a
+ *  panel left open said "Not offered" after its push: dogfooding, 2026-11-22). */
+const reviewMark = (offer) => {
+  const d = state && state.domains.find((x) => x.slug === offer.domain);
+  const b = d && branchesOf(d).find((b) => b.repo === offer.repo && b.branch === offer.branch);
+  const repo = state && state.repos.find((r) => r.repo === offer.repo);
+  return JSON.stringify([repo && repo.fetchedAt, b && b.commit, b && b.pushed && b.pushed.commit, b && b.landed]);
+};
 const openReview = async (offer, against = "origin") => {
   if (reviewing && reviewing.gone) reviewing.gone.abort();
-  const fetchedAt = ((state && state.repos.find((r) => r.repo === offer.repo)) || {}).fetchedAt || null;
+  const mark = reviewMark(offer);
   const gone = new AbortController();
-  reviewing = { offer, against, fetchedAt, gone, loading: true };
+  reviewing = { offer, against, mark, gone, loading: true };
   addressOf(offer, against);
   render();
   let review;
@@ -461,8 +470,8 @@ const openReview = async (offer, against = "origin") => {
   }
   if (!reviewing || reviewing.gone !== gone) return;
   // Its lists as the first page came: more is added to these copies as it is asked for.
-  reviewing = review.error ? { offer, against, fetchedAt, gone, review }
-    : { offer, against, fetchedAt, gone, review, commits: { ...review.commits, items: [...review.commits.items] }, files: review.changes };
+  reviewing = review.error ? { offer, against, mark, gone, review }
+    : { offer, against, mark, gone, review, commits: { ...review.commits, items: [...review.commits.items] }, files: review.changes };
   render();
   if (!review.error) loadDiff();
 };
@@ -782,13 +791,16 @@ const pullRequestOf = (b) => b.pushed && typeof b.pushed.pullRequest === "string
   ? el("a", { class: "button quiet small", href: b.pushed.pullRequest, target: "_blank", rel: "noopener noreferrer", "data-pull-request": `${b.repo}/${b.branch}`, title: `GitHub's page for opening ${b.branch}'s pull request, in your browser, as yourself` }, "Open pull request")
   : null;
 const fetchNow = (repo) => el("button", { class: "quiet small", disabled: busy.has(`fetch:${repo}`), "data-fetch": repo, title: `desolate fetch ${repo}: the remote's branches as they are now, so a pull request merged there shows here at once`, onclick: () => act(`fetch:${repo}`, "repo.fetch", { repo }) }, busy.has(`fetch:${repo}`) ? "Fetching..." : "Fetch now");
-/** What a checkout's branch is on the remote, below its line: pushed (its pull request), or
- *  squashed there (the command that carries it on). */
+/** What a checkout's branch is on the remote, below its line: pushed (its pull request),
+ *  squashed there, or merged (the command that carries it on, for each checkout as it lands:
+ *  it waited for all of them, dogfooding 2026-11-22). */
 const checkoutAfter = (d, w, c) => {
   const pushed = (w.pushed || []).find((p) => p.repo === c.repo);
   const b = c.head && c.head.branch ? branchesOf(d).find((b) => b.repo === c.repo && b.branch === c.head.branch) : null;
+  const landed = landedOf(d, c);
   return [
     pushed && pushed.carryOn ? el("div", { class: "line sub", "data-carry-on": c.repo }, "To carry on from the squash, in the workspace (what you committed since is kept, on top): ", el("code", {}, pushed.carryOn)) : null,
+    landed ? el("div", { class: "line sub", "data-carry-on-merged": c.repo }, "To carry on in this checkout, start the next branch from what was merged: ", el("code", {}, `git fetch && git switch --no-track -c <next-branch> origin/${landed}`)) : null,
     b && b.pushed && !landedOf(d, c) ? el("div", { class: "line", "data-pushed": c.repo }, pill(`pushed ${short(b.pushed.commit)}`, "green", `desolate pushed ${b.pushed.commit} to the remote's ${b.branch}`), " ", pullRequestOf(b), " ", fetchNow(c.repo)) : null,
   ];
 };
@@ -930,8 +942,7 @@ const workspaceRow = (d, w) => {
   const target = { domain: d.slug, workspace: w.workspace };
   const [word, colour, explain] = statusOf(w, host, running);
   const why = deletable(w, running);
-  // All its work merged: the bases it went into, for the step that carries on from them.
-  const merged = allLanded(d, w) ? [...new Set(w.checkouts.map((c) => landedOf(d, c)).filter(Boolean))] : null;
+  const merged = allLanded(d, w);
   const remove = el("span", { class: "tip", title: why.length ? `Not deletable yet: ${why.join("; ")}.` : `Delete ${d.slug}/${w.workspace}: its VM goes, nothing in it is unsaved, and every commit is on the remote. Its branches stay in the domain.` },
     el("button", { class: "quiet danger", disabled: why.length > 0 || busy.has(`rm:${d.slug}/${w.workspace}`), "data-delete": `${d.slug}/${w.workspace}`,
       onclick: () => { if (confirm(`Delete ${d.slug}/${w.workspace}? Its VM is removed. Nothing in it is unsaved, and its commits are on the remote; its branches stay in the domain.`)) act(`rm:${d.slug}/${w.workspace}`, "workspace.remove", target); } }, "Delete"));
@@ -952,9 +963,7 @@ const workspaceRow = (d, w) => {
         checkoutAfter(d, w, c)]),
       // What it said of itself: its colour as a dot (the word was the dot again), then its words.
       says ? el("div", { class: "line", "data-says": says.color }, el("span", { class: `said ${says.color}`, title: `its status: ${says.color} (desolate status set)` }), says.message) : null,
-      merged ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. To carry on in it, start the next branch from what was merged, in each checkout: ",
-        el("code", {}, `git fetch && git switch --no-track -c <next-branch> origin/${merged.length === 1 ? merged[0] : "<its base>"}`),
-        `. Or ${running ? "Stop frees its memory, and " : ""}Delete removes it.`) : null,
+      merged ? el("div", { class: "line sub", "data-done": "" }, `Its work is merged: carry on in it as each checkout says, or ${running ? "Stop frees its memory, and " : ""}Delete removes it.`) : null,
       host.devcontainer ? el("div", { class: "line" }, pill(/^FAILED/.test(host.devcontainer) ? "devcontainer failed" : "devcontainer", /^FAILED/.test(host.devcontainer) ? "red" : "", "the project's devcontainer, in its VM"), " ", host.devcontainer.replace(/^up \(/, "(")) : null,
       sizeLine(d, w, running, making),
       agentsLine(d, w, host),
@@ -1055,13 +1064,27 @@ const firstWorkspace = (d) => {
  *  branch named after the workspace, from the default branch (nothing said so: dogfooding,
  *  2026-11-21). */
 const newNames = new Map(); // slug -> the name typed
-const newWorkspaceSays = (d) => {
-  const typed = newNames.get(d.slug) || "";
-  let name = typed;
+const newEnvs = new Map(); // slug -> the repository whose environment was chosen
+const newWorkspace = (d) => {
+  let name = newNames.get(d.slug) || "";
   for (let n = 1; !name; n++) if (!d.workspaces.some((w) => w.workspace === `w${n}`)) name = `w${n}`;
   const held = (repo) => d.workspaces.some((w) => w.checkouts.some((c) => c.repo === repo && c.kind === "main"));
+  const env = d.env && (newEnvs.get(d.slug) || d.env.used);
+  return { name, held, env, chosen: Boolean(env && d.env.used && env !== d.env.used) };
+};
+/** Another repository's environment (a domain with a python API and a node front end): its
+ *  checkouts are named, that one's first, as `desolate up --checkout` would be (dogfooding,
+ *  2026-11-22: the page always gave the first repository's). */
+const newCheckouts = (d) => {
+  const { name, held, env } = newWorkspace(d);
+  const repos = [env, ...d.repos.filter((r) => r !== env)];
+  return repos.map((repo) => `${repo}=${held(repo) ? `worktree:${name}` : "main"}`).join(",");
+};
+const newWorkspaceSays = (d) => {
+  const { name, held, env } = newWorkspace(d);
   return el("div", { class: "line sub", "data-new-workspace-says": d.slug }, `New workspace makes ${name}: `,
-    defaultsOf(d).map((x, i) => [i ? "; " : "", el("span", { class: "mono" }, x.repo), held(x.repo) ? [" on a new branch ", el("span", { class: "mono" }, name), ` from ${x.branch}`] : [" on ", el("span", { class: "mono" }, x.branch), ", the domain's own checkout"]]), ".");
+    defaultsOf(d).map((x, i) => [i ? "; " : "", el("span", { class: "mono" }, x.repo), held(x.repo) ? [" on a new branch ", el("span", { class: "mono" }, name), ` from ${x.branch}`] : [" on ", el("span", { class: "mono" }, x.branch), ", the domain's own checkout"]]), ".",
+    env ? [" It runs ", el("span", { class: "mono", "data-new-workspace-env": env }, env), "'s devcontainer."] : null);
 };
 
 /** The domain `desolate clone` made a repository (owner--repo), for that repository alone. */
@@ -1105,8 +1128,13 @@ const domainCard = (d) => {
     (state.issues || []).some((i) => i.domain === d.slug && i.state === "published") ? el("div", { class: "line sub", "data-published-issues": "" }, "Issues published lately: ",
       (state.issues || []).filter((i) => i.domain === d.slug && i.state === "published").map((i, n) => [n ? ", " : "", i.url && /^https:\/\/github\.com\//.test(i.url) ? el("a", { href: i.url, target: "_blank", rel: "noopener noreferrer" }, i.title) : i.title])) : null,
     branchList(d),
-    d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); newNames.delete(d.slug); } },
+    d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault();
+      const args = newWorkspace(d).chosen ? { domain: d.slug, workspace: newWorkspace(d).name, checkouts: newCheckouts(d) } : { domain: d.slug, workspace: event.target.elements.name.value.trim() };
+      event.target.reset(); newNames.delete(d.slug); newEnvs.delete(d.slug);
+      act(key, "workspace.up", args); } },
       el("input", { name: "name", placeholder: "name (optional)", pattern: slugPattern(), "aria-label": "workspace name", oninput: (event) => { newNames.set(d.slug, event.target.value.trim()); render(); } }),
+      d.env && d.env.choices.length > 1 ? el("select", { name: "env", "aria-label": "whose devcontainer it runs", title: "Whose devcontainer the workspace runs: each repository with one", "data-new-workspace-env-choice": d.slug, onchange: (event) => { newEnvs.set(d.slug, event.target.value); render(); } },
+        d.env.choices.map((repo) => el("option", { value: repo, selected: repo === newWorkspace(d).env }, `${repo}'s environment`))) : null,
       el("button", { class: firstOne ? "quiet" : "", disabled: busy.has(key), title: "A workspace of its own: a VM with the repositories. The first takes each one's default branch (brought up to the remote's when it has nothing of its own); each after it, a branch named after it" }, busy.has(key) ? "Starting..." : "New workspace")) : null,
     d.repos.length ? newWorkspaceSays(d) : null,
     // Adding a repository is set apart from making a workspace: it changes the domain.
@@ -1274,11 +1302,8 @@ let pending = asked.has("review");
 const arrived = (now) => {
   state = now;
   render();
-  // The remote was fetched while its review is open (Fetch now): the review again, against it.
-  if (reviewing && !reviewing.loading) {
-    const fetchedAt = (state.repos.find((r) => r.repo === reviewing.offer.repo) || {}).fetchedAt || null;
-    if (fetchedAt && fetchedAt !== reviewing.fetchedAt) openReview(reviewing.offer, reviewing.against);
-  }
+  // The remote fetched, or the branch moved or pushed, while its review is open: read again.
+  if (reviewing && !reviewing.loading && reviewMark(reviewing.offer) !== reviewing.mark) openReview(reviewing.offer, reviewing.against);
   if (!pending) return;
   const d = state.domains.find((x) => x.slug === asked.get("domain"));
   if (d && d.repos.includes(asked.get("repo")) && asked.get("branch")) {
