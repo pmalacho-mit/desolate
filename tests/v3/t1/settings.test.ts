@@ -114,6 +114,40 @@ describe("T1 settings: where a value comes from", () => {
   });
 });
 
+describe("T1 settings: the four that were variables only", () => {
+  it("each takes what its variable took, and refuses a typo (the control: what it takes)", () => {
+    const at = (rows: ReturnType<typeof listed>, name: string) => {
+      const row = rows.find((r) => r.name === name)!;
+      return row.error ?? row.value;
+    };
+    const taken = listed({
+      DESOLATE_EDITOR_PORT: "41581",
+      DESOLATE_APPROVER: "touchid",
+      DESOLATE_TEMPLATES: "0",
+      DESOLATE_BROWSER: "Firefox Developer Edition",
+    });
+    assert.deepEqual(
+      ["editor.port", "approver.kind", "workspace.templates", "browser.app"].map((n) =>
+        at(taken, n),
+      ),
+      [41581, "touchid", "off", "Firefox Developer Edition"],
+    );
+    const refused = listed({
+      DESOLATE_EDITOR_PORT: "80",
+      DESOLATE_APPROVER: "yubikey",
+      DESOLATE_TEMPLATES: "toString",
+      DESOLATE_BROWSER: "-a",
+    });
+    assert.match(String(at(refused, "editor.port")), /must be a whole number from 1024 to 65535/);
+    assert.match(
+      String(at(refused, "approver.kind")),
+      /must be touchid or terminal, not 'yubikey'/,
+    );
+    assert.match(String(at(refused, "workspace.templates")), /must be on or off \(or 1 or 0\)/);
+    assert.match(String(at(refused, "browser.app")), /must be an application's name/);
+  });
+});
+
 describe("T1 settings: every one is found, and named in the docs", () => {
   it("a setting declared in any file is listed, with no list to keep", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-settings-files-"));
@@ -164,8 +198,7 @@ describe("T1 settings: every one is found, and named in the docs", () => {
 // ------------------------------------------------------------ no tunable read elsewhere
 // Every `process.env.DESOLATE_*` read in release/ is either through the registry or one of
 // these, which are not tunables: where things are, who is asking, a test's hook, or a
-// protocol between desolate's own processes. And, until their tickets move them into the
-// registry (limits 02, 03, 06, 08, 09, 11, 15), the tunables they own: those are marked.
+// protocol between desolate's own processes.
 const NOT_TUNABLES = new Set([
   // where things are, and which stack this is
   "DESOLATE_HOME",
@@ -193,12 +226,6 @@ const NOT_TUNABLES = new Set([
   "DESOLATE_GH",
   "DESOLATE_TEST_RUN",
   "DESOLATE_TEST_GATEWAY_PORTS",
-]);
-const TUNABLES_NOT_YET_MOVED = new Set([
-  "DESOLATE_APPROVER", // limits 02 (host/approver.ts)
-  "DESOLATE_TEMPLATES", // limits 08 (host/workspaces.ts)
-  "DESOLATE_EDITOR_PORT", // limits 15 (shared/names.ts)
-  "DESOLATE_BROWSER", // host/cli.ts, outside any ticket's lines: a setting to come
 ]);
 // A read by a name the code works out (process.env[name]): only where it is the registry's,
 // (and its listing's), or passes the environment on whole. host/workspaces.ts's is limits
@@ -248,9 +275,7 @@ describe("T1 settings: no tunable read from the environment outside the registry
     const stray: string[] = [];
     for (const file of codeFiles(release)) {
       const { names, computed } = readsIn(fs.readFileSync(path.join(release, file), "utf8"));
-      for (const name of names)
-        if (!NOT_TUNABLES.has(name) && !TUNABLES_NOT_YET_MOVED.has(name))
-          stray.push(`${file}: ${name}`);
+      for (const name of names) if (!NOT_TUNABLES.has(name)) stray.push(`${file}: ${name}`);
       if (computed && !COMPUTED_READS.has(file)) stray.push(`${file}: process.env[<a name>]`);
     }
     assert.deepEqual(

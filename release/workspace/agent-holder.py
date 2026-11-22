@@ -3,6 +3,7 @@
 long test run); "agent" is only the command's name.
 
   python3 -I agent-holder.py start <name> <dir> [--log-most <bytes>] -- <command...>   (detaches; prints its state)
+  python3 -I agent-holder.py start <name> <dir> [--log-most <bytes>] < <command as a JSON list of words>   (the host's)
   python3 -I agent-holder.py attach <name>                          (the host's `desolate agent attach`)
   python3 -I agent-holder.py log <name> [--all | --lines <n> | --since <unix time>]
   python3 -I agent-holder.py list
@@ -632,13 +633,26 @@ def whole(text, what):
     return int(text)
 
 
+def from_stdin():
+    """The command as the host sends it: on stdin, since one shell string carries argv into
+    the VM, and Linux takes no argument over 128 KiB."""
+    try:
+        command = json.loads(sys.stdin.read())
+    except ValueError:
+        command = None
+    if not isinstance(command, list) or not command or not all(isinstance(w, str) and "\0" not in w for w in command):
+        sys.exit("agent-holder: the command on stdin is not a JSON list of words")
+    return command
+
+
 def main(args):
-    if len(args) >= 4 and args[0] == "start" and "--" in args[3:]:
-        dash = args.index("--", 3)
+    if len(args) >= 3 and args[0] == "start":
+        dash = args.index("--", 3) if "--" in args[3:] else len(args)
         own = args[3:dash]
         if own and not (len(own) == 2 and own[0] == "--log-most"):
             sys.exit(__doc__)
-        start(checked(args[1]), args[2], args[dash + 1:], whole(own[1], "--log-most") if own else None)
+        command = args[dash + 1:] if dash < len(args) else from_stdin()
+        start(checked(args[1]), args[2], command, whole(own[1], "--log-most") if own else None)
     elif len(args) == 2 and args[0] == "attach":
         attach(checked(args[1]))
     elif len(args) in (2, 3, 4) and args[0] == "log":

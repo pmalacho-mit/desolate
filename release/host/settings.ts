@@ -25,6 +25,7 @@ import {
   WORKSPACE_MEMORY,
 } from "../shared/size.ts";
 import { printable } from "../shared/text.ts";
+import { APPROVER_KIND } from "./approver.ts";
 import { RELEASE_DIR } from "./paths.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -83,6 +84,8 @@ export const applies = (setting: Setting<unknown>): string => {
     return "the root VM has it when it starts again: desolate down, then desolate bootstrap";
   if (setting === GIT_CPUS || setting === GIT_MEMORY)
     return "the git VM has it when it starts again: desolate down, then desolate git";
+  if (setting === APPROVER_KIND)
+    return "the next bootstrap that makes an approver makes this kind; one made already stays what it is";
   if (setting === WORKSPACE_CPUS || setting === WORKSPACE_MEMORY || setting === WORKSPACE_DISK)
     return "a workspace made from now on has it (one already made keeps its size: desolate resize)";
   switch (setting.side) {
