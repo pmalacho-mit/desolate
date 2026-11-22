@@ -135,8 +135,10 @@ next: desolate up you--app   (a workspace: a VM with its checkout, its devcontai
 ## 4. Start a workspace
 
 On the dashboard (`desolate ui --open`), a domain with no workspaces offers **Workspace on
-main**: one on the default branch, the domain's own checkout of each repository. Or, for a
-branch of its own:
+main**: one on the default branch, the domain's own checkout of each repository. **New
+workspace** on its card makes another, with the name you type (`w1`, `w2`... if none), each
+repository on a new branch of that name from its default branch; the line under it says so
+before you click. Or, for a branch you name:
 
 ```bash
 desolate up you--app --name greet --branch feature/greet-by-name
@@ -198,8 +200,9 @@ ceiling the VM fills as it uses it (and macOS is slow to take back); disk grows 
 written. `desolate list` shows each workspace's size. If the
 first repository (or the first you name with `--checkout`) has a `devcontainer.json`, it
 runs inside the VM, as written. The first
-workspace of a domain builds the domain's environment once (the "template" above); the
-next ones start from it in about 20 seconds.
+workspace of a domain builds the domain's environment (the "template" above); the next ones
+start from it in about 20 seconds. It is built again once the project's devcontainer or
+desolate's own VM image (after an upgrade) has changed.
 
 The workspace has **no credentials and no network** but its own proxy (HTTP and HTTPS to
 named hosts; `desolate domain you--app net enforce` limits even that to a list).
@@ -317,7 +320,10 @@ what needs you on top (offers, a workspace asking for help), then each domain as
 
 - **each workspace's state** as a pill (running, stopped, or what the dashboard is doing to
   it: being made, starting, stopping, deleting, with the step it is at);
-- **each checkout's branch** as it changes, and whether its commits are on the remote;
+- **each checkout's branch** as it changes, and whether its commits are on the remote (or
+  squashed there, with the command that carries the branch on from the squash);
+- **each workspace's agents** (`desolate agent start`, step 6), running or ended: hover one
+  for its command, when it last printed, and how to attach to it;
 - **every branch of the domain** under **Branches**:
 
 ![Every branch a domain has, offered or not, with Review and Open in git](assets/dashboard-branches.png)
@@ -346,6 +352,11 @@ Two ways, and both end with you approving the exact commit:
 - From the dashboard: **Push exactly <commit>**. It opens the approval page in a new tab,
   where you approve exactly that commit. (Your browser is signed in to it by `desolate ui --open`:
   step 2. Or approve with `desolate approve` in a terminal.)
+  Once it is pushed, the workspace's row and the branch's row under **Branches** say
+  **pushed**, with **Open pull request** (GitHub's page for it, in your browser, as you).
+  When the pull request is merged, **Fetch now** beside it shows it at once (the root also
+  looks every 15 minutes): the row then says **merged into main**, and how to carry on in
+  the workspace: `git fetch && git switch --no-track -c <next-branch> origin/main`.
   The default branch is pushed the same way: the review says so in red at its top, since a
   push there changes it on the remote with no pull request first.
 - **Open in git**, in the review: the git terminal, on that branch as the workspace has it
