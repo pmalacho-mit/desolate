@@ -174,6 +174,9 @@ const pushed = (
 describe("T2 section 4.8: the root UI", () => {
   before(() => {
     stack = newStack("ui");
+    // The host looks in each running workspace for what a remove would lose every 2 s, not
+    // every 30 s (the setting workspace.lookSeconds): Delete waits for those looks.
+    stack.env.DESOLATE_WORKSPACE_LOOK_SECONDS = "2";
     stack.seed("acme/app", (dir) => {
       fs.writeFileSync(path.join(dir, "README.md"), "# app\n");
       git(dir, "add", "-A");
@@ -1073,7 +1076,7 @@ describe("T2 section 4.8: the root UI", () => {
     };
     const spare = async () => ws(await state(), "web/spare") as Seen | undefined;
     const lost = async () => (await spare())?.host?.looked?.lost;
-    // The host looks at it while it runs (every 30 s); the root counts its commits.
+    // The host looks at it while it runs (every 2 s here); the root counts its commits.
     assert.ok(
       await until(
         async () => Array.isArray(await lost()) && Array.isArray((await spare())?.pushed),

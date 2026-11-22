@@ -49,7 +49,7 @@ import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
-import type { Backend as ApprovalBackend } from "./approve-web.ts";
+import type { Backend as ApprovalBackend, PusherSaid } from "./approve-web.ts";
 import { accountLines } from "../shared/review-account.ts";
 import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
 import { statusDir } from "../shared/status.ts";
@@ -59,7 +59,7 @@ import { sniffSocket } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
-import { backend, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
+import { backend, config, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -726,6 +726,12 @@ const approvalBackend = (): ApprovalBackend => {
       return url;
     },
     refuseIssue: async (issue) => (await import("./issues.ts")).refuseIssue(issue),
+    pushes: (heard) =>
+      events.listen(0, (line) => {
+        const e = JSON.parse(line) as PusherSaid & { source: string };
+        if (e.source === "pusher") heard(e);
+      }),
+    github: () => config()?.forge.kind === "github",
   };
 };
 
@@ -772,6 +778,71 @@ declare namespace lastLines {
   ];
 }
 
+/** A workspace's agents as the dashboard is told of them: the running first, then the one
+ *  that spoke last, a few, each command cut to a line, and how many there are. A VM may list
+ *  a thousand (agent.ts), and the facts are one request, of which the state service takes
+ *  256 KiB (root/stated.ts BODY_BYTES); `desolate agent list` has the rest. */
+const AGENTS_SHOWN = 8;
+/** Three quarters of what root/stated.ts takes of a request (BODY_BYTES, 256 KiB). */
+const FACTS_MOST = 192 * 1024;
+const COMMAND_SHOWN = 200;
+const shownAgents = (agents: {
+  items: {
+    name: string;
+    state: string;
+    exit: number | null;
+    started: string;
+    lastOutput: string | null;
+    command: string[];
+  }[];
+  total: number;
+}) => ({
+  items: [...agents.items]
+    .sort(
+      (a, b) =>
+        Number(b.state === "running") - Number(a.state === "running") ||
+        (b.lastOutput ?? b.started).localeCompare(a.lastOutput ?? a.started),
+    )
+    .slice(0, AGENTS_SHOWN)
+    .map((a) => ({
+      name: a.name,
+      state: a.state,
+      exit: a.exit,
+      lastOutput: a.lastOutput,
+      command: a.command.join(" ").slice(0, COMMAND_SHOWN),
+    })),
+  total: agents.total,
+});
+
+declare namespace shownAgents {
+  type Agent<Name extends string, State extends string, Last extends string> = {
+    name: Name;
+    state: State;
+    exit: null;
+    started: "2026-11-21T20:00:00Z";
+    lastOutput: Last;
+    command: ["npx vitest"];
+  };
+  /** the running first, then the one that spoke last; the count is of all of them */
+  export type Order = Expect<
+    Invoke<
+      typeof shownAgents,
+      [
+        agents: {
+          items: [
+            Agent<"old", "exited", "2026-11-21T20:01:00Z">,
+            Agent<"new", "exited", "2026-11-21T20:09:00Z">,
+            Agent<"tests", "running", "2026-11-21T20:05:00Z">,
+          ];
+          total: 3;
+        },
+      ]
+    >,
+    "matches",
+    { items: [{ name: "tests" }, { name: "new" }, { name: "old" }]; total: 3 }
+  >;
+}
+
 /** The memory given to running workspaces: each one's size, else the stack's. */
 const memoryGiven = (
   domains: { workspaces: { vm: string; size?: Partial<Size> }[] }[],
@@ -784,6 +855,17 @@ const memoryGiven = (
       if (running.has(w.vm)) given += Number(w.size?.memoryMiB ?? defaultMiB()) || 0;
   return given;
 };
+/** How often the daemon looks in each running workspace for what a remove would lose, for the
+ *  dashboard's Delete. A timer, not an event: what changes it is the workspace's own files,
+ *  written inside its VM, where the host sees nothing happen. */
+const LOOK_SECONDS = define({
+  name: "workspace.lookSeconds",
+  env: "DESOLATE_WORKSPACE_LOOK_SECONDS",
+  side: "host",
+  default: 30,
+  parse: whole(1, 60 * 60),
+  why: "How often the host looks in each running workspace (a git status in its VM) for what a remove would lose, which the dashboard's Delete shows: longer for fewer looks on a Mac with many workspaces.",
+});
 /** How much of this Mac's memory running workspaces may be given, for a workspace's own
  *  request for another (a spawn). A person may knowingly give more than the Mac has. */
 const SPAWN_ROOM = define({
@@ -1881,6 +1963,9 @@ const serve = async () => {
 
   let sentFacts = "";
   let sentAt = 0;
+  // Each running workspace's agents, as last listed (the look below): the dashboard showed
+  // none, and a person found them only with `desolate agent list` (dogfooding, 2026-11-21).
+  const agentsOf = new Map<string, Awaited<ReturnType<typeof import("./agent.ts").agentsIn>>>();
   const tellRoot = async () => {
     const vms = await b.list();
     rootUp = vms.find((vm) => vm.name === ROOT_VM)?.status === "running";
@@ -1914,6 +1999,9 @@ const serve = async () => {
                 .map((p) => ({ port: p, by: holderOf(p) })),
               // What only the host knows of it, in sentences: listeners cut here, connections
               // its link refused. (What the VM left out is in its devcontainer line already.)
+              ...(vm.status === "running" && agentsOf.has(vm.name)
+                ? { agents: shownAgents(agentsOf.get(vm.name)!) }
+                : {}),
               ...(entry.past > 0 || entry.refused.count > 0
                 ? {
                     notes: notesOf(
@@ -1944,6 +2032,10 @@ const serve = async () => {
       },
       workspaces,
     };
+    // Agents are what a VM may make many of (a domain's agent spawns workspaces): left out
+    // when the facts would come near what the state service takes, so nothing else freezes.
+    if (JSON.stringify(facts).length > FACTS_MOST)
+      for (const w of Object.values(workspaces) as { agents?: unknown }[]) delete w.agents;
     const text = JSON.stringify(facts);
     // Said when it changes, and now and then regardless, so the service knows the host is there.
     if (text === sentFacts && Date.now() - sentAt < 45_000) return;
@@ -1953,9 +2045,10 @@ const serve = async () => {
   };
 
   // What each running workspace holds that a remove would lose (uncommitted changes,
-  // untracked files, stashes), looked at in its own VM every 30 s, for the dashboard's Delete
-  // (workspaces.ts look). One at a time, and never two rounds at once.
+  // untracked files, stashes), looked at in its own VM every LOOK_SECONDS, for the
+  // dashboard's Delete (workspaces.ts look). One at a time, and never two rounds at once.
   let looking = false;
+  const lookMs = valueOf(LOOK_SECONDS) * 1000;
   setInterval(async () => {
     if (looking || !rootUp) return;
     looking = true;
@@ -1964,6 +2057,8 @@ const serve = async () => {
       const running = new Set(
         (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
       );
+      // (A VM stopped since is not shown with the agents it had.)
+      for (const vm of agentsOf.keys()) if (!running.has(vm)) agentsOf.delete(vm);
       for (const entry of entries.values()) {
         if (!running.has(entry.vm)) continue;
         try {
@@ -1975,12 +2070,18 @@ const serve = async () => {
         } catch {
           /* gone meanwhile, or not answering: looked at next time */
         }
+        try {
+          const { agentsIn } = await import("./agent.ts");
+          agentsOf.set(entry.vm, await agentsIn(entry.vm, `${entry.domain}/${entry.workspace}`));
+        } catch {
+          agentsOf.delete(entry.vm); // not answering: none shown, rather than old ones
+        }
       }
       void tellRoot().catch(() => {});
     } finally {
       looking = false;
     }
-  }, 30_000).unref();
+  }, lookMs).unref();
 
   /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
    *  running workspaces, with the new one's (its domain's size, else the stack's), within

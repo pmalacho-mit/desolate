@@ -136,9 +136,9 @@ next: desolate up you--app   (a workspace: a VM with its checkout, its devcontai
 
 On the dashboard (`desolate ui --open`), a domain with no workspaces offers **Workspace on
 main**: one on the default branch, the domain's own checkout of each repository. **New
-workspace**, on every domain's card, makes one too (its name you may leave empty): the first
-takes each repository's default branch, and each after it a branch of its own, named after the
-workspace. Or, for a branch you name:
+workspace** on its card makes another, with the name you type (`w1`, `w2`... if none), each
+repository on a new branch of that name from its default branch; the line under it says so
+before you click. Or, for a branch you name:
 
 ```bash
 desolate up you--app --name greet --branch feature/greet-by-name
@@ -200,8 +200,9 @@ ceiling the VM fills as it uses it (and macOS is slow to take back); disk grows 
 written. `desolate list` shows each workspace's size. If the
 first repository (or the first you name with `--checkout`) has a `devcontainer.json`, it
 runs inside the VM, as written. The first
-workspace of a domain builds the domain's environment once (the "template" above); the
-next ones start from it in about 20 seconds.
+workspace of a domain builds the domain's environment (the "template" above); the next ones
+start from it in about 20 seconds. It is built again once the project's devcontainer or
+desolate's own VM image (after an upgrade) has changed.
 
 The workspace has **no credentials and no network** but its own proxy (HTTP and HTTPS to
 named hosts; `desolate domain you--app net enforce` limits even that to a list).
@@ -237,7 +238,11 @@ and 443 ([what that means for registries and builds](reference.md)).
 - **Commit** as usual, from the terminal or the editor's Source Control. Your commits carry
   your own name and email (your Mac's `git config --global user.name` and `user.email`).
 - **`git pull` and `git fetch`** get what GitHub has now: the workspace asks the root to
-  refresh its copy first (a second or two), and fetches from it.
+  refresh its copy first (a second or two), and fetches from it. Offering a branch makes
+  GitHub's branch of that name its upstream, so once it is pushed `git pull` on it works
+  (until then `git status` calls the upstream "gone": GitHub does not have it yet). Once its
+  pull request is merged, start the next change from the default branch:
+  `git fetch && git switch --no-track -c <next-branch> origin/main`.
 - **`git push`** (or the editor's Sync) hands your branch to the root, which is as far as
   anything in a workspace can push. It says so:
 
@@ -255,7 +260,7 @@ and 443 ([what that means for registries and builds](reference.md)).
   and `git status`, the editor and every other tool would then say GitHub has a branch it
   does not have. The editor's Publish Branch and Sync show a red "Can't push refs to remote.
   Try running Pull first" dialog for the same reason, and the button still says Publish
-  Branch afterwards. Close the dialog: the branch was offered. Show Command Output has the
+  Branch until the push lands. Close the dialog: the branch was offered. Show Command Output has the
   `offered ... at ...` line, and the dashboard lists the branch. Pushing again only offers it
   again (the newer offer replaces the older one), so it does no harm, but there is no need.
 
@@ -315,7 +320,10 @@ what needs you on top (offers, a workspace asking for help), then each domain as
 
 - **each workspace's state** as a pill (running, stopped, or what the dashboard is doing to
   it: being made, starting, stopping, deleting, with the step it is at);
-- **each checkout's branch** as it changes, and whether its commits are on the remote;
+- **each checkout's branch** as it changes, and whether its commits are on the remote (or
+  squashed there, with the command that carries the branch on from the squash);
+- **each workspace's agents** (`desolate agent start`, step 6), running or ended: hover one
+  for its command, when it last printed, and how to attach to it;
 - **every branch of the domain** under **Branches**:
 
 ![Every branch a domain has, offered or not, with Review and Open in git](assets/dashboard-branches.png)
@@ -344,6 +352,11 @@ Two ways, and both end with you approving the exact commit:
 - From the dashboard: **Push exactly <commit>**. It opens the approval page in a new tab,
   where you approve exactly that commit. (Your browser is signed in to it by `desolate ui --open`:
   step 2. Or approve with `desolate approve` in a terminal.)
+  Once it is pushed, the workspace's row and the branch's row under **Branches** say
+  **pushed**, with **Open pull request** (GitHub's page for it, in your browser, as you).
+  When the pull request is merged, **Fetch now** beside it shows it at once (the root also
+  looks every 15 minutes): the row then says **merged into main**, and how to carry on in
+  the workspace: `git fetch && git switch --no-track -c <next-branch> origin/main`.
   The default branch is pushed the same way: the review says so in red at its top, since a
   push there changes it on the remote with no pull request first.
 - **Open in git**, in the review: the git terminal, on that branch as the workspace has it
@@ -370,10 +383,12 @@ to the root, after which you decline it on the approval page.
 
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
-it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes
-is the one desolate's reviewer made of its commits, and what you approve names it. Once it
-has landed, desolate links GitHub's page for opening its pull request ([after a
-push](reference.md#approving-pushing-and-the-pages-desolate-serves)).
+it: move it onto the button, then click a moment later (a click before that does nothing,
+and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
+the pack that goes is the one desolate's reviewer made of its commits, and what you approve
+names it. The card then says when the push is on the remote, with **Open a pull request**
+(GitHub's page, into the repository's default branch). Once nothing else waits, the keys go
+back to the shell.
 
 What the approval page shows, and the two choices it may add:
 

@@ -70,7 +70,12 @@ so a program listening on another port is sent the cookie, but never the key), i
 (a page an agent wrote, on a workspace's name, is another), a token per push, a JSON body.
 It cannot be framed, and its Approve button arms only after the tab has had your attention
 for a second and the pointer then moves onto it, so a click aimed at something else when a
-window opened under it lands on nothing. Treat the address like a password: anyone with it,
+window opened under it lands on nothing. A click a moment after arming is the approval; one
+sooner, or on a button not armed, does nothing, and the line under the buttons says why.
+Once approved, the card says how the push ended, as the root's pusher reported it, with GitHub's
+page for opening its pull request into the repository's default branch. An address ending in
+`#repo=<owner/repo>&branch=<branch>&commit=<commit>` marks that push's card and scrolls to it;
+cards already decided fold when a new push comes. Treat the address like a password: anyone with it,
 on your Mac, can approve. The pages are served on both `127.0.0.1` and `::1` (where browsers
 look first for these names), or not at all: while another program holds the port on `::1`,
 desolate prints no address with a token in it, and retires the tokens (a tab already open
@@ -83,14 +88,16 @@ Approve arms only while the browser reports the button visible and uncovered.
 **After a push: its pull request, and noticing the merge.** A branch offered with
 `desolate offer --base <branch>` is for that branch; otherwise for the repository's default.
 When its push lands, desolate gives GitHub's page for opening the pull request, filled in:
-"Open pull request" in the dashboard's activity, a line after `desolate push`, and one in a
-raw `git push origin`'s output. It opens in your browser, where you are signed in as
+"Open pull request" on the dashboard (on the workspace's row and the branch's, until it is
+merged, and in its activity), a line after `desolate push`, and one in a raw `git push
+origin`'s output. It opens in your browser, where you are signed in as
 yourself, and you create the pull request there: desolate holds no forge token, and this
 needs none. The root keeps a record of what it pushed (`/var/lib/desolate/pushed.json`, kept
 across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
-every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days. The test is conservative: every file the branch changed is, in
+every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days; the dashboard's
+**Fetch now** beside the link looks at once. The test is conservative: every file the branch changed is, in
 the base, exactly as the branch left it (so a merge commit, a squash and a rebase all count).
 A base that has since changed one of those files again is not recognised, and the branch is
 then just not marked.
@@ -353,7 +360,15 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
   refs to remote" dialog. The offer's own line (`offered <repo> <branch> at <commit>`) is
   what says it worked. `desolate offer` exits 0 when it is taken, so a script or an agent
   should use that instead. Offering a branch again replaces its earlier offer. (Kept so on
-  purpose: #189.)
+  purpose: #189.) An offer makes `origin/<branch>` the upstream of a branch that has none,
+  so `git pull` gets the branch once it is pushed; until then `git status` says the upstream
+  is gone.
+- LFS files check out from the mirror, and an offer carries the LFS objects its commits
+  point to. git-lfs's own pre-push hook (`git lfs install` adds one) uploads to
+  `workspace/desolate-lfs-offer`, which sends nothing, since the mirror is read-only. In a
+  devcontainer, git-lfs is the project's: add the feature
+  `ghcr.io/devcontainers/features/git-lfs:1` to its `devcontainer.json`. The workspace's
+  start says so once the repository has LFS files and the container has no git-lfs.
 - Commits carry the person's git identity from the Mac (`git config --global user.name` and
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.
@@ -620,8 +635,10 @@ Every setting there is (T1 checks that this table names exactly those):
 | `git.scrollbackLines` | `DESOLATE_GIT_SCROLLBACK_LINES` | on the Mac | 5000 | lines the git terminal's browser tab keeps to scroll back through |
 | `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly (QEMU without KVM) |
 | `root.silentSeconds` | `DESOLATE_ROOT_SILENT_SECONDS` | on the Mac | 900 | how long a call to the root VM may hear nothing from it (no progress, no answer) before it is given up |
+| `workspace.silentSeconds` | `DESOLATE_WORKSPACE_SILENT_SECONDS` | on the Mac | 120 | how long a step of a workspace's start may hear nothing from the workspace's VM before it is stopped |
 | `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | an eighth of this Mac's memory at about 85 MB each, 16 to 256 | connections out of one workspace carried to its proxy at once; as many more wait, and past those one is refused |
 | `forward.rawPorts` | `DESOLATE_RAW_PORTS` | on the Mac | none | your own ports where a workspace's server speaks first, as a database does: a connection there goes to the workspace that listened on the port first, where on another port a client that waits for the server is disconnected (the databases' and queues' ports are listed already) |
+| `workspace.lookSeconds` | `DESOLATE_WORKSPACE_LOOK_SECONDS` | on the Mac | 30 | how often the host looks in each running workspace for what a remove would lose, which the dashboard's Delete shows |
 | `spawn.memoryPercent` | `DESOLATE_SPAWN_MEMORY_PERCENT` | on the Mac | 85 | how much of this Mac's memory the running workspaces may be given before a workspace's own request for another is refused |
 | `agent.logMiB` | `DESOLATE_AGENT_LOG_MIB` | on the Mac | a twentieth of the workspace's disk | the most of an agent's output its log keeps: past it the oldest is dropped, and the log says so |
 | `events.kept` | `DESOLATE_EVENTS_KEPT` | on the Mac | 500 | the last events the host daemon holds for `desolate events --replay <n>` |

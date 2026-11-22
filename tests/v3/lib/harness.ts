@@ -45,6 +45,10 @@ export type Stack = {
   destroy: () => void;
 };
 
+/** The most one command of a test may take. None takes near it; one that hung once (a CLI
+ *  call behind a push a failed test left waiting) took 14 minutes of a run before the test
+ *  went on, and said nothing of where. */
+const COMMAND_MOST_MS = 10 * 60_000;
 const sh = (
   command: string,
   args: string[],
@@ -57,11 +61,18 @@ const sh = (
     cwd: options.cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    timeout: COMMAND_MOST_MS,
+    killSignal: "SIGKILL",
   });
+  const hung = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
   return {
     code: result.status ?? 1,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stderr:
+      (result.stderr ?? "") +
+      (hung
+        ? `\n[the test stopped it: still running after ${COMMAND_MOST_MS / 60_000} min: ${path.basename(command)} ${args.slice(0, 4).join(" ")}]`
+        : ""),
     ms: Date.now() - started,
   };
 };
@@ -83,22 +94,33 @@ export const git = (dir: string, ...args: string[]) =>
     { encoding: "utf8" },
   );
 
-/** T2: the fake backend. T3: real VMs on Linux (qemu). T4: the product backend on a Mac (vz). */
 /** What was said of a domain's outbox from now on, by whichever fetch took what it held: a
- *  `git fetch` of the test's (`output`), or rootd's own import, which takes what a domain
- *  writes as it writes it (root/rootd.ts, importChanged) and says so in its log. The first to
- *  look takes it, so a test cannot know which: this waits, up to 20 s, for `expected` in one. */
+ *  `git fetch` of the test's (`output`), or one of the root's own, each of which says what
+ *  the domain's fetch said in its service's log (root/offers.ts fetchDomain): rootd's import
+ *  as a domain writes, the state service's count of a workspace's commits, an offer. The
+ *  first to look takes it, so a test cannot know which: this waits, up to 20 s, for
+ *  `expected` in any. A command that failed says how, so an empty answer is never silent. */
 export const outboxSaid = (stack: Stack) => {
-  const log = "/var/lib/desolate/rootd.log";
-  const from = Number(stack.inRoot(["bash", "-c", `wc -l < ${log}`]).stdout.trim()) + 1;
-  return (output: string, expected: RegExp) => {
-    let said = output;
-    for (const end = Date.now() + 20_000; !expected.test(said) && Date.now() < end;)
-      said = output + stack.inRoot(["bash", "-c", `sleep 0.25; tail -n +${from} ${log}`]).stdout;
+  const logs = ["rootd", "stated", "rootctl"].map((name) => `/var/lib/desolate/${name}.log`);
+  // (A log not made yet has no lines: all of it is new.)
+  const from = logs.map((log) => {
+    const counted = stack.inRoot(["bash", "-c", `wc -l < ${log}`]);
+    return counted.code === 0 ? Number(counted.stdout.trim()) + 1 : 1;
+  });
+  const tails = logs.map((log, i) => `tail -n +${from[i]} ${log} 2>/dev/null`).join("; ");
+  const told = (r: Result) => r.stdout + (r.code ? `\n[exit ${r.code}] ${r.stderr}` : r.stderr);
+  return (output: Result, expected: RegExp) => {
+    let said = told(output);
+    for (const end = Date.now() + 20_000; !expected.test(said) && Date.now() < end;) {
+      const tail = stack.inRoot(["bash", "-c", `sleep 0.25; ${tails}; true`]);
+      said =
+        told(output) + (tail.code ? `\n[the root's logs could not be read] ` : "") + told(tail);
+    }
     return said;
   };
 };
 
+/** T2: the fake backend. T3: real VMs on Linux (qemu). T4: the product backend on a Mac (vz). */
 export const backendOfTier = (): "fake" | "qemu" | "vz" =>
   process.env.DESOLATE_TIER === "T3" ? "qemu" : process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
 
