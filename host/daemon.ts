@@ -790,6 +790,17 @@ const memoryGiven = (
       if (running.has(w.vm)) given += Number(w.size?.memoryMiB ?? defaultMiB()) || 0;
   return given;
 };
+/** How often the daemon looks in each running workspace for what a remove would lose, for the
+ *  dashboard's Delete. A timer, not an event: what changes it is the workspace's own files,
+ *  written inside its VM, where the host sees nothing happen. */
+const LOOK_SECONDS = define({
+  name: "workspace.lookSeconds",
+  env: "DESOLATE_WORKSPACE_LOOK_SECONDS",
+  side: "host",
+  default: 30,
+  parse: whole(1, 60 * 60),
+  why: "How often the host looks in each running workspace (a git status in its VM) for what a remove would lose, which the dashboard's Delete shows: longer for fewer looks on a Mac with many workspaces.",
+});
 /** How much of this Mac's memory running workspaces may be given, for a workspace's own
  *  request for another (a spawn). A person may knowingly give more than the Mac has. */
 const SPAWN_ROOM = define({
@@ -1959,9 +1970,10 @@ const serve = async () => {
   };
 
   // What each running workspace holds that a remove would lose (uncommitted changes,
-  // untracked files, stashes), looked at in its own VM every 30 s, for the dashboard's Delete
-  // (workspaces.ts look). One at a time, and never two rounds at once.
+  // untracked files, stashes), looked at in its own VM every LOOK_SECONDS, for the
+  // dashboard's Delete (workspaces.ts look). One at a time, and never two rounds at once.
   let looking = false;
+  const lookMs = valueOf(LOOK_SECONDS) * 1000;
   setInterval(async () => {
     if (looking || !rootUp) return;
     looking = true;
@@ -1986,7 +1998,7 @@ const serve = async () => {
     } finally {
       looking = false;
     }
-  }, 30_000).unref();
+  }, lookMs).unref();
 
   /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
    *  running workspaces, with the new one's (its domain's size, else the stack's), within

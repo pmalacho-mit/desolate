@@ -29,7 +29,7 @@ import {
 } from "../shared/size.ts";
 import type { ProjectSize, Size } from "../shared/size.ts";
 import { RUN_MAX } from "../shared/run.ts";
-import { define, valueOf } from "../shared/settings.ts";
+import { define, valueOf, whole } from "../shared/settings.ts";
 import type { RunResult } from "../shared/run.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { BEAT_MS, elapsed } from "../shared/step.ts";
@@ -315,13 +315,20 @@ const fromVm = (plan: WorkspacePlan, what: string, output: string, lines: number
     return file;
   });
 
-/** How many beats (shared/step.ts: a step in the VM says it is still running every
- *  BEAT_MS) the host lets go by with no line before it takes the step as stopped: two
- *  minutes. A step that is running is never stopped for being slow; one whose VM stopped
- *  answering (it froze, its ssh went, the program hung before it could say so) is not waited
- *  on for ever. A VM busy with a build still runs a timer every ten seconds: twelve of them
- *  missed is not load. */
-const QUIET_BEATS = 12;
+/** How long the host lets a step in a workspace's VM say nothing before it takes the step
+ *  as stopped. A step that runs says it still does every BEAT_MS (shared/step.ts), so one
+ *  that is running is never stopped for being slow; one whose VM stopped answering (it
+ *  froze, its ssh went, the program hung before it could say so) is not waited on for ever.
+ *  Two minutes is twelve beats: a VM busy with a build still runs a timer every ten seconds,
+ *  and twelve of them missed is not load. At least two beats. */
+const WORKSPACE_SILENT_SECONDS = define({
+  name: "workspace.silentSeconds",
+  env: "DESOLATE_WORKSPACE_SILENT_SECONDS",
+  side: "host",
+  default: 120,
+  parse: whole((2 * BEAT_MS) / 1000, 24 * 60 * 60),
+  why: "How long a step of a workspace's start may hear nothing from the workspace's VM (no line, no beat) before it is stopped: more on a Mac so loaded that a VM misses its beats for minutes.",
+});
 
 /** Whoever is watching this start as it happens, and how what a step says reaches them: the
  *  dashboard (DESOLATE_PROGRESS: a `progress:` line each), a person at a terminal (each
@@ -370,7 +377,7 @@ const rawWatcher = (): Shown => {
 /** Run a step of a start in the workspace's VM (init.ts, devcontainer.ts) for as long as it
  *  runs: it has no deadline (docs/v3/limits.md, R4: the person waiting owns that, and can
  *  Ctrl-C). It says what it is doing, and that it still is, a line at a time on stderr; each
- *  line goes to `shown`, and one QUIET_BEATS' time with none ends it, said as run() says
+ *  line goes to `shown`, and WORKSPACE_SILENT_SECONDS with none ends it, said as run() says
  *  it. What it writes is the VM's, so all of it is held to run()'s bound (RUN_MAX). The
  *  answer's stderr is what it said, without its "still ..." lines. */
 const stepInVm = (plan: WorkspacePlan, argv: string[], shown: Shown) =>
@@ -402,7 +409,7 @@ const stepInVm = (plan: WorkspacePlan, argv: string[], shown: Shown) =>
         settle({ code: 128, stdout, stderr: `${stderr}${partial}${ended}` });
       }, 5000).unref();
     };
-    const quietMs = QUIET_BEATS * BEAT_MS;
+    const quietMs = valueOf(WORKSPACE_SILENT_SECONDS) * 1000;
     const quiet = setTimeout(
       () => end(`\n(nothing from the workspace's VM for ${elapsed(quietMs)}: stopped)`),
       quietMs,
