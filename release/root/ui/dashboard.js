@@ -25,15 +25,16 @@ const gitLink = (repo, at) => state && state.stack && state.stack.editorPort
   ? el("a", { class: "button quiet", "data-open-git": repo, href: `http://${state.stack.gitHostname || "desolate-git.localhost"}:${state.stack.editorPort}/?repo=${encodeURIComponent(repo)}${at ? `&domain=${encodeURIComponent(at.domain)}&branch=${encodeURIComponent(at.branch)}` : ""}`, target: "_blank", rel: "noopener noreferrer", title: at ? `A terminal in your clone of ${repo}, on ${at.branch} as ${at.domain} has it: git status, git log, git push` : `A terminal in your clone of ${repo}` }, "Open in git")
   : null;
 /** The approval page (the Mac's own, not this one's): its bare address, the only one another
- *  site may open (host/approve-web.ts). */
-const approvalUrl = () => state && state.stack && state.stack.approveHostname
-  ? `http://${state.stack.approveHostname}:${state.stack.editorPort}/`
+ *  site may open (host/approve-web.ts), and for a `push`, a fragment naming it, which the
+ *  page marks (the fragment never reaches its server). */
+const approvalUrl = (push) => state && state.stack && state.stack.approveHostname
+  ? `http://${state.stack.approveHostname}:${state.stack.editorPort}/${push ? `#repo=${encodeURIComponent(push.repo)}&branch=${encodeURIComponent(push.branch)}&commit=${encodeURIComponent(push.commit)}` : ""}`
   : null;
 /** It in a tab of its own, as Push starts a push that waits there for the person. Opened in
  *  the click itself, so the browser lets it open; with no tie back to this page (noopener,
  *  and its own Cross-Origin-Opener-Policy). */
-const openApproval = () => {
-  if (approvalUrl()) window.open(approvalUrl(), "_blank", "noopener,noreferrer");
+const openApproval = (push) => {
+  if (approvalUrl(push)) window.open(approvalUrl(push), "_blank", "noopener,noreferrer");
 };
 /** What a name is, said with it: a domain, a workspace, a repository, a branch, a commit (the
  *  same word can be several). A domain or a workspace named with `at` ("<domain>" or
@@ -752,7 +753,7 @@ const reviewPanel = () => {
     el("div", { class: "buttons" }, !review.pushable ? el("span", { class: "sub" }, "Not pushable: cloned --no-push, so there is no write key for it.")
       : reviewing.against === "domain" ? el("span", { class: "sub" }, `A push would send ${review.pushCommits} commit(s), counted against origin: compare with origin to push.`)
       : !offered ? el("span", { class: "sub" }, "Not offered at this commit, so not pushed from here. Open it in git (above) and run git push there, or have the agent run ", el("code", {}, "desolate offer"), ".")
-      : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval(); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
+      : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval({ repo: review.repo, branch: review.branch, commit: review.commit }); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
           busy.has(key) ? "Pushing..." : `Push exactly ${short(review.commit)}${review.isDefault ? ` to ${review.branch}` : ""}`)),
     el("div", { class: "sub" }, "Push opens the approval page in a new tab, where you approve exactly this commit. (Or approve it with ", el("code", {}, "desolate approve"), " in a terminal on the Mac.)"));
 };
