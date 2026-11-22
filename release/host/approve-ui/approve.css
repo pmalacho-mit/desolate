@@ -161,3 +161,4 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 /* A card decided before a new one came: its names and what was decided, on one short card. */
 .card.folded > :not(.names):not(.actions), .card.folded .actions > :not(.hint) { display: none; }
 .card.folded .actions { position: static; border-top: 0; padding: 0; }
+.summary > p.working { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

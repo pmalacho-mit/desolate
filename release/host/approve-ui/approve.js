@@ -254,12 +254,14 @@ const summaryOf = (review, card) => {
   if (!review || review.working) {
     // No deadline: the person waits as long as they choose to, or refuses (R4). How long, the
     // page counts from what the host said (the host tells it only what changes).
-    const p = el("p");
+    // What it is doing, on one line (approve.css): ticking each second, it never changes the
+    // card's height, which would make every card wait its second again.
+    const p = el("p", undefined, "working");
     const since = performance.now() - (review ? review.working.seconds * 1000 : 0);
-    const say = () => { p.textContent = `desolate's reviewer is working out what this push would send: ${review ? workingText({ ...review.working, seconds: Math.floor((performance.now() - since) / 1000) }) : "starting"}. It may take a while for a large push; Approve arms when it has said. Or refuse it.`; };
+    const say = () => { p.textContent = `desolate's reviewer is working out what this push would send: ${review ? workingText({ ...review.working, seconds: Math.floor((performance.now() - since) / 1000) }) : "starting"}`; p.title = p.textContent; };
     say();
     if (card) card.tick = say;
-    box.append(p);
+    box.append(p, el("p", "It may take a while for a large push; Approve arms when it has said. Or refuse it."));
     return box;
   }
   if (!review.account) {
