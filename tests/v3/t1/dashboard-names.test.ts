@@ -12,7 +12,11 @@ const SOURCE = path.resolve(import.meta.dirname, "../../../release/root/ui/dashb
 /** Anything the script touches as it loads: a stand-in that answers every use with another. */
 const anything: unknown = new Proxy(function () {}, {
   get: (_, key) =>
-    key === Symbol.iterator ? [][Symbol.iterator] : key === Symbol.toPrimitive ? () => "" : anything,
+    key === Symbol.iterator
+      ? [][Symbol.iterator]
+      : key === Symbol.toPrimitive
+        ? () => ""
+        : anything,
   apply: () => anything,
   construct: () => anything as object,
 });
