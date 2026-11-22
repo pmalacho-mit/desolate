@@ -51,6 +51,8 @@ doctor: all checks passed.
 
 ## stop and start
 
+## new workspace in another repository's environment
+
 ## resize from the dashboard
 
 ## review and push

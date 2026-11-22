@@ -591,13 +591,29 @@ const squashOf = async (u: Unpushed): Promise<Counted> => {
 // projectSizeOf), for the dashboard's Resize. Read in the same loop: one rev-parse when the
 // spec has not changed.
 const asksOf = new Map<string, domains.ProjectAsk | null>();
+/** Each domain's environments, for New workspace (domains.ts envKey): the one its workspaces
+ *  get unless another is chosen, and the repositories that have one. Read again when the
+ *  domain's choice or a mirror changes. */
+const envsOf = new Map<string, { key: string; used: string | null; choices: string[] }>();
+const checkEnvs = async (d: { slug: string; repos: string[]; env?: string }) => {
+  const key = JSON.stringify([d.env, repos.list().filter((r) => d.repos.includes(r.repo))]);
+  if (envsOf.get(d.slug)?.key === key) return;
+  const choices: string[] = [];
+  if (d.repos.length > 1)
+    for (const repo of d.repos)
+      if ((await domains.envKey(d.slug, repo))?.repo === repo) choices.push(repo);
+  envsOf.set(d.slug, { key, used: (await domains.envKey(d.slug))?.repo ?? null, choices });
+};
 let checkingPushed = false;
 const checkPushed = async () => {
   if (checkingPushed) return;
   checkingPushed = true;
   const seen = new Set<string>();
   try {
-    for (const d of domains.domains())
+    for (const d of domains.domains()) {
+      await checkEnvs(d).catch((error) =>
+        console.error(`stated: ${d.slug}'s environments could not be read: ${String(error)}`),
+      );
       for (const w of domains.workspaces(d.slug)) {
         if (w.workspace === TEMPLATE_BUILD) continue;
         const key = `${d.slug}/${w.workspace}`;
@@ -631,8 +647,11 @@ const checkPushed = async () => {
           console.error(`stated: ${key}'s commits could not be counted: ${String(error)}`);
         }
       }
+    }
     for (const key of pushedOf.keys()) if (!seen.has(key)) pushedOf.delete(key);
     for (const key of asksOf.keys()) if (!seen.has(key)) asksOf.delete(key);
+    for (const slug of envsOf.keys())
+      if (!domains.domains().some((d) => d.slug === slug)) envsOf.delete(slug);
   } finally {
     checkingPushed = false;
   }
@@ -691,6 +710,10 @@ const snapshot = () => {
     branches: branchesFor(d, 0, pushed),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
+    // Whose devcontainer New workspace runs, and which it may choose instead (null: not read yet).
+    env: envsOf.has(d.slug)
+      ? { used: envsOf.get(d.slug)!.used, choices: envsOf.get(d.slug)!.choices }
+      : null,
     // The domain's environment, while it is built for its first workspace: shown as that,
     // not as a workspace named "template" with a Start button (dogfooding, 2026-11-17).
     building: domains.workspaces(d.slug).some((w) => w.workspace === TEMPLATE_BUILD)

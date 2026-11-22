@@ -182,6 +182,16 @@ describe("T2 section 4.8: the root UI", () => {
       git(dir, "add", "-A");
       git(dir, "commit", "--quiet", "-m", "seed");
     });
+    // Two repositories with environments of their own (a python API, a node front end).
+    for (const repo of ["acme/api", "acme/front"])
+      stack.seed(repo, (dir) => {
+        fs.writeFileSync(
+          path.join(dir, ".devcontainer.json"),
+          '{ "image": "registry.invalid/x:1" }\n',
+        );
+        git(dir, "add", "-A");
+        git(dir, "commit", "--quiet", "-m", "seed");
+      });
     const booted = bootstrap(stack);
     assert.equal(booted.code, 0);
     assert.match(
@@ -639,8 +649,18 @@ describe("T2 section 4.8: the root UI", () => {
     );
   });
 
-  it("stop and start from the dashboard", async () => {
+  it("stop and start from the dashboard; its agents as they are after the start, at once", async () => {
     stack.step("stop and start");
+    const sleeper = async () =>
+      (
+        ws(await state(), "web/one")?.host as
+          { agents?: { items: { name: string; state: string }[] } } | undefined
+      )?.agents?.items.find((a) => a.name === "sleeper")?.state;
+    assert.equal(
+      stack.quiet("agent", "start", "web/one", "--name", "sleeper", "--", "sleep", "1000").code,
+      0,
+    );
+    assert.ok(await until(async () => (await sleeper()) === "running", 30_000), "control");
     assert.equal((await action("workspace.stop", { domain: "web", workspace: "one" })).status, 202);
     assert.ok(
       await until(async () => ws(await state(), "web/one")?.host?.status === "stopped", 60_000),
@@ -649,15 +669,71 @@ describe("T2 section 4.8: the root UI", () => {
       (await action("workspace.start", { domain: "web", workspace: "one" })).status,
       202,
     );
+    // Every look from the moment it runs: the agent ended with the VM, and is never shown
+    // running (it was, until the host next looked: dogfooding, 2026-11-22).
+    const seen = new Set<string>();
     assert.ok(
-      await until(
-        async () =>
-          ws(await state(), "web/one")?.host?.status === "running" &&
-          (await state()).actions.at(-1)?.state === "done",
-        120_000,
-      ),
+      await until(async () => {
+        const s = await state();
+        if (ws(s, "web/one")?.host?.status === "running") seen.add(String(await sleeper()));
+        return seen.has("lost") && s.actions.at(-1)?.state === "done";
+      }, 120_000),
+      `seen: ${[...seen].join(", ")}`,
     );
+    assert.equal(seen.has("running"), false, `seen: ${[...seen].join(", ")}`);
     assert.equal((await state()).actions.at(-1)!.command, "desolate start web/one");
+  });
+
+  it("New workspace runs the environment chosen: the same checkouts, that repository's first", async () => {
+    stack.step("new workspace in another repository's environment");
+    for (const repo of ["acme/api", "acme/front"])
+      assert.equal(stack.quiet("clone", repo, "--no-domain").code, 0);
+    const done = async () =>
+      until(
+        async () => ["done", "failed"].includes((await state()).actions.at(-1)?.state ?? ""),
+        120_000,
+      );
+    assert.equal(
+      (await action("domain.create", { domain: "two", repos: "acme/api,acme/front" })).status,
+      202,
+    );
+    assert.ok(await done());
+    type Env = { used: string | null; choices: string[] } | null;
+    const env = async () =>
+      ((await state()).domains.find((d) => d.slug === "two") as { env?: Env } | undefined)?.env;
+    assert.ok(await until(async () => (await env())?.choices.length === 2, 30_000));
+    assert.deepEqual(await env(), { used: "acme/api", choices: ["acme/api", "acme/front"] });
+    // A checkout that is not one up takes is refused before anything runs.
+    assert.equal(
+      (await action("workspace.up", { domain: "two", checkouts: "acme/front=worktree:--x" }))
+        .status,
+      400,
+    );
+    const up = await action("workspace.up", {
+      domain: "two",
+      workspace: "front",
+      checkouts: "acme/front=main,acme/api=main",
+    });
+    assert.equal(up.status, 202);
+    assert.equal(
+      (JSON.parse(up.body) as { command: string }).command,
+      "desolate up two --name front --checkout acme/front=main --checkout acme/api=main",
+    );
+    const planned = path.join(stack.home, "domains/two/inbox/workspaces/front.json");
+    assert.ok(await until(async () => fs.existsSync(planned), 60_000));
+    const plan = JSON.parse(fs.readFileSync(planned, "utf8")) as {
+      env?: string;
+      checkouts: { repo: string; kind: string }[];
+    };
+    assert.equal(plan.env, "acme/front");
+    assert.deepEqual(
+      plan.checkouts.map((c) => `${c.repo}=${c.kind}`),
+      ["acme/api=main", "acme/front=main"],
+      "the checkouts New workspace would make anyway",
+    );
+    assert.ok(await done());
+    assert.equal((await state()).actions.at(-1)!.state, "done");
+    assert.equal(stack.quiet("rm", "two/front").code, 0);
   });
 
   it("Resize from the dashboard: refused while it runs, done once it is stopped", async () => {
@@ -1116,11 +1192,23 @@ describe("T2 section 4.8: the root UI", () => {
     type Page<T> = { items: T[]; total: number; from: number };
     type Commit = { commit: string; subject: string };
     const at = "domain=web&repo=acme%2Fapp&branch=long";
-    const review = JSON.parse((await http("GET", `/review?${at}`)).body) as {
+    type Review = {
+      commit: string;
       commits: Page<Commit>;
       changes: Page<{ path: string }>;
       pushCommits: number;
     };
+    // The review reads the domain's branch, which can be a commit behind the offer for a moment
+    // (the last commit still on its way to the root): asked again until it reads the tip.
+    let review = null as Review | null;
+    assert.ok(
+      await until(async () => {
+        review = JSON.parse((await http("GET", `/review?${at}`)).body) as Review;
+        return review.commit === tip;
+      }, 60_000),
+      `the review reads the offered commit: ${review?.commit}`,
+    );
+    review = review!;
     assert.deepEqual(
       [review.commits.total, review.pushCommits, review.commits.items.length, review.changes.total],
       [250, 250, 100, 250],
@@ -1191,7 +1279,10 @@ describe("T2 section 4.8: the root UI", () => {
     // The host looks at it while it runs (every 2 s here); the root counts its commits.
     assert.ok(
       await until(
-        async () => Array.isArray(await lost()) && Array.isArray((await spare())?.pushed),
+        async () =>
+          Array.isArray(await lost()) &&
+          ((await spare())?.pushed ?? []).length > 0 &&
+          (await spare())!.pushed!.every((c) => c.count !== null),
         120_000,
       ),
       `looked at and counted: ${JSON.stringify(await spare())}`,
