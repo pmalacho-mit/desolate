@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import { request as httpRequest } from "node:http";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { bootstrap, git, newStack } from "../lib/harness.ts";
+import { bootstrap, git, newStack, outboxSaid } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 import { findChrome, loadPage } from "../lib/browser.ts";
 import { lfsDigest, signedFor } from "../../../release/shared/approval.ts";
@@ -1675,6 +1675,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     inWs("dev/w1", "pkill -f wsd.ts; true");
     const sync = path.join(stack.home, "domains/dev/outbox/sync/acme/widgets");
     const good = commit;
+    const said = outboxSaid(stack);
     fs.writeFileSync(
       path.join(sync, "refs.json"),
       JSON.stringify({
@@ -1701,11 +1702,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.doesNotMatch(lied.stdout, /evil|notasha|ProxyCommand|refs\/desolate/);
     // The root removes what it finds by NAME, in the directory it checked: the link goes,
     // what it pointed at is never opened, and the person is told something was dropped.
-    assert.match(
-      lied.stdout,
-      /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/,
-      lied.stdout,
-    );
+    const dropped = /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/;
+    assert.match(said(lied.stdout, dropped), dropped, lied.stdout);
     assert.ok(
       !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
         fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
@@ -1747,6 +1745,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
     assert.equal(countMany(), 6000, "and no branch was pruned on it");
     // A bundle whose header (its list of refs) is past the same bound: refused as that.
+    const saidOfHeader = outboxSaid(stack);
     fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
     const line = `${commit} refs/heads/b\n`;
     fs.writeFileSync(
@@ -1754,10 +1753,9 @@ echo "=====waits"; cat /tmp/waits.lines`,
       `# v2 git bundle\n${line.repeat(Math.ceil((4 * 1024 * 1024) / line.length))}\nPACK`,
     );
     const header = inRootClone("git fetch dev 2>&1");
-    assert.match(
-      header.stdout,
-      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/,
-    );
+    const over =
+      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/;
+    assert.match(saidOfHeader(header.stdout, over), over);
     // Control: the list as the workspace wrote it, and the many branches it does not name
     // are pruned, as an honest list says.
     fs.writeFileSync(path.join(sync, "refs.json"), kept);
