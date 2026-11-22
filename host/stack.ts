@@ -220,6 +220,7 @@ export const BRIEF = {
   "issue.list": 30_000,
   "issue.done": 30_000,
   "domain.list": 30_000,
+  "workspace.get": 30_000,
   /** starts a domain's two proxies and waits for their sockets */
   "proxy.start": 60_000,
 } as const;
@@ -474,19 +475,17 @@ const ask = async <T>(op: string, args: Record<string, unknown>, asked: Asked): 
  *  rootctl.ts once (a fresh stack, a service restarting on new code).
  *
  *  It is waited on for as long as the root keeps saying something, and for
- *  ROOT_SILENT_SECONDS of nothing; `signal` ends it when whoever asked goes away.
- *  `timeoutMs` is for callers not yet moved (host/daemon.ts, host/git-vm.ts): a total, as it
- *  always was. A brief call names no number: `rootctlBrief`. */
+ *  ROOT_SILENT_SECONDS of nothing; `signal` ends it when whoever asked goes away. A brief
+ *  call names no number: `rootctlBrief`. */
 export const rootctl = <T = unknown>(
   op: string,
   args: Record<string, unknown> = {},
-  options: { quiet?: boolean; signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { quiet?: boolean; signal?: AbortSignal } = {},
 ): Promise<T> =>
   ask<T>(op, args, {
     quiet: options.quiet,
     signal: options.signal,
     silenceMs: valueOf(ROOT_SILENT_SECONDS) * 1000,
-    totalMs: options.timeoutMs,
   });
 
 /** A brief call (BRIEF, above, says which operations and why): nothing of its progress is
