@@ -134,7 +134,26 @@ const toLog = () => {
     return false;
   }
 };
-export const fetchDomain = async (domain: string, repo: Repo): Promise<void> => {
+/** The fetch running in each clone in this process. A domain's branches come in by a forced
+ *  refspec, so of two fetches at once the one that read the domain first could write last and
+ *  set a branch back (a review read 249 of a branch's 250 commits: the dashboard's count was
+ *  fetching as the review did). One at a time, each after the last: a review's fetch reads
+ *  the domain after any fetch already running has written. */
+const fetching = new Map<string, Promise<void>>();
+export const fetchDomain = (domain: string, repo: Repo): Promise<void> => {
+  const key = clonePath(repo);
+  const mine = (fetching.get(key) ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => fetchDomainNow(domain, repo));
+  fetching.set(key, mine);
+  void mine
+    .catch(() => {})
+    .finally(() => {
+      if (fetching.get(key) === mine) fetching.delete(key);
+    });
+  return mine;
+};
+const fetchDomainNow = async (domain: string, repo: Repo): Promise<void> => {
   const fetch = () => git(clonePath(repo), ["fetch", "--quiet", "--prune", domain]);
   // rootd imports as a domain writes, and a review imports too: two at once in one clone
   // can meet on a ref's lock, and the later one tries again, a little later each time (the
