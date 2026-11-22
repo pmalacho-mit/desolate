@@ -348,10 +348,17 @@ while True:
         "/tmp/again.log",
       );
       await until("the next push is taken and waits", () => waitingPushes() === 1, 60_000);
+      // git killed alone (no signal reaches its helper, which git runs as a grandchild): the
+      // helper's input closes, and that withdraws the push too. (Found by this test's first
+      // run: it stayed listed.)
       inGit(
-        "pkill -f 'python3 -I /tmp/terminal[.]py'; pkill -f 'git push origin HEAD:refs/heads/withdraw[n]'",
+        "pkill -f 'python3 -I /tmp/terminal[.]py'; pkill -KILL -f 'git push origin HEAD:refs/heads/withdraw[n]'",
       );
-      await until("and leaves when it is stopped", () => waitingPushes() === 0, ENDS_MS);
+      await until(
+        "a push whose git was killed alone leaves the list",
+        () => waitingPushes() === 0,
+        ENDS_MS,
+      );
     });
   },
 );

@@ -16,8 +16,8 @@ after(() => fs.rmSync(box, { recursive: true, force: true }));
 const module = path.join(import.meta.dirname, "../../../release/shared/git-out-box.ts");
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** A program that asks, stopped by `signals` once its request is there: what it left in the
- *  out-box afterwards, and how it ended. */
+/** A program that asks, stopped by `signals` once its request is there (none: its input is
+ *  closed instead): what it left in the out-box afterwards, and how it ended. */
 const stoppedWith = async (round: number, signals: NodeJS.Signals[]) => {
   const at = { out: path.join(box, `out-${round}`), answers: path.join(box, `answers-${round}`) };
   for (const dir of Object.values(at)) fs.mkdirSync(dir);
@@ -27,16 +27,25 @@ const stoppedWith = async (round: number, signals: NodeJS.Signals[]) => {
       "--disable-warning=ExperimentalWarning",
       "--input-type=module",
       "-e",
+      // As the push helper wires it: git closing its input is git gone (git/git-remote-desolate-out.ts).
       `const { requester } = await import(${JSON.stringify(module)});
-await requester(${JSON.stringify(at)}).ask("0123456789abcdef", { op: "fetch", repo: "acme/app" }, () => {});`,
+const box = requester(${JSON.stringify(at)});
+process.stdin.once("close", box.left);
+process.stdin.resume();
+await box.ask("0123456789abcdef", { op: "fetch", repo: "acme/app" }, () => {});`,
     ],
-    { stdio: "ignore" },
+    { stdio: ["pipe", "ignore", "ignore"] },
   );
   const ended = new Promise<string>((resolve) =>
     child.on("exit", (code, signal) => resolve(signal ?? String(code))),
   );
   for (let i = 0; i < 200 && !fs.existsSync(path.join(at.out, "0123456789abcdef.json")); i++)
     await sleep(25);
+  if (signals.length === 0) {
+    // No signal: its input closed, as when git is killed alone.
+    child.stdin!.end();
+    return { ended: await ended, left: fs.readdirSync(at.out).sort() };
+  }
   // The first signal, then the rest again and again until it has ended: a second may come
   // at any moment of the first's handling (git passes its own on when it gets to it).
   child.kill(signals[0]);
@@ -54,6 +63,9 @@ describe("T1 a git VM request, withdrawn when its asker is stopped", () => {
         { ended: "130", left: ["0123456789abcdef.gone"] },
         `round ${round}`,
       );
+  });
+  it("git killed alone (its input closes, no signal): withdrawn too", async () => {
+    assert.deepEqual(await stoppedWith(200, []), { ended: "1", left: ["0123456789abcdef.gone"] });
   });
   it("the control: one signal, as a closed terminal sends", async () => {
     assert.deepEqual(await stoppedWith(100, ["SIGHUP"]), {

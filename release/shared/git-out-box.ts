@@ -134,18 +134,23 @@ export const requester = (at: Boxes = GIT_VM_BOXES, pace: typeof PACE = PACE) =>
   // passed on to the helper it runs), and with no listener left the second killed it before
   // it had told the host: the push stayed on the approval page (dogfooding, 2026-11-21).
   let stopping = false;
-  const stopped = (signal: NodeJS.Signals, code: number) =>
-    process.on(signal, () => {
-      if (stopping) return;
-      stopping = true;
-      withdraw();
-      process.exit(128 + code);
-    });
-  stopped("SIGINT", 2);
-  stopped("SIGTERM", 15);
-  stopped("SIGHUP", 1);
+  const stop = (code: number) => {
+    if (stopping) return;
+    stopping = true;
+    withdraw();
+    process.exit(code);
+  };
+  process.on("SIGINT", () => stop(130));
+  process.on("SIGTERM", () => stop(143));
+  process.on("SIGHUP", () => stop(129));
 
   return {
+    /** Whoever asked has gone without a signal (git, killed alone, closed this program's
+     *  input): what is being asked is withdrawn, and the program ends. Nothing when nothing
+     *  is asked: git closes the input after every push, and that one is answered. */
+    left: () => {
+      if (asked !== null) stop(1);
+    },
     /** The path for a file of this program's in the out-box (`name` from `named`): removed
      *  again if the program stops before the host has answered. */
     leave: (name: string) => {
