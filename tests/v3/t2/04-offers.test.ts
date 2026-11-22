@@ -1628,8 +1628,14 @@ echo "=====waits"; cat /tmp/waits.lines`,
       // A click as the pointer arrives is said, not taken: it has not been over Approve a second.
       // (From elsewhere on the card first: resting on Approve since the page loaded, it would
       // have armed, as it should.)
+      // (Timed by the page: from the pointer's arrival over Approve to its press.)
       await page.click(".card.asked .onto");
-      await page.click(".card.asked button.approve", "Approve push");
+      await page.evaluate(
+        `(() => { const w = ${card}.querySelector('button.approve').parentElement; window.arrivedAt = 0; w.addEventListener('pointermove', () => { window.arrivedAt ||= performance.now(); }); window.addEventListener('pointerdown', () => { window.pressedAt = performance.now(); }, { capture: true }); return true; })()`,
+      );
+      await page.click(".card.asked button.approve", "Approve push", { atOnce: true });
+      const took = await page.evaluate<number>("window.pressedAt - window.arrivedAt");
+      assert.ok(took < 1000, `the press came ${took} ms after the pointer arrived: not at once`);
       assert.match(
         await page.evaluate<string>(`${card}.querySelector('.hint').textContent`),
         /^not armed yet/,
