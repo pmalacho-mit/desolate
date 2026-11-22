@@ -10,7 +10,7 @@ specific to AI.)
 ```bash
 desolate agent start acme/w1 --name claude -- claude         # any command: it runs in the devcontainer
 desolate agent start acme/w1 --name web -- npm run dev       # a dev server, kept running
-desolate agent list                                               # every one, in every workspace
+desolate agent list                                               # the running ones, in every workspace
 desolate agent attach acme/w1 --name claude                  # your terminal on it; Ctrl-] detaches
 desolate agent log acme/w1 --name claude                     # what it printed: to a terminal, its last 100 lines
 desolate agent stop acme/w1 --name claude                    # Ctrl-C, as you would; then asks before it kills
@@ -61,8 +61,9 @@ a full-screen program needs passes, and the escape sequences that act beyond the
 
 **In parallel.** One workspace is one VM, and agents in different workspaces run truly side
 by side (a workspace can hold more than one, by `--name`). A workspace from its domain's
-template starts in about 20 s. `desolate agent list` shows each agent's state and when it
-last printed anything (up to 100 a workspace, then how many more: `--json` lists them all); the dashboard shows each workspace's status as the agent sets it
+template starts in about 20 s. `desolate agent list` shows each running agent and when it
+last printed anything, and counts those that ended; `desolate agent list acme/w1` shows every
+one of a workspace's, ended too (up to 100, then how many more: `--json` lists them all); the dashboard shows each workspace's status as the agent sets it
 (`desolate status set ...` inside), and `desolate notify` turns orange and red into
 notifications.
 
