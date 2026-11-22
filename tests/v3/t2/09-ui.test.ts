@@ -1050,8 +1050,8 @@ describe("T2 section 4.8: the root UI", () => {
         .sort(),
       files.map((f) => [f, f === "READMЕ.md" || f.startsWith(".github∕")]).sort(),
     );
-    // On the page, by a person's pointer: each name as text, its hidden characters named and a
-    // trailing space quoted; the plain name as written (the control); the lookalikes said.
+    // On the page, by a person's pointer: each name as git stores it, its hidden characters
+    // and a trailing space named; the plain name as written (the control); the lookalikes said.
     const chrome = findChrome();
     assert.ok(chrome, "this check needs Chrome or Chromium");
     const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
@@ -1067,7 +1067,7 @@ describe("T2 section 4.8: the root UI", () => {
       for (const [name, looks] of [
         ["notes-⟨U+202E⟩dm.hs", ""],
         ["ok.txt⟨U+000A⟩README.md", ""],
-        ['"package.json "', ""],
+        ["package.json⟨space⟩", ""],
         ["READMЕ.md", LOOKS],
         [".github∕workflows∕x.yml", LOOKS],
         ["notes/plain.md", ""],
