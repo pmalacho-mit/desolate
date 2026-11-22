@@ -136,7 +136,7 @@ const IDENTITY = { name: 80, email: 254 } as const;
  *  branch a new one starts from), and its author, committer and dates are the commit's. So
  *  the same push, onto the same remote, always squashes to the same commit (for a new branch,
  *  where it starts depends on the remote's branches the reviewer holds; either way the
- *  approval names the very commit the person was shown). Its message: the first commit's
+ *  approval names the very commit the person was shown). Its message: the last commit's
  *  subject, then every commit's. Null when there is nothing to squash; a sentence when there
  *  is, and it is not offered, saying why. */
 const squashOf = async (
@@ -167,7 +167,9 @@ const squashOf = async (
     .map((subject) => shown(subject, 200) || "(no message)");
   const list = subjects.slice(0, SQUASH_LISTED).map((s) => `- ${s}`);
   if (subjects.length > SQUASH_LISTED) list.push(`- and ${subjects.length - SQUASH_LISTED} more`);
-  const message = `${subjects[0] ?? "Squashed"}\n\nSquashed from ${count} commits:\n${list.join("\n")}\n`;
+  // Titled by the last commit's subject: where the branch ended up, which reads as its
+  // change better than where it began (dogfooding, 2026-11-22).
+  const message = `${subjects.at(-1) ?? "Squashed"}\n\nSquashed from ${count} commits:\n${list.join("\n")}\n`;
   const [anRaw, aeRaw, ad, cnRaw, ceRaw, cd] = (
     await gitOk(dir, [
       "log",
