@@ -101,6 +101,7 @@ import type {
   readInPieces,
   setOf,
   shown,
+  silentClients,
   sixGiB,
   wire,
 } from "../.harness/host-daemon.ts";
@@ -120,7 +121,8 @@ type Registered = { vm: string; domain: string; workspace: string; proxy: string
 type Entry = Registered & {
   listeners: Set<number>;
   reserved: Set<number>;
-  link: Server | null;
+  /** Closes its link: its servers, and every connection they took. */
+  link: (() => void) | null;
   lastError: string;
   editorToken: string;
   editorTokenEpoch: number;
@@ -226,6 +228,39 @@ const SERVER_FIRST_MS = 400;
  *  that has waited longest goes, not the newest: a program of another user's opening silent
  *  sockets could otherwise lock the person out (decisions.md, the audit of 2026-11-16). */
 const SILENT_MOST = 512;
+
+/** What `client` says first (shared/sniff.ts), held meanwhile among `silent`: the clients
+ *  that have said nothing yet. When `most` are, the one that has waited longest is closed. */
+const heard = async (silent: Set<Socket>, client: Socket, quietMs: number, most = SILENT_MOST) => {
+  if (silent.size >= most) {
+    const oldest = silent.values().next().value;
+    if (oldest) (silent.delete(oldest), oldest.destroy());
+  }
+  silent.add(client);
+  try {
+    return await sniffSocket(client, quietMs);
+  } finally {
+    silent.delete(client);
+  }
+};
+
+declare namespace heard {
+  /** clients that open and say nothing (another user's program, on a forwarded port) are
+   *  held `most` at a time: one more and the longest-waiting goes, not the newest, so they
+   *  cannot keep the person's own out. The control: `most` of them, all held */
+  export type Bounded = [
+    Expect<
+      Invoke<typeof silentClients, [hear: typeof heard, count: 4, most: 3]>,
+      "=",
+      [true, false, false, false]
+    >,
+    Expect<
+      Invoke<typeof silentClients, [hear: typeof heard, count: 3, most: 3]>,
+      "=",
+      [false, false, false]
+    >,
+  ];
+}
 /** How long a refused connection out is given to read its answer and close (openLink): a
  *  workspace's relay reads it at once. */
 const REFUSED_MS = 5000;
@@ -1163,23 +1198,11 @@ const serve = async () => {
   const rawOwner = new Map<number, string>();
   // Ports whose protocol carries no name: the known ones and the person's (forward.ts).
   const knownRaw = rawPortsOf();
-  const waiting = new Set<Socket>();
+  /** Clients that have said nothing yet, on every forwarded port and the pages' (heard). */
+  const silent = new Set<Socket>();
   // Read once, at the start: a value the setting does not take stops the daemon here, saying
   // so in its log, not at the first workspace.
   const linkMost = valueOf(LINK_CONNECTIONS);
-  /** What a client says first, once it has (shared/sniff.ts), held among the waiting. */
-  const heard = async (client: Socket, quietMs: number) => {
-    if (waiting.size >= SILENT_MOST) {
-      const oldest = waiting.values().next().value;
-      if (oldest) (waiting.delete(oldest), oldest.destroy());
-    }
-    waiting.add(client);
-    try {
-      return await sniffSocket(client, quietMs);
-    } finally {
-      waiting.delete(client);
-    }
-  };
   // A line that cannot be written (the disk full, no file descriptor left) is lost, not the
   // daemon: it is called from inside the handlers of every workspace's connections.
   const log = (line: string) => {
@@ -1239,7 +1262,7 @@ const serve = async () => {
     // where the browser's request, sent on that socket later, arrived whatever its Host,
     // with the cookies of the workspace it named: found by the audit of 2026-11-16.)
     const raw = knownRaw.has(port);
-    const sniffedHead = await heard(client, raw ? SERVER_FIRST_MS : SILENT_MS);
+    const sniffedHead = await heard(silent, client, raw ? SERVER_FIRST_MS : SILENT_MS);
     const { head } = sniffedHead;
     // Where it goes is decided by inboundRoute, from what it said and nothing else.
     const owner = rawOwner.get(port);
@@ -1283,7 +1306,9 @@ const serve = async () => {
     };
     upstream.on("data", onGreeting);
     client.resume();
-    const first = await sniffSocket(client, 600_000);
+    // Among the silent, as every client is until it speaks: else each silent one held a
+    // session into the VM for ten minutes, past SILENT_MOST.
+    const first = await heard(silent, client, 600_000);
     if (client.destroyed) return void upstream.destroy();
     if (spokeAsBrowser(first)) return close();
     client.on("error", close);
@@ -1339,7 +1364,7 @@ const serve = async () => {
     // Waited for as on any other port: no protocol here is one whose server speaks first, so
     // a browser's preconnected socket is held until it says which page it wants (it was
     // closed after 400 ms, and the page it was opened for then failed to load).
-    void heard(client, SILENT_MS).then(({ sniffed, head }) => {
+    void heard(silent, client, SILENT_MS).then(({ sniffed, head }) => {
       const route = pagesRoute(sniffed, entries.values());
       if (route.to === "git") {
         client.setTimeout(30 * 60_000, () => client.destroy());
@@ -1569,15 +1594,30 @@ const serve = async () => {
       queue.add(go);
       client.once("close", () => queue.delete(go));
     };
-    const carry = (client: Socket) => {
+    // Every connection the link took, so that its workspace's going ends them: closing a
+    // server only stops it taking more, and a stopped workspace's downloads went on. One
+    // taken after (a listener not yet closed) is ended at once.
+    const clients = new Set<Socket>();
+    let gone = false;
+    const took = (client: Socket) => {
       client.on("error", () => client.destroy());
-      if (entry.proxy === null) return client.destroy();
+      if (gone) return false;
+      clients.add(client);
+      client.once("close", () => clients.delete(client));
+      return true;
+    };
+    const carry = (client: Socket) => {
+      if (!took(client) || entry.proxy === null) return client.destroy();
       toProxy(client, Buffer.alloc(0));
     };
     const server = createServer(carry);
     server.on("error", (error) => log(`link ${entry.vm}: ${error.message}`));
     server.listen(socket, () => fs.chmodSync(socket, 0o666));
-    entry.link = server;
+    entry.link = () => {
+      gone = true;
+      server.close();
+      for (const client of clients) client.destroy();
+    };
     // vz: the guest reaches its link through one loopback port on the host, the only one
     // its confinement allows it.
     const { hostPort, token } = b.link(entry.vm);
@@ -1592,8 +1632,7 @@ const serve = async () => {
       // for as long as it liked (it was 64, the link's own bound, and closed the newest).
       const proving = new Set<Socket>();
       const tcp = createServer((client) => {
-        client.on("error", () => client.destroy());
-        if (!token || entry.proxy === null) return client.destroy();
+        if (!took(client) || !token || entry.proxy === null) return client.destroy();
         if (proving.size >= PROVING_MOST) {
           const longest = proving.values().next().value!;
           proving.delete(longest);
@@ -1718,7 +1757,7 @@ const serve = async () => {
     events.publish(
       events.host("workspace-down", { domain: entry.domain, workspace: entry.workspace, vm }),
     );
-    entry.link?.close();
+    entry.link?.();
     for (const watcher of entry.watchers) watcher.close();
     entries.delete(vm);
     reconcile();
@@ -2294,7 +2333,7 @@ const serve = async () => {
           editors.close();
           editors6.close();
           for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
-          for (const entry of entries.values()) entry.link?.close();
+          for (const entry of entries.values()) entry.link?.();
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });
           process.exit(0);

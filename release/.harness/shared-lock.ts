@@ -437,3 +437,69 @@ export const misleadingLock = (
     JSON.parse(fs.readFileSync(path.join(live, "holder"), "utf8")).pid === process.pid;
   return { came: ran.status === null ? "stuck" : ran.stdout || ran.stderr, liveIntact };
 };
+
+/** A process whose umask is `umask` takes the lock `dir` (as a share's: `share`) and says
+ *  what it finds while it holds it: the modes of the lock, its holder file and its beat. */
+export const modesUnder = (dir: string, umask: number, share: boolean) => {
+  fs.mkdirSync(path.dirname(dir), { recursive: true });
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import * as fs from "node:fs";
+       const { withLock } = await import(${JSON.stringify(LOCK_TS)});
+       const [dir, umask, share] = process.argv.slice(1);
+       process.umask(Number(umask));
+       const mode = (name) => fs.existsSync(dir + name) ? (fs.statSync(dir + name).mode & 0o777).toString(8) : null;
+       const seen = await withLock(dir, async () => ({ lock: mode(""), holder: mode("/holder"), beat: mode("/beat") }),
+         share === "1" ? { scope: "share" } : {}, { pollMs: 10, beatMs: 40, missed: 10 });
+       process.stdout.write(JSON.stringify(seen));`,
+      dir,
+      String(umask),
+      share ? "1" : "0",
+    ],
+    { encoding: "utf8" },
+  );
+  if (ran.status !== 0) throw new Error(`the taker failed: ${ran.stderr}`);
+  return JSON.parse(ran.stdout) as Record<string, string | null>;
+};
+
+/** A share lock held from another VM (leftWithABeat, its beat not going on), taken, not
+ *  waiting, once while opening its beat fails (EIO, as a share may) and once more after:
+ *  what each taking did, "taken" or the refusal's message. */
+export const beatUnreadable = (dir: string): string[] => {
+  leftWithABeat(dir, false);
+  const ran = spawnSync(
+    process.execPath,
+    [
+      ...NODE,
+      `import { createRequire, syncBuiltinESMExports } from "node:module";
+       const fs = createRequire(import.meta.url)("node:fs");
+       const dir = process.argv[1];
+       const { withLock } = await import(${JSON.stringify(LOCK_TS)});
+       const open = fs.openSync;
+       let failing = true;
+       fs.openSync = (file, ...rest) => {
+         if (failing && file === dir + "/beat")
+           throw Object.assign(new Error("EIO: i/o error"), { code: "EIO" });
+         return open(file, ...rest);
+       };
+       syncBuiltinESMExports();
+       const said = [];
+       for (const _ of [1, 2]) {
+         try {
+           await withLock(dir, async () => {}, { scope: "share", wait: false }, { pollMs: 10, beatMs: 40, missed: 10 });
+           said.push("taken");
+         } catch (error) {
+           said.push(error.message);
+         }
+         failing = false;
+       }
+       process.stdout.write(JSON.stringify(said));`,
+      dir,
+    ],
+    { encoding: "utf8" },
+  );
+  if (ran.status !== 0) throw new Error(`the taker failed: ${ran.stderr}`);
+  return JSON.parse(ran.stdout) as string[];
+};
