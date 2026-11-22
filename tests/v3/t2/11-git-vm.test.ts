@@ -214,7 +214,9 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     await type(
       "echo from-the-git-vm > note.txt && git add note.txt && git -c user.name=person -c user.email=p@example.invalid commit -qm 'from the git VM' && git push origin HEAD:refs/heads/from-git\n",
     );
-    await screen(/handed to the root\. Approve it beside this terminal/);
+    await screen(
+      /handed to the root; nothing has gone to the remote\. Approve it on the approval page/,
+    );
     const commit = stack
       .inVm(gitVm(), ["git", "-C", "/git/acme/widgets", "rev-parse", "HEAD"])
       .stdout.trim();

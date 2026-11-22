@@ -586,7 +586,7 @@ const takeOne = async (
       id,
       domain
         ? `desolate: handed to the root, for ${domain}: its workspaces see it as root/${String(asked.branch)} within seconds.`
-        : "desolate: handed to the root. Approve it beside this terminal (in the browser tab), or on the approval page (desolate approve --web). Until it is approved, Ctrl-C withdraws it.",
+        : "desolate: handed to the root; nothing has gone to the remote. Approve it on the approval page (desolate approve --web; in the git terminal, beside the shell). Until it is approved, Ctrl-C withdraws it.",
     );
     note(id, `  ${repoId(repo)}  ${String(asked.branch)}  ${String(asked.commit)}`);
     const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>(

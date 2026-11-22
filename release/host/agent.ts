@@ -4,7 +4,7 @@
 //   desolate agent start <domain>/<workspace> [--name <n>] [--checkout <owner/repo>] -- <command...>
 //   desolate agent attach <domain>/<workspace> [--name <n>]     Ctrl-] detaches; it keeps running
 //   desolate agent list [<domain>[/<workspace>]] [--json]
-//   desolate agent log <domain>/<workspace> [--name <n>] [--all | --lines <n> | --since <when>]
+//   desolate agent log <domain>/<workspace> [--name <n>] [--all | --lines <n> | --since <when>] [--raw]
 //   desolate agent stop <domain>/<workspace> [--name <n>] [--kill]
 //
 // "agent" is the command's name: any long-running program is one (a dev server, a watcher, a
@@ -25,6 +25,7 @@ import { andMore, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
 import { parseRepo, SLUG } from "../shared/names.ts";
 import { define, mebibytes, valueOf } from "../shared/settings.ts";
+import { StringDecoder } from "node:string_decoder";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { CUT, failure, printable, printableLines } from "../shared/text.ts";
 import { keep, LAST } from "./failures.ts";
@@ -47,6 +48,7 @@ import type {
   vmAnswers,
 } from "../.harness/host-stack.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
+import type { byteByByte, inChunks } from "../.harness/shared-terminal.ts";
 
 type Out = (line: string) => void;
 type Workspace = {
@@ -90,6 +92,7 @@ export const FLAGS = {
     all: { type: "boolean" },
     lines: { type: "string" },
     since: { type: "string" },
+    raw: { type: "boolean" },
   },
   stop: { name: { type: "string" }, kill: { type: "boolean" } },
 } as const;
@@ -304,6 +307,23 @@ type Row = Agent & { workspace: string };
  *  flood (an agent is root there), and is said to be by its count. */
 const AGENTS_MOST = 1000;
 
+/** A command as you would type it again: a word a shell would split or act on, quoted. */
+const typed = (words: string[]) =>
+  words.map((w) => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, "'\\''")}'`)).join(" ");
+
+declare namespace typed {
+  export type Words = Table<
+    typeof typed,
+    [
+      [args: [words: ["npm", "run", "dev", "--port=5173"]], expected: "npm run dev --port=5173"],
+      [
+        args: [words: ["bash", "-lc", "cd web && npx vitest", "it's", ""]],
+        expected: "bash -lc 'cd web && npx vitest' 'it'\\''s' ''",
+      ],
+    ]
+  >;
+}
+
 /** The rows of a VM's account of its agents that are well formed, each name once, at most
  *  AGENTS_MOST of them, and how many there were: the VM's (an agent is root there), so only
  *  rows of the expected shape, every string made printable, a time that is not one dropped. */
@@ -326,7 +346,7 @@ const rowsOf = (given: unknown, workspace: string): Listed<Row> => {
       name: a.name,
       state: String(a.state),
       workspace,
-      command: [printable((Array.isArray(a.command) ? a.command : []).map(String).join(" "))],
+      command: [printable(typed((Array.isArray(a.command) ? a.command : []).map(String)))],
       started: iso(a.started) ?? "",
       lastOutput: iso(a.lastOutput),
       exit: Number.isInteger(a.exit) ? a.exit : null,
@@ -428,6 +448,11 @@ declare namespace fitted {
   >;
 }
 
+/** What "lost" is, and the command that starts it again: an agent ends with its VM (a
+ *  workspace stopped, restarted, or its holder killed), and nothing restarts it. */
+const lostSaid = (a: Row) =>
+  `lost: it was running when its workspace's VM stopped, and nothing starts it again (its log is kept). To start it again: desolate agent start ${a.workspace}${a.name === "agent" ? "" : ` --name ${a.name}`} -- ${a.command.join(" ")}`;
+
 export const list = async (only: string | undefined, out: Out, json: boolean) => {
   const [domain, workspace] = String(only ?? "").split("/");
   const all = await rootctl<{ slug: string; workspaces: Workspace[] }[]>(
@@ -480,7 +505,8 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
     ? []
     : found.flatMap((rows) => rows.items.filter((a) => a.state !== "running"));
   const where = [...new Set(ended.map((a) => a.workspace))];
-  const endedLine = `${ended.length} that ended ${where.length === 1 ? `in ${where[0]}` : `in ${where.length} workspaces`}: desolate agent list ${where.length === 1 ? where[0] : "<domain>/<workspace>"} lists them`;
+  const lost = ended.filter((a) => a.state === "lost").length;
+  const endedLine = `${ended.length} that ended ${where.length === 1 ? `in ${where[0]}` : `in ${where.length} workspaces`}${lost ? `, ${lost} of them lost when ${where.length === 1 ? "its VM" : "their VMs"} stopped` : ""}: desolate agent list ${where.length === 1 ? where[0] : "<domain>/<workspace>"} lists them${lost ? ", and how to start them again" : ""}`;
   if (ended.length && ended.length === found.reduce((n, rows) => n + rows.total, 0))
     return out(`no agents running (${endedLine})`);
   for (const rows of found) {
@@ -490,13 +516,15 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
       items: items.slice(0, PAGE),
       total: rows.total - (rows.items.length - items.length),
     };
-    for (const a of page.items)
+    for (const a of page.items) {
       out(
         fitted(
           `  ${a.workspace}  ${a.name}  ${a.state}${a.exit !== null ? ` (exit ${a.exit})` : ""}  started ${ago(a.started)}, last output ${ago(a.lastOutput)}  ${a.command.join(" ")}`,
           width,
         ),
       );
+      if (a.state === "lost") out(`    ${lostSaid(a)}`);
+    }
     const rest = andMore(page, "agent");
     if (rest)
       out(
@@ -550,7 +578,7 @@ declare namespace list {
         Invoke<typeof said>,
         "=",
         [
-          '[{"name":"agent","state":"running","workspace":"acme/w1","command":["claude -p fix ?[2J the docs"],"started":"2026-11-16T10:00:00Z","lastOutput":null,"exit":null}]',
+          '[{"name":"agent","state":"running","workspace":"acme/w1","command":["claude -p \'fix ?[2J the docs\'"],"started":"2026-11-16T10:00:00Z","lastOutput":null,"exit":null}]',
         ]
       >,
       /** (w2's record names beta/w1's VM: it is not asked) */
@@ -561,7 +589,8 @@ declare namespace list {
       >,
     ]
   >;
-  /** bare, a person sees what is running, and how to see the rest; named, every one */
+  /** bare, a person sees what is running, and how to see the rest; named, every one, and
+   *  what "lost" is, with the command that starts it again */
   export type Running = Given<
     [
       Mock<"./stack.ts", typeof fakeStack>,
@@ -587,7 +616,7 @@ declare namespace list {
             list: [{ name: "dsl-main-ddb30a57cc"; status: "running"; labels: {} }];
             exec: {
               code: 0;
-              stdout: '[{"name":"web","state":"running","command":["npm","run","dev"],"exit":null},{"name":"old","state":"exited","command":["make"],"exit":0}]';
+              stdout: '[{"name":"web","state":"running","command":["npm","run","dev"],"exit":null},{"name":"old","state":"exited","command":["make"],"exit":0},{"name":"tests","state":"lost","command":["bash","-lc","npx vitest"],"exit":null}]';
             };
           },
         ]
@@ -600,7 +629,7 @@ declare namespace list {
         "=",
         [
           "  acme/w1  web  running  started never, last output never  npm run dev",
-          "  (and 1 that ended in acme/w1: desolate agent list acme/w1 lists them)",
+          "  (and 2 that ended in acme/w1, 1 of them lost when its VM stopped: desolate agent list acme/w1 lists them, and how to start them again)",
         ]
       >,
       Given<
@@ -610,6 +639,8 @@ declare namespace list {
           "=",
           [
             "  acme/w1  old  exited (exit 0)  started never, last output never  make",
+            "  acme/w1  tests  lost  started never, last output never  bash -lc 'npx vitest'",
+            "    lost: it was running when its workspace's VM stopped, and nothing starts it again (its log is kept). To start it again: desolate agent start acme/w1 --name tests -- bash -lc 'npx vitest'",
             "  acme/w1  web  running  started never, last output never  npm run dev",
           ]
         >
@@ -745,7 +776,7 @@ declare namespace sinceOf {
  *  is kept and where this read starts: a cut is said (R1) from that. */
 export const log = async (
   where: string | undefined,
-  options: { name?: string; all?: boolean; lines?: string; since?: string },
+  options: { name?: string; all?: boolean; lines?: string; since?: string; raw?: boolean },
 ) => {
   const usage = "--all, --lines <n> or --since <10m, 2h, 1d, or a date and time>";
   if (
@@ -776,8 +807,14 @@ export const log = async (
   const name = nameOf(options.name);
   const at = `${w.domain}/${w.workspace}${name === "agent" ? "" : ` --name ${name}`}`;
   const reading = backend().spawn(w.vm, [...HOLDER(), "log", name, ...how]);
-  // To a terminal, what a screen needs and no more; to a pipe or file, as it was.
-  const filter = process.stdout.isTTY ? terminalFilter() : (bytes: Buffer) => bytes;
+  const state = agentsIn(w.vm, `${w.domain}/${w.workspace}`).catch(() => null);
+  // To a terminal, what a screen needs and no more; to a pipe or file, its text (--raw: the
+  // terminal's bytes, as it printed them).
+  const filter = process.stdout.isTTY
+    ? terminalFilter()
+    : options.raw
+      ? (bytes: Buffer) => bytes
+      : plain();
   let head: Buffer | null = Buffer.alloc(0);
   const stderr = gather(reading.stderr!);
   let unlike = false;
@@ -815,7 +852,60 @@ export const log = async (
       holderError({ stdout: "", stderr: stderr() }, name),
       `desolate agent list ${w.domain}/${w.workspace}`,
     );
+  const lost = (await state)?.items.find((a) => a.name === name && a.state === "lost");
+  if (lost) process.stderr.write(`desolate: ${name} is ${lostSaid(lost)}\n`);
 };
+
+/** What an agent printed, as text: what a screen needs (terminalFilter, which drops every
+ *  string whole across reads and passes each escape it keeps whole), less those escapes, with
+ *  the terminal's line ends as newlines and nothing else a terminal acts on. Its output is the
+ *  VM's (an agent is root there): `--raw` is for the person who asks for it. */
+export const plain = () => {
+  const screen = terminalFilter();
+  const text = new StringDecoder("utf8");
+  // What a read ended in that the next may finish: \r (of \r\n), an escape's first bytes.
+  let held = "";
+  return (chunk: Buffer): Buffer => {
+    let said = held + text.write(screen(chunk));
+    held = /(\x1b[ -/]{0,8}|\r)$/.exec(said)?.[0] ?? "";
+    said = said.slice(0, said.length - held.length);
+    said = said.replace(/\x1b(\[[0-?]*[ -/]*[@-~]|[ -/]*[0-~])/g, "").replace(/\r\n?/g, "\n");
+    return Buffer.from(printableLines(said, ""), "utf8");
+  };
+};
+
+declare namespace plain {
+  /** colour, cursor moves and redraws, a title: gone; the text and its lines kept, however the
+   *  reads split them */
+  export type Text = Expect<
+    Invoke<
+      typeof inChunks,
+      [
+        make: typeof plain,
+        chunks: [
+          "\u001b[1;32m✓\u001b[0m 18 pas",
+          "sed\r",
+          "\n\u001b]0;vitest\u0007\u001b[2K\u001b[1Arun\u001b(",
+          "B\ragain\u0007\u0008\r\n",
+        ],
+      ]
+    >,
+    "=",
+    "✓ 18 passed\nrun\nagain\n"
+  >;
+  /** one byte a read: the same */
+  export type ByteByByte = Expect<
+    Invoke<
+      typeof byteByByte,
+      [
+        make: typeof plain,
+        text: "\u001b[1;32m✓\u001b[0m ok\r\n\u001b]8;;https://x.test\u001b\\link\r\n",
+      ]
+    >,
+    "=",
+    "✓ ok\nlink\n"
+  >;
+}
 
 /** What is said of a read of the log, from the holder's first line: on stderr, how much came
  *  before what is shown; in the log itself, where older output was dropped. Answers what goes

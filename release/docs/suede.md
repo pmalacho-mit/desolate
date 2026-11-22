@@ -60,7 +60,8 @@ What happens, in the git VM (no network, no keys):
    must not have been proposed already.
 2. **suede's own upstream runs**: desolate's pinned copy of it (`release/git/suede-upstream.sh`,
    checked against `SUEDE_UPSTREAM_SHA256` in `pins.env`), with the image's pinned git-subrepo,
-   in a scratch clone. Its push is caught there, not sent. **The copy the branch vendors at
+   in a scratch clone. Its push is caught there, not sent, so what it says ("pushed", "OK
+   Proposed upstream") is shown only if it stops. **The copy the branch vendors at
    `some-dependency/.suede/core/upstream` is never run**: an agent could have written it.
 3. **What it made is checked and shown**: its files are exactly the dependency's directory at
    that commit, it builds on that release commit, `.github/` is untouched. You see the commits
@@ -68,7 +69,8 @@ What happens, in the git VM (no network, no keys):
    which every consumer of the dependency runs), that is said in red, and again on the approval
    page.
 4. **The push**, with `git push` from the git VM: the root checks every object, the reviewer
-   works out what it sends, and the approval page shows it. Approve, and the pusher sends it to
+   works out what it sends, and the approval page shows it (in the git terminal, beside the
+   shell). Nothing has gone anywhere until you approve. Approve, and the pusher sends it to
    `downstream/you/app-<commit>`.
 5. **The pull request**: the dependency's Action rebuilds the branch onto its `main` and opens
    the pull request. On the Mac, `desolate upstream` waits for it (up to three minutes, through

@@ -32,12 +32,24 @@ workspace does; starting the same name again carries on the same log.
 desolate agent log acme/w1 --name web --all          # all that is kept, from the start
 desolate agent log acme/w1 --name web --lines 500    # the last 500 lines
 desolate agent log acme/w1 --name web --since 10m    # since 10 minutes ago (s, m, h, d; or a date and time)
-desolate agent log acme/w1 --name web | grep error   # to a pipe or a file: all of it
+desolate agent log acme/w1 --name web | grep error   # to a pipe or a file: all of it, as text
+desolate agent log acme/w1 --name web --raw > web.log # its terminal's bytes, colour and cursor moves too
 ```
 
-What is left out is said on stderr, never in the log's own lines, so a pipe gets the log
-alone. Times are noted every 5 seconds of output, so `--since` may start up to 5 seconds
+To a pipe or a file the log is text: colour, cursor moves and the other escapes a terminal
+acts on are taken out, and its line ends are newlines. `--raw` keeps them, as the program
+printed them. What is left out is said on stderr, never in the log's own lines, so a pipe
+gets the log alone. Times are noted every 5 seconds of output, so `--since` may start up to 5 seconds
 early.
+
+**Lost: when its workspace stopped.** An agent runs in its workspace's VM and ends with it.
+After a workspace is stopped and started again (the dashboard's Stop and Start, `desolate
+stop` and `start`, the Mac restarting), the agents that were running are `lost`: nothing
+starts them again on its own, since a command that was running yesterday may not be one to
+run again unasked. Their logs are kept. `desolate agent list <domain>/<workspace>` says which
+are lost and gives the command that starts each again (with `--checkout` too, if you started
+it with one), and `desolate agent log` of a lost one says the same, on stderr. Started again
+under the same name, it carries on the same log.
 
 **Stopping.** `desolate agent stop` sends Ctrl-C twice through its terminal, as you would
 (most programs, Claude Code among them, end on that). At a terminal it then says it is
