@@ -627,6 +627,13 @@ const main = async (argv: string[]) => {
         `the root did not take the offer: ${String(reply.error)}`,
         String(reply.fix ?? "on the host: desolate doctor"),
       );
+    // Its upstream, if it has none: origin/<it>, where a push of it lands, so that `git pull`
+    // gets it then. Unset, `git pull` said "no tracking information" (dogfooding, 2026-11-21).
+    const clone = `/workspaces/${repo}`;
+    if ((await run("git", ["-C", clone, "config", `branch.${branch}.merge`])).code !== 0) {
+      await run("git", ["-C", clone, "config", `branch.${branch}.remote`, "origin"]);
+      await run("git", ["-C", clone, "config", `branch.${branch}.merge`, `refs/heads/${branch}`]);
+    }
     process.stdout.write(
       `offered ${repo} ${branch} at ${commit.slice(0, 12)}${base ? `, for ${base}` : ""}${lfs.length ? `, with ${lfs.length} LFS object(s)` : ""}.\n`,
     );
