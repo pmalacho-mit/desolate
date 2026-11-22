@@ -214,6 +214,8 @@ export const BRIEF = {
   /** the root's own checks: a dozen probes of its sockets, files and users, each bounded */
   doctor: 60_000,
   "approvals.pending": 30_000,
+  /** with `since` "", which is answered at once; a wait is a plain call, its page's to end */
+  "approvals.wait": 30_000,
   "approvals.refuse": 30_000,
   /** hands a signed approval to the keyring's gate, which checks it before it answers */
   "approvals.answer": 60_000,

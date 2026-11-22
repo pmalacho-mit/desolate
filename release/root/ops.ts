@@ -2,7 +2,7 @@
 // operation's name and JSON arguments, never a command line.
 import { printable } from "../shared/text.ts";
 import { refuse } from "../shared/exit.ts";
-import { pendingIn } from "./approvals.ts";
+import { pendingAfter, pendingIn } from "./approvals.ts";
 import { takeHashed } from "../shared/copy.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -47,9 +47,12 @@ import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
+import type { aRequestIn } from "../.harness/root-approvals.ts";
+import type { tagOf } from "./approvals.ts";
 import type {
   emptyRoot,
   namesIn,
+  pathIn,
   readIn,
   readJsonIn,
   writeJsonIn,
@@ -404,6 +407,20 @@ export const ops: Record<string, Op> = {
       summary,
       at,
     }));
+  },
+  /** The same list, once it is not the one `since` tags (approvals.ts, pendingAfter): held
+   *  for as long as the host's connection is, saying so at each look, so that the call's
+   *  silence bound does not end a wait in which nothing changed. Asked the old way (no
+   *  signal), it answers at once. */
+  async "approvals.wait"(args, log, signal) {
+    const { tag, pending } = await pendingAfter(
+      APPROVALS,
+      String(args.since ?? ""),
+      signal ?? AbortSignal.abort(),
+      true,
+      () => log("waiting"),
+    );
+    return { tag, pending: pending.map(({ message, at }) => ({ message, at })) };
   },
   /** A `git push` made in the git VM (host/git-vm.ts), handed over by the host: its bundle
    *  is checked like a domain's (intake.ts), taken in, and pushed as a raw push is, after
@@ -1064,6 +1081,56 @@ declare namespace ops {
         "not a push approval"
       >,
     ]
+  >;
+  type Waiting =
+    "desolate push approval v2\nrepo: acme/app\nbranch: fix\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nnonce: 00112233445566778899aabbccddeeff\n";
+  /** the approval page's wait, asked the old way (no connection to hold it by): what waits,
+   *  at once, though it is the list the asker has; only the message and when. (The tag is
+   *  written out at each use: an alias of it was read before the request was written.) */
+  export type WaitTheOldWay = Given<
+    [
+      Fresh,
+      Invoke<
+        typeof aRequestIn,
+        [
+          name: "a.json",
+          writer: "waiting",
+          value: { message: Waiting; at: "2026-11-16T12:00:00.000Z" },
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<
+        (typeof ops)["approvals.wait"],
+        [
+          args: {
+            since: Invoke<
+              typeof tagOf,
+              [
+                pending: Invoke<
+                  typeof pendingIn,
+                  [dir: Invoke<typeof pathIn, [where: "state", name: "approvals"]>]
+                >,
+              ]
+            >;
+          },
+          log: Quiet,
+        ]
+      >,
+      "=",
+      {
+        tag: Invoke<
+          typeof tagOf,
+          [
+            pending: Invoke<
+              typeof pendingIn,
+              [dir: Invoke<typeof pathIn, [where: "state", name: "approvals"]>]
+            >,
+          ]
+        >;
+        pending: [{ message: Waiting; at: "2026-11-16T12:00:00.000Z" }];
+      }
+    >
   >;
   /** commits are named whole, before git is asked anything */
   export type SuedeChanged = Throws<

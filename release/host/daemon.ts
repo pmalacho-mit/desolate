@@ -59,7 +59,7 @@ import { sniffSocket } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
-import { backend, ROOT_VM, rootctlBrief } from "./stack.ts";
+import { backend, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -661,6 +661,8 @@ declare namespace reviewerSummary {
   ];
 }
 
+/** What the root lists as waiting for the approval page (root/ops.ts, approvals.wait). */
+type WaitingList = { tag: string; pending: { message: string; at: string }[] };
 const approvalBackend = (): ApprovalBackend => {
   return {
     secrets: secretOps,
@@ -682,11 +684,11 @@ const approvalBackend = (): ApprovalBackend => {
         return importEnv(secretOps, domain, text, choices);
       },
     },
-    pending: async () =>
-      (await rootctlBrief<{ message: string; at: string }[]>("approvals.pending")).map((p) => ({
-        message: p.message,
-        at: p.at,
-      })),
+    // Held by the root until its list changes, and ended with the page's request.
+    pending: (since, signal) =>
+      since === ""
+        ? rootctlBrief<WaitingList>("approvals.wait", { since }, { signal })
+        : rootctl<WaitingList>("approvals.wait", { since }, { quiet: true, signal }),
     summary: reviewerSummary,
     approve: async (signed) => {
       const push = parseSigned(signed);
