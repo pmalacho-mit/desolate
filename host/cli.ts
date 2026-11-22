@@ -80,7 +80,7 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
                                                                  any program kept running in a workspace (a dev server,
                                                                  a watcher, a coding agent), with its terminal; no tmux
   desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   attach: your terminal on it; Ctrl-] detaches
-  desolate agent log <domain>/<workspace> [--all | --lines <n> | --since <10m|date>]   what it printed
+  desolate agent log <domain>/<workspace> [--all | --lines <n> | --since <10m|date>] [--raw]   what it printed; --raw keeps its escapes
   desolate agent stop <domain>/<workspace> [--kill]              Ctrl-C, then asks; --kill ends it at once
   desolate agent list [<domain>[/<workspace>]] [--json]          the running ones; a workspace named: its every one
 
@@ -719,6 +719,7 @@ const main = async (argv: string[]): Promise<number> => {
         all: values.all === true,
         lines: values.lines as string | undefined,
         since: values.since as string | undefined,
+        raw: values.raw === true,
       });
     else
       refuse(
