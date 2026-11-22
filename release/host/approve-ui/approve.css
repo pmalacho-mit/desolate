@@ -77,10 +77,11 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 /* The decision stays in view: while a card is taller than the window, its buttons stay at the
    bottom of the window (inside the card, in front of nothing but the card's own text). */
 .actions { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; margin: 0; position: sticky; bottom: 0; z-index: 1; background: var(--card); padding: var(--s3) 0 var(--s1); border-top: 1px solid var(--line); }
-/* The hint on a line of its own, at least one line tall whatever it says: arming changes it,
-   and a bar that changed height moved Approve from under the pointer, which disarmed it
-   (dogfooding, 2026-11-21: with three buttons it never stayed armed). */
-.actions:not(.plain) > .hint { flex-basis: 100%; min-height: 1.55em; }
+/* The hint on a line of its own, one line tall whatever arming says (approve.js, arming): a
+   bar that changed height moved Approve from under the pointer, which disarmed it (dogfooding,
+   2026-11-21: with three buttons it never stayed armed). What happened may take lines. */
+.actions:not(.plain) > .hint { flex-basis: 100%; min-height: 1.55em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.actions:not(.plain) > .hint.said { white-space: normal; }
 /* A long list scrolls in its own box. */
 .summary ul.long { max-height: 11em; overflow: auto; background: var(--raise); border-radius: 10px; padding: var(--s2) var(--s3); }
 button { font: 550 13.5px var(--font); min-height: 36px; padding: 0 var(--s4); display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03); }

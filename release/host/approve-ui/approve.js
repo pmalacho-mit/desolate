@@ -85,12 +85,17 @@ const armedOf = (card) => card.arms.find((a) => a.armedAt);
 const disarm = (card) => {
   for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
   if (card.done || performance.now() < card.saidUntil) return;
-  card.hint.textContent = whyNotArmed(card);
+  arming(card, whyNotArmed(card));
 };
+/** The hint while arming: one line, cut if it must (approve.css), so it never changes the
+ *  bar's height under the pointer. */
+const arming = (card, text) => { card.hint.classList.remove("said"); card.hint.textContent = text; card.hint.title = text; };
+/** What happened, in full (it may take lines): kept until the next arming. */
+const said = (card, text) => { card.hint.classList.add("said"); card.hint.textContent = text; card.hint.title = ""; card.saidUntil = Infinity; };
 /** Why no button of `card` is armed now, as the hint says it. */
 const whyNotArmed = (card) => {
   const first = card.arms.find((a) => !a.wrap.hidden);
-  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer onto a button, rest it there a moment, then click" : "arming in a moment...";
+  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "rest the pointer on a button a moment, then click" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
@@ -394,28 +399,28 @@ const add = (push, issue) => {
       arm.armedAt = performance.now();
       arm.button.disabled = false;
       card.saidUntil = 0;
-      card.hint.textContent = issue ? "armed: click to publish" : "armed: click to approve";
+      arming(card, issue ? "armed: click to publish" : "armed: click to approve");
     });
     arm.wrap.addEventListener("pointerleave", () => disarm(card));
     // A click on a button not armed (the wrapper has it: approve.css) does nothing, and says
     // why, for a few seconds: a click ignored in silence read as a page that did not work.
     arm.wrap.addEventListener("click", () => {
       if (arm.armedAt || card.done || card.busy) return;
+      arming(card, `not armed yet: ${whyNotArmed(card)}`);
       card.saidUntil = performance.now() + SAID_MS;
-      card.hint.textContent = `not armed, so nothing was done: ${whyNotArmed(card)}`;
     });
     arm.button.addEventListener("click", async (event) => {
       // A real pointer's click, on a button armed a moment ago: not a key, not a script.
       if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
       // Armed a moment ago, and clicked at once: said, so the person knows to rest a moment.
-      if (performance.now() - arm.armedAt < DWELL_MS) { card.hint.textContent = "hold still on the button a moment, then click"; return; }
+      if (performance.now() - arm.armedAt < DWELL_MS) { arming(card, "hold still on the button a moment, then click"); return; }
       card.busy = true;
       arm.button.disabled = true;
-      card.hint.textContent = issue ? "publishing..." : "approving...";
+      arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`; }
-      catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); }
+      catch (error) { said(card, `not approved: ${error.message}`); }
       finally { card.busy = false; disarm(card); }
     });
   }
@@ -425,8 +430,8 @@ const add = (push, issue) => {
   element.querySelector(".refuse").addEventListener("click", async (event) => {
     if (!event.isTrusted || card.busy || card.done) return;
     card.busy = true;
-    try { await post("refuse", card); card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"; }
-    catch (error) { card.hint.textContent = error.message; }
+    try { await post("refuse", card); card.done = true; for (const arm of card.arms) arm.button.disabled = true; said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
+    catch (error) { said(card, error.message); }
     finally { card.busy = false; }
   });
   disarm(card);
@@ -441,11 +446,11 @@ const ended = (outcome) => {
   const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.nonce === outcome.nonce);
   if (!card) return;
   card.ended = true;
-  if (!outcome.pushed) return void (card.hint.textContent = `approved, but the pusher said: ${outcome.error}`);
-  card.hint.textContent = `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it.${carryOn(card)} `;
-  if (typeof outcome.link !== "string" || !outcome.link.startsWith("https://github.com/")) return;
-  const link = Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" });
-  card.hint.append(link, " (on GitHub, as yourself)");
+  if (!outcome.pushed) return void said(card, `approved, but the pusher said: ${outcome.error}`);
+  said(card, `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it. `);
+  if (typeof outcome.link === "string" && outcome.link.startsWith("https://github.com/"))
+    card.hint.append(Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
+  card.hint.append(carryOn(card));
 };
 
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
@@ -516,7 +521,7 @@ const render = (pending, issues) => {
   for (const card of cards.values())
     if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
-      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or given up)"; }
+      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; said(card, "no longer waiting (approved elsewhere, refused, or given up)"); }
       card.element.classList.add("gone");
       changed = true;
     }
