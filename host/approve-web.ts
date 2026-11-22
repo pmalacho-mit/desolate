@@ -35,6 +35,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { parseApproval, signedFor } from "../shared/approval.ts";
 import type { PushApproval } from "../shared/approval.ts";
 import { digestOf as issueDigest, draftOf } from "../shared/issues.ts";
@@ -199,16 +200,11 @@ export type Review =
   | { error: string };
 export type Waiting = { message: string; at: string };
 export type Backend = {
-  /** Pushes waiting for a person, as the root lists them (the root's word: only the
-   *  message is used, and it is parsed here). */
-  pending: () => Promise<Waiting[]>;
-  /** The same list once it is not the one `since` tags (root/approvals.ts, pendingAfter),
-   *  waited on for as long as `signal` holds; `since` "" is answered at once. Without it, a
-   *  page that waits has the list asked for again each second. */
-  waitPending?: (
-    since: string,
-    signal: AbortSignal,
-  ) => Promise<{ tag: string; pending: Waiting[] }>;
+  /** Pushes waiting for a person, as the root lists them (the root's word: only the message
+   *  is used, and it is parsed here), once they are not the list `since` tags (root/
+   *  approvals.ts, pendingAfter): waited on for as long as `signal` holds. "" is answered at
+   *  once. */
+  pending: (since: string, signal: AbortSignal) => Promise<{ tag: string; pending: Waiting[] }>;
   /** A question to desolate's reviewer, and its answer as it streams: what it is doing, then
    *  the one answer (shared/review-account.ts). It works for as long as `signal` holds. */
   summary: (request: AccountRequest, signal: AbortSignal) => AsyncIterable<AccountLine>;
@@ -494,7 +490,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   ): Promise<{ account: Account; asking: Asking } | { status: number; error: string }> => {
     if (!/^[0-9a-f]{32}$/.test(nonce) || !/^[0-9a-f]{64}$/.test(given))
       return { status: 403, error: "not a push this page showed" };
-    const waiting = (await backend.pending().catch(() => [] as Waiting[])).find(
+    const waiting = (await listedNow().catch(() => [] as Waiting[])).find(
       (w) => parseApproval(w.message)?.nonce === nonce,
     );
     if (!waiting || !sameSecret(given, pushToken(token, waiting.message)))
@@ -573,33 +569,20 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         ),
       ),
     );
-  /** The root's list once it is not the one `since` tags, for as long as `signal` holds. */
   /** The root's list once it is not the one `since` tags, for as long as `signal` holds.
    *  `look`: when it was asked for, in lists asked for (`answerFor` drops only the reviews of
    *  pushes asked about before it: another page's may come from a later list). */
   let looks = 0;
-  const rootListAfter = async (
-    since: string,
-    signal: AbortSignal,
-  ): Promise<{ tag: string; pending: Waiting[]; look: number }> => {
+  const rootListAfter = async (since: string, signal: AbortSignal) => {
     const look = ++looks;
-    if (backend.waitPending) return { ...(await backend.waitPending(since, signal)), look };
-    for (;;) {
-      const pending = await backend.pending();
-      const tag = digestOf(pending.map((w) => w.message).join("\n"));
-      if (tag !== since || signal.aborted) return { tag, pending, look };
-      await new Promise<void>((resolve) => {
-        const done = () => {
-          clearTimeout(timer);
-          signal.removeEventListener("abort", done);
-          resolve();
-        };
-        const timer = setTimeout(done, 1000);
-        signal.addEventListener("abort", done, { once: true });
-      });
-      if (signal.aborted) return { tag, pending, look };
-    }
+    const listed = await backend.pending(since, signal);
+    // A root that answers the same list at once (asked the old way, with no connection to
+    // wait on) is asked again a second later, not at once.
+    if (listed.tag === since) await delay(1000, undefined, { signal }).catch(() => {});
+    return { ...listed, look };
   };
+  /** What the root lists now. */
+  const listedNow = async () => (await backend.pending("", new AbortController().signal)).pending;
   return async (req: IncomingMessage, res: ServerResponse) => {
     // This name only, this origin only: a page on any other name is refused before anything.
     // (Save /embed's own page, which another site loads, as a frame: it is static and holds
@@ -969,9 +952,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         return json(res, 403, { error: "not a push this page showed" });
       // The push, as the root lists it now. Signed only if it is the very text the page showed:
       // the token is over that text, so another text under the same nonce does not match.
-      const waiting = (await backend.pending()).find(
-        (w) => parseApproval(w.message)?.nonce === nonce,
-      );
+      const waiting = (await listedNow()).find((w) => parseApproval(w.message)?.nonce === nonce);
       const push = waiting ? parseApproval(waiting.message) : null;
       if (!waiting || !push)
         return json(res, 410, {

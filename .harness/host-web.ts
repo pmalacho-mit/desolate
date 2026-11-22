@@ -95,7 +95,10 @@ export const waiting = (messages: string[], says?: AccountLine[]): Backend => {
   decided = { approved: [], refused: [] };
   questions = [];
   return {
-    pending: async () => messages.map((message) => ({ message, at: "2026-11-16T10:00:00Z" })),
+    pending: async () => ({
+      tag: "listed",
+      pending: messages.map((message) => ({ message, at: "2026-11-16T10:00:00Z" })),
+    }),
     summary: (request, signal) => {
       questions.push(request);
       return says ? saying(says) : working(signal);
