@@ -57,8 +57,11 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 /* A commit: its id, its subject, who wrote it (quieter, at the end). A file: its path, then
    lines added and removed in their own right-aligned columns, so the numbers line up. */
 .summary li.commit { grid-template-columns: max-content minmax(0, 1fr) auto; }
-.summary li.file { grid-template-columns: minmax(0, 1fr) 4.5em 4.5em; }
+.summary li.file { grid-template-columns: minmax(0, 1fr) 4.5em 4.5em auto; }
 .summary li.file > code { justify-self: start; }
+/* Its Diff button last on its line, and its diff, when open, under it across the card. */
+.summary li.file > button { grid-column: 4; min-height: 22px; margin-left: var(--s2); }
+.summary li.file > .diffbox { grid-column: 1 / -1; }
 .summary .who { color: var(--muted); font-size: 12.5px; }
 /* The file list's +N and -N only: a diff's added lines are .add too, and were set right,
    out of sight (dogfooding, 2026-11-20). */

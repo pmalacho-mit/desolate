@@ -23,6 +23,7 @@ import { GUEST_USER } from "./types.ts";
 import { socatAddress } from "./types.ts";
 import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
 import type { Expect, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { endOf, spawnFailed } from "../../.harness/host-vm.ts";
 
 const IMAGE = process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest";
 const LABEL = "desolate.instance";
@@ -32,8 +33,14 @@ const docker = (args: string[], options: { input?: string | Buffer; timeoutMs?: 
 
 /** A child process's stdio as one Duplex stream. */
 export const duplexOf = (child: ChildProcess): Duplex => {
-  const stdin = child.stdin!;
-  const stdout = child.stdout!;
+  const { stdin, stdout } = child;
+  // No pipes: the spawn failed before it made them (EMFILE, ENFILE: this process holds too
+  // many files). Its error comes on the next tick and ends the stream, which is not thrown.
+  if (!stdin || !stdout) {
+    const failed = new Duplex({ read() {}, write: (_chunk, _encoding, done) => done() });
+    child.once("error", (error) => failed.destroy(error));
+    return failed;
+  }
   const stream = new Duplex({
     read() {
       stdout.resume();
@@ -57,6 +64,18 @@ export const duplexOf = (child: ChildProcess): Duplex => {
   child.on("error", (error) => stream.destroy(error));
   return stream;
 };
+
+declare namespace duplexOf {
+  /** a spawn that could not make its pipes gives a stream ended by its error, not a throw */
+  export type NoPipes = Expect<
+    Invoke<
+      typeof endOf,
+      [stream: Invoke<typeof duplexOf, [child: Invoke<typeof spawnFailed, [code: "EMFILE"]>]>]
+    >,
+    "=",
+    "spawn socat EMFILE"
+  >;
+}
 
 const execArgs = (name: string, argv: string[], options: ExecOptions, interactive: boolean) => {
   const args = ["exec"];
@@ -309,6 +328,7 @@ export const fakeBackend = (): Backend => {
         timeoutMs: options.timeoutMs,
         signal: options.signal,
         idleMs: options.idleMs,
+        maxBytes: options.maxBytes,
         inheritStderr: options.inheritStderr,
       });
     },

@@ -525,6 +525,7 @@ const needsYou = () => {
   for (const a of state.approvals) items.push(el("li", {}, el("span", { class: "dot orange" }), el("div", { class: "what" },
     el("div", { class: "name" }, `A push is waiting for your approval: ${a.repo} ${a.branch}`),
     el("div", { class: "line mono" }, `${a.commit}`),
+    a.summary ? el("div", { class: "line sub fit", title: a.summary, "data-approval-from": "" }, a.summary) : null,
     el("div", { class: "line" }, "Approve it on the host, outside every VM: run ", el("code", {}, "desolate approve"), " in a terminal there.")), el("div", {})));
   for (const r of state.refused || []) items.push(el("li", { "data-refused": `${r.domain}/${r.repo}` }, el("span", { class: "dot red" }), el("div", { class: "what" },
     el("div", { class: "name" }, `Refused from ${r.domain}: a bundle of ${r.repo}`),
@@ -740,7 +741,7 @@ const checkoutLine = (d, w, c) => {
  *  there (pushed.ts) and the checkout is still at that commit; else null. */
 const landedOf = (d, c) => {
   if (!c.head || !c.head.branch || !c.head.commit) return null;
-  const b = (d.branches || []).find((b) => b.repo === c.repo && b.branch === c.head.branch && b.commit === c.head.commit);
+  const b = branchesOf(d).find((b) => b.repo === c.repo && b.branch === c.head.branch && b.commit === c.head.commit);
   return b && b.landed ? b.landed : null;
 };
 /** A workspace whose work is all in: some checkout's branch is merged, and every other is
@@ -872,10 +873,10 @@ const workspaceRow = (d, w) => {
         w.startedBy
           ? pill(w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`, w.outlived ? "orange" : "", w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)`, { "data-started-by": w.startedBy })
           : pill("started by you", "", "you started it: from here, or desolate up", { "data-started-by": "" })),
-      making && w.making ? el("div", { class: "line sub", "data-making-step": "", title: redact(w.making) }, redact(w.making)) : null,
+      making && w.making ? el("div", { class: "line sub fit", "data-making-step": "", title: redact(w.making) }, redact(w.making)) : null,
       w.checkouts.map((c) => el("div", { class: "checkout", "data-checkout": c.repo }, checkoutLine(d, w, c),
         landedOf(d, c) ? pill(`merged into ${landedOf(d, c)}`, "green", "its branch, at this commit, is merged on the remote", { "data-merged": landedOf(d, c) }) : null,
-        c.head && c.head.branch && (d.branches || []).some((b) => b.repo === c.repo && b.branch === c.head.branch)
+        c.head && c.head.branch && branchesOf(d).some((b) => b.repo === c.repo && b.branch === c.head.branch)
           ? el("button", { class: "quiet small", "data-diff-checkout": c.repo, title: `What ${c.head.branch} changes against the remote's ${(state.repos.find((r) => r.repo === c.repo) || {}).defaultBranch || "default branch"}`, onclick: () => openReview({ domain: d.slug, repo: c.repo, branch: c.head.branch }) }, "Diff") : null)),
       // What it said of itself: its colour as a dot (the word was the dot again), then its words.
       says ? el("div", { class: "line", "data-says": says.color }, el("span", { class: `said ${says.color}`, title: `its status: ${says.color} (desolate status set)` }), says.message) : null,
@@ -885,22 +886,51 @@ const workspaceRow = (d, w) => {
       (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? " " : "", el("a", { href: p.url, target: "_blank", rel: "noopener", class: "pill accent", title: `its server on port ${p.port}, at its own name` }, `:${p.port}`)])) : null,
       // A port this Mac holds (another user's program, often, on a shared Mac): the
       // workspace's server on it is not forwarded, and its address reaches that program.
-      ...(host.heldOnMac || []).map((h) => el("div", { class: "line warn", "data-held-on-mac": String(h.port) }, `not forwarded: :${h.port}. This Mac's port ${h.port} is held (${h.by}), so the workspace's address on it reaches that program, not this workspace. Run it on another port.`))),
+      ...(host.heldOnMac || []).map((h) => el("div", { class: "line warn", "data-held-on-mac": String(h.port) }, `not forwarded: :${h.port}. This Mac's port ${h.port} is held (${h.by}), so the workspace's address on it reaches that program, not this workspace. Run it on another port.`)),
+      // What else only the host knows of its forwarding (host/forward.ts, notesOf): listeners
+      // left out, connections out it refused.
+      ...(host.notes || []).map((note) => el("div", { class: "line warn", "data-host-note": "" }, note))),
     el("div", { class: "buttons" }, making ? null : [
       running && host.editor ? el("a", { class: "button", href: host.editor, target: "_blank", rel: "noopener", "data-editor": "" }, "Open editor") : null,
       running ? button("Stop", key, "workspace.stop", target, true) : button("Start", key, "workspace.start", target),
       remove]));
 };
 
+/** A domain's branches shown: the snapshot's first page (those checked out first), then the
+ *  pages asked for since (GET /branches), each branch once. */
+const branchesMore = new Map(); // slug -> { items, asking, error }
+const branchesOf = (d) => {
+  const seen = new Set();
+  return [...d.branches.items, ...((branchesMore.get(d.slug) || {}).items || [])].filter((b) => {
+    const key = `${b.repo}\n${b.branch}`;
+    return seen.has(key) ? false : (seen.add(key), true);
+  });
+};
+const moreBranches = async (d, from) => {
+  const more = branchesMore.get(d.slug) || { items: [] };
+  branchesMore.set(d.slug, { ...more, asking: true, error: "" });
+  render();
+  try {
+    const response = await fetch(`/branches?domain=${encodeURIComponent(d.slug)}&from=${from}`, { headers: window.desolateKey.headers });
+    const page = await response.json();
+    if (!response.ok) throw new Error(page.error || `HTTP ${response.status}`);
+    branchesMore.set(d.slug, { items: [...more.items, ...page.items] });
+  } catch (error) {
+    branchesMore.set(d.slug, { ...more, error: `the rest could not be had: ${error.message}` });
+  }
+  render();
+};
 /** Every branch a domain has (its own list), offered or not: each one reviewable. */
 const branchList = (d) => {
-  const list = d.branches || [];
+  const list = branchesOf(d);
   if (!list.length) return null;
+  const more = branchesMore.get(d.slug) || {};
+  const shown = { items: list, total: d.branches.total };
   const offered = (b) => state.offers.some((o) => o.domain === d.slug && o.repo === b.repo && o.branch === b.branch && o.commit === b.commit);
   const where = (b) => d.workspaces.filter((w) => w.checkouts.some((c) => c.repo === b.repo && c.head && c.head.branch === b.branch)).map((w) => w.workspace);
   const open = branchesOpen.has(d.slug);
   return el("details", { class: "branches", open, "data-branches": d.slug },
-    el("summary", { onclick: (event) => { event.preventDefault(); if (open) branchesOpen.delete(d.slug); else branchesOpen.add(d.slug); render(); } }, `Branches (${d.branchesTotal > list.length ? `${list.length} of ${d.branchesTotal}` : list.length})`),
+    el("summary", { onclick: (event) => { event.preventDefault(); if (open) branchesOpen.delete(d.slug); else branchesOpen.add(d.slug); render(); } }, `Branches (${shown.total > list.length ? `${list.length} of ${shown.total}` : list.length})`),
     el("ul", { class: "rows" }, list.map((b) => el("li", { "data-branch": `${b.repo}/${b.branch}` },
       el("span", { class: `dot ${offered(b) ? "blue" : "hollow"}`, title: offered(b) ? "offered" : "not offered" }),
       el("div", { class: "what" },
@@ -909,7 +939,11 @@ const branchList = (d) => {
           b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null),
         el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? [" · checked out in ", where(b).map((w) => named("workspace", w))] : "")),
       el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))),
-    d.branchesTotal > list.length ? el("div", { class: "sub" }, `and ${d.branchesTotal - list.length} more branches: \`desolate branches ${d.slug}\` lists every one`) : null);
+    list.length < shown.total
+      ? el("div", { class: "sub more", "data-branches-more": d.slug }, andMore(shown, "branch", "branches"), " ",
+          el("button", { class: "quiet small", type: "button", disabled: Boolean(more.asking), onclick: () => moreBranches(d, d.branches.items.length + (more.items || []).length) }, more.asking ? "Reading..." : "Show more"),
+          more.error ? el("span", { class: "warn" }, ` ${more.error}`) : null)
+      : null);
 };
 const branchesOpen = new Set();
 
