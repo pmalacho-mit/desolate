@@ -1364,7 +1364,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
         code?: number;
       };
       const action = actions.find((a) => a.id === report.id);
-      if (action) {
+      // (The host sends an end again when its answer was lost: an ended action takes no more.)
+      if (action && action.state !== "done" && action.state !== "failed") {
         action.state = report.done ? (report.code === 0 ? "done" : "failed") : "running";
         if (report.done) action.code = report.code;
         said(action, (report.lines ?? []).map(String));
