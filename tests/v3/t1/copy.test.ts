@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
-import { takeHashed } from "../../../release/shared/copy.ts";
+import { copyOut, openPlain, takeHashed } from "../../../release/shared/copy.ts";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-copy-"));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -66,5 +66,43 @@ describe("T1 taking in a file another side wrote", () => {
     fs.writeFileSync(to, content);
     assert.equal(takeHashed(path.join(dir, "liar"), to, oid, 1024), null);
     assert.deepEqual(fs.readFileSync(to), content);
+  });
+
+  // copyOut is asynchronous, so the other side has the whole copy to act in. A 64 MiB file
+  // of one byte repeated, and what it hashes to.
+  const SIZE = 64 * 1024 * 1024;
+  const ones = Buffer.alloc(SIZE, 1);
+  const onesOid = createHash("sha256").update(ones).digest("hex");
+  const copying = (name: string) => {
+    const from = path.join(dir, name);
+    fs.writeFileSync(from, ones);
+    const opened = openPlain(from, SIZE)!;
+    const to = target();
+    return { from, to, opened, copy: copyOut(opened, to).finally(() => fs.closeSync(opened.fd)) };
+  };
+  it("control: a large copy lets the loop run meanwhile, and keeps every byte", async () => {
+    const { to, copy } = copying("large");
+    let turns = 0;
+    const turn = setInterval(() => turns++, 0);
+    assert.equal(await copy, onesOid);
+    clearInterval(turn);
+    assert.ok(turns > 0, "a timer ran while it copied");
+    assert.equal(fs.statSync(to).size, SIZE);
+  });
+  it("its name swapped for a link to a secret as it copies: what was opened is what is copied", async () => {
+    const secret = path.join(dir, "secret");
+    fs.writeFileSync(secret, Buffer.alloc(SIZE, 2));
+    const { from, to, copy } = copying("swapped");
+    setImmediate(() => {
+      fs.rmSync(from);
+      fs.symlinkSync(secret, from);
+    });
+    assert.equal(await copy, onesOid);
+    assert.deepEqual(fs.readFileSync(to).subarray(SIZE - 4), Buffer.alloc(4, 1));
+  });
+  it("made shorter as it copies: refused, not taken short", async () => {
+    const { from, copy } = copying("shrinks");
+    setImmediate(() => fs.truncateSync(from, 1024));
+    await assert.rejects(copy, /the file got shorter while it was copied/);
   });
 });

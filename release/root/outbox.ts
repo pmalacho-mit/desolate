@@ -3,13 +3,14 @@
 // are expected (no symlink is followed), and sizes are bounded. No function here runs git in
 // a domain's repository; the only git they feed is `git fetch <bundle file>` in a ROOT clone,
 // and a bundle is objects with no config and no hooks.
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
 import { readJson, writeJson } from "../shared/json.ts";
-import { FORGE, formatBytes, over } from "../shared/limits.ts";
+import { FORGE, over } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
+import { copyOut, copyOutSync } from "../shared/copy.ts";
 import { domainPath, ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -166,30 +167,6 @@ const readIn = (dir: Dir, name: string, max: number, what: string): Buffer | str
     return `${what} could not be read`;
   } finally {
     fs.closeSync(opened.fd);
-  }
-};
-
-/** Copy what a descriptor holds into a file of the root's own, hashing as it goes. At most
- *  `max` bytes: a file that grew after it was opened is not taken. */
-const copyOut = (fd: number, target: string, max: number): string | null => {
-  const hash = createHash("sha256");
-  const out = fs.openSync(
-    target,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
-    0o600,
-  );
-  let total = 0;
-  try {
-    const buffer = Buffer.alloc(1024 * 1024);
-    for (let read = fs.readSync(fd, buffer); read > 0; read = fs.readSync(fd, buffer)) {
-      total += read;
-      if (total > max) return null;
-      hash.update(buffer.subarray(0, read));
-      fs.writeSync(out, buffer, 0, read);
-    }
-    return hash.digest("hex");
-  } finally {
-    fs.closeSync(out);
   }
 };
 
@@ -366,11 +343,9 @@ export const takeBundles = (
       );
       try {
         if (!isOpened(opened)) throw new Error(opened.why);
-        // (Grown since it was opened: refused as what it became.)
-        if (copyOut(opened.fd, copy, FORGE.packBytes) === null)
-          throw new Error(
-            `the bundle ${name} grew while it was read, past the ${formatBytes(FORGE.packBytes)} a push to the forge may carry`,
-          );
+        // What it held when it was opened and measured. (Synchronous: this runs in
+        // git-remote-desolate, a process of its own.)
+        copyOutSync(opened, copy);
         copies.push(copy);
       } catch (error) {
         fs.rmSync(copy, { force: true });
@@ -451,20 +426,20 @@ declare namespace noteRefusal {
  *  name and its size is what the pointer said (section 6.3). The bytes that are hashed are
  *  the bytes that are kept: they are copied from one open descriptor, and the copy becomes
  *  `target` only after the hash agrees. */
-export const takeLfs = (
+export const takeLfs = async (
   domain: string,
   repo: string,
   oid: string,
   size: number,
   target: string,
-): { ok: true } | { error: string } => {
+): Promise<{ ok: true } | { error: string }> => {
   if (!isLfsOid(oid)) return { error: "not an LFS object id" };
   const dir = openDir(path.join(outbox(domain), "lfs", repo));
   const what = `the LFS object ${oid.slice(0, 12)}`;
   const opened = dir
     ? openIn(dir, oid, FORGE.lfsObjectBytes, what, "the forge stores")
     : { why: `${what} is not there`, absent: true };
-  const tmp = `${target}.${process.pid}.tmp`;
+  const tmp = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     if (!isOpened(opened))
       return { error: opened.absent ? `${what} is not in the outbox` : opened.why };
@@ -473,12 +448,14 @@ export const takeLfs = (
         error: `the LFS object ${oid.slice(0, 12)} is ${opened.size} bytes; its pointer says ${size}`,
       };
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.rmSync(tmp, { force: true });
-    if (copyOut(opened.fd, tmp, size) !== oid)
+    // Copied without blocking rootd: the other domains are answered meanwhile.
+    if ((await copyOut(opened, tmp)) !== oid)
       return { error: `the LFS object ${oid.slice(0, 12)} does not hash to its id` };
     fs.renameSync(tmp, target);
     removeIn(dir!, oid);
     return { ok: true };
+  } catch (error) {
+    return { error: `${what} could not be copied: ${(error as Error).message}` };
   } finally {
     if (isOpened(opened)) fs.closeSync(opened.fd);
     dir?.close();
