@@ -125,9 +125,11 @@ const post = async (what, card, squash) => {
 };
 
 // The diff, as text: each line a text node in a span classed by its first character.
-// Characters that reorder or hide what is shown (bidi controls, zero-width ones): in a diff a
-// person approves from, each is shown as itself, named, so the line reads as git stores it.
-const unhidden = (line) => line.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
+// Characters that reorder or hide what is shown (bidi controls, zero-width ones) and controls
+// (a commit message's escapes; a carriage return, but for the one that ends a line): in a
+// diff a person approves from, each is shown as itself, named, so the line reads as git
+// stores it.
+const unhidden = (line) => line.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]|\r(?!\n|$)/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
 const kindOf = (line) => line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
 /** git's text, a line a span; given `tokens` (shared/ui/highlight.js), each line of code in
  *  its syntax's colours, its text unchanged. */
@@ -258,6 +260,10 @@ const pagedList = (card, name, listed, ul, line, noun, onPage) => {
   return { before, after, more: () => ask(end, "end"), done: () => end >= listed.total };
 };
 
+/** A file whose name only looks like one that runs on the forge, or like README.md: said
+ *  under it (the reviewer's lookalike). */
+const looks = (f) => f.lookalike ? el("span", "its name has letters that look like others", "looks") : null;
+
 const summaryOf = (review, card) => {
   const box = document.createDocumentFragment();
   if (!review || review.working) {
@@ -296,7 +302,7 @@ const summaryOf = (review, card) => {
   // Its id, its subject, and who wrote it, quieter: the subject is what is read.
   if (commits.total) {
     const ul = el("ul", undefined, commits.total > 8 ? "long" : "");
-    const list = pagedList(card, "commits", commits, ul, (c) => { const li = el("li", undefined, "commit"); li.append(el("code", c.commit.slice(0, 12)), el("span", ` ${c.subject}`), el("span", `  ${c.author}`, "who")); return li; }, "commits");
+    const list = pagedList(card, "commits", commits, ul, (c) => { const li = el("li", undefined, "commit"); li.append(el("code", c.commit.slice(0, 12)), el("span", ` ${c.subject}`), el("span", `  by ${c.author}`, "who")); return li; }, "commits");
     box.append(list.before, ul, list.after);
   }
   const files = account.files;
@@ -313,7 +319,8 @@ const summaryOf = (review, card) => {
       if (f.binary) li.append(el("span", "binary", "who"));
       else li.append(el("span", `+${f.added}`, "add"), el("span", `−${f.removed}`, "del"));
       // Its own diff, asked for by its path (the reviewer takes it literally).
-      if (card) li.append(...diffToggle(card, ["Diff", "Hide its diff"], `file=${encodeURIComponent(f.path)}`));
+      const [button, box] = card ? diffToggle(card, ["Diff", "Hide its diff"], `file=${encodeURIComponent(f.path)}`) : [];
+      li.append(...[button, looks(f), box].filter(Boolean));
       return li;
     };
     const sensitiveNote = el("p", "", "error");
@@ -338,15 +345,16 @@ const summaryOf = (review, card) => {
   if (between.total) {
     box.append(el("p", `${count(between.total)} more file(s) that these commits change, though the list above (the net change) does not show them. Each commit is pushed, so what they held is in the branch's history:`, "error"));
     const bl = el("ul", undefined, between.total > 8 ? "long" : "");
-    const list = pagedList(card, "between", between, bl, (f) => { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(el("code", f.path)); return li; }, "files");
+    const list = pagedList(card, "between", between, bl, (f) => { const li = el("li", undefined, f.sensitive ? "file sensitive" : "file"); li.append(...[el("code", f.path), looks(f)].filter(Boolean)); return li; }, "files");
     box.append(list.before, bl, list.after);
   }
   // What goes, exactly as it is signed: the reviewer's pack, its size, and the LFS objects.
   box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(account.sends.size)}, and ${account.sends.lfs.count} LFS object(s) they point to${account.sends.lfs.count ? `, ${size(account.sends.lfs.bytes)}` : ""}: nothing else.`));
   if (card) {
     box.append(...diffToggle(card, ["Show the diff", "Hide the diff"], "net=1"));
-    // Each commit whole (what was changed in between, too), one at a time, as asked for.
-    if (commits.total > 1 || between.total) {
+    // Each commit whole (what was changed in between, too), one at a time, as asked for: its
+    // whole message and who wrote it, for one commit too (the list above has its subject).
+    if (commits.total || between.total) {
       const each = el("div", undefined, "diffbox");
       const button = el("button", "Show each commit whole", "quiet");
       button.type = "button";
