@@ -567,7 +567,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
       fix:
         error === null
           ? "desolate bootstrap"
-          : `stop what holds port ${port}, or give this stack another: DESOLATE_EDITOR_PORT=<port> desolate bootstrap`,
+          : `stop what holds port ${port}, or give this stack another: desolate settings set editor.port <port>, desolate down, then desolate bootstrap`,
     });
   }
   // The Mac's loopback, from the root's own user, asked by trying: a listener of doctor's own

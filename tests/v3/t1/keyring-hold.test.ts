@@ -81,7 +81,7 @@ const answer = (message: unknown) =>
       commit: "0123456789abcdef0123456789abcdef01234567",
       squashes: null,
       pack: "e".repeat(64),
-      lfs: [],
+      lfs: { count: 0, digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
     }),
     signature: "AAAA",
   });

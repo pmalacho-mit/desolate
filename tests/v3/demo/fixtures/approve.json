@@ -97,7 +97,7 @@
      "sends": {
       "pack": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "size": 48213,
-      "lfs": []
+      "lfs": { "count": 0, "bytes": 0, "digest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" }
      },
      "fastForward": true,
      "base": "9257ca85171343983156dccec4c1294b57ad5789",

@@ -12,7 +12,7 @@
 //             after the branch name is typed on this process's controlling terminal. It
 //             does not stop a program running as you on the host, which can read the key
 //             file or fabricate a terminal: that program is outside desolate's rule.
-//   touchid   (macOS, opt-in: DESOLATE_APPROVER=touchid at the first bootstrap) the key is
+//   touchid   (macOS, opt-in: the setting approver.kind at the first bootstrap) the key is
 //             in the Secure Enclave and signs only with the person present. For a stricter
 //             stance than the rule above. It is a whole defence only together with a write
 //             key that is also out of reach (docs/v3/decisions.md, section 5.3), and it has
@@ -31,6 +31,7 @@ import * as path from "node:path";
 import { formatSigned, parseSigned } from "../shared/approval.ts";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { formatBytes } from "../shared/limits.ts";
+import { define, valueOf } from "../shared/settings.ts";
 import { printable } from "../shared/text.ts";
 import { paths, RELEASE_DIR } from "./paths.ts";
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -48,6 +49,20 @@ const FILES = {
   key: path.join(DIR, "key"),
   helper: path.join(DIR, "desolate-touchid"),
 } as const;
+
+/** Which kind the first bootstrap makes. */
+export const APPROVER_KIND = define<Kind>({
+  name: "approver.kind",
+  env: "DESOLATE_APPROVER",
+  side: "host",
+  default: "terminal",
+  parse: Object.assign(
+    (text: string) =>
+      ["touchid", "terminal"].includes(text.trim()) ? (text.trim() as Kind) : null,
+    { takes: "touchid or terminal" },
+  ),
+  why: "Which key approves pushes, made at the first bootstrap: terminal (a software key; you type the branch) or touchid (the Secure Enclave, behind Touch ID). One made already stays what it is.",
+});
 
 export const kind = (): Kind | null => {
   try {
@@ -83,21 +98,19 @@ export const publicKey = (): string | null => {
 export const fingerprint = (pem: string) => createHash("sha256").update(pem).digest("hex");
 
 /** Make the approver if there is none. Returns whether it made one. Which kind: `terminal`,
- *  unless DESOLATE_APPROVER=touchid asks for the Secure Enclave. If that was asked for and
+ *  unless approver.kind asks for the Secure Enclave (touchid). If that was asked for and
  *  cannot be set up, this refuses: the stronger kind is never quietly swapped for the
  *  other (P6). */
 export const init = (log: (line: string) => void): boolean => {
   if (kind() && publicKey()) return false;
-  const asked = process.env.DESOLATE_APPROVER;
-  if (asked !== undefined && asked !== "touchid" && asked !== "terminal")
-    refuse(`DESOLATE_APPROVER is '${asked}'`, "use touchid or terminal");
-  const chosen: Kind = (asked as Kind | undefined) ?? "terminal";
+  const chosen = valueOf(APPROVER_KIND);
   fs.mkdirSync(DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(DIR, 0o700);
   if (chosen === "touchid") {
-    const weaker = "or use the default approver: unset DESOLATE_APPROVER and bootstrap again";
+    const weaker =
+      "or use the default approver: desolate settings set approver.kind terminal, and bootstrap again";
     if (process.platform !== "darwin")
-      refuse("the touchid approver needs a Mac", "DESOLATE_APPROVER=terminal");
+      refuse("the touchid approver needs a Mac", "desolate settings set approver.kind terminal");
     const built = spawnSync(
       "swiftc",
       ["-O", "-o", FILES.helper, path.join(RELEASE_DIR, "host", "approver", "touchid.swift")],
@@ -149,7 +162,11 @@ declare namespace init {
     Expect<
       Invoke<typeof refusalOf, [run: typeof init, args: [log: typeof collect]]>,
       "=",
-      { message: "DESOLATE_APPROVER is 'yubikey'"; fix: "use touchid or terminal"; code: 1 }
+      {
+        message: "DESOLATE_APPROVER must be touchid or terminal, not 'yubikey'";
+        fix: "unset DESOLATE_APPROVER (or set it to what it takes)";
+        code: 1;
+      }
     >
   >;
 }

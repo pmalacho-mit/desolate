@@ -54,6 +54,21 @@ describe("T1 tab completion", () => {
     assert.deepEqual(complete("domain", "dev", "secret", "o"), ["off", "on"]);
     assert.deepEqual(complete("domain", "dev", "net", "re"), ["recommend"]);
   });
+  it("offers the flags and words of net and agent", () => {
+    assert.deepEqual(complete("domain", "dev", "net", "h"), ["hold"]);
+    assert.deepEqual(complete("domain", "dev", "net", "recommend", ""), ["--all"]);
+    assert.deepEqual(complete("net", "log", "--l"), ["--last"]);
+    assert.deepEqual(complete("agent", ""), ["attach", "list", "log", "start", "stop"]);
+    assert.deepEqual(complete("agent", "log", "dev/w"), ["dev/w1"]);
+    assert.deepEqual(complete("agent", "log", "dev/w1", ""), [
+      "--all",
+      "--lines",
+      "--name",
+      "--since",
+    ]);
+    assert.deepEqual(complete("agent", "stop", "dev/w1", "--k"), ["--kill"]);
+    assert.deepEqual(complete("agent", "start", "dev/w1", "--c"), ["--checkout"]);
+  });
   it("offers the domains, workspaces and repositories of this stack", () => {
     assert.deepEqual(complete("up", ""), ["dev", "docs"]);
     assert.deepEqual(complete("exec", "d"), ["dev/issue-12", "dev/w1", "docs/w1"]);

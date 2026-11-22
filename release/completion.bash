@@ -55,7 +55,8 @@ _desolate() {
             domain)
                 if [ "$COMP_CWORD" -eq 2 ]; then words="create $(_desolate_domains)"
                 elif [ "$COMP_CWORD" -eq 3 ] && [ "${COMP_WORDS[2]}" != create ]; then words="add show net secret"
-                elif [ "${COMP_WORDS[3]:-}" = net ] && [ "$COMP_CWORD" -eq 4 ]; then words="show open enforce allow deny allow-internal recommend"
+                elif [ "${COMP_WORDS[3]:-}" = net ] && [ "$COMP_CWORD" -eq 4 ]; then words="show open enforce allow deny allow-internal recommend hold"
+                elif [ "${COMP_WORDS[3]:-}" = net ] && [ "${COMP_WORDS[4]:-}" = recommend ]; then words="--all"
                 elif [ "${COMP_WORDS[3]:-}" = secret ] && [ "$COMP_CWORD" -eq 4 ]; then words="list set copy on off rm"
                 elif [ "${COMP_WORDS[3]:-}" = add ]; then words="--repo $(_desolate_repos)"
                 fi ;;
@@ -74,7 +75,17 @@ _desolate() {
                 fi ;;
             approve) words="--selftest" ;;
             root) if [ "$COMP_CWORD" -eq 2 ]; then words="shell"; fi ;;
-            net) if [ "$COMP_CWORD" -eq 2 ]; then words="log"; else words="$(_desolate_domains) --json"; fi ;;
+            net) if [ "$COMP_CWORD" -eq 2 ]; then words="log"; else words="$(_desolate_domains) --last --json"; fi ;;
+            agent)
+                if [ "$COMP_CWORD" -eq 2 ]; then words="start attach list log stop"
+                elif [ "$COMP_CWORD" -eq 3 ]; then words="$(_desolate_workspaces)"
+                else case "${COMP_WORDS[2]}" in
+                    start) words="--name --checkout --" ;;
+                    attach) words="--name" ;;
+                    list) words="--json" ;;
+                    log) words="--name --all --lines --since" ;;
+                    stop) words="--name --kill" ;;
+                esac; fi ;;
             # (A setting's name is not offered: the settings are known by loading desolate's
             # code, which a completion must not do on every key press. `desolate settings` lists them.)
             settings) if [ "$COMP_CWORD" -eq 2 ]; then words="set unset --json"; fi ;;
