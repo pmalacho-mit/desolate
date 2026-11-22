@@ -69,11 +69,13 @@ key the page keeps in its own storage (a browser sends a name's cookies to every
 so a program listening on another port is sent the cookie, but never the key), its own origin
 (a page an agent wrote, on a workspace's name, is another), a token per push, a JSON body.
 It cannot be framed, and its Approve button arms only after the tab has had your attention
-for a second and the pointer then moves onto it, so a click aimed at something else when a
-window opened under it lands on nothing. A click a moment after arming is the approval; one
-sooner, or on a button not armed, does nothing, and the line under the buttons says why.
-Once approved, the card says how the push ended, as the root's pusher reported it, with GitHub's
-page for opening its pull request into the repository's default branch. An address ending in
+for a second and the pointer has been on the button for a second while nothing on the page
+changed (moving or at rest), so a click aimed at something else when a window opened under it
+lands on nothing. A click on the armed button is the approval; one on a button not armed does
+nothing, and the line under the buttons says why. Once approved, the card says how the push
+ended, as the root's pusher reported it, with GitHub's page for opening its pull request into
+the repository's default branch (for a suede proposal, `downstream/...`, it says the
+dependency's own Action opens it). Long diff lines wrap. An address ending in
 `#repo=<owner/repo>&branch=<branch>&commit=<commit>` marks that push's card and scrolls to it;
 cards already decided fold when a new push comes. Treat the address like a password: anyone with it,
 on your Mac, can approve. The pages are served on both `127.0.0.1` and `::1` (where browsers
