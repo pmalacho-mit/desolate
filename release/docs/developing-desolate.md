@@ -145,7 +145,8 @@ A second checkout runs a second stack, with its own home, VM names and port:
 ```bash
 git clone https://github.com/pmalacho-mit/desolate ~/desolate-next
 cd ~/desolate-next && git checkout mac/push-label
-DESOLATE_INSTANCE=next DESOLATE_HOME=~/.desolate-next DESOLATE_EDITOR_PORT=31681 release/cli.sh bootstrap
+DESOLATE_HOME=~/.desolate-next release/cli.sh settings set editor.port 31681   # kept in that home
+DESOLATE_INSTANCE=next DESOLATE_HOME=~/.desolate-next release/cli.sh bootstrap
 ```
 
 It shares nothing with the real stack. `desolate doctor` fails if a stack's daemon could not

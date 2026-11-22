@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { bootstrap, git, newStack } from "../lib/harness.ts";
+import { bootstrap, git, newStack, outboxSaid } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
@@ -273,14 +273,14 @@ describe("T2: what a hostile domain sends, the root takes as data", () => {
     // A bundle in a format a workspace's git does not write by default (v3, which exists
     // to carry capabilities such as a filter that leaves objects out): refused as a whole.
     // The control is the same branch, bundled the ordinary way, just above.
+    const said = outboxSaid(stack);
     const v3 = inWs(
       "git bundle create --version=3 -q /desolate/outbox/sync/acme/widgets/zz-v3.bundle after && head -c 16 /desolate/outbox/sync/acme/widgets/zz-v3.bundle",
     );
     assert.match(v3.stdout, /^# v3 git bundle/, v3.stdout + v3.stderr);
-    assert.match(
-      inRootClone("git fetch dev 2>&1").stdout,
-      /a bundle from dev was refused and dropped: it is not a bundle a workspace's git writes \(v2\)/,
-    );
+    const refused =
+      /a bundle from dev was refused and dropped: it is not a bundle a workspace's git writes \(v2\)/;
+    assert.match(said(inRootClone("git fetch dev 2>&1").stdout, refused), refused);
     assert.ok(
       !fs.existsSync(path.join(outbox, "sync/acme/widgets/zz-v3.bundle")),
       "and it is gone from the outbox",

@@ -407,8 +407,10 @@ describe("T2 P1: a workspace's editor, inside its VM, by its own hostname", () =
       /vscode-workbench-web-configuration/,
     );
     const fresh = fs.mkdtempSync(path.join(stack.work, "chrome-fresh-"));
+    // Waits for the page's own text: Chrome's log says "403 (Forbidden)" before the page
+    // has its body, and a wait that took that saw an empty page.
     const stranger = await loadPage(chrome, fresh, `http://${e.host}:${e.port}/`, {
-      until: /Forbidden|vscode-workbench-web-configuration/,
+      until: /<pre[^>]*>Forbidden|vscode-workbench-web-configuration/,
     });
     assert.match(stranger.stdout, /Forbidden/);
     assert.doesNotMatch(stranger.stdout, /vscode-workbench-web-configuration/);

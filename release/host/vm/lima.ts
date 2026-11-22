@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { run } from "../../shared/run.ts";
 import type { RunResult } from "../../shared/run.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
+import { rootVmName } from "../../shared/names.ts";
 import { printable } from "../../shared/text.ts";
 import { define, valueOf, whole } from "../../shared/settings.ts";
 import { because } from "../failures.ts";
@@ -551,7 +552,10 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     }
     rootReady.add(name);
   };
-  const isRootVm = (name: string) => meta(name)?.spec.role === "root";
+  // By its name too: a record that cannot be read just now must not send root's command
+  // through the login user's sudo, where that user's own PATH would run it.
+  const isRootVm = (name: string) =>
+    name === rootVmName(INSTANCE) || meta(name)?.spec.role === "root";
 
   const shellArgs = (name: string, argv: string[], options: ExecOptions) => {
     const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
@@ -1032,14 +1036,23 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         timeoutMs: options.timeoutMs,
         signal: options.signal,
         idleMs: options.idleMs,
+        maxBytes: options.maxBytes,
         inheritStderr: options.inheritStderr,
       });
     },
 
     spawn(name, argv, options = {}) {
-      // Root in the root VM is asked for by exec() only; nothing streams as root there.
+      // Root in the root VM: ssh as root with this home's key, as exec reaches it, never
+      // through the login user. On exec's shared connection: a session held open (a review,
+      // as long as a person reads a push) starves nothing there, where sshd allows a thousand
+      // (root/start.sh), and this ssh is a client of it, so ending it ends its session alone.
+      // Root's key is put there at bootstrap (ensureRootSsh); until then ssh is refused, and
+      // the child fails saying so.
       if (options.root && isRootVm(name))
-        throw new Error("spawn as root in the root VM is not offered; use exec");
+        return spawn("ssh", rootSshArgs(name, argv, options), {
+          stdio: ["pipe", "pipe", "pipe"],
+          env: env(),
+        });
       return spawn(LIMACTL, ["--tty=false", ...shellArgs(name, argv, options)], {
         stdio: ["pipe", "pipe", "pipe"],
         env: env(),

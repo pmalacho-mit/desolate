@@ -13,7 +13,15 @@ export const accountOf = (
   total: number,
   lines: number,
 ): Account => {
-  const sends = { pack: "e".repeat(64), size: 100, lfs: [] };
+  const sends = {
+    pack: "e".repeat(64),
+    size: 100,
+    lfs: {
+      count: 0,
+      bytes: 0,
+      digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    },
+  };
   return {
     key: "k",
     warnings: Array.from({ length: warnings }, (_, i) => `warning ${i + 1}`),

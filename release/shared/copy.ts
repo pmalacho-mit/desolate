@@ -6,6 +6,7 @@
 // what is hashed is what is kept.
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
+import { promisify } from "node:util";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type {
@@ -89,26 +90,34 @@ declare namespace openPlain {
   >;
 }
 
+const NEW_FILE =
+  fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+const CHUNK = 1024 * 1024;
+const SHORTER = "the file got shorter while it was copied";
+const read = promisify(fs.read);
+
 /** Copy from a descriptor into a new file (never an existing one, never through a link),
- *  hashing on the way; exactly `size` bytes, what the descriptor said it held. Its sha256. */
-export const copyOut = (from: { fd: number; size: number }, to: string, mode = 0o600): string => {
-  const out = fs.openSync(
-    to,
-    fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW,
-    mode,
-  );
+ *  hashing on the way; exactly `size` bytes, what the descriptor said it held. Its sha256.
+ *  Asynchronous: a copy of gigabytes leaves the process's loop free between chunks. */
+export const copyOut = async (
+  from: { fd: number; size: number },
+  to: string,
+  mode = 0o600,
+): Promise<string> => {
+  const out = await fs.promises.open(to, NEW_FILE, mode);
   const hash = createHash("sha256");
-  const buffer = Buffer.alloc(1024 * 1024);
+  const buffer = Buffer.alloc(CHUNK);
   try {
     for (let done = 0; done < from.size;) {
-      const read = fs.readSync(from.fd, buffer, 0, Math.min(buffer.length, from.size - done), done);
-      if (read === 0) throw new Error("the file got shorter while it was copied");
-      hash.update(buffer.subarray(0, read));
-      fs.writeSync(out, buffer, 0, read);
-      done += read;
+      const want = Math.min(CHUNK, from.size - done);
+      const { bytesRead } = await read(from.fd, buffer, 0, want, done);
+      if (bytesRead === 0) throw new Error(SHORTER);
+      hash.update(buffer.subarray(0, bytesRead));
+      await out.write(buffer, 0, bytesRead);
+      done += bytesRead;
     }
   } finally {
-    fs.closeSync(out);
+    await out.close();
   }
   return hash.digest("hex");
 };
@@ -169,22 +178,59 @@ declare namespace copyOut {
   >;
 }
 
+/** copyOut, for a caller whose process may block on it. */
+export const copyOutSync = (from: { fd: number; size: number }, to: string, mode = 0o600) => {
+  const out = fs.openSync(to, NEW_FILE, mode);
+  const hash = createHash("sha256");
+  const buffer = Buffer.alloc(CHUNK);
+  try {
+    for (let done = 0; done < from.size;) {
+      const read = fs.readSync(from.fd, buffer, 0, Math.min(CHUNK, from.size - done), done);
+      if (read === 0) throw new Error(SHORTER);
+      hash.update(buffer.subarray(0, read));
+      fs.writeSync(out, buffer, 0, read);
+      done += read;
+    }
+  } finally {
+    fs.closeSync(out);
+  }
+  return hash.digest("hex");
+};
+
+declare namespace copyOutSync {
+  /** the same copy and hash as copyOut's */
+  export type Hashes = Given<
+    [Invoke<typeof emptyScratch>, Invoke<typeof writeScratch, [name: "from", text: "hello"]>],
+    [
+      Expect<
+        Invoke<
+          typeof copyOutSync,
+          [from: Invoke<typeof opened, [name: "from"]>, to: Invoke<typeof scratch, [name: "to"]>]
+        >,
+        "=",
+        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+      >,
+      Expect<Invoke<typeof readScratch, [name: "to"]>, "=", "hello">,
+    ]
+  >;
+}
+
 /** An object named by its sha256, taken from `from` to `to` only if it hashes to its name:
  *  through a `.part` file beside `to`, which is gone afterwards whatever happened. Null when
  *  it was taken (or `to` was there already), else why not. */
-export const takeHashed = (
+export const takeHashed = async (
   from: string,
   to: string,
   sha256: string,
   most: number,
   mode = 0o644,
-): string | null => {
+): Promise<string | null> => {
   if (fs.existsSync(to)) return null;
   const source = openPlain(from, most);
   if (!source) return "not a plain file of a size desolate takes";
   const part = `${to}.part-${process.pid}`;
   try {
-    if (copyOut(source, part, mode) !== sha256) return "it does not hash to its name";
+    if ((await copyOut(source, part, mode)) !== sha256) return "it does not hash to its name";
     fs.renameSync(part, to);
     return null;
   } catch (error) {

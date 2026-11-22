@@ -15,14 +15,8 @@
 //     pages, and the root sees only D, its own page's code, after A and G were spent.
 // The cookies are still the browser's session's: quitting the browser signs it out of all three.
 import { createHash, randomBytes } from "node:crypto";
+import { SIGNIN } from "../shared/signin.ts";
 import type { Expect, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
-
-export const SIGNIN = {
-  /** how long a code waits for its browser: the command opens it at once */
-  ttlMs: 60_000,
-  /** codes held at once; the oldest goes first (a loop asking for codes holds no more) */
-  most: 32,
-};
 
 /** The pages served by the host: each takes only its own codes. */
 export type Page = "approve" | "git";

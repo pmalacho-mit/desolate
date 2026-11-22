@@ -84,6 +84,21 @@ export const git = (dir: string, ...args: string[]) =>
   );
 
 /** T2: the fake backend. T3: real VMs on Linux (qemu). T4: the product backend on a Mac (vz). */
+/** What was said of a domain's outbox from now on, by whichever fetch took what it held: a
+ *  `git fetch` of the test's (`output`), or rootd's own import, which takes what a domain
+ *  writes as it writes it (root/rootd.ts, importChanged) and says so in its log. The first to
+ *  look takes it, so a test cannot know which: this waits, up to 20 s, for `expected` in one. */
+export const outboxSaid = (stack: Stack) => {
+  const log = "/var/lib/desolate/rootd.log";
+  const from = Number(stack.inRoot(["bash", "-c", `wc -l < ${log}`]).stdout.trim()) + 1;
+  return (output: string, expected: RegExp) => {
+    let said = output;
+    for (const end = Date.now() + 20_000; !expected.test(said) && Date.now() < end;)
+      said = output + stack.inRoot(["bash", "-c", `sleep 0.25; tail -n +${from} ${log}`]).stdout;
+    return said;
+  };
+};
+
 export const backendOfTier = (): "fake" | "qemu" | "vz" =>
   process.env.DESOLATE_TIER === "T3" ? "qemu" : process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
 

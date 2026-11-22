@@ -301,8 +301,7 @@ const summaryOf = (review, card) => {
     box.append(list.before, bl, list.after);
   }
   // What goes, exactly as it is signed: the reviewer's pack, its size, and the LFS objects.
-  const lfsBytes = (sends) => sends.lfs.reduce((n, entry) => n + Number(entry.split(" ")[1] || 0), 0);
-  box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(account.sends.size)}, and ${account.sends.lfs.length} LFS object(s) they point to${account.sends.lfs.length ? `, ${size(lfsBytes(account.sends))}` : ""}: nothing else.`));
+  box.append(el("p", `It sends one pack desolate's reviewer made of these commits, ${size(account.sends.size)}, and ${account.sends.lfs.count} LFS object(s) they point to${account.sends.lfs.count ? `, ${size(account.sends.lfs.bytes)}` : ""}: nothing else.`));
   if (card) {
     box.append(...diffToggle(card, ["Show the diff", "Hide the diff"], "net=1"));
     // Each commit whole (what was changed in between, too), one at a time, as asked for.
@@ -337,7 +336,7 @@ const summaryOf = (review, card) => {
     box.append(el("p", `Or push it squashed into one commit, ${sq.commit.slice(0, 12)}, ${sq.parent ? `on ${sq.parent.slice(0, 12)}` : "with no parent"}: the same files as the last commit, and none of what was in between. The workspace's branch keeps its ${sq.count} commits.`));
     box.append(el("pre", `${sq.message}${sq.author ? `\nAuthor:    ${sq.author}\nCommitter: ${sq.committer}` : ""}${sq.dates ? `\n${sq.dates}` : ""}`, "message"));
     // What that choice sends, as it is signed: its own pack and LFS objects.
-    box.append(el("p", `Squashed, it sends a pack of its own, ${size(sq.sends.size)}, and ${sq.sends.lfs.length} LFS object(s)${sq.sends.lfs.length ? `, ${size(lfsBytes(sq.sends))}` : ""}: nothing else.`));
+    box.append(el("p", `Squashed, it sends a pack of its own, ${size(sq.sends.size)}, and ${sq.sends.lfs.count} LFS object(s)${sq.sends.lfs.count ? `, ${size(sq.sends.lfs.bytes)}` : ""}: nothing else.`));
   }
   return box;
 };

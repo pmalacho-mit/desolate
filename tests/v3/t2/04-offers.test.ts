@@ -7,14 +7,16 @@ import * as fs from "node:fs";
 import { request as httpRequest } from "node:http";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { bootstrap, git, newStack } from "../lib/harness.ts";
+import { bootstrap, git, newStack, outboxSaid } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 import { findChrome, loadPage } from "../lib/browser.ts";
-import { signedFor } from "../../../release/shared/approval.ts";
+import { lfsDigest, signedFor } from "../../../release/shared/approval.ts";
 
 let stack: Stack;
 let commit = "";
 let oid = "";
+/** The commit's LFS object as the reviewer lists it for the pusher, by its pointer's size. */
+const lfsListed = () => [`${oid} 50000`];
 const vms = new Map<string, string>();
 const vmOf = (target: string) => {
   if (!vms.has(target)) {
@@ -142,7 +144,7 @@ type Said = {
   commits?: Listed<{ commit: string; subject: string; author: string }>;
   files?: Listed<{ path: string }>;
   between?: Listed<{ path: string }>;
-  sends?: { pack: string; size: number; lfs: string[] };
+  sends?: { pack: string; size: number; lfs: { count: number; bytes: number; digest: string } };
   squash?: { commit: string; message: string; count: number; committer: string };
   lines: Record<string, unknown>[];
 };
@@ -406,8 +408,8 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     });
     assert.deepEqual(
       said.sends!.lfs,
-      [`${oid} 50000`],
-      "the reviewer lists the commit's LFS object, by the size its pointer says",
+      { count: 1, bytes: 50000, digest: lfsDigest(lfsListed()) },
+      "the reviewer counts the commit's LFS object, by the size its pointer says, and digests the list",
     );
     const own = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey;
     const forged = keyring({
@@ -520,7 +522,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const lfsFile = inRootClone(
       `ls .git/lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`,
     ).stdout.trim();
-    const ownPack = toPusher(real.id!, "/tmp/own.pack", [], said.sends!.lfs);
+    const ownPack = toPusher(real.id!, "/tmp/own.pack", [], lfsListed());
     assert.equal(ownPack.ok, false);
     assert.match(ownPack.error!, /the pack is not the one approved .*nothing was pushed/);
     assert.deepEqual(forgeRefs("acme/widgets"), before, "no ref of the remote moved");
@@ -566,7 +568,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         { oid, file: `${ROOT_CLONE}/${lfsFile}` },
         { oid: planted, file: "/tmp/planted" },
       ],
-      [...said.sends!.lfs, `${planted} 32`],
+      [...lfsListed(), `${planted} 32`],
     );
     assert.equal(plantedLfs.ok, false);
     assert.match(
@@ -603,7 +605,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         { oid, file: `${ROOT_CLONE}/${lfsFile}` },
         { oid: planted, file: "/tmp/planted" },
       ],
-      said.sends!.lfs,
+      lfsListed(),
     );
     assert.equal(unlisted.ok, false);
     assert.match(
@@ -666,7 +668,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       approved3.id!,
       controlPack,
       [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
-      saidControl.sends!.lfs,
+      lfsListed(),
     );
     assert.equal(control.ok, true, String(control.error));
     assert.equal(
@@ -681,7 +683,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       approved3.id!,
       controlPack,
       [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
-      saidControl.sends!.lfs,
+      lfsListed(),
     );
     assert.equal(reused.ok, false);
     assert.match(String(reused.error), /holds no live approval/);
@@ -1368,7 +1370,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       commit,
       squashes: null,
       pack: "e".repeat(64),
-      lfs: [],
+      lfs: { count: 0, digest: "0".repeat(64) },
     });
     assert.match(
       String(keyring({ op: "approve", message: text, signature: "" }).error),
@@ -1673,6 +1675,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     inWs("dev/w1", "pkill -f wsd.ts; true");
     const sync = path.join(stack.home, "domains/dev/outbox/sync/acme/widgets");
     const good = commit;
+    const said = outboxSaid(stack);
     fs.writeFileSync(
       path.join(sync, "refs.json"),
       JSON.stringify({
@@ -1699,11 +1702,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.doesNotMatch(lied.stdout, /evil|notasha|ProxyCommand|refs\/desolate/);
     // The root removes what it finds by NAME, in the directory it checked: the link goes,
     // what it pointed at is never opened, and the person is told something was dropped.
-    assert.match(
-      lied.stdout,
-      /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/,
-      lied.stdout,
-    );
+    const dropped = /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/;
+    assert.match(said(lied.stdout, dropped), dropped, lied.stdout);
     assert.ok(
       !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
         fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
@@ -1745,6 +1745,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
     assert.equal(countMany(), 6000, "and no branch was pruned on it");
     // A bundle whose header (its list of refs) is past the same bound: refused as that.
+    const saidOfHeader = outboxSaid(stack);
     fs.writeFileSync(path.join(sync, "refs.json"), JSON.stringify({ refs: many }));
     const line = `${commit} refs/heads/b\n`;
     fs.writeFileSync(
@@ -1752,10 +1753,9 @@ echo "=====waits"; cat /tmp/waits.lines`,
       `# v2 git bundle\n${line.repeat(Math.ceil((4 * 1024 * 1024) / line.length))}\nPACK`,
     );
     const header = inRootClone("git fetch dev 2>&1");
-    assert.match(
-      header.stdout,
-      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/,
-    );
+    const over =
+      /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/;
+    assert.match(saidOfHeader(header.stdout, over), over);
     // Control: the list as the workspace wrote it, and the many branches it does not name
     // are pruned, as an honest list says.
     fs.writeFileSync(path.join(sync, "refs.json"), kept);

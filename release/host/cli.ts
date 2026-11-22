@@ -1,12 +1,12 @@
 // The desolate command, on the host. It drives everything, holds no key, and runs no git on
 // desolate's repositories (P4).
 import { forTerminal } from "../shared/text.ts";
-import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { parseRepo } from "../shared/names.ts";
+import { openInBrowser } from "./browser.ts";
 import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { printed } from "../.harness/host-cli.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
@@ -259,22 +259,6 @@ declare namespace helpFor {
   >;
 }
 
-/** `--open`: the address in a browser on this Mac. Chrome or Firefox if there is one:
- *  Safari cannot find desolate's *.localhost names. */
-const openInBrowser = (url: string) => {
-  if (process.platform !== "darwin") return void spawnSync("xdg-open", [url], { stdio: "ignore" });
-  const browser =
-    process.env.DESOLATE_BROWSER ??
-    ["Google Chrome", "Firefox", "Chromium", "Brave Browser", "Microsoft Edge"].find((app) =>
-      fs.existsSync(`/Applications/${app}.app`),
-    );
-  const opened = spawnSync("open", browser ? ["-a", browser, url] : [url], { stdio: "ignore" });
-  if (opened.status !== 0 || !browser)
-    process.stderr.write(
-      `desolate: ${browser ? `could not open ${browser}` : "no Chrome or Firefox found: Safari cannot open *.localhost addresses"}; open the address above in Chrome or Firefox\n`,
-    );
-};
-
 const main = async (argv: string[]): Promise<number> => {
   const [verb, ...rest] = argv;
   if (!verb || verb === "help" || verb === "--help" || verb === "-h") {
@@ -423,7 +407,10 @@ const main = async (argv: string[]): Promise<number> => {
   if ((verb === "status" || verb === "board") && rest.some((arg) => !arg.startsWith("-"))) {
     const { values, positionals } = flags(rest, {});
     const { status } = await import("./status.ts");
-    await status(positionals[0], out, values.json === true);
+    await status(positionals[0], out, values.json === true, async () => {
+      const { ports } = await import("./daemon.ts");
+      return new Map((await ports().catch(() => [])).map((w) => [w.workspace, w.notes]));
+    });
     return EXIT.ok;
   }
   if (verb === "list" || verb === "status" || verb === "board") {
@@ -823,6 +810,7 @@ const main = async (argv: string[]): Promise<number> => {
           out(
             `  port ${r.port} ${r.why.startsWith("listening in the workspace") ? "is NOT forwarded" : "is kept taken here"}: ${r.why}`,
           );
+        for (const note of w.notes) out(`  note: ${note}`);
       }
     return EXIT.ok;
   }

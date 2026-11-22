@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import type { AddressInfo } from "node:net";
 import * as path from "node:path";
 import { refuse } from "../shared/exit.ts";
+import { formatBytes } from "../shared/limits.ts";
 import { waitFor } from "../shared/run.ts";
 import * as approver from "./approver.ts";
 import { because, lastFailure } from "./failures.ts";
@@ -567,7 +568,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
       fix:
         error === null
           ? "desolate bootstrap"
-          : `stop what holds port ${port}, or give this stack another: DESOLATE_EDITOR_PORT=<port> desolate bootstrap`,
+          : `stop what holds port ${port}, or give this stack another: desolate settings set editor.port <port>, desolate down, then desolate bootstrap`,
     });
   }
   // The Mac's loopback, from the root's own user, asked by trying: a listener of doctor's own
@@ -620,6 +621,9 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
   // Not a check either: where the whole text of the last failure is, of those a refusal
   // showed the end of (failures.ts).
   const last = lastFailure();
+  // Nor this: how near the root's state is to what this host reads of it (daemon.ts), said
+  // when past half of it.
+  const room = await (await import("./daemon.ts")).stateRoom();
   if (json)
     out(
       JSON.stringify(
@@ -630,6 +634,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
           checks,
           heldOnMac: held,
           lastFailure: last?.file ?? null,
+          stateRoom: room,
         },
         null,
         2,
@@ -652,6 +657,10 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
     if (last)
       out(
         `note: the whole text of the last failure shown cut is ${last.file} (${last.of} kept, newest last, in ${path.dirname(last.file)})`,
+      );
+    if (room && room.largest * 2 > room.most)
+      out(
+        `note: the root's state has been ${formatBytes(room.largest)}, of the ${formatBytes(room.most)} this host reads of it: past that, desolate events and the dashboard's actions stop`,
       );
   }
   return failed.length;

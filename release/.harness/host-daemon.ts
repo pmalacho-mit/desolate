@@ -154,6 +154,22 @@ export const helloTo = (name: string | null) => {
 export const asked = (text: string) => said(text).sniffed;
 /** `text`, its names written as above, as bytes. */
 export const wire = (text: string) => Buffer.from(named(text), "latin1");
+/** What a reader of the root's state answer (daemon.ts, stateReader) gives first when it is
+ *  handed `text`'s bytes `piece` at a time, as `shown` has it; null when it gives nothing. */
+export const readInPieces = (
+  reader: (most?: number) => { take: (chunk: Buffer) => unknown },
+  text: string,
+  piece: number,
+  most?: number,
+) => {
+  const read = reader(most);
+  const bytes = wire(text);
+  for (let at = 0; at < bytes.length; at += piece) {
+    const got = read.take(bytes.subarray(at, at + piece));
+    if (got !== null) return shown(got);
+  }
+  return null;
+};
 
 /** `count` ports from `from` on, which a type would take a long time to write. */
 export const portRange = (from: number, count: number) =>

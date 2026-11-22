@@ -27,9 +27,12 @@ const home = path.join(root, "home");
 fs.mkdirSync(home);
 const state = path.join(home, ".desolate-agents");
 
-const holder = (...args: string[]) => {
+const holder = (...args: string[]) => given("", ...args);
+/** The holder, with `input` on its stdin. */
+const given = (input: string, ...args: string[]) => {
   const ran = spawnSync("python3", ["-I", path.join(root, "bin", "h.py"), ...args], {
     encoding: "latin1",
+    input,
     timeout: 20_000,
     env: { PATH: process.env.PATH, HOME: home },
   });
@@ -114,6 +117,22 @@ describe("T1 the agent holder: its log, reads of it, and stop", () => {
     assert.equal(all.meta.first, 0);
     assert.ok(all.text.startsWith("1\n2\n"));
     assert.doesNotMatch(holder("attach", "small").stdout, /not replayed/);
+  });
+
+  it("the command on stdin, as the host sends it: a word one shell string could not carry", async () => {
+    // 40,000 quotes: 160,000 characters once quoted for a shell, past Linux's 128 KiB.
+    const word = "'".repeat(40_000);
+    const started = given(JSON.stringify(["printf", "%s", word]), "start", "quoted", root);
+    assert.equal(started.code, 0, started.stderr);
+    await ended("quoted");
+    assert.ok(read("quoted").text.startsWith(word), "the word, whole");
+    // The control: what is not a list of words is refused, and nothing starts.
+    for (const input of ["printf hi", '["a\\u0000b"]', "[]", ""]) {
+      const refused = given(input, "start", "notwords", root);
+      assert.equal(refused.code, 1);
+      assert.match(refused.stderr, /the command on stdin is not a JSON list of words/);
+    }
+    assert.equal(fs.existsSync(path.join(state, "notwords.json")), false);
   });
 
   it("a log from a holder before segments is read, and a new start carries on after it", async () => {

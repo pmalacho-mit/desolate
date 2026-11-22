@@ -17,7 +17,6 @@ import { formatBytes, over } from "../shared/limits.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { CUT, failure, printable } from "../shared/text.ts";
 import { execFile, spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as os from "node:os";
 import type { Size } from "../shared/size.ts";
@@ -53,7 +52,6 @@ import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } fro
 import type { Backend as ApprovalBackend } from "./approve-web.ts";
 import { accountLines } from "../shared/review-account.ts";
 import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
-import { isOldKey, oldAnswer, withOld } from "./review-fallback.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
@@ -61,7 +59,7 @@ import { sniffSocket } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
-import { backend, ROOT_VM, rootctl } from "./stack.ts";
+import { backend, ROOT_VM, rootctlBrief } from "./stack.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -100,15 +98,15 @@ import type {
   keepLog,
   endsOf,
   numbered,
+  readInPieces,
   setOf,
   shown,
   silentClients,
   sixGiB,
-  vmAnswering,
   wire,
 } from "../.harness/host-daemon.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
-import type { firstOf, stillRunning, vmRunning } from "../.harness/host-web.ts";
+import type { firstOf, spawnedAs, stillRunning, vmRunning } from "../.harness/host-web.ts";
 import type { all } from "../.harness/shared-review-account.ts";
 import type { abortedIn } from "../.harness/shared-run.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
@@ -353,19 +351,7 @@ const reviewerAsked = (request: AccountRequest, signal?: AbortSignal) => {
   let ranOut = false;
   async function* bytes(): AsyncGenerator<Uint8Array | string, void, void> {
     if (signal?.aborted) return;
-    let child: ChildProcess;
-    try {
-      child = backend().spawn(ROOT_VM, argv, { root: true });
-    } catch {
-      // FALLBACK, until host/vm/lima.ts offers `spawn` as root in the root VM (limits ticket
-      // 11, #183: this ticket's pull request has the exact change). With `exec` the answer
-      // arrives when it is whole: no progress is seen on the way, and a request that is
-      // dropped is not ended in the root. It is still not ended for being long (R4).
-      const result = await backend().exec(ROOT_VM, argv, { root: true, input });
-      ended = Promise.resolve({ code: result.code, stderr: result.stderr });
-      ranOut = true;
-      return void (yield result.stdout);
-    }
+    const child = backend().spawn(ROOT_VM, argv, { root: true });
     let stderr = "";
     ended = new Promise((resolve) => {
       child.once("error", (error) => resolve({ code: 127, stderr: stderr + error.message }));
@@ -424,13 +410,8 @@ export async function* reviewerSummary(
   request: AccountRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<AccountLine, void, void> {
-  // FALLBACK (review-fallback.ts): more of an account that the old reviewer gave.
-  if (request.op !== "account" && isOldKey(request.key))
-    return yield* oldAnswer(request, (again) => reviewerAsked(again, signal).bytes);
   const asked = reviewerAsked(request, signal);
-  // FALLBACK (review-fallback.ts): the old reviewer's one JSON object, read as the stream.
-  const bytes = request.op === "account" ? withOld(request, asked.bytes) : asked.bytes;
-  for await (const line of accountLines(bytes)) {
+  for await (const line of accountLines(asked.bytes)) {
     if (signal?.aborted) return;
     if (!("error" in line)) {
       yield line;
@@ -455,11 +436,6 @@ declare namespace reviewerSummary {
     commit: "1111111111111111111111111111111111111111";
     onto: null;
   };
-  type Sends = {
-    pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    size: 100;
-    lfs: [];
-  };
   /** the reviewer's lines as it writes them: what it is doing, while it does it, and then
    *  its account, which ends the answer. (Here the reviewer is a program that says these
    *  lines a moment apart; what it logs goes to stderr, and is not part of the answer.) */
@@ -479,23 +455,42 @@ declare namespace reviewerSummary {
         ]
       >,
     ],
-    Expect<
-      Invoke<
-        typeof all,
+    [
+      Expect<
+        Invoke<
+          typeof all,
+          [
+            lines: Invoke<
+              typeof reviewerSummary,
+              [request: { op: "page"; key: "k"; list: "commits"; from: 0 }]
+            >,
+          ]
+        >,
+        "=",
         [
-          lines: Invoke<
-            typeof reviewerSummary,
-            [request: { op: "page"; key: "k"; list: "commits"; from: 0 }]
-          >,
+          { progress: { phase: "waiting for another push's account" } },
+          { progress: { phase: "packing"; done: 1200; of: 8000 } },
+          { page: { commits: { items: []; total: 0; from: 0 } } },
         ]
       >,
-      "=",
-      [
-        { progress: { phase: "waiting for another push's account" } },
-        { progress: { phase: "packing"; done: 1200; of: 8000 } },
-        { page: { commits: { items: []; total: 0; from: 0 } } },
-      ]
-    >
+      /** asked as root in the root VM, the request on its input alone: nothing of it in the
+       *  program's words or its environment */
+      Expect<
+        Invoke<typeof spawnedAs>,
+        "=",
+        [
+          {
+            vm: "dsl-main-root";
+            argv: [
+              "node",
+              "--disable-warning=ExperimentalWarning",
+              "/desolate/release/root/review-ask.ts",
+            ];
+            options: { root: true };
+          },
+        ]
+      >,
+    ]
   >;
   /** whoever asked went away: the reviewer's program is ended, and nothing more is given,
    *  no answer and no error. (The control: left alone, the same program is still running.) */
@@ -593,7 +588,7 @@ declare namespace reviewerSummary {
       Call<
         Mocked<typeof backend>,
         "mockReturnValue",
-        [value: Invoke<typeof vmAnswering, [code: 2, stdout: "", stderr: "bad \u001b[2Jref"]>]
+        [value: Invoke<typeof vmRunning, [script: "printf 'bad \\033[2Jref' >&2; exit 2"]>]
       >,
     ],
     Expect<
@@ -631,7 +626,7 @@ declare namespace reviewerSummary {
         Call<
           Mocked<typeof backend>,
           "mockReturnValue",
-          [value: Invoke<typeof vmAnswering, [code: 0, stdout: "null\n", stderr: ""]>]
+          [value: Invoke<typeof vmRunning, [script: "echo null"]>]
         >,
       ],
       Expect<
@@ -650,7 +645,7 @@ declare namespace reviewerSummary {
         Call<
           Mocked<typeof backend>,
           "mockReturnValue",
-          [value: Invoke<typeof vmAnswering, [code: 0, stdout: '[{"ok":true}]\n', stderr: ""]>]
+          [value: Invoke<typeof vmRunning, [script: "echo '[{\"ok\":true}]'"]>]
         >,
       ],
       Expect<
@@ -664,43 +659,6 @@ declare namespace reviewerSummary {
       >
     >,
   ];
-  /** FALLBACK (review-fallback.ts, to go with it): a VM layer that cannot stream as root
-   *  answers when the reviewer is done, and a reviewer of the old kind answers with one JSON
-   *  object; both are read as the stream's one answer */
-  export type OldWay = Given<
-    [
-      Mock<"./stack.ts">,
-      Call<
-        Mocked<typeof backend>,
-        "mockReturnValue",
-        [
-          value: Invoke<
-            typeof vmAnswering,
-            [
-              code: 0,
-              stdout: '{"ok":true,"commits":[],"files":[],"fastForward":null,"sends":{"pack":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","size":100,"lfs":[]}}\n',
-              stderr: "",
-            ]
-          >,
-        ]
-      >,
-    ],
-    Expect<
-      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
-      "matches",
-      [
-        {
-          account: {
-            warnings: [];
-            commits: { items: []; total: 0; from: 0 };
-            files: { items: []; total: 0; from: 0 };
-            fastForward: null;
-            sends: Sends;
-          };
-        },
-      ]
-    >
-  >;
 }
 
 const approvalBackend = (): ApprovalBackend => {
@@ -725,23 +683,19 @@ const approvalBackend = (): ApprovalBackend => {
       },
     },
     pending: async () =>
-      (
-        await rootctl<{ message: string; at: string }[]>(
-          "approvals.pending",
-          {},
-          { quiet: true, timeoutMs: 30_000 },
-        )
-      ).map((p) => ({ message: p.message, at: p.at })),
+      (await rootctlBrief<{ message: string; at: string }[]>("approvals.pending")).map((p) => ({
+        message: p.message,
+        at: p.at,
+      })),
     summary: reviewerSummary,
     approve: async (signed) => {
       const push = parseSigned(signed);
       if (!push) throw new Error("not a push approval");
       const { signClicked } = await import("./approver.ts");
-      await rootctl(
-        "approvals.answer",
-        { message: signed, signature: signClicked(signed) },
-        { quiet: true, timeoutMs: 60_000 },
-      );
+      await rootctlBrief("approvals.answer", {
+        message: signed,
+        signature: signClicked(signed),
+      });
       events.publish(
         events.host("approved", {
           repo: push.repo,
@@ -753,7 +707,7 @@ const approvalBackend = (): ApprovalBackend => {
       );
     },
     refuse: async (message) => {
-      await rootctl("approvals.refuse", { message }, { quiet: true, timeoutMs: 30_000 });
+      await rootctlBrief("approvals.refuse", { message });
       const push = parseApproval(message);
       if (push)
         events.publish(
@@ -761,13 +715,9 @@ const approvalBackend = (): ApprovalBackend => {
         );
     },
     issues: async () =>
-      (
-        await rootctl<unknown[]>(
-          "issue.list",
-          { waiting: true },
-          { quiet: true, timeoutMs: 30_000 },
-        )
-      ).filter((i) => (i as { state?: unknown }).state === "approving"),
+      (await rootctlBrief<unknown[]>("issue.list", { waiting: true })).filter(
+        (i) => (i as { state?: unknown }).state === "approving",
+      ),
     publishIssue: async (issue) => {
       const url = await (await import("./issues.ts")).publish(issue);
       events.publish(events.host("issue-published", { repo: issue.repo, id: issue.id, url }));
@@ -900,8 +850,9 @@ declare namespace roomVerdict {
 /** The root's state service's answer, once it is all there: complete when its Content-Length
  *  has arrived, not when the stream closes (what carries the connection, ssh or an exec, may
  *  hold it open until this side closes, which it does not do first: measured, a relay that
- *  sees its input end drops the answer). null: not all there yet. */
-const stateAnswer = (data: Buffer): { status: number; body: string } | Error | null => {
+ *  sees its input end drops the answer). null: its head has not all come; a number: it has,
+ *  and the whole answer is that many bytes. */
+const stateAnswer = (data: Buffer): { status: number; body: string } | Error | number | null => {
   const split = data.indexOf("\r\n\r\n");
   if (split < 0) return null;
   const head = data.subarray(0, split).toString("latin1");
@@ -909,9 +860,10 @@ const stateAnswer = (data: Buffer): { status: number; body: string } | Error | n
   const length = Number(/\r\ncontent-length: (\d+)/i.exec(head)?.[1] ?? -1);
   if (status === 0 || length < 0)
     return new Error("the root's state service sent something that is not an answer");
-  if (data.length >= split + 4 + length)
-    return { status, body: data.subarray(split + 4, split + 4 + length).toString("utf8") };
-  return null;
+  const whole = split + 4 + length;
+  if (data.length >= whole)
+    return { status, body: data.subarray(split + 4, whole).toString("utf8") };
+  return whole;
 };
 
 declare namespace stateAnswer {
@@ -939,7 +891,7 @@ declare namespace stateAnswer {
       { status: 401; body: "no!" }
     >,
   ];
-  /** not all there yet */
+  /** not all there yet: its head, or the size its head says it is */
   export type Incomplete = [
     Expect<
       Invoke<
@@ -955,7 +907,7 @@ declare namespace stateAnswer {
         [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{}"]>]
       >,
       "=",
-      null
+      59
     >,
   ];
   /** a head without its length, or not HTTP/1.1's, is not an answer, and waiting will not make it one */
@@ -987,6 +939,86 @@ declare namespace stateAnswer {
       { error: "the root's state service sent something that is not an answer" }
     >,
   ];
+}
+
+/** The root's state service's answer, read as it comes in chunks cut anywhere: `take` each,
+ *  and it gives what stateAnswer does once that is whole (else null), or the bound's error
+ *  past `most` bytes. Chunks are kept and joined only when the answer can be whole: when its
+ *  head ends in one (looked for with the three bytes before it), then when all the head
+ *  says has come. (Joined at every chunk, reading it was quadratic in its size.) */
+const stateReader = (most = STATE_ANSWER_BYTES) => {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let tail = Buffer.alloc(0);
+  let whole = Infinity;
+  return {
+    size: () => size,
+    take: (chunk: Buffer): { status: number; body: string } | Error | null => {
+      chunks.push(chunk);
+      size += chunk.length;
+      if (size > most)
+        return new Error(
+          `${over("the root's state service's answer", most, size, "bytes", "this host reads of one")} (desolate doctor says how near the state is to it)`,
+        );
+      if (whole === Infinity) {
+        const seen = Buffer.concat([tail, chunk]);
+        tail = seen.subarray(-3);
+        if (!seen.includes("\r\n\r\n")) return null;
+      } else if (size < whole) return null;
+      const data = Buffer.concat(chunks, size);
+      chunks.splice(0, chunks.length, data);
+      const answer = stateAnswer(data);
+      if (typeof answer !== "number") return answer;
+      whole = answer;
+      return null;
+    },
+  };
+};
+
+declare namespace stateReader {
+  /** an answer cut anywhere, its head's end among the cuts, is read whole, once */
+  export type Pieces = [
+    Expect<
+      Invoke<
+        typeof readInPieces,
+        [
+          reader: typeof stateReader,
+          text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
+          piece: 1,
+        ]
+      >,
+      "=",
+      { status: 200; body: '{"a":"bcd"}' }
+    >,
+    Expect<
+      Invoke<
+        typeof readInPieces,
+        [
+          reader: typeof stateReader,
+          text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
+          piece: 7,
+        ]
+      >,
+      "=",
+      { status: 200; body: '{"a":"bcd"}' }
+    >,
+  ];
+  /** past its bound, it says the bound and the size that met it */
+  export type Over = Expect<
+    Invoke<
+      typeof readInPieces,
+      [
+        reader: typeof stateReader,
+        text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
+        piece: 16,
+        most: 40,
+      ]
+    >,
+    "=",
+    {
+      error: "the root's state service's answer is 48 bytes, over the 40 this host reads of one (desolate doctor says how near the state is to it)";
+    }
+  >;
 }
 
 /** The state's tag, as the root's user's service gave it, to ask for what changed since:
@@ -1798,7 +1830,6 @@ const serve = async () => {
       }
       const payload = body === undefined ? "" : JSON.stringify(body);
       const stream = toStateService();
-      let data = Buffer.alloc(0);
       const timer = setTimeout(
         () => settle(new Error("the root's state service did not answer")),
         timeoutMs,
@@ -1812,27 +1843,15 @@ const serve = async () => {
         if (result instanceof Error) reject(result);
         else resolve(result);
       };
-      // The answer is complete when its Content-Length has arrived, not when the stream
-      // closes: what carries the connection (ssh, an exec) may hold it open until this
-      // side closes, which it does not do first (measured: a relay that sees its input
-      // end drops the answer).
-      const complete = () => {
-        const answer = stateAnswer(data);
-        if (answer && !(answer instanceof Error))
-          stateLargest = Math.max(stateLargest, Buffer.byteLength(answer.body));
-        if (answer) settle(answer);
-      };
+      const reader = stateReader();
       stream.on("data", (chunk: Buffer) => {
-        data = Buffer.concat([data, chunk]);
-        if (data.length > STATE_ANSWER_BYTES) {
-          stateLargest = Math.max(stateLargest, data.length);
-          return settle(
-            new Error(
-              `${over("the root's state service's answer", STATE_ANSWER_BYTES, data.length, "bytes", "this host reads of one")} (desolate doctor says how near the state is to it)`,
-            ),
-          );
-        }
-        complete();
+        const answer = reader.take(chunk);
+        if (answer === null) return;
+        stateLargest = Math.max(
+          stateLargest,
+          answer instanceof Error ? reader.size() : Buffer.byteLength(answer.body),
+        );
+        settle(answer);
       });
       stream.on("error", (error) => settle(error));
       stream.on("close", () => settle(new Error("the root's state service is not there")));
@@ -1946,11 +1965,10 @@ const serve = async () => {
       for (const entry of entries.values()) {
         if (!running.has(entry.vm)) continue;
         try {
-          const w = await rootctl<import("./workspaces.ts").Workspace>(
-            "workspace.get",
-            { domain: entry.domain, name: entry.workspace },
-            { quiet: true },
-          );
+          const w = await rootctlBrief<import("./workspaces.ts").Workspace>("workspace.get", {
+            domain: entry.domain,
+            name: entry.workspace,
+          });
           await ws.look(w);
         } catch {
           /* gone meanwhile, or not answering: looked at next time */
@@ -1969,9 +1987,13 @@ const serve = async () => {
     try {
       const { stackDefaults } = await import("./workspaces.ts");
       const { merge } = await import("../shared/size.ts");
-      const all = await rootctl<
-        { slug: string; size?: Partial<Size>; workspaces: { vm: string; size?: Partial<Size> }[] }[]
-      >("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
+      const all = await rootctlBrief<
+        {
+          slug: string;
+          size?: Partial<Size>;
+          workspaces: { vm: string; size?: Partial<Size> }[];
+        }[]
+      >("domain.list");
       const up = new Set(
         (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
       );
@@ -1991,12 +2013,42 @@ const serve = async () => {
     let spawning: string | null = null;
     // Built here, from the kind and its arguments: never a command line the root wrote.
     const argv = hostArgv(action.kind, action.args);
-    const report = (lines: string[], done?: number) =>
-      rootHttp("POST", "/host/progress", {
-        id: action.id,
-        lines,
-        ...(done === undefined ? {} : { done: true, code: done }),
-      }).catch(() => {});
+    // One report at a time, what came meanwhile in the next, and the end carrying what is
+    // left: a line landing after the end would mark the action running again. An end the
+    // root did not answer is sent again, a few times: one lost left the action running on
+    // the page for ever (T2 19).
+    let lines: string[] = [];
+    let end: number | undefined;
+    let due = false;
+    let posting: Promise<void> | null = null;
+    const post = async () => {
+      for (let missed = 0; due;) {
+        due = false;
+        const body = {
+          id: action.id,
+          lines: lines.splice(0),
+          ...(end === undefined ? {} : { done: true, code: end }),
+        };
+        const heard = await rootHttp("POST", "/host/progress", body).then(
+          () => true,
+          () => false,
+        );
+        if (heard || !("done" in body)) continue;
+        if (++missed === 10) return log(`the end of ${action.id} did not reach the root`);
+        lines = lastLines([...body.lines, ...lines]);
+        due = true;
+        await sleep(2000);
+      }
+    };
+    const report = (more: string[], done?: number) => {
+      lines = lastLines([...lines, ...more]);
+      if (done !== undefined) end = done;
+      due = true;
+      return (posting ??= post().finally(() => {
+        posting = null;
+        if (due) void report([]);
+      }));
+    };
     if (!argv) return void report(["the host does not do that"], 64);
     // A workspace's own request (spawn, close): run only if the workspace it names signed it,
     // with the key only it and this host have (shared/spawn.ts says why not the root's word).
@@ -2297,9 +2349,10 @@ const serve = async () => {
 
   // After a restart of the host: take up every workspace whose VM is running.
   try {
-    const domains = await rootctl<
-      { slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]
-    >("domain.list", {}, { quiet: true, timeoutMs: 30_000 });
+    const domains =
+      await rootctlBrief<{ slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]>(
+        "domain.list",
+      );
     const running = new Set(
       (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
     );
@@ -2309,11 +2362,11 @@ const serve = async () => {
         // The root's word, checked: a record naming another domain's VM gets no link and no
         // proxy (it would give that VM this domain's names and rules: review of the fixes).
         if (running.has(w.vm) && w.domain === d.slug && isOwnVm(d.slug, w)) {
-          const proxy = await rootctl<{ socket: string }>(
-            "proxy.start",
-            { vm: w.vm, domain: w.domain, workspace: w.workspace },
-            { quiet: true, timeoutMs: 60_000 },
-          );
+          const proxy = await rootctlBrief<{ socket: string }>("proxy.start", {
+            vm: w.vm,
+            domain: w.domain,
+            workspace: w.workspace,
+          });
           register({
             vm: w.vm,
             domain: w.domain,
@@ -2397,7 +2450,13 @@ export const ensureDaemon = async () => {
   const child = spawn(
     process.execPath,
     ["--disable-warning=ExperimentalWarning", fileURLToPath(import.meta.url), "serve"],
-    { detached: true, stdio: ["ignore", log, log], env: process.env },
+    // Its port is the one it is started with, for its life: what it listens on is what every
+    // address and origin it checks names, whatever `desolate settings set` stores meanwhile.
+    {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: { ...process.env, DESOLATE_EDITOR_PORT: String(editorHostPort()) },
+    },
   );
   child.unref();
   if (!(await waitFor(alive, 20_000, 100)))
@@ -2437,14 +2496,14 @@ export const tokenAddressesSafe = async () => {
   if (held)
     refuse(
       `not printed: ${held}, and this address carries a token`,
-      "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap",
+      "stop what holds it, or give this stack another port: desolate settings set editor.port <port>, desolate down, then desolate bootstrap",
     );
 };
 
 declare namespace tokenAddressesSafe {
   /** the daemon holds its port on both loopback addresses: an address with a token may be printed */
   export type Held = Given<
-    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31581; error: "" } }]>,
     Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", null>
   >;
   /** another program has [::1] on that port, where browsers look first: it would be sent the token */
@@ -2455,8 +2514,8 @@ declare namespace tokenAddressesSafe {
         reply: {
           ok: true;
           editor: {
-            port: 31580;
-            error: "a program on this machine holds [::1]:31580, where browsers look first";
+            port: 31581;
+            error: "a program on this machine holds [::1]:31581, where browsers look first";
           };
         },
       ]
@@ -2465,8 +2524,8 @@ declare namespace tokenAddressesSafe {
       Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>,
       "=",
       {
-        message: "not printed: a program on this machine holds [::1]:31580, where browsers look first, and this address carries a token";
-        fix: "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap";
+        message: "not printed: a program on this machine holds [::1]:31581, where browsers look first, and this address carries a token";
+        fix: "stop what holds it, or give this stack another port: desolate settings set editor.port <port>, desolate down, then desolate bootstrap";
         code: 1;
       }
     >
@@ -2494,17 +2553,31 @@ declare namespace tokenAddressesSafe {
 export const editorPortError = async (): Promise<string | null> => {
   if (!(await alive())) return null;
   const reply = await ask({ op: "editor" }, 10_000).catch(() => null);
-  const editor = reply?.editor as { error?: unknown } | undefined;
-  return reply?.ok === true ? String(editor?.error ?? "") : null;
+  if (reply?.ok !== true) return null;
+  const editor = reply.editor as { port?: unknown; error?: unknown } | undefined;
+  // The daemon keeps the port it started with: one stored since is not held, and an address
+  // on it would go to whatever holds that one.
+  if (editor?.port !== editorHostPort())
+    return `the host daemon holds port ${printable(editor?.port, 20)}, not ${editorHostPort()} (editor.port changed since it started: desolate down, then desolate bootstrap)`;
+  return String(editor?.error ?? "");
 };
 
 declare namespace editorPortError {
   /** asked without starting a daemon: none running is null, not "" */
   export type NoDaemon = Expect<Invoke<typeof editorPortError>, "=", null>;
+  /** a daemon on another port than this command's (editor.port stored since it started) */
+  export type Elsewhere = Given<
+    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 40000; error: "" } }]>,
+    Expect<
+      Invoke<typeof editorPortError>,
+      "=",
+      "the host daemon holds port 40000, not 31581 (editor.port changed since it started: desolate down, then desolate bootstrap)"
+    >
+  >;
   /** "" when the daemon holds the port, else its reason, as it said it */
   export type Said = [
     Given<
-      Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+      Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31581; error: "" } }]>,
       Expect<Invoke<typeof editorPortError>, "=", "">
     >,
     Given<
@@ -2513,11 +2586,11 @@ declare namespace editorPortError {
         [
           reply: {
             ok: true;
-            editor: { port: 31580; error: "a program on this machine holds port 31580" };
+            editor: { port: 31581; error: "a program on this machine holds port 31581" };
           },
         ]
       >,
-      Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31580">
+      Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31581">
     >,
   ];
   /** a daemon that refused the question has not said, so null */
