@@ -1192,11 +1192,23 @@ describe("T2 section 4.8: the root UI", () => {
     type Page<T> = { items: T[]; total: number; from: number };
     type Commit = { commit: string; subject: string };
     const at = "domain=web&repo=acme%2Fapp&branch=long";
-    const review = JSON.parse((await http("GET", `/review?${at}`)).body) as {
+    type Review = {
+      commit: string;
       commits: Page<Commit>;
       changes: Page<{ path: string }>;
       pushCommits: number;
     };
+    // The review reads the domain's branch, which can be a commit behind the offer for a moment
+    // (the last commit still on its way to the root): asked again until it reads the tip.
+    let review = null as Review | null;
+    assert.ok(
+      await until(async () => {
+        review = JSON.parse((await http("GET", `/review?${at}`)).body) as Review;
+        return review.commit === tip;
+      }, 60_000),
+      `the review reads the offered commit: ${review?.commit}`,
+    );
+    review = review!;
     assert.deepEqual(
       [review.commits.total, review.pushCommits, review.commits.items.length, review.changes.total],
       [250, 250, 100, 250],
