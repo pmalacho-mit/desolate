@@ -340,17 +340,17 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     // (A shell an earlier test left open is offered back instead of a new one's greeting:
     // waiting for the greeting alone spent the whole minute every run.)
     const first = await person.load(address, {
-      until: /desolate's git VM|Back to the shell in/,
+      until: /desolate's git VM|Back to shell \d+/,
       ms: 60_000,
     });
-    assert.match(first.stdout, /desolate's git VM|Back to the shell in/, first.stdout.slice(-600));
+    assert.match(first.stdout, /desolate's git VM|Back to shell \d+/, first.stdout.slice(-600));
     const opened = await person.load(fromElsewhere, {
-      until: /Back to the shell in|desolate's git VM|desolate ui --open|refused/,
+      until: /Back to shell \d+|desolate's git VM|desolate ui --open|refused/,
       ms: 60_000,
     });
     assert.match(
       opened.stdout,
-      /Back to the shell in \/git\/acme\/widgets[\s\S]*New shell/,
+      /Back to shell \d+ \(left [^)]*\)<\/button>[\s\S]*New shell/,
       opened.stdout.slice(-600),
     );
   });
