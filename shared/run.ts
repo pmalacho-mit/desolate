@@ -108,9 +108,9 @@ const guard = () => {
       for (const by = Date.now() + ENDING_MS; groups.size > 0 && Date.now() < by;)
         await new Promise((resolve) => setTimeout(resolve, 20));
       // (A run begun meanwhile, as by a handler of the same signal, is killed with the rest,
-      // and says why.)
+      // says why, and lets go of its pipes as any ended run does.)
       for (const [pid, run] of groups) {
-        run.said(STOPPING);
+        run.end(STOPPING);
         toGroup(pid, "SIGKILL");
       }
       ending = undefined;
@@ -468,6 +468,21 @@ declare namespace run {
     Invoke<typeof answerWhenItsRunnerEnds>,
     "=",
     { code: 128; stdout: ""; stderr: "\n(stopped: the program that ran it is ending)" }
+  >;
+  /** and so does one begun while its runner was ending (by its own listener of the signal),
+   *  soon, though what its program started holds its pipes */
+  export type SaysItsRunnerEndedWhenBegunEnding = Configure<
+    { timeout: 20_000 },
+    Expect<
+      Invoke<typeof answerWhenItsRunnerEnds, [escapee: true, during: true]>,
+      "=",
+      {
+        code: 128;
+        stdout: "";
+        stderr: "\n(stopped: the program that ran it is ending)";
+        soon: true;
+      }
+    >
   >;
   /** and says so soon, though what its program started left the group and holds its pipes */
   export type SaysItsRunnerEndedThoughAnEscapee = Configure<
