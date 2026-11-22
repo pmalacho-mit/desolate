@@ -637,7 +637,10 @@ const checkPushed = async () => {
           )
           .join(",");
         const known = pushedOf.get(key);
-        if (known && known.heads === heads && Date.now() - known.at < 120_000) continue;
+        // (Not counted yet, such as a commit still on its way to the root: counted again at the
+        // next round, not two minutes later. The dashboard said "not counted" that long.)
+        const settled = known && !known.result.some((u) => u.count === null && u.commit !== null);
+        if (known && settled && known.heads === heads && Date.now() - known.at < 120_000) continue;
         try {
           const counted = await offers.unpushedOf(d.slug, w);
           // (A squash not looked for is a count still shown.)

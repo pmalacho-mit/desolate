@@ -1267,7 +1267,10 @@ describe("T2 section 4.8: the root UI", () => {
     // The host looks at it while it runs (every 2 s here); the root counts its commits.
     assert.ok(
       await until(
-        async () => Array.isArray(await lost()) && Array.isArray((await spare())?.pushed),
+        async () =>
+          Array.isArray(await lost()) &&
+          ((await spare())?.pushed ?? []).length > 0 &&
+          (await spare())!.pushed!.every((c) => c.count !== null),
         120_000,
       ),
       `looked at and counted: ${JSON.stringify(await spare())}`,
