@@ -27,10 +27,16 @@ const VISIBILITY = EMBED && "IntersectionObserver" in window && "isVisible" in I
 let pointerInside = false;
 const READY_MS = 1000;
 const DWELL_MS = 300;
+/** How long a word about a click stays before the hint says again what arming waits for. */
+const SAID_MS = 3000;
 const list = document.getElementById("list");
 const status = document.getElementById("status");
 const template = document.getElementById("card");
 const cards = new Map(); // the push's token (over its exact text) -> card
+// The push this tab was opened for: the dashboard's Push names it in the address's fragment
+// (which the host never sees). Its card, if one names exactly that, is marked and scrolled to
+// once; it arms and signs as any other.
+const askedFor = EMBED ? {} : Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
 
 const attending = () => document.visibilityState === "visible" && (document.hasFocus() || (EMBED && pointerInside));
 let attentiveSince = attending() ? performance.now() : 0;
@@ -78,9 +84,13 @@ const ready = (card, arm) => current && reviewedOf(card) && attentiveSince !== 0
 const armedOf = (card) => card.arms.find((a) => a.armedAt);
 const disarm = (card) => {
   for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
-  if (card.done) return;
+  if (card.done || performance.now() < card.saidUntil) return;
+  card.hint.textContent = whyNotArmed(card);
+};
+/** Why no button of `card` is armed now, as the hint says it. */
+const whyNotArmed = (card) => {
   const first = card.arms.find((a) => !a.wrap.hidden);
-  card.hint.textContent = !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer over a button to arm it" : "arming in a moment...";
+  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer onto a button, rest it there a moment, then click" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
@@ -372,7 +382,7 @@ const add = (push, issue) => {
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
   const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, visible: VISIBILITY ? false : undefined }));
-  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
+  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
   for (const arm of arms) {
     if (watcher) watcher.observe(arm.wrap);
     // (A disabled button gets no pointer events in every browser: these are on its wrapper,
@@ -383,9 +393,17 @@ const add = (push, issue) => {
       disarm(card);
       arm.armedAt = performance.now();
       arm.button.disabled = false;
-      card.hint.textContent = "";
+      card.saidUntil = 0;
+      card.hint.textContent = issue ? "armed: click to publish" : "armed: click to approve";
     });
     arm.wrap.addEventListener("pointerleave", () => disarm(card));
+    // A click on a button not armed (the wrapper has it: approve.css) does nothing, and says
+    // why, for a few seconds: a click ignored in silence read as a page that did not work.
+    arm.wrap.addEventListener("click", () => {
+      if (arm.armedAt || card.done || card.busy) return;
+      card.saidUntil = performance.now() + SAID_MS;
+      card.hint.textContent = `not armed, so nothing was done: ${whyNotArmed(card)}`;
+    });
     arm.button.addEventListener("click", async (event) => {
       // A real pointer's click, on a button armed a moment ago: not a key, not a script.
       if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
@@ -396,7 +414,7 @@ const add = (push, issue) => {
       card.hint.textContent = issue ? "publishing..." : "approving...";
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : arm.squash ? `approved, squashed into one commit: the push continues in the root. Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "approved: the push continues in the root"; }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`; }
       catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
       finally { card.busy = false; disarm(card); }
     });
@@ -413,6 +431,21 @@ const add = (push, issue) => {
   });
   disarm(card);
   return card;
+};
+
+/** After a squash, how the workspace's branch goes on from it. */
+const carryOn = (card) => card.squashed ? ` Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "";
+/** How a push this page approved ended, as the host heard it from the pusher: said on its card,
+ *  with the page to open its pull request (GitHub's, on github.com only). */
+const ended = (outcome) => {
+  const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.nonce === outcome.nonce);
+  if (!card) return;
+  card.ended = true;
+  if (!outcome.pushed) return void (card.hint.textContent = `approved, but the pusher said: ${outcome.error}`);
+  card.hint.textContent = `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it.${carryOn(card)} `;
+  if (typeof outcome.link !== "string" || !outcome.link.startsWith("https://github.com/")) return;
+  const link = Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" });
+  card.hint.append(link, " (on GitHub, as yourself)");
 };
 
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
@@ -434,6 +467,7 @@ const choicesOf = (card, review) => {
 
 const render = (pending, issues) => {
   let changed = false;
+  let added = false;
   const seen = new Set();
   for (const issue of issues) {
     seen.add(issue.token);
@@ -441,7 +475,7 @@ const render = (pending, issues) => {
     const card = add(null, issue);
     cards.set(issue.token, card);
     list.append(card.element);
-    changed = true;
+    changed = added = true;
   }
   for (const push of pending) {
     seen.add(push.token);
@@ -450,7 +484,13 @@ const render = (pending, issues) => {
       card = add(push);
       cards.set(push.token, card);
       list.append(card.element);
-      changed = true;
+      changed = added = true;
+      if (askedFor.commit === push.commit && askedFor.repo === push.repo && askedFor.branch === push.branch) {
+        askedFor.commit = "";
+        card.element.classList.add("asked");
+        card.element.prepend(el("p", "This tab was opened for this push.", "asked-note"));
+        card.element.scrollIntoView({ block: "start" });
+      }
     }
     // (How long the reviewer has been at it is not a change: the page counts that itself.)
     const shown = JSON.stringify(push.review && push.review.working ? { working: { ...push.review.working, seconds: 0 } } : push.review);
@@ -480,6 +520,10 @@ const render = (pending, issues) => {
       card.element.classList.add("gone");
       changed = true;
     }
+  // Something new to decide: what was decided before folds to its names and its outcome, so
+  // the new card is not pushed below the fold (dogfooding, 2026-11-21: two refused cards above
+  // the live one, beside the git terminal). The page moved: every card waits its second again.
+  if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); card.changedAt = performance.now(); }
   if (changed) disarmAll();
   const waiting = [...cards.values()].filter((card) => !card.gone).length;
   document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
@@ -507,7 +551,7 @@ const poll = async (tag) => {
     const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
     if (!answer.ok) { current = false; disarmAll(); say(body.error || `HTTP ${answer.status}`); }
-    else { pending = body.pending; render(pending, issues); current = true; next = body.tag; }
+    else { pending = body.pending; render(pending, issues); for (const outcome of body.done || []) ended(outcome); current = true; next = body.tag; }
   } catch (error) { current = false; disarmAll(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };

@@ -135,10 +135,12 @@ const aside = document.getElementById("approvals");
 const toggle = document.getElementById("toggle");
 const APPROVE_ORIGIN = location.origin.replace("//desolate-git.", "//desolate-approve.");
 let chosen = null; // the person's choice, once made: true open, false closed
+const frame = document.getElementById("frame");
 const show = (open) => {
   if (aside.hidden === !open) return;
   aside.hidden = !open;
   window.dispatchEvent(new Event("resize"));
+  if (!open) term.focus();
 };
 toggle.addEventListener("click", () => { chosen = aside.hidden; show(chosen); });
 window.addEventListener("message", (event) => {
@@ -148,9 +150,12 @@ window.addEventListener("message", (event) => {
   toggle.classList.toggle("waiting", waiting > 0);
   if (waiting > 0 && chosen !== false) show(true);
   if (waiting === 0 && chosen === null) show(false);
+  // Nothing left to decide: the keys go to the shell again, not to the pane last clicked
+  // (dogfooding, 2026-11-21: the next command typed went nowhere).
+  if (waiting === 0 && document.activeElement === frame) term.focus();
 });
 fetch("/approvals-frame", { credentials: "same-origin", headers: window.desolateKey.headers }).then((answer) => answer.ok ? answer.json() : null).then((body) => {
   if (!body || typeof body.url !== "string" || !body.url.startsWith(`${APPROVE_ORIGIN}/embed#`)) return;
-  document.getElementById("frame").src = body.url;
+  frame.src = body.url;
   toggle.hidden = false;
 }).catch(() => {});

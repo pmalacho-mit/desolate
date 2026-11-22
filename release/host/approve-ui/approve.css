@@ -33,7 +33,7 @@ body.nothing .lede { display: none; }
 html.embed .empty .more { display: none; }
 h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
 .lede, .from, .hint, .status { color: var(--muted); }
-.card { display: grid; gap: var(--s4); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: var(--s5) var(--s6); margin: var(--s5) 0; box-shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04); }
+.card { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s4); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: var(--s5) var(--s6); margin: var(--s5) 0; box-shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04); }
 .card > * { margin-top: 0; margin-bottom: 0; }
 .names { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s4); align-items: center; margin: 0; }
 .names dt { color: var(--muted); font-size: 13px; line-height: 22px; }
@@ -48,8 +48,10 @@ h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
 .mono, code { font-family: var(--mono); font-size: 12.5px; }
 code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 .forced { color: var(--danger); font-weight: 600; }
-.summary { display: grid; gap: var(--s3); }
-.summary > * { margin: 0; }
+/* (minmax(0, 1fr), and min-width 0 below: a long diff line or commit subject scrolls in its
+   own box, and never widens the card past the window: dogfooding, 2026-11-21.) */
+.summary { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+.summary > * { margin: 0; min-width: 0; }
 .summary > button { justify-self: start; }
 .summary ul { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s1); }
 .summary li { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: var(--s2); align-items: baseline; }
@@ -62,6 +64,9 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 /* Its Diff button last on its line, and its diff, when open, under it across the card. */
 .summary li.file > button { grid-column: 4; min-height: 22px; margin-left: var(--s2); }
 .summary li.file > .diffbox { grid-column: 1 / -1; }
+.diffbox { min-width: 0; }
+.summary li.whole { grid-template-columns: minmax(0, 1fr); }
+.summary li.whole > button { justify-self: start; max-width: 100%; text-align: left; }
 .summary .who { color: var(--muted); font-size: 12.5px; }
 /* The file list's +N and -N only: a diff's added lines are .add too, and were set right,
    out of sight (dogfooding, 2026-11-20). */
@@ -72,13 +77,17 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 /* The decision stays in view: while a card is taller than the window, its buttons stay at the
    bottom of the window (inside the card, in front of nothing but the card's own text). */
 .actions { display: flex; gap: var(--s3); align-items: center; flex-wrap: wrap; margin: 0; position: sticky; bottom: 0; z-index: 1; background: var(--card); padding: var(--s3) 0 var(--s1); border-top: 1px solid var(--line); }
+/* The hint on a line of its own, at least one line tall whatever it says: arming changes it,
+   and a bar that changed height moved Approve from under the pointer, which disarmed it
+   (dogfooding, 2026-11-21: with three buttons it never stayed armed). */
+.actions:not(.plain) > .hint { flex-basis: 100%; min-height: 1.55em; }
 /* A long list scrolls in its own box. */
 .summary ul.long { max-height: 11em; overflow: auto; background: var(--raise); border-radius: 10px; padding: var(--s2) var(--s3); }
 button { font: 550 13.5px var(--font); min-height: 36px; padding: 0 var(--s4); display: inline-flex; align-items: center; justify-content: center; border-radius: 9px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; box-shadow: 0 1px 1px rgba(0, 0, 0, 0.03); }
 button.approve { background: var(--fg); border-color: var(--fg); color: var(--card); font-weight: 600; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 .arm { display: inline-block; }
-.onto { color: var(--muted); }
+.onto { color: var(--muted); overflow-wrap: anywhere; }
 button.approve:disabled { pointer-events: none; }
 /* The other choice, beside Approve: the same push as one commit. */
 button.approve.squash { background: var(--card); color: var(--fg); border-color: var(--fg); }
@@ -145,3 +154,9 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 .planrows .why .mono { color: var(--fg); }
 .planrows .warn { color: var(--danger); }
 .hint.warn { color: var(--caution); }
+/* The push this tab was opened for (approve.js, askedFor). */
+.card.asked { border-color: var(--k-branch); }
+.asked-note { color: var(--k-branch); font-weight: 600; }
+/* A card decided before a new one came: its names and what was decided, on one short card. */
+.card.folded > :not(.names):not(.actions), .card.folded .actions > :not(.hint) { display: none; }
+.card.folded .actions { position: static; border-top: 0; padding: 0; }

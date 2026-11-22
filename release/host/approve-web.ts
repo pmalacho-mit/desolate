@@ -199,6 +199,15 @@ export type Review =
   | { account: Shown }
   | { error: string };
 export type Waiting = { message: string; at: string };
+export type PusherSaid = {
+  type: string;
+  repo: string;
+  branch: string;
+  commit: string;
+  error?: string;
+};
+/** How a push this page approved ended, as the pusher said: told to the page by its nonce. */
+type Outcome = { nonce: string; pushed: boolean; error?: string; link?: string };
 export type Backend = {
   /** Pushes waiting for a person, as the root lists them (the root's word: only the message
    *  is used, and it is parsed here), once they are not the list `since` tags (root/
@@ -220,6 +229,10 @@ export type Backend = {
   publishIssue: (issue: Issue) => Promise<string>;
   /** Not now: back to a draft on the dashboard. */
   refuseIssue: (issue: Issue) => Promise<void>;
+  /** The pusher's word on each push as it ends (host/events.ts, pusherEvent: from a log only
+   *  root writes), heard until the answer is called. `github`: the forge is GitHub. */
+  pushes: (heard: (said: PusherSaid) => void) => () => void;
+  github: () => boolean;
   /** A domain's secrets, for /secrets (domains.ts secretOps): absent, the page has none. */
   secrets?: SecretOps;
   /** Every editor's default settings (editor-defaults.ts), for /editor-defaults. */
@@ -374,6 +387,17 @@ const ASKING_MOST = 4;
 /** Pushes the page keeps an account of: past it, a push is listed and said to wait. Far more
  *  than a person has waiting; at the account's own bound (8 MiB a line) it is 256 MiB. */
 const LISTED_MOST = 32;
+/** Approvals whose end the page is told of: the last few are all a person looks back at. */
+const OUTCOMES_KEPT = 16;
+/** How long the pusher's log is followed for an approval it has not said the end of: a push
+ *  ends in seconds, a large one in minutes. Past it, the dashboard's activity says. */
+const HEARD_MS = 30 * 60_000;
+
+/** GitHub's page for opening a pull request of `branch`, into the repository's default branch
+ *  (GitHub's choice when the address names no base): the person opens it signed in as
+ *  themselves. From the names the person signed, each part escaped. */
+const pullRequestPage = (repo: string, branch: string) =>
+  `https://github.com/${[repo, "compare", branch].join("/").split("/").map(encodeURIComponent).join("/")}?expand=1`;
 
 /** The one answer to a question asked of the reviewer, past what it says while it works. */
 const answerOf = async (lines: AsyncIterable<AccountLine>): Promise<AccountLine | null> => {
@@ -405,6 +429,48 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     listed: boolean;
   };
   const reviews = new Map<string, Asking>();
+  // The approvals this page signed, newest last, and how each ended once the pusher said. Its
+  // log is followed only while a page is open and has a push in front of it, or one approved
+  // that has not ended (the daemon reads it only while someone listens).
+  const approvals: {
+    repo: string;
+    branch: string;
+    commit: string;
+    at: number;
+    outcome: Outcome;
+  }[] = [];
+  const unsaid = (a: (typeof approvals)[number]) =>
+    !a.outcome.pushed && a.outcome.error === undefined && Date.now() - a.at < HEARD_MS;
+  let pages = 0;
+  let unhear: (() => void) | null = null;
+  const hearPusher = () => {
+    const want = pages > 0 && (reviews.size > 0 || approvals.some(unsaid));
+    if (want && !unhear)
+      unhear = backend.pushes((said) => {
+        const done = approvals.find(
+          (a) =>
+            a.repo === said.repo &&
+            a.branch === said.branch &&
+            a.commit === said.commit &&
+            unsaid(a),
+        );
+        if (!done) return;
+        if (said.type === "pushed") {
+          done.outcome.pushed = true;
+          if (backend.github()) done.outcome.link = pullRequestPage(said.repo, said.branch);
+        } else
+          done.outcome.error =
+            said.type === "push-uncertain"
+              ? `it may or may not have reached the remote (${printable(said.error ?? "")})`
+              : printable(said.error || "the push failed");
+        tell();
+        hearPusher();
+      });
+    else if (!want && unhear) {
+      unhear();
+      unhear = null;
+    }
+  };
   /** The pages waiting for what they show to change (/pending?since=): told when a review
    *  says something new. */
   const moved = new Set<() => void>();
@@ -814,7 +880,12 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     if (req.method === "GET" && url.pathname === "/pending") {
       const since = url.searchParams.get("since");
       const gone = new AbortController();
-      res.once("close", () => gone.abort());
+      pages += 1;
+      res.once("close", () => {
+        gone.abort();
+        pages -= 1;
+        hearPusher();
+      });
       try {
         let root = await rootListAfter("", gone.signal);
         // One wait on the root at a time, kept across a reviewer's news: each wake is not
@@ -822,8 +893,12 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         let fromRoot: ReturnType<typeof rootListAfter> | null = null;
         for (;;) {
           const out = answerFor(root.pending, root.look, token);
-          const tag = tagOfAnswer(out);
-          if (since === null || tag !== since) return json(res, 200, { pending: out, tag });
+          hearPusher();
+          const done = approvals
+            .map((a) => a.outcome)
+            .filter((o) => o.pushed || o.error !== undefined);
+          const tag = digestOf(tagOfAnswer(out) + JSON.stringify(done));
+          if (since === null || tag !== since) return json(res, 200, { pending: out, done, tag });
           fromRoot ??= rootListAfter(root.tag, gone.signal);
           const round = new AbortController();
           const next = await Promise.race([
@@ -1029,6 +1104,15 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       try {
         if (url.pathname === "/approve") {
           await backend.approve(signed);
+          approvals.push({
+            repo: push.repo,
+            branch: push.branch,
+            commit: asked.squash === true ? reviewed!.squash!.commit : push.commit,
+            at: Date.now(),
+            outcome: { nonce: push.nonce, pushed: false },
+          });
+          if (approvals.length > OUTCOMES_KEPT) approvals.shift();
+          hearPusher();
           log(
             `approve page: approved ${push.repo} ${push.branch} ${push.commit}${asked.squash === true ? ` squashed into ${reviewed!.squash!.commit}` : ""}${push.onto ? ` (from ${push.onto}${reviewed!.fastForward === false ? ", replacing it" : ""})` : " (a new branch)"}`,
           );

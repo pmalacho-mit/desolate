@@ -61,6 +61,10 @@ let issuesListed: unknown[] = [];
 const published: string[] = [];
 const notNow: string[] = [];
 const refused: string[] = [];
+/** Who hears the pusher now (host/daemon.ts: the events it reads from the pusher's log). */
+type Said = { type: string; repo: string; branch: string; commit: string; error?: string };
+let pusherHeard: ((said: Said) => void) | null = null;
+const pusherSays = (said: Said) => pusherHeard!(said);
 let server: Server;
 let port = 0;
 
@@ -193,6 +197,11 @@ before(async () => {
           return `https://github.com/${issue.repo}/issues/7`;
         },
         refuseIssue: async (issue) => void notNow.push(issue.id),
+        pushes: (heard) => {
+          pusherHeard = heard;
+          return () => (pusherHeard = null);
+        },
+        github: () => true,
       },
       () => {},
     ),
@@ -868,6 +877,35 @@ describe("T1 the approval page", () => {
       signedFor(otherMessage, { commit: "5".repeat(40), squashes: other.commit, ...SQUASH_SENDS }),
     ]);
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+  });
+
+  it("after approving, the page is told how the push it signed ended, by the pusher's word on that commit alone", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    assert.equal(pusherHeard, null, "control: nobody looks, so the pusher's log is not followed");
+    await listedNow();
+    const looking = held(`/pending?since=${await tagNow()}`);
+    await moment();
+    assert.ok(pusherHeard, "a page looks at a push: the pusher is heard");
+    assert.equal((await approve(good())).status, 200);
+    // The pusher's word on another commit of the branch, or another repository: not this push.
+    pusherSays({ type: "pushed", repo: push.repo, branch: push.branch, commit: "b".repeat(40) });
+    pusherSays({ type: "pushed", repo: "acme/other", branch: push.branch, commit: push.commit });
+    await moment();
+    assert.equal(looking.answer.done, false, "nothing said for a push this page did not sign");
+    pusherSays({ type: "pushed", repo: push.repo, branch: push.branch, commit: push.commit });
+    await looking.asked;
+    assert.deepEqual(looking.answer.body!.done, [
+      {
+        nonce: push.nonce,
+        pushed: true,
+        link: "https://github.com/acme/widgets/compare/issue/12?expand=1",
+      },
+    ]);
+    await moment();
+    assert.equal(pusherHeard, null, "no page looks now: the pusher is not heard");
+    const later = JSON.parse((await call("GET", "/pending", asPage())).body) as { done: unknown };
+    assert.deepEqual(later.done, looking.answer.body!.done, "and what it said is kept");
   });
 
   it("a push the reviewer could not describe is not signed, though the page listed it", async () => {
