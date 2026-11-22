@@ -149,6 +149,7 @@ let decidedAt = -Infinity;
 window.addEventListener("message", (event) => {
   if (event.origin !== APPROVE_ORIGIN || !event.data) return;
   if (event.data.desolateDecided === true) decidedAt = performance.now();
+  if (event.data.desolateTyping === true) decidedAt = -Infinity;
   if (typeof event.data.desolatePending !== "number") return;
   const waiting = Math.max(0, Math.floor(event.data.desolatePending));
   toggle.textContent = waiting ? `Approvals (${waiting})` : "Approvals";

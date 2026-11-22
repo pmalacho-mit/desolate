@@ -91,22 +91,31 @@ const disarm = (card) => {
  *  bar's height under the pointer. */
 const arming = (card, text) => { card.hint.classList.remove("said"); card.hint.textContent = text; card.hint.title = text; };
 /** What happened, in full (it may take lines): kept until the next arming. */
-const said = (card, text) => { card.hint.classList.add("said"); card.hint.textContent = text; card.hint.title = ""; card.saidUntil = Infinity; };
+const said = (card, text) => {
+  card.hint.classList.add("said"); card.hint.textContent = text; card.hint.title = ""; card.saidUntil = Infinity;
+  // Decided: nothing on it takes keys any more.
+  if (card.done) for (const input of card.element.querySelectorAll("input")) input.disabled = true;
+};
 /** Why no button of `card` is armed now, as the hint says it. */
 const whyNotArmed = (card) => {
   const first = card.arms.find((a) => !a.wrap.hidden);
-  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "rest the pointer on a button a moment, then click" : "arming in a moment...";
+  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer on a button, then click a moment later" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 // Whatever changes a card's size (a card folded, a diff opened, what happened said on one, as
 // late as the pusher's word) moves every Approve below it: each waits its second again.
-new ResizeObserver(() => { for (const card of cards.values()) card.changedAt = performance.now(); disarmAll(); }).observe(list);
+// So does the page scrolling: it moves Approve under a pointer that did not move.
+const moved = () => { for (const card of cards.values()) card.changedAt = performance.now(); disarmAll(); };
+new ResizeObserver(moved).observe(list);
+window.addEventListener("scroll", moved, { passive: true });
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
 setInterval(() => { for (const card of cards.values()) if (card.tick && !card.done) card.tick(); }, 1000);
 
 /** Beside the git terminal: the person decided, so its page may give the keys back to the
  *  shell once nothing waits (git.js). Only a number and a word, to that one origin. */
 const tellTerminal = (message) => { if (EMBED && window.parent !== window) window.parent.postMessage(message, location.origin.replace("//desolate-approve.", "//desolate-git.")); };
+// A key typed in the pane: the person is still at work here (git.js keeps the keys here).
+document.addEventListener("keydown", () => tellTerminal({ desolateTyping: true }), true);
 const post = async (what, card, squash) => {
   const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, shown: card.push.shown, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
   const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
