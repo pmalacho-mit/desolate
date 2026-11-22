@@ -121,6 +121,7 @@ export const FEATURES: Feature[] = [
     code: [
       "release/workspace/sync.ts",
       "release/workspace/git-remote-desolate-offer",
+      "release/workspace/desolate-lfs-offer",
       "release/workspace/git-remote-desolate-mirror",
       "release/workspace/git-urls.ts",
       "release/root/outbox.ts",
