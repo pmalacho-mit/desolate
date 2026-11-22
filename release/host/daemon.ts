@@ -1966,6 +1966,14 @@ const serve = async () => {
   // Each running workspace's agents, as last listed (the look below): the dashboard showed
   // none, and a person found them only with `desolate agent list` (dogfooding, 2026-11-21).
   const agentsOf = new Map<string, Awaited<ReturnType<typeof import("./agent.ts").agentsIn>>>();
+  const listAgents = async (entry: Entry) => {
+    try {
+      const { agentsIn } = await import("./agent.ts");
+      agentsOf.set(entry.vm, await agentsIn(entry.vm, `${entry.domain}/${entry.workspace}`));
+    } catch {
+      agentsOf.delete(entry.vm); // not answering: none shown, rather than old ones
+    }
+  };
   const tellRoot = async () => {
     const vms = await b.list();
     rootUp = vms.find((vm) => vm.name === ROOT_VM)?.status === "running";
@@ -2070,12 +2078,7 @@ const serve = async () => {
         } catch {
           /* gone meanwhile, or not answering: looked at next time */
         }
-        try {
-          const { agentsIn } = await import("./agent.ts");
-          agentsOf.set(entry.vm, await agentsIn(entry.vm, `${entry.domain}/${entry.workspace}`));
-        } catch {
-          agentsOf.delete(entry.vm); // not answering: none shown, rather than old ones
-        }
+        await listAgents(entry);
       }
       void tellRoot().catch(() => {});
     } finally {
@@ -2345,9 +2348,13 @@ const serve = async () => {
         if (request.op === "register") {
           register(request as Registered);
           const entry = entries.get(request.vm!)!;
+          // Started (again): its agents as they are now, not as before it stopped (they were
+          // shown running for a look's while after a restart: dogfooding, 2026-11-22).
+          agentsOf.delete(entry.vm);
           await sync(entry);
           reconcile();
           tellRoot().catch(() => {});
+          void listAgents(entry).then(() => tellRoot().catch(() => {}));
           reply = { ok: true };
         } else if (request.op === "unregister") {
           unregister(request.vm!);
