@@ -73,6 +73,8 @@ describe("T2 section 4.2: a compose devcontainer, its services and their ports",
     stack.seed("acme/composed", (dir) => {
       fs.mkdirSync(path.join(dir, ".devcontainer"));
       // As the official compose templates write it: the parent of the checkout at /workspaces.
+      // (Ports 49x7 are this suite's alone: T2's suites run side by side, and the host
+      // forwards a workspace's port at its own number. tests/v3/README.md.)
       fs.writeFileSync(
         path.join(dir, ".devcontainer", "devcontainer.json"),
         `{
@@ -82,7 +84,7 @@ describe("T2 section 4.2: a compose devcontainer, its services and their ports",
   "workspaceFolder": "/workspaces/\${localWorkspaceFolderBasename}",
   "remoteUser": "dev",
   "containerEnv": { "FROM_SPEC": "container-env" },
-  "forwardPorts": [3917, "db:6917"],
+  "forwardPorts": [4917, "db:4927"],
 }
 `,
       );
@@ -96,13 +98,13 @@ describe("T2 section 4.2: a compose devcontainer, its services and their ports",
       - ../..:/workspaces:cached
   db:
     image: ${IMAGE}
-    # 6917 is declared in forwardPorts; 6918 is not
-    command: sh -c 'mkdir -p /tmp/srv && echo i-am-db > /tmp/srv/who && cd /tmp/srv && (python3 -m http.server 6918 &) && exec python3 -m http.server 6917'
+    # 4927 is declared in forwardPorts; 4928 is not
+    command: sh -c 'mkdir -p /tmp/srv && echo i-am-db > /tmp/srv/who && cd /tmp/srv && (python3 -m http.server 4928 &) && exec python3 -m http.server 4927'
   web:
     image: ${IMAGE}
-    command: ${serve("i-am-web", 7917)}
+    command: ${serve("i-am-web", 4937)}
     ports:
-      - "7917:7917"
+      - "4937:4937"
 `,
       );
       fs.writeFileSync(path.join(dir, "README.md"), "# composed\n");
@@ -191,56 +193,56 @@ describe("T2 section 4.2: a compose devcontainer, its services and their ports",
 
   it("a server on the service's own loopback is forwarded, like a single container's", async () => {
     stack.step("the primary service's listener");
-    // CONTROL first: nothing on 3917 yet, so nothing is forwarded there.
-    assert.ok(!forwarded().includes(3917));
-    assert.doesNotMatch(await request(3917, devHost, "/who"), /i-am-app/);
+    // CONTROL first: nothing on 4917 yet, so nothing is forwarded there.
+    assert.ok(!forwarded().includes(4917));
+    assert.doesNotMatch(await request(4917, devHost, "/who"), /i-am-app/);
     exec(
-      "(setsid nohup sh -c 'mkdir -p /tmp/srv && echo i-am-app > /tmp/srv/who && cd /tmp/srv && exec python3 -m http.server 3917 --bind 127.0.0.1' >/dev/null 2>&1 </dev/null &); sleep 1",
+      "(setsid nohup sh -c 'mkdir -p /tmp/srv && echo i-am-app > /tmp/srv/who && cd /tmp/srv && exec python3 -m http.server 4917 --bind 127.0.0.1' >/dev/null 2>&1 </dev/null &); sleep 1",
     );
-    assert.ok(await until(() => forwarded().includes(3917)), "port 3917 is forwarded");
+    assert.ok(await until(() => forwarded().includes(4917)), "port 4917 is forwarded");
     let page = "";
     assert.ok(
-      await until(async () => /i-am-app/.test((page = await request(3917, devHost, "/who")))),
+      await until(async () => /i-am-app/.test((page = await request(4917, devHost, "/who")))),
       page.slice(0, 300),
     );
     // It is the service's, on the service's loopback: in the VM the port is held by desolate's
     // mirror in wsd, not by the server.
     const holder = inVm(
-      "ss -ltnpH 'sport = :3917' | grep -o 'pid=[0-9]*' | cut -d= -f2 | xargs -r ps -o args= -p",
+      "ss -ltnpH 'sport = :4917' | grep -o 'pid=[0-9]*' | cut -d= -f2 | xargs -r ps -o args= -p",
       true,
     ).stdout;
     assert.match(holder, /wsd\.ts/, holder);
     assert.doesNotMatch(holder, /python/);
   });
 
-  it("forwardPorts `db:6917` reaches the db service by name; its undeclared 6918 does not", async () => {
+  it("forwardPorts `db:4927` reaches the db service by name; its undeclared 4928 does not", async () => {
     stack.step("service:port forwards");
-    assert.ok(await until(() => forwarded().includes(6917)), `forwarded: ${forwarded().join(",")}`);
+    assert.ok(await until(() => forwarded().includes(4927)), `forwarded: ${forwarded().join(",")}`);
     let page = "";
     assert.ok(
-      await until(async () => /i-am-db/.test((page = await request(6917, devHost, "/who")))),
+      await until(async () => /i-am-db/.test((page = await request(4927, devHost, "/who")))),
       page.slice(0, 300),
     );
-    // Beside it: the same service listens on 6918 (shown from the VM, at the service's
+    // Beside it: the same service listens on 4928 (shown from the VM, at the service's
     // address), undeclared, and that is not forwarded.
     const db = inVm(
-      `python3 -c "import socket; socket.create_connection(('$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(docker ps -q --filter label=com.docker.compose.service=db))', 6918), 3); print('db-listens-on-6918')"`,
+      `python3 -c "import socket; socket.create_connection(('$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' $(docker ps -q --filter label=com.docker.compose.service=db))', 4928), 3); print('db-listens-on-4928')"`,
       true,
     );
-    assert.equal(db.stdout.trim(), "db-listens-on-6918", db.stderr);
-    assert.ok(!forwarded().includes(6918), `forwarded: ${forwarded().join(",")}`);
+    assert.equal(db.stdout.trim(), "db-listens-on-4928", db.stderr);
+    assert.ok(!forwarded().includes(4928), `forwarded: ${forwarded().join(",")}`);
   });
 
   it("a port a service publishes is docker's listener in the VM, and is forwarded too", async () => {
     stack.step("published ports");
-    assert.ok(await until(() => forwarded().includes(7917)), `forwarded: ${forwarded().join(",")}`);
+    assert.ok(await until(() => forwarded().includes(4937)), `forwarded: ${forwarded().join(",")}`);
     let page = "";
     assert.ok(
-      await until(async () => /i-am-web/.test((page = await request(7917, devHost, "/who")))),
+      await until(async () => /i-am-web/.test((page = await request(4937, devHost, "/who")))),
       page.slice(0, 300),
     );
     // It is docker's own proxy in the VM that holds it, not desolate's mirror.
-    assert.match(inVm("ss -ltnpH 'sport = :7917'", true).stdout, /docker-proxy/);
+    assert.match(inVm("ss -ltnpH 'sport = :4937'", true).stdout, /docker-proxy/);
   });
 
   it("the editor runs in the primary service, behind the gate on the VM's loopback", async () => {

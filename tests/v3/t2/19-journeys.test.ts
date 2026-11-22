@@ -94,6 +94,9 @@ const signedIn = async () => {
 describe("T2 journeys through the dashboard", () => {
   before(async () => {
     stack = newStack("journeys");
+    // The host looks in each running workspace for what a remove would lose every 2 s, not
+    // every 30 s (the setting workspace.lookSeconds): Delete waits for those looks.
+    stack.env.DESOLATE_WORKSPACE_LOOK_SECONDS = "2";
     stack.seed("acme/app", (dir) => {
       fs.writeFileSync(path.join(dir, "README.md"), "# app\n");
       git(dir, "add", "-A");

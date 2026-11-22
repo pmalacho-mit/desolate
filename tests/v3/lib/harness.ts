@@ -45,6 +45,10 @@ export type Stack = {
   destroy: () => void;
 };
 
+/** The most one command of a test may take. None takes near it; one that hung once (a CLI
+ *  call behind a push a failed test left waiting) took 14 minutes of a run before the test
+ *  went on, and said nothing of where. */
+const COMMAND_MOST_MS = 10 * 60_000;
 const sh = (
   command: string,
   args: string[],
@@ -57,11 +61,18 @@ const sh = (
     cwd: options.cwd,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    timeout: COMMAND_MOST_MS,
+    killSignal: "SIGKILL",
   });
+  const hung = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
   return {
     code: result.status ?? 1,
     stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
+    stderr:
+      (result.stderr ?? "") +
+      (hung
+        ? `\n[the test stopped it: still running after ${COMMAND_MOST_MS / 60_000} min: ${path.basename(command)} ${args.slice(0, 4).join(" ")}]`
+        : ""),
     ms: Date.now() - started,
   };
 };
