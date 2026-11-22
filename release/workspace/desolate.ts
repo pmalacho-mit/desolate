@@ -18,9 +18,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NAMES } from "../shared/limits.ts";
-import { isBranch, parseRepo, repoId } from "../shared/names.ts";
+import { branchRefusal, isBranch, parseRepo, repoId, slugRefusal } from "../shared/names.ts";
 import { run, sleep } from "../shared/run.ts";
-import { checkoutsOf, IDENTITY_FILE, KEY, sign } from "../shared/spawn.ts";
+import { checkoutsRefusal, commandRefusal, IDENTITY_FILE, KEY, sign } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
 import { statsLines } from "../shared/stats.ts";
 import {
@@ -205,8 +205,6 @@ const SPAWN_USAGE =
   "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
 const SPAWN_HELP = `${SPAWN_USAGE}\n  --name      its name (else one made from this workspace's)\n  --checkout  a repository it works in, on a branch of its own (repeat for more); the first one's devcontainer is its environment; a repository not named gets its main checkout if that is free, else none\n  --branch    instead: that branch in each of the domain's repositories\n  -- ...      a command it runs as its agent, as words (no shell); without one it is only made\nA branch no other workspace has checked out. Then: desolate domain stats, desolate events --follow --all, desolate close <name>. /desolate/release/AGENTS.md, "Other workspaces".\n`;
 
-/** `desolate spawn ...`: what the host is asked to make. No name: one made from this
- *  workspace's. The command is words after `--`, never a shell string. */
 /** The name a spawned workspace gets when it is not given one: its parent's, and four hex
  *  digits to keep it apart from its siblings. The parent's part is cut to leave room for
  *  them within a name's length (NAMES.slug), and never ends in a dash (as domainNameFor
@@ -234,6 +232,8 @@ declare namespace spawnedName {
   >;
 }
 
+/** `desolate spawn ...`: what the host is asked to make. No name: one made from this
+ *  workspace's. The command is words after `--`, never a shell string. */
 export const spawnArgs = (
   args: string[],
 ):
@@ -260,18 +260,16 @@ export const spawnArgs = (
   const checkouts = own.flatMap((a, i) =>
     a === "--checkout" && own[i + 1] !== undefined ? [own[i + 1]!] : [],
   );
-  if (checkoutsOf(checkouts) === null)
-    return {
-      refused: `a --checkout is not one desolate takes: ${checkouts.join(" ")}`,
-      fix: "--checkout <owner/repo>=worktree:<branch>   (or <owner/repo>=main)",
-    };
+  // What the root and the host would refuse, refused before it is signed, in their words.
+  const name = value("--name");
   const branch = value("--branch") ?? "";
-  if (branch && !isBranch(branch))
-    return {
-      refused: `'${branch}' is not a branch desolate will carry`,
-      fix: "letters, digits, '.', '_', '-' and '/', not starting with a dash",
-    };
-  return { name: value("--name"), branch, checkouts, command };
+  const refused =
+    (name === undefined ? null : slugRefusal(name, "workspace")) ??
+    checkoutsRefusal(checkouts) ??
+    (branch ? branchRefusal(branch) : null) ??
+    commandRefusal(command);
+  if (refused) return { refused, fix: SPAWN_USAGE };
+  return { name, branch, checkouts, command };
 };
 
 declare namespace spawnArgs {
@@ -299,11 +297,6 @@ declare namespace spawnArgs {
           command: [];
         },
       ],
-      /** a value that starts with a dash is a value, after a flag that takes one */
-      [
-        args: [args: ["--name", "-w2"]],
-        expected: { name: "-w2"; branch: ""; checkouts: []; command: [] },
-      ],
     ]
   >;
   export type Help = Table<
@@ -313,8 +306,8 @@ declare namespace spawnArgs {
       [args: [args: ["--name", "w2", "-h"]], expected: { help: true }],
     ]
   >;
-  /** the host acts on these: a flag it does not know, a checkout or a branch it would not
-   *  carry, is refused here, with the spelling that works */
+  /** what the root or the host would refuse is refused here, before it is signed, in the
+   *  shared rules' words; a flag it does not know too */
   export type Refuses = Table<
     typeof spawnArgs,
     [
@@ -325,25 +318,40 @@ declare namespace spawnArgs {
           fix: "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
         },
       ],
+      /** a value that starts with a dash is the flag's value, refused as a name */
+      [
+        args: [args: ["--name", "-w2"]],
+        expected: {
+          refused: "a workspace name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit";
+          fix: "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
+        },
+      ],
       [
         args: [args: ["--checkout", "acme/app=worktree:a..b"]],
         expected: {
-          refused: "a --checkout is not one desolate takes: acme/app=worktree:a..b";
-          fix: "--checkout <owner/repo>=worktree:<branch>   (or <owner/repo>=main)";
+          refused: "'a..b' is not a branch desolate will carry";
+          fix: "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
         },
       ],
       [
         args: [args: ["--checkout", "../app=main"]],
         expected: {
-          refused: "a --checkout is not one desolate takes: ../app=main";
-          fix: "--checkout <owner/repo>=worktree:<branch>   (or <owner/repo>=main)";
+          refused: "'../app=main' is not <owner/repo>=main or <owner/repo>=worktree:<branch>";
+          fix: "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
         },
       ],
       [
         args: [args: ["--branch", "--upload-pack=x"]],
         expected: {
           refused: "'--upload-pack=x' is not a branch desolate will carry";
-          fix: "letters, digits, '.', '_', '-' and '/', not starting with a dash";
+          fix: "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
+        },
+      ],
+      [
+        args: [args: ["--", "claude", "a\u0000b"]],
+        expected: {
+          refused: "word 2 of the command holds a NUL, which no program's argument can";
+          fix: "desolate spawn [--name <workspace>] [--branch <branch>] [--checkout <owner/repo>=worktree:<branch>]... [-- <command...>]";
         },
       ],
     ]
@@ -353,12 +361,10 @@ declare namespace spawnArgs {
 /** `desolate close <workspace>`. */
 export const closeArgs = (args: string[]): { name: string } | Refused => {
   const name = args[0];
-  if (!name || name.startsWith("-"))
-    return {
-      refused: "close which workspace?",
-      fix: "desolate close <workspace>   (one this workspace started: desolate domain stats)",
-    };
-  return { name };
+  const fix = "desolate close <workspace>   (one this workspace started: desolate domain stats)";
+  if (!name || name.startsWith("-")) return { refused: "close which workspace?", fix };
+  const refused = slugRefusal(name, "workspace");
+  return refused ? { refused, fix } : { name };
 };
 
 declare namespace closeArgs {
@@ -377,6 +383,13 @@ declare namespace closeArgs {
         args: [args: ["--all"]],
         expected: {
           refused: "close which workspace?";
+          fix: "desolate close <workspace>   (one this workspace started: desolate domain stats)";
+        },
+      ],
+      [
+        args: [args: ["W2"]],
+        expected: {
+          refused: "a workspace name is a slug: lowercase letters, digits and single dashes, at most 40, starting with a letter or digit";
           fix: "desolate close <workspace>   (one this workspace started: desolate domain stats)";
         },
       ],
@@ -580,9 +593,10 @@ const main = async (argv: string[]) => {
     const repo = await repoOf(asked.repo);
     const current = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
     const branch = named ?? current;
-    if (!isBranch(branch))
+    const notBranch = branchRefusal(branch);
+    if (notBranch)
       fail(
-        `'${branch}' is not a branch desolate will carry`,
+        notBranch,
         "check out the branch to offer, or name it: desolate offer <owner>/<repo> <branch>",
       );
     const commit =

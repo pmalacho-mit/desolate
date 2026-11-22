@@ -205,10 +205,7 @@ export const start = async (
       EXIT.usage,
     );
   const name = nameOf(options.name);
-  const started = await backend().exec(w.vm, holderStart(name, checkout!.path, command), {
-    timeoutMs: 60_000,
-    maxBytes: SAID_MOST,
-  });
+  const started = await holderStart(w, name, checkout!.path, command);
   if (started.code !== 0)
     refuse(
       `the agent did not start: ${holderError(started, name)}`,
@@ -266,18 +263,22 @@ declare namespace start {
   ];
 }
 
-/** The holder's start, with the log's most when the person set one. */
-const holderStart = (name: string, dir: string, command: string[]) => {
+/** The holder's start, with the log's most when the person set one. The command goes on
+ *  stdin, as JSON: Lima's shell carries argv to the VM as one shell string, and Linux takes
+ *  no argument over 128 KiB (a command may be 64 Ki characters, quoted). */
+const holderStart = (w: Workspace, name: string, dir: string, command: string[]) => {
   const most = valueOf(LOG_MOST);
-  return [
-    ...HOLDER(),
-    "start",
-    name,
-    dir,
-    ...(most === null ? [] : ["--log-most", String(most * 1024 * 1024)]),
-    "--",
-    ...command,
-  ];
+  return backend().exec(
+    w.vm,
+    [
+      ...HOLDER(),
+      "start",
+      name,
+      dir,
+      ...(most === null ? [] : ["--log-most", String(most * 1024 * 1024)]),
+    ],
+    { timeoutMs: 60_000, input: JSON.stringify(command), maxBytes: SAID_MOST },
+  );
 };
 
 /** An agent in a workspace that was just made (`desolate up ... -- <command...>`, and what a
@@ -287,10 +288,7 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
   const checkout = w.checkouts[0];
   if (!checkout)
     refuse(`${w.domain}/${w.workspace} has no checkout to run it in`, `desolate list ${w.domain}`);
-  const started = await backend().exec(w.vm, holderStart("agent", checkout!.path, command), {
-    timeoutMs: 60_000,
-    maxBytes: SAID_MOST,
-  });
+  const started = await holderStart(w, "agent", checkout!.path, command);
   if (started.code !== 0)
     refuse(
       `the workspace is up, but its agent did not start: ${holderError(started, "agent")}`,

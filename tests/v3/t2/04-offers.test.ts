@@ -10,11 +10,13 @@ import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 import { findChrome, loadPage } from "../lib/browser.ts";
-import { signedFor } from "../../../release/shared/approval.ts";
+import { lfsDigest, signedFor } from "../../../release/shared/approval.ts";
 
 let stack: Stack;
 let commit = "";
 let oid = "";
+/** The commit's LFS object as the reviewer lists it for the pusher, by its pointer's size. */
+const lfsListed = () => [`${oid} 50000`];
 const vms = new Map<string, string>();
 const vmOf = (target: string) => {
   if (!vms.has(target)) {
@@ -142,7 +144,7 @@ type Said = {
   commits?: Listed<{ commit: string; subject: string; author: string }>;
   files?: Listed<{ path: string }>;
   between?: Listed<{ path: string }>;
-  sends?: { pack: string; size: number; lfs: string[] };
+  sends?: { pack: string; size: number; lfs: { count: number; bytes: number; digest: string } };
   squash?: { commit: string; message: string; count: number; committer: string };
   lines: Record<string, unknown>[];
 };
@@ -406,8 +408,8 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     });
     assert.deepEqual(
       said.sends!.lfs,
-      [`${oid} 50000`],
-      "the reviewer lists the commit's LFS object, by the size its pointer says",
+      { count: 1, bytes: 50000, digest: lfsDigest(lfsListed()) },
+      "the reviewer counts the commit's LFS object, by the size its pointer says, and digests the list",
     );
     const own = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey;
     const forged = keyring({
@@ -520,7 +522,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
     const lfsFile = inRootClone(
       `ls .git/lfs/objects/${oid.slice(0, 2)}/${oid.slice(2, 4)}/${oid}`,
     ).stdout.trim();
-    const ownPack = toPusher(real.id!, "/tmp/own.pack", [], said.sends!.lfs);
+    const ownPack = toPusher(real.id!, "/tmp/own.pack", [], lfsListed());
     assert.equal(ownPack.ok, false);
     assert.match(ownPack.error!, /the pack is not the one approved .*nothing was pushed/);
     assert.deepEqual(forgeRefs("acme/widgets"), before, "no ref of the remote moved");
@@ -566,7 +568,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         { oid, file: `${ROOT_CLONE}/${lfsFile}` },
         { oid: planted, file: "/tmp/planted" },
       ],
-      [...said.sends!.lfs, `${planted} 32`],
+      [...lfsListed(), `${planted} 32`],
     );
     assert.equal(plantedLfs.ok, false);
     assert.match(
@@ -603,7 +605,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
         { oid, file: `${ROOT_CLONE}/${lfsFile}` },
         { oid: planted, file: "/tmp/planted" },
       ],
-      said.sends!.lfs,
+      lfsListed(),
     );
     assert.equal(unlisted.ok, false);
     assert.match(
@@ -666,7 +668,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       approved3.id!,
       controlPack,
       [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
-      saidControl.sends!.lfs,
+      lfsListed(),
     );
     assert.equal(control.ok, true, String(control.error));
     assert.equal(
@@ -681,7 +683,7 @@ describe("T2 phase 5: offers, the root's view, and pushes", () => {
       approved3.id!,
       controlPack,
       [{ oid, file: `${ROOT_CLONE}/${lfsFile}` }],
-      saidControl.sends!.lfs,
+      lfsListed(),
     );
     assert.equal(reused.ok, false);
     assert.match(String(reused.error), /holds no live approval/);
@@ -1368,7 +1370,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       commit,
       squashes: null,
       pack: "e".repeat(64),
-      lfs: [],
+      lfs: { count: 0, digest: "0".repeat(64) },
     });
     assert.match(
       String(keyring({ op: "approve", message: text, signature: "" }).error),
