@@ -65,6 +65,7 @@ desolate: this push needs your confirmation.
   LFS         0 object(s), only those its commits point to
   sends       1 commit(s) the remote does not have, 1 file(s)
               (desolate's reviewer, in the root)
+  push        acme/app fix <commit>
 Type the branch name (fix) to push, or anything else to refuse: fix
 approved; the push waiting in the root continues.
 [exit 0]

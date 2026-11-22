@@ -202,6 +202,13 @@ export type Backend = {
   /** Pushes waiting for a person, as the root lists them (the root's word: only the
    *  message is used, and it is parsed here). */
   pending: () => Promise<Waiting[]>;
+  /** The same list once it is not the one `since` tags (root/approvals.ts, pendingAfter),
+   *  waited on for as long as `signal` holds; `since` "" is answered at once. Without it, a
+   *  page that waits has the list asked for again each second. */
+  waitPending?: (
+    since: string,
+    signal: AbortSignal,
+  ) => Promise<{ tag: string; pending: Waiting[] }>;
   /** A question to desolate's reviewer, and its answer as it streams: what it is doing, then
    *  the one answer (shared/review-account.ts). It works for as long as `signal` holds. */
   summary: (request: AccountRequest, signal: AbortSignal) => AsyncIterable<AccountLine>;
@@ -394,12 +401,20 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   type Asking = {
     stop: AbortController;
     since: number;
+    /** The lists asked for of the root before it was asked about (`rootListAfter`). */
+    born: number;
     progress: { phase: string; done?: number; of?: number } | null;
     answer: { account: Account } | { error: string } | null;
     /** The page was given the answer (/pending): from here it may be signed. */
     listed: boolean;
   };
   const reviews = new Map<string, Asking>();
+  /** The pages waiting for what they show to change (/pending?since=): told when a review
+   *  says something new. */
+  const moved = new Set<() => void>();
+  const tell = () => {
+    for (const wake of [...moved]) wake();
+  };
   /** Questions not yet asked, first come first asked, and how many are being answered. */
   const queued: (() => void)[] = [];
   let answering = 0;
@@ -412,6 +427,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     const asking: Asking = {
       stop: new AbortController(),
       since: Date.now(),
+      born: looks,
       progress: { phase: "waiting for another push's account" },
       answer: null,
       listed: false,
@@ -430,8 +446,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       asking.progress = null;
       try {
         for await (const line of backend.summary(request, asking.stop.signal)) {
-          if ("progress" in line) asking.progress = line.progress;
-          else
+          if ("progress" in line) {
+            if (JSON.stringify(line.progress) === JSON.stringify(asking.progress)) continue;
+            asking.progress = line.progress;
+            tell();
+          } else
             return void (asking.answer =
               "account" in line
                 ? checkedAccount(line.account)
@@ -445,6 +464,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       } finally {
         answering -= 1;
         next();
+        tell();
       }
     };
     queued.push(() => void ask());
@@ -486,6 +506,99 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     if (!asking?.listed || !asking.answer || !("account" in asking.answer))
       return { status: 404, error: "the page has not been given the reviewer's account of it" };
     return { account: asking.answer.account, asking };
+  };
+  /** What the page is told of the pushes the root lists: each push's parsed text, the token
+   *  over it, and the reviewer's account. A push the root no longer lists is dropped here. */
+  const answerFor = (listed: Waiting[], look: number, token: string) => {
+    // A text the root no longer lists is a push that is gone (approved, refused, or given
+    // up): its question to the reviewer is dropped, and so is what it answered.
+    const now = new Set(listed.map((w) => digestOf(w.message)));
+    for (const [digest, asking] of reviews)
+      if (!now.has(digest) && asking.born < look) {
+        asking.stop.abort();
+        reviews.delete(digest);
+      }
+    const out = [];
+    for (const waiting of listed) {
+      const push = parseApproval(waiting.message);
+      if (!push) continue;
+      // Past the most this page keeps an account of, a push is listed, and not asked about.
+      if (!reviews.has(digestOf(waiting.message)) && reviews.size >= LISTED_MOST) {
+        out.push({
+          nonce: push.nonce,
+          repo: push.repo,
+          branch: push.branch,
+          commit: push.commit,
+          onto: push.onto,
+          token: pushToken(token, waiting.message),
+          review: {
+            error: `over ${LISTED_MOST} pushes are waiting, more than this page asks the reviewer about at once: refuse the ones that are not yours, and this one is asked about then`,
+          },
+        });
+        continue;
+      }
+      // Everything shown is the parsed text and the reviewer's account; the root's user's own
+      // words about a push are not shown at all. A diff, and the rest of a long list, are
+      // asked for when the person wants them (/diff, /page): not in the list the page waits on.
+      const asking = askingOf(push, waiting.message);
+      const review = reviewOf(asking);
+      // The page is given this account now: from here it may be signed.
+      // (An account that says the reviewer could not describe it is given too: the click is
+      // then refused for that, not for an account not shown.)
+      if (!("working" in review)) asking.listed = true;
+      out.push({
+        nonce: push.nonce,
+        repo: push.repo,
+        branch: push.branch,
+        commit: push.commit,
+        onto: push.onto,
+        token: pushToken(token, waiting.message),
+        review,
+        ...("account" in review
+          ? { shown: shownToken(token, waiting.message, review.account) }
+          : {}),
+      });
+    }
+    return out;
+  };
+  /** The answer's tag: the same pushes and accounts, the same tag. (How long the reviewer has
+   *  been at it is counted by the page, from `seconds`: not a change.) */
+  const tagOfAnswer = (out: ReturnType<typeof answerFor>) =>
+    digestOf(
+      JSON.stringify(
+        out.map((p) =>
+          "working" in p.review
+            ? { ...p, review: { working: { ...p.review.working, seconds: 0 } } }
+            : p,
+        ),
+      ),
+    );
+  /** The root's list once it is not the one `since` tags, for as long as `signal` holds. */
+  /** The root's list once it is not the one `since` tags, for as long as `signal` holds.
+   *  `look`: when it was asked for, in lists asked for (`answerFor` drops only the reviews of
+   *  pushes asked about before it: another page's may come from a later list). */
+  let looks = 0;
+  const rootListAfter = async (
+    since: string,
+    signal: AbortSignal,
+  ): Promise<{ tag: string; pending: Waiting[]; look: number }> => {
+    const look = ++looks;
+    if (backend.waitPending) return { ...(await backend.waitPending(since, signal)), look };
+    for (;;) {
+      const pending = await backend.pending();
+      const tag = digestOf(pending.map((w) => w.message).join("\n"));
+      if (tag !== since || signal.aborted) return { tag, pending, look };
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, 1000);
+        signal.addEventListener("abort", done, { once: true });
+      });
+      if (signal.aborted) return { tag, pending, look };
+    }
   };
   return async (req: IncomingMessage, res: ServerResponse) => {
     // This name only, this origin only: a page on any other name is refused before anything.
@@ -712,66 +825,42 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       return json(res, 404, { error: "no such thing" });
     }
 
+    // `since`: the tag of the answer the page has. Then the answer waits until it would be
+    // another: the root's list changed, or a reviewer said something new; for as long as the
+    // page holds the request (R4). Without it, the answer is now's.
     if (req.method === "GET" && url.pathname === "/pending") {
-      let listed: Waiting[];
+      const since = url.searchParams.get("since");
+      const gone = new AbortController();
+      res.once("close", () => gone.abort());
       try {
-        listed = await backend.pending();
+        let root = await rootListAfter("", gone.signal);
+        // One wait on the root at a time, kept across a reviewer's news: each wake is not
+        // another call into the root.
+        let fromRoot: ReturnType<typeof rootListAfter> | null = null;
+        for (;;) {
+          const out = answerFor(root.pending, root.look, token);
+          const tag = tagOfAnswer(out);
+          if (since === null || tag !== since) return json(res, 200, { pending: out, tag });
+          fromRoot ??= rootListAfter(root.tag, gone.signal);
+          const round = new AbortController();
+          const next = await Promise.race([
+            fromRoot,
+            new Promise<null>((resolve) => {
+              const wake = () => resolve(null);
+              moved.add(wake);
+              round.signal.addEventListener("abort", () => moved.delete(wake), { once: true });
+            }),
+          ]).finally(() => round.abort());
+          if (gone.signal.aborted) return;
+          if (next) [root, fromRoot] = [next, null];
+        }
       } catch (error) {
+        if (gone.signal.aborted) return;
         // (Nothing is dropped for a list that could not be had: the pushes may all still wait.)
         return json(res, 502, {
           error: `the root's list of pushes waiting could not be had: ${printable((error as Error).message)}`,
         });
       }
-      // A text the root no longer lists is a push that is gone (approved, refused, or given
-      // up): its question to the reviewer is dropped, and so is what it answered.
-      const now = new Set(listed.map((w) => digestOf(w.message)));
-      for (const [digest, asking] of reviews)
-        if (!now.has(digest)) {
-          asking.stop.abort();
-          reviews.delete(digest);
-        }
-      const out = [];
-      for (const waiting of listed) {
-        const push = parseApproval(waiting.message);
-        if (!push) continue;
-        // Past the most this page keeps an account of, a push is listed, and not asked about.
-        if (!reviews.has(digestOf(waiting.message)) && reviews.size >= LISTED_MOST) {
-          out.push({
-            nonce: push.nonce,
-            repo: push.repo,
-            branch: push.branch,
-            commit: push.commit,
-            onto: push.onto,
-            token: pushToken(token, waiting.message),
-            review: {
-              error: `over ${LISTED_MOST} pushes are waiting, more than this page asks the reviewer about at once: refuse the ones that are not yours, and this one is asked about then`,
-            },
-          });
-          continue;
-        }
-        // Everything shown is the parsed text and the reviewer's account; the root's user's own
-        // words about a push are not shown at all. A diff, and the rest of a long list, are
-        // asked for when the person wants them (/diff, /page): not in a list polled every second.
-        const asking = askingOf(push, waiting.message);
-        const review = reviewOf(asking);
-        // The page is given this account now: from here it may be signed.
-        // (An account that says the reviewer could not describe it is given too: the click is
-        // then refused for that, not for an account not shown.)
-        if (!("working" in review)) asking.listed = true;
-        out.push({
-          nonce: push.nonce,
-          repo: push.repo,
-          branch: push.branch,
-          commit: push.commit,
-          onto: push.onto,
-          token: pushToken(token, waiting.message),
-          review,
-          ...("account" in review
-            ? { shown: shownToken(token, waiting.message, review.account) }
-            : {}),
-        });
-      }
-      return json(res, 200, { pending: out });
     }
     if (req.method === "GET" && url.pathname === "/issues") {
       const listed = (await backend.issues().catch(() => [] as unknown[]))
