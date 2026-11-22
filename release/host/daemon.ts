@@ -2358,7 +2358,13 @@ export const ensureDaemon = async () => {
   const child = spawn(
     process.execPath,
     ["--disable-warning=ExperimentalWarning", fileURLToPath(import.meta.url), "serve"],
-    { detached: true, stdio: ["ignore", log, log], env: process.env },
+    // Its port is the one it is started with, for its life: what it listens on is what every
+    // address and origin it checks names, whatever `desolate settings set` stores meanwhile.
+    {
+      detached: true,
+      stdio: ["ignore", log, log],
+      env: { ...process.env, DESOLATE_EDITOR_PORT: String(editorHostPort()) },
+    },
   );
   child.unref();
   if (!(await waitFor(alive, 20_000, 100)))
@@ -2398,14 +2404,14 @@ export const tokenAddressesSafe = async () => {
   if (held)
     refuse(
       `not printed: ${held}, and this address carries a token`,
-      "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap",
+      "stop what holds it, or give this stack another port: desolate settings set editor.port <port>, desolate down, then desolate bootstrap",
     );
 };
 
 declare namespace tokenAddressesSafe {
   /** the daemon holds its port on both loopback addresses: an address with a token may be printed */
   export type Held = Given<
-    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31581; error: "" } }]>,
     Expect<Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>, "=", null>
   >;
   /** another program has [::1] on that port, where browsers look first: it would be sent the token */
@@ -2416,8 +2422,8 @@ declare namespace tokenAddressesSafe {
         reply: {
           ok: true;
           editor: {
-            port: 31580;
-            error: "a program on this machine holds [::1]:31580, where browsers look first";
+            port: 31581;
+            error: "a program on this machine holds [::1]:31581, where browsers look first";
           };
         },
       ]
@@ -2426,8 +2432,8 @@ declare namespace tokenAddressesSafe {
       Invoke<typeof refusalOf, [run: typeof tokenAddressesSafe]>,
       "=",
       {
-        message: "not printed: a program on this machine holds [::1]:31580, where browsers look first, and this address carries a token";
-        fix: "stop what holds it, or give this stack another port: DESOLATE_EDITOR_PORT=<port> desolate bootstrap";
+        message: "not printed: a program on this machine holds [::1]:31581, where browsers look first, and this address carries a token";
+        fix: "stop what holds it, or give this stack another port: desolate settings set editor.port <port>, desolate down, then desolate bootstrap";
         code: 1;
       }
     >
@@ -2455,17 +2461,31 @@ declare namespace tokenAddressesSafe {
 export const editorPortError = async (): Promise<string | null> => {
   if (!(await alive())) return null;
   const reply = await ask({ op: "editor" }, 10_000).catch(() => null);
-  const editor = reply?.editor as { error?: unknown } | undefined;
-  return reply?.ok === true ? String(editor?.error ?? "") : null;
+  if (reply?.ok !== true) return null;
+  const editor = reply.editor as { port?: unknown; error?: unknown } | undefined;
+  // The daemon keeps the port it started with: one stored since is not held, and an address
+  // on it would go to whatever holds that one.
+  if (editor?.port !== editorHostPort())
+    return `the host daemon holds port ${printable(editor?.port, 20)}, not ${editorHostPort()} (editor.port changed since it started: desolate down, then desolate bootstrap)`;
+  return String(editor?.error ?? "");
 };
 
 declare namespace editorPortError {
   /** asked without starting a daemon: none running is null, not "" */
   export type NoDaemon = Expect<Invoke<typeof editorPortError>, "=", null>;
+  /** a daemon on another port than this command's (editor.port stored since it started) */
+  export type Elsewhere = Given<
+    Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 40000; error: "" } }]>,
+    Expect<
+      Invoke<typeof editorPortError>,
+      "=",
+      "the host daemon holds port 40000, not 31581 (editor.port changed since it started: desolate down, then desolate bootstrap)"
+    >
+  >;
   /** "" when the daemon holds the port, else its reason, as it said it */
   export type Said = [
     Given<
-      Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31580; error: "" } }]>,
+      Invoke<typeof daemonAnswering, [reply: { ok: true; editor: { port: 31581; error: "" } }]>,
       Expect<Invoke<typeof editorPortError>, "=", "">
     >,
     Given<
@@ -2474,11 +2494,11 @@ declare namespace editorPortError {
         [
           reply: {
             ok: true;
-            editor: { port: 31580; error: "a program on this machine holds port 31580" };
+            editor: { port: 31581; error: "a program on this machine holds port 31581" };
           },
         ]
       >,
-      Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31580">
+      Expect<Invoke<typeof editorPortError>, "=", "a program on this machine holds port 31581">
     >,
   ];
   /** a daemon that refused the question has not said, so null */

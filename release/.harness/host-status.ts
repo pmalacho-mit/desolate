@@ -57,10 +57,16 @@ export const statusSays = async (
   command: typeof status,
   target: string | undefined,
   json: boolean,
+  notes?: Record<string, string[]>,
 ): Promise<{ lines: string[] } | { refused: string; fix: string }> => {
   const lines: string[] = [];
   try {
-    await command(target, (line) => void lines.push(line), json);
+    await command(
+      target,
+      (line) => void lines.push(line),
+      json,
+      notes && (async () => new Map(Object.entries(notes))),
+    );
     return { lines };
   } catch (error) {
     return { refused: (error as Error).message, fix: String((error as { fix?: unknown }).fix) };
