@@ -113,7 +113,9 @@ domains', as `root/<domain>/<branch>`), diff, log, rebase, commit, and `git push
 <branch>`, which waits for you on the approval page and then goes out through the root.
 `git push <domain> <branch>` delivers a branch to a domain instead (its workspaces see
 `root/<branch>`; nothing leaves the machine, so nothing is asked), and `desolate fetch` has
-the root refresh the mirror from the remote first, then fetches every remote. Your commits
+the root refresh the mirror from the remote first, then fetches every remote: of the clone
+you are in and the other clones of its domains (`desolate fetch <owner/repo>`: that one; in
+`/git`: every clone), and says which it fetched. Your commits
 there carry the Mac's own `git config --global user.name`/`user.email`, if it has
 them and the git VM has none yet. The
 git VM has no network, no key, and nothing of a project's that runs: no devcontainer, no
