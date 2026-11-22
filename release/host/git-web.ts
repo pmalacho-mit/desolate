@@ -33,7 +33,7 @@ import { refusal, sameSecret } from "../shared/gate.ts";
 import { carriesCredential, cookieValue, signedInPage } from "../shared/page-key.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";
 import { signins } from "./signin.ts";
-import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
 import type { mint } from "./signin.ts";
 import type { ask, gitVmDown, noShell, quiet } from "../.harness/host-web.ts";
@@ -182,6 +182,36 @@ type Session = {
   seen: number;
 };
 
+/** The last line a shell shows, as plain text, which the page offers it back by: two shells
+ *  opened in one folder were told apart by "1 min ago" alone (dogfooding, 2026-11-22). Its
+ *  prompt says where the shell is now. */
+export const lastLine = (printed: string): string => {
+  const lines = printed
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b.?/g, "")
+    .split("\n")
+    // (What a carriage return went back over was written over.)
+    .map((line) =>
+      (line.replace(/\r+$/, "").split("\r").pop() ?? "").replace(/[\x00-\x1f\x7f]/g, "").trim(),
+    )
+    .filter(Boolean);
+  return [...(lines.at(-1) ?? "")].slice(0, 120).join("");
+};
+
+declare namespace lastLine {
+  export type Cases = Table<
+    typeof lastLine,
+    [
+      [
+        args: [printed: "one\r\n\x1b[01;32mme@git\x1b[00m:\x1b[01;34m/git/acme/api\x1b[00m$ "],
+        expected: "me@git:/git/acme/api$",
+      ],
+      [args: [printed: "\x1b]0;a title\x07ls\r\nREADME\r\n\r\n"], expected: "README"],
+      [args: [printed: "50%\r100%\r\n"], expected: "100%"],
+      [args: [printed: ""], expected: ""],
+    ]
+  >;
+}
+
 /** `spawn`: a process in the git VM with pipes (the backend's). */
 /** `prepare`: the git VM up and the person's clone of `repo` there (git-vm.ts), before a
  *  shell opens in it; with `at` (the dashboard's review of a domain's branch), that branch
@@ -199,6 +229,14 @@ export const handler = (
   // reads stays until a tab comes back to it, or it ends (exit, or the git VM going down).
   const forget = (s: Session) => {
     if (s.ended && s.streams.size === 0) sessions.delete(s.id);
+  };
+
+  /** The last line shell `s` printed (of its last 4 KiB). */
+  const shows = (s: Session) => {
+    const tail: Buffer[] = [];
+    for (let i = s.kept.length - 1, n = 0; i >= 0 && n < 4096; n += s.kept[i--]!.length)
+      tail.unshift(s.kept[i]!);
+    return lastLine(Buffer.concat(tail).subarray(-4096).toString("utf8"));
   };
 
   const open = (repo: string, first = "") => {
@@ -330,7 +368,13 @@ export const handler = (
         ...forPage(),
         left: [...sessions.values()]
           .filter((s) => !s.ended && s.streams.size === 0)
-          .map((s) => ({ id: s.id, token: s.token, where: s.where, since: s.seen })),
+          .map((s) => ({
+            id: s.id,
+            token: s.token,
+            where: s.where,
+            since: s.seen,
+            last: shows(s),
+          })),
       });
     const match = /^\/session\/([0-9a-f]{16})\/(stream|input|resize)$/.exec(url.pathname);
     if (req.method === "GET" && match?.[2] === "stream") {

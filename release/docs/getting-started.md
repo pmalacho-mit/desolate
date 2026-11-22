@@ -369,13 +369,14 @@ desolate git you/app --open
 ```
 
 ```bash
-desolate fetch                                  # in the git terminal: refresh from GitHub, fetch every remote
+desolate fetch                                  # in the git terminal: refresh this clone and its domains' others from GitHub
 git log --oneline you--app/feature/greet-by-name    # each domain is a remote
 git push origin you--app/feature/greet-by-name:refs/heads/feature/greet-by-name
 ```
 
 A shell in the git terminal stays open when its tab closes (or the laptop sleeps): open the
-terminal again and it offers the shell back, as you left it. `exit` ends one. At most six are
+terminal again and it offers the shell back, as you left it, each by a number and its last
+line; a reload goes straight back to the tab's own shell. `exit` ends one. At most six are
 open at once (the setting `git.shells`, `DESOLATE_GIT_SHELLS`; the lines a tab keeps to scroll
 back through are `git.scrollbackLines`). `git push` and `desolate fetch` wait for as long as
 you do, and say what the host is doing meanwhile; Ctrl-C withdraws a push until it is handed

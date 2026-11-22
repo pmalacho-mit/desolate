@@ -271,7 +271,7 @@ describe("T1 the git terminal", () => {
       return JSON.parse(answer.body) as {
         input: number;
         scrollback: number;
-        left: { id: string; token: string; where: string; since: number }[];
+        left: { id: string; token: string; where: string; since: number; last: string }[];
       };
     };
     assert.equal(
@@ -293,9 +293,11 @@ describe("T1 the git terminal", () => {
     assert.equal(offered.input, INPUT_CHARS, "the page is told how much one request carries");
     assert.equal(offered.scrollback, 5000);
     const back = offered.left.find((s) => s.id === id);
-    assert.deepEqual(back && { token: back.token, where: back.where }, {
+    assert.deepEqual(back && { token: back.token, where: back.where, last: back.last }, {
       token,
       where: "/git/acme/widgets",
+      // (The shell here is cat: what it shows last is the protocol's line it was given.)
+      last: "i bGVmdCBoZXJlCg==",
     });
     const again = await call("GET", `/session/${id}/stream?token=${token}`, page(), undefined, 300);
     assert.match(
