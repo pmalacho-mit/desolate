@@ -88,14 +88,16 @@ Approve arms only while the browser reports the button visible and uncovered.
 **After a push: its pull request, and noticing the merge.** A branch offered with
 `desolate offer --base <branch>` is for that branch; otherwise for the repository's default.
 When its push lands, desolate gives GitHub's page for opening the pull request, filled in:
-"Open pull request" in the dashboard's activity, a line after `desolate push`, and one in a
-raw `git push origin`'s output. It opens in your browser, where you are signed in as
+"Open pull request" on the dashboard (on the workspace's row and the branch's, until it is
+merged, and in its activity), a line after `desolate push`, and one in a raw `git push
+origin`'s output. It opens in your browser, where you are signed in as
 yourself, and you create the pull request there: desolate holds no forge token, and this
 needs none. The root keeps a record of what it pushed (`/var/lib/desolate/pushed.json`, kept
 across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
-every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days. The test is conservative: every file the branch changed is, in
+every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days; the dashboard's
+**Fetch now** beside the link looks at once. The test is conservative: every file the branch changed is, in
 the base, exactly as the branch left it (so a merge commit, a squash and a rebase all count).
 A base that has since changed one of those files again is not recognised, and the branch is
 then just not marked.
