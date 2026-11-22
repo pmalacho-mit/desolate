@@ -17,8 +17,9 @@
 //   - a JSON body (so another origin's form cannot send it at all).
 // The page cannot be framed (frame-ancestors 'none', X-Frame-Options), runs no inline
 // script, keeps no opener (Cross-Origin-Opener-Policy), and its button arms only after the
-// page has been visible and focused for a second and the pointer then moves onto it: a click
-// that was already on its way when a window opened under it lands on nothing.
+// page has been visible and focused for a second and the pointer has been on it for a second
+// while the page stood still: a click that was already on its way when a window opened under
+// it lands on nothing.
 //
 // ONE EXCEPTION TO "CANNOT BE FRAMED": /embed, beside the git terminal. Only the git
 // terminal's own origin may frame it (frame-ancestors names it exactly), so a `git push`
@@ -431,8 +432,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   };
   const reviews = new Map<string, Asking>();
   // The approvals this page signed, newest last, and how each ended once the pusher said. Its
-  // log is followed only while a page is open and has a push in front of it, or one approved
-  // that has not ended (the daemon reads it only while someone listens).
+  // log is followed while a page is open and has a push in front of it, and while one approved
+  // has not ended, page or not (the daemon reads it only while someone listens). A page asks
+  // again after each answer, so between two of its asks no page is open: an approval's word
+  // that came then was missed, and its card said "pushing" for good (T2 04, under load).
   const approvals: {
     repo: string;
     branch: string;
@@ -445,7 +448,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   let pages = 0;
   let unhear: (() => void) | null = null;
   const hearPusher = () => {
-    const want = pages > 0 && (reviews.size > 0 || approvals.some(unsaid));
+    const want = (pages > 0 && reviews.size > 0) || approvals.some(unsaid);
     if (want && !unhear)
       unhear = backend.pushes((said) => {
         const done = approvals.find(
@@ -1104,16 +1107,31 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
       }
       try {
         if (url.pathname === "/approve") {
-          await backend.approve(signed);
-          approvals.push({
+          // Listened for before it is approved: the push can land before the keyring's answer
+          // does, and its word was then missed, the card saying "pushing" for good (T2 04, the
+          // pointer's push, under load).
+          const approval = {
             repo: push.repo,
             branch: push.branch,
             commit: asked.squash === true ? reviewed!.squash!.commit : push.commit,
             at: Date.now(),
             outcome: { token: given, pushed: false },
-          });
+          };
+          approvals.push(approval);
           if (approvals.length > OUTCOMES_KEPT) approvals.shift();
           hearPusher();
+          // Not heard of by then: no longer listened for (the dashboard's activity says).
+          setTimeout(hearPusher, HEARD_MS + 1000).unref();
+          try {
+            await backend.approve(signed);
+          } catch (error) {
+            const at = approvals.indexOf(approval);
+            if (at >= 0) approvals.splice(at, 1);
+            hearPusher();
+            // (And the pages told: a word heard for it meanwhile is not theirs to keep.)
+            tell();
+            throw error;
+          }
           log(
             `approve page: approved ${push.repo} ${push.branch} ${push.commit}${asked.squash === true ? ` squashed into ${reviewed!.squash!.commit}` : ""}${push.onto ? ` (from ${push.onto}${reviewed!.fastForward === false ? ", replacing it" : ""})` : " (a new branch)"}`,
           );

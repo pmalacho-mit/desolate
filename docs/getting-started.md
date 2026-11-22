@@ -138,7 +138,9 @@ On the dashboard (`desolate ui --open`), a domain with no workspaces offers **Wo
 main**: one on the default branch, the domain's own checkout of each repository. **New
 workspace** on its card makes another, with the name you type (`w1`, `w2`... if none), each
 repository on a new branch of that name from its default branch; the line under it says so
-before you click. Or, for a branch you name:
+before you click, and whose `devcontainer.json` it runs: when more than one repository has
+one, choose there (the default is the domain's, which `desolate domain <d> env --from <repo>`
+sets). Or, for a branch you name:
 
 ```bash
 desolate up you--app --name greet --branch feature/greet-by-name
@@ -360,7 +362,7 @@ Two ways, and both end with you approving the exact commit:
   **pushed**, with **Open pull request** (GitHub's page for it, in your browser, as you).
   When the pull request is merged, **Fetch now** beside it shows it at once (the root also
   looks every 15 minutes): the row then says **merged into main**, and how to carry on in
-  the workspace: `git fetch && git switch --no-track -c <next-branch> origin/main`.
+  each checkout that is merged: `git fetch && git switch --no-track -c <next-branch> origin/main`.
   The default branch is pushed the same way: the review says so in red at its top, since a
   push there changes it on the remote with no pull request first.
 - **Open in git**, in the review: the git terminal, on that branch as the workspace has it
@@ -387,9 +389,9 @@ you do, and say what the host is doing meanwhile; Ctrl-C withdraws a push until 
 to the root, after which you decline it on the approval page.
 
 The push waits for you, and the approval opens beside the terminal: what the push names, and
-what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
-it: move it onto the button, then click a moment later (a click before that does nothing,
-and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
+what it would send, worked out in the root. **Approve** arms once the pointer has rested
+on it for a second while nothing on the page changed: rest it on the button, then click (a
+click before that does nothing, and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
 the pack that goes is the one desolate's reviewer made of its commits, and what you approve
 names it. The card then says when the push is on the remote, with **Open a pull request**
 (GitHub's page, into the repository's default branch). Once nothing else waits, the keys go
@@ -411,8 +413,8 @@ What the approval page shows, and the two choices it may add:
   page says what it is doing ("packing (1,200 of 8,000), 2 min") and waits as long as you
   do. Approve arms once it has said what the push sends.
 - **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
-  the last commit's files, on what the branch builds on, with a message listing every
-  commit. Nothing that was in between reaches the remote. The workspace's branch still has
+  the last commit's files, on what the branch builds on, titled by the last commit's subject,
+  with a message listing every commit. Nothing that was in between reaches the remote. The workspace's branch still has
   the commits that were squashed, so to carry on, move it onto the squash. After the push,
   the Mac prints the command, to run in the workspace:
 

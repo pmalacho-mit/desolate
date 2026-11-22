@@ -83,7 +83,7 @@ _desolate() {
                     start) words="--name --checkout --" ;;
                     attach) words="--name" ;;
                     list) words="--json" ;;
-                    log) words="--name --all --lines --since" ;;
+                    log) words="--name --all --lines --since --raw" ;;
                     stop) words="--name --kill" ;;
                 esac; fi ;;
             # (A setting's name is not offered: the settings are known by loading desolate's

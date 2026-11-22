@@ -4,7 +4,7 @@
 // never runs a command line the root VM wrote.
 import { over } from "./limits.ts";
 import { characters, isSlug, parseRepo } from "./names.ts";
-import { LIMIT as SPAWN, parseSigned } from "./spawn.ts";
+import { checkoutsOf, LIMIT as SPAWN, parseSigned } from "./spawn.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -22,9 +22,9 @@ const TITLE = new RegExp(`^[\\x20-\\x7e]{1,${CREATE.title}}$`);
  *  root's ordinary user writes them, and the host parses them; one that is not text, or is
  *  longer, refuses the action (never left out of it). A spawn's command is JSON, which
  *  shared/spawn.ts's LIMIT.json bounds before it is signed, so every command a workspace
- *  may sign is carried. Its checkouts are 16 of `<owner/repo>=worktree:<branch>` (ASCII, at most 411
- *  each), as JSON. Create's repos are 20 names of at most 201, comma-separated. Every other
- *  argument is a name, a size or a title. */
+ *  may sign is carried. Its checkouts are 16 of `<owner/repo>=worktree:<branch>` (ASCII, at
+ *  most 411 each), as JSON (New workspace's, comma-separated). Create's repos are 20 names
+ *  of at most 201, comma-separated. Every other argument is a name, a size or a title. */
 export const ARGUMENT = {
   command: SPAWN.json,
   checkouts: 8_000,
@@ -73,10 +73,21 @@ export const HOST_ACTIONS: Record<string, (a: Args) => string[] | null> = {
           a.disk!,
         ]
       : null,
-  "workspace.up": (a) =>
-    isSlug(a.domain) && (a.workspace === undefined || a.workspace === "" || isSlug(a.workspace))
-      ? ["up", a.domain, ...(a.workspace ? ["--name", a.workspace] : [])]
-      : null,
+  // `checkouts`: comma-separated, when New workspace was given another repository's
+  // environment: every checkout named, that one's first (whose devcontainer `up` runs).
+  "workspace.up": (a) => {
+    const checkouts = a.checkouts ? checkoutsOf(a.checkouts.split(",")) : [];
+    return checkouts &&
+      isSlug(a.domain) &&
+      (a.workspace === undefined || a.workspace === "" || isSlug(a.workspace))
+      ? [
+          "up",
+          a.domain,
+          ...(a.workspace ? ["--name", a.workspace] : []),
+          ...checkouts.flatMap((c) => ["--checkout", c]),
+        ]
+      : null;
+  },
   "repo.fetch": (a) => (a.repo !== undefined && parseRepo(a.repo) ? ["fetch", a.repo] : null),
   // `repos`: the repositories it starts with, comma-separated (each must be one).
   "domain.create": (a) => {
@@ -259,6 +270,22 @@ declare namespace hostArgv {
         expected: ["up", "dev", "--name", "issue-12"],
       ],
       [
+        args: [
+          kind: "workspace.up",
+          args: { domain: "dev"; workspace: "w2"; checkouts: "acme/web=main,acme/api=worktree:w2" },
+        ],
+        expected: [
+          "up",
+          "dev",
+          "--name",
+          "w2",
+          "--checkout",
+          "acme/web=main",
+          "--checkout",
+          "acme/api=worktree:w2",
+        ],
+      ],
+      [
         args: [kind: "repo.fetch", args: { repo: "acme/widgets" }],
         expected: ["fetch", "acme/widgets"],
       ],
@@ -305,6 +332,11 @@ declare namespace hostArgv {
       [args: [kind: "workspace.start", args: { domain: "--all"; workspace: "w1" }], expected: null],
       [args: [kind: "workspace.up", args: { domain: "dev"; workspace: "--fetch" }], expected: null],
       [args: [kind: "workspace.up", args: { domain: "dev; rm -rf ~" }], expected: null],
+      [
+        args: [kind: "workspace.up", args: { domain: "dev"; checkouts: "acme/web=worktree:--x" }],
+        expected: null,
+      ],
+      [args: [kind: "workspace.up", args: { domain: "dev"; checkouts: "--fetch" }], expected: null],
       [args: [kind: "repo.fetch", args: { repo: "--upload-pack=x" }], expected: null],
       [
         args: [kind: "domain.add", args: { domain: "dev"; repo: "acme/widgets/../x" }],
