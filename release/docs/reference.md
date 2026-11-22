@@ -353,7 +353,15 @@ clone's `origin` is two small git remote helpers (`workspace/git-remote-desolate
   refs to remote" dialog. The offer's own line (`offered <repo> <branch> at <commit>`) is
   what says it worked. `desolate offer` exits 0 when it is taken, so a script or an agent
   should use that instead. Offering a branch again replaces its earlier offer. (Kept so on
-  purpose: #189.)
+  purpose: #189.) An offer makes `origin/<branch>` the upstream of a branch that has none,
+  so `git pull` gets the branch once it is pushed; until then `git status` says the upstream
+  is gone.
+- LFS files check out from the mirror, and an offer carries the LFS objects its commits
+  point to. git-lfs's own pre-push hook (`git lfs install` adds one) uploads to
+  `workspace/desolate-lfs-offer`, which sends nothing, since the mirror is read-only. In a
+  devcontainer, git-lfs is the project's: add the feature
+  `ghcr.io/devcontainers/features/git-lfs:1` to its `devcontainer.json`. The workspace's
+  start says so once the repository has LFS files and the container has no git-lfs.
 - Commits carry the person's git identity from the Mac (`git config --global user.name` and
   `user.email`, read when the workspace is made), in the VM and in its devcontainer, unless the
   container's user has one of its own. Without one on the Mac, the workspace's own name.

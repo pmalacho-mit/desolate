@@ -235,7 +235,11 @@ and 443 ([what that means for registries and builds](reference.md)).
 - **Commit** as usual, from the terminal or the editor's Source Control. Your commits carry
   your own name and email (your Mac's `git config --global user.name` and `user.email`).
 - **`git pull` and `git fetch`** get what GitHub has now: the workspace asks the root to
-  refresh its copy first (a second or two), and fetches from it.
+  refresh its copy first (a second or two), and fetches from it. Offering a branch makes
+  GitHub's branch of that name its upstream, so once it is pushed `git pull` on it works
+  (until then `git status` calls the upstream "gone": GitHub does not have it yet). Once its
+  pull request is merged, start the next change from the default branch:
+  `git fetch && git switch --no-track -c <next-branch> origin/main`.
 - **`git push`** (or the editor's Sync) hands your branch to the root, which is as far as
   anything in a workspace can push. It says so:
 
@@ -252,8 +256,7 @@ and 443 ([what that means for registries and builds](reference.md)).
   with an error, on purpose. If git counted it as pushed, it would record `origin/<branch>`,
   and `git status`, the editor and every other tool would then say GitHub has a branch it
   does not have. The editor's Publish Branch and Sync show a red "Can't push refs to remote.
-  Try running Pull first" dialog for the same reason, and the button still says Publish
-  Branch afterwards. Close the dialog: the branch was offered. Show Command Output has the
+  Try running Pull first" dialog for the same reason. Close the dialog: the branch was offered. Show Command Output has the
   `offered ... at ...` line, and the dashboard lists the branch. Pushing again only offers it
   again (the newer offer replaces the older one), so it does no harm, but there is no need.
 
