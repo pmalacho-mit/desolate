@@ -53,7 +53,6 @@ import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } fro
 import type { Backend as ApprovalBackend } from "./approve-web.ts";
 import { accountLines } from "../shared/review-account.ts";
 import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
-import { isOldKey, oldAnswer, withOld } from "./review-fallback.ts";
 import { statusDir } from "../shared/status.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { sleep, waitFor } from "../shared/run.ts";
@@ -389,13 +388,8 @@ export async function* reviewerSummary(
   request: AccountRequest,
   signal?: AbortSignal,
 ): AsyncGenerator<AccountLine, void, void> {
-  // FALLBACK (review-fallback.ts): more of an account that the old reviewer gave.
-  if (request.op !== "account" && isOldKey(request.key))
-    return yield* oldAnswer(request, (again) => reviewerAsked(again, signal).bytes);
   const asked = reviewerAsked(request, signal);
-  // FALLBACK (review-fallback.ts): the old reviewer's one JSON object, read as the stream.
-  const bytes = request.op === "account" ? withOld(request, asked.bytes) : asked.bytes;
-  for await (const line of accountLines(bytes)) {
+  for await (const line of accountLines(asked.bytes)) {
     if (signal?.aborted) return;
     if (!("error" in line)) {
       yield line;
@@ -419,11 +413,6 @@ declare namespace reviewerSummary {
     branch: "issue/12";
     commit: "1111111111111111111111111111111111111111";
     onto: null;
-  };
-  type Sends = {
-    pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    size: 100;
-    lfs: [];
   };
   /** the reviewer's lines as it writes them: what it is doing, while it does it, and then
    *  its account, which ends the answer. (Here the reviewer is a program that says these
@@ -629,43 +618,6 @@ declare namespace reviewerSummary {
       >
     >,
   ];
-  /** FALLBACK (review-fallback.ts, to go with it): a VM layer that cannot stream as root
-   *  answers when the reviewer is done, and a reviewer of the old kind answers with one JSON
-   *  object; both are read as the stream's one answer */
-  export type OldWay = Given<
-    [
-      Mock<"./stack.ts">,
-      Call<
-        Mocked<typeof backend>,
-        "mockReturnValue",
-        [
-          value: Invoke<
-            typeof vmAnswering,
-            [
-              code: 0,
-              stdout: '{"ok":true,"commits":[],"files":[],"fastForward":null,"sends":{"pack":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","size":100,"lfs":[]}}\n',
-              stderr: "",
-            ]
-          >,
-        ]
-      >,
-    ],
-    Expect<
-      Invoke<typeof all, [lines: Invoke<typeof reviewerSummary, [request: Ask]>]>,
-      "matches",
-      [
-        {
-          account: {
-            warnings: [];
-            commits: { items: []; total: 0; from: 0 };
-            files: { items: []; total: 0; from: 0 };
-            fastForward: null;
-            sends: Sends;
-          };
-        },
-      ]
-    >
-  >;
 }
 
 const approvalBackend = (): ApprovalBackend => {
