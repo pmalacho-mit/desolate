@@ -404,7 +404,12 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
         const child = spawn(
           path.join(REPO_ROOT, "release", "cli.sh"),
           ["up", "nests-dev", "--name", name, "--checkout", `acme/widgets=worktree:${name}`],
-          { env: { ...stack.env, DESOLATE_PROGRESS: "1" }, stdio: ["ignore", "ignore", "pipe"] },
+          {
+            // The host's patience with a silent step, made short: what is claimed is the
+            // difference between a holder that beats and a step that does not, not the time.
+            env: { ...stack.env, DESOLATE_PROGRESS: "1", DESOLATE_WORKSPACE_SILENT_SECONDS: "20" },
+            stdio: ["ignore", "ignore", "pipe"],
+          },
         );
         let stderr = "";
         child.stderr.on("data", (chunk) => (stderr += chunk));
@@ -418,17 +423,17 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     assert.equal(alone.code, 0, alone.stderr);
     assert.doesNotMatch(alone.stderr, waitingFor);
 
-    // A live holder for 150 s: longer than the host lets a step go silent. The start waits,
-    // saying for whom, and comes up once the lock is let go.
-    assert.equal(hold(150).code, 0, "the holder took the lock");
+    // A live holder for 30 s: longer than the host lets a step go silent (20 s here). The
+    // start waits, saying for whom, and comes up once the lock is let go.
+    assert.equal(hold(30).code, 0, "the holder took the lock");
     const waited = await up("waited");
     assert.equal(waited.code, 0, waited.stderr);
     assert.match(waited.stderr, waitingFor, "it says whom it waits for");
     assert.match(waited.stderr, /^progress: {3}still waiting for \S+ .*\(\d+ (s|min) so far\)$/m);
-    assert.ok(waited.ms >= 140_000, `it waited for the live holder (${waited.ms} ms)`);
+    assert.ok(waited.ms >= 25_000, `it waited for the live holder (${waited.ms} ms)`);
 
     // A step that stops saying anything (its process stopped, as in a VM that froze) is not
-    // waited on for ever: two minutes of silence, and the start fails, saying so.
+    // waited on for ever: the setting's silence, and the start fails, saying so.
     assert.equal(hold(600).code, 0);
     const frozen = up("frozen");
     // Its init is stopped as soon as it runs (it is then waiting for the lock, or about to).
@@ -448,7 +453,7 @@ describe("T2 phases 2-3: domains, workspaces and their checkouts", () => {
     }
     const silent = await frozen;
     assert.notEqual(silent.code, 0, "a start whose step went silent fails");
-    assert.match(silent.stderr, /nothing from the workspace's VM for 2 min: stopped/);
+    assert.match(silent.stderr, /nothing from the workspace's VM for 20 s: stopped/);
 
     // CONTROL for the live holder: the same holder, killed. Its beat stops, and the next
     // start takes the lock within a few beats, not after the old two-minute age.

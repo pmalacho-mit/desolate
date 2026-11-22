@@ -4,8 +4,10 @@
 //
 // What is claimed:
 // - A request is taken, then waited on for as long as the root is there and on it: one the
-//   root takes four minutes over (the forge is made slow) is answered, and says meanwhile what
-//   the root is doing. (It gave up at two minutes, saying "Is it running?".)
+//   root takes 40 s over (the forge is made slow), four beat windows, is answered, and says
+//   meanwhile what the root is doing. (It gave up at two minutes, saying "Is it running?".
+//   That a beating root is waited on with no total is workspace/sync.ts's verdict, whose
+//   in-source test waits 240 s; here it is the whole channel.)
 // - Fetches asked of one repository while one runs are one more fetch, and do not refuse an
 //   offer, or keep it waiting. (Thirty in a minute refused the domain's offer.)
 // - A flood of requests from one domain does not slow another's: beside the control, the same
@@ -31,11 +33,18 @@ const until = async (probe: () => boolean, ms: number) => {
 /** A command in a workspace, in its checkout, as its agent would run it. */
 const inside = (workspace: string, script: string) =>
   stack.quiet("exec", workspace, "--", "bash", "-c", script);
-/** The same, left running in the workspace: its output and exit code go to /tmp/<name>.*. */
-const started = (workspace: string, name: string, script: string) => {
+/** The same, left running in the workspace: its output and exit code go to /tmp/<name>.*.
+ *  Several names: as many at once, started by one command. */
+const started = (workspace: string, names: string | string[], script: string) => {
   const ran = inside(
     workspace,
-    `rm -f /tmp/${name}.*; setsid bash -c 's=$(date +%s); { ${script.replace(/'/g, "'\\''")}; } >/tmp/${name}.out 2>/tmp/${name}.err; echo "$? $(( $(date +%s) - s ))" >/tmp/${name}.done' </dev/null >/dev/null 2>&1 &`,
+    [names]
+      .flat()
+      .map(
+        (name) =>
+          `rm -f /tmp/${name}.*; setsid bash -c 's=$(date +%s); { ${script.replace(/'/g, "'\\''")}; } >/tmp/${name}.out 2>/tmp/${name}.err; echo "$? $(( $(date +%s) - s ))" >/tmp/${name}.done' </dev/null >/dev/null 2>&1 &`,
+      )
+      .join("\n"),
   );
   assert.equal(ran.code, 0, ran.stderr);
 };
@@ -88,11 +97,11 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
   });
   after(() => stack.destroy());
 
-  it("a fetch the root takes four minutes over is answered; thirty more beside it are one fetch, and an offer is not kept waiting", async () => {
-    // The forge's next git-upload-pack waits four minutes before it serves (once): git, at the
-    // root, waiting on a slow remote, as a first fetch of a large repository does.
+  it("a fetch the root takes long over is answered; thirty more beside it are one fetch, and an offer is not kept waiting", async () => {
+    // The forge's next git-upload-pack waits 40 s before it serves (once): git, at the root,
+    // waiting on a slow remote, as a first fetch of a large repository does.
     const armed = forge(
-      `mkdir -p /slow && chmod 777 /slow && echo 240 > /slow/armed && chmod 666 /slow/armed && printf '%s\\n' '#!/bin/sh' 'if mv /slow/armed /slow/used 2>/dev/null; then sleep "$(cat /slow/used)"; fi' 'exec /usr/bin/git-upload-pack "$@"' > /usr/local/bin/git-upload-pack && chmod 755 /usr/local/bin/git-upload-pack`,
+      `mkdir -p /slow && chmod 777 /slow && echo 40 > /slow/armed && chmod 666 /slow/armed && printf '%s\\n' '#!/bin/sh' 'if mv /slow/armed /slow/used 2>/dev/null; then sleep "$(cat /slow/used)"; fi' 'exec /usr/bin/git-upload-pack "$@"' > /usr/local/bin/git-upload-pack && chmod 755 /usr/local/bin/git-upload-pack`,
     );
     assert.equal(armed.status, 0, armed.stderr);
     const packsBefore = uploadPacks("acme/widgets");
@@ -102,8 +111,11 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
       await until(() => forge("test -e /slow/used").status === 0, 60_000),
       "the root's fetch did not reach the slow forge",
     );
-    for (let i = 0; i < 30; i++)
-      started("alpha/a1", `f${i}`, "desolate fetch --mirror-only acme/widgets");
+    started(
+      "alpha/a1",
+      Array.from({ length: 30 }, (_, i) => `f${i}`),
+      "desolate fetch --mirror-only acme/widgets",
+    );
     await sleep(3000);
     // An offer while thirty-one fetches wait: answered at once, not refused for them.
     const offered = offer("alpha/a1", "during the fetches");
@@ -113,9 +125,9 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
     assert.equal(ended("alpha/a1", "slow"), null, "the slow fetch is still under way");
 
     let slow: ReturnType<typeof ended> = null;
-    assert.ok(await until(() => (slow = ended("alpha/a1", "slow")) !== null, 420_000));
+    assert.ok(await until(() => (slow = ended("alpha/a1", "slow")) !== null, 180_000));
     assert.equal(slow!.code, 0, slow!.err);
-    assert.ok(slow!.seconds >= 230, `answered after ${slow!.seconds} s`);
+    assert.ok(slow!.seconds >= 38, `answered after ${slow!.seconds} s`);
     // What the root was doing, said while it did it: not "Is it running?".
     assert.match(slow!.err, /desolate: fetching acme\/widgets.*\(\d+ s so far\)/);
     assert.doesNotMatch(slow!.err, /Is it running/);
@@ -135,10 +147,11 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
     const control = offer("beta/b1", "before the flood");
     assert.equal(control.code, 0, control.stderr);
     // alpha floods its outbox: offers of a commit it does not have, each of which the root
-    // looks for again and again before refusing (seconds each), written straight in.
+    // looks for again and again before refusing (3 to 4 s each), written straight in. Six:
+    // alpha's own offer then waits behind them past the 10 s after which it says why.
     const flood = inside(
       "alpha/a1",
-      `for i in $(seq 1 20); do printf '{"op":"offer","repo":"acme/widgets","branch":"task/a","commit":"%040d"}' $i > /desolate/outbox/requests/flood-$i.json; done`,
+      `for i in $(seq 1 6); do printf '{"op":"offer","repo":"acme/widgets","branch":"task/a","commit":"%040d"}' $i > /desolate/outbox/requests/flood-$i.json; done`,
     );
     assert.equal(flood.code, 0, flood.stderr);
     await sleep(1000);
@@ -158,7 +171,7 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
     assert.equal(ended("alpha/a1", "mine"), null, "alpha's offer was not behind its flood");
     // And it is waited on, saying why, and answered: not refused.
     let mine: ReturnType<typeof ended> = null;
-    assert.ok(await until(() => (mine = ended("alpha/a1", "mine")) !== null, 400_000));
+    assert.ok(await until(() => (mine = ended("alpha/a1", "mine")) !== null, 180_000));
     assert.equal(mine!.code, 0, mine!.err);
     assert.match(
       mine!.err,

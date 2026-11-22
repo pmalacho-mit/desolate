@@ -337,7 +337,13 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     const person = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-git-")));
     after(() => person.close());
     const address = /(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!;
-    await person.load(address, { until: /desolate's git VM/, ms: 60_000 });
+    // (A shell an earlier test left open is offered back instead of a new one's greeting:
+    // waiting for the greeting alone spent the whole minute every run.)
+    const first = await person.load(address, {
+      until: /desolate's git VM|Back to the shell in/,
+      ms: 60_000,
+    });
+    assert.match(first.stdout, /desolate's git VM|Back to the shell in/, first.stdout.slice(-600));
     const opened = await person.load(fromElsewhere, {
       until: /Back to the shell in|desolate's git VM|desolate ui --open|refused/,
       ms: 60_000,
@@ -655,7 +661,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     );
   });
 
-  it("a shell survives its tab closing: past the half minute that ended it, the page is offered it back, as it was", async () => {
+  it("a shell survives its tab closing: the page is offered it back, as it was", async () => {
     const terminal = client("desolate-git.localhost", Number(stack.env.DESOLATE_EDITOR_PORT));
     await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
     const opened = await terminal.post("/session", { repo: "acme/widgets" });
@@ -671,8 +677,8 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
         .join("");
     assert.equal((await type("KEPT=$((6*7)); cd /git/acme/widgets/.git\n")).status, 200);
     await read(1500);
-    // The tab has closed. The host ended such a shell 30 s after, looking every 5 s.
-    await sleep(40_000);
+    // The tab has closed. (The host ended such a shell 30 s after, looking every 5 s; there
+    // is no such timer now, release/host/git-web.ts, so nothing is waited out here.)
     const listed = await terminal.get("/sessions");
     assert.equal(listed.status, 200, listed.body);
     const left = (JSON.parse(listed.body) as { left: { id: string; token: string }[] }).left;
