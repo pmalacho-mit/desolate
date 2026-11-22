@@ -63,8 +63,9 @@ const watcher = VISIBILITY ? new IntersectionObserver((entries) => {
     for (const card of cards.values()) {
       const arm = card.arms.find((a) => a.wrap === entry.target);
       if (!arm) continue;
-      arm.visible = entry.isVisible && entry.intersectionRatio >= 0.99;
-      if (!arm.visible) disarm(card);
+      const visible = entry.isVisible && entry.intersectionRatio >= 0.99;
+      // Covered, or shown again: a change, and the second starts again (the fresh review).
+      if (visible !== arm.visible) { arm.visible = visible; changed(card); }
     }
   }
 }, { threshold: [0, 1], trackVisibility: true, delay: 100 }) : null;
@@ -112,7 +113,7 @@ window.addEventListener("scroll", moved, { passive: true });
 /** Armed, if the pointer has been over it (moving or not) for a second while nothing on the
  *  page changed. */
 const tryArm = (card, arm) => {
-  if (card.done || card.busy || armedOf(card) || !arm.overSince || performance.now() - arm.overSince < READY_MS || !ready(card, arm)) return;
+  if (card.done || card.busy || armedOf(card) || performance.now() < card.saidUntil || !arm.overSince || performance.now() - arm.overSince < READY_MS || !ready(card, arm)) return;
   arm.armedAt = performance.now();
   arm.button.disabled = false;
   card.saidUntil = 0;
@@ -448,12 +449,13 @@ const add = (push, issue) => {
       // A real pointer's click, on an armed button: not a key, not a script.
       if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
       card.busy = true;
+      const asked = performance.now();
       arm.button.disabled = true;
       arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); for (const outcome of outcomes) ended(outcome); }
-      catch (error) { said(card, `not approved: ${error.message}`); }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); if (outcomesAt >= asked) for (const outcome of outcomes) ended(outcome); }
+      catch (error) { said(card, `not approved: ${error.message}`); card.saidUntil = performance.now() + SAID_MS; }
       finally { card.busy = false; disarm(card); }
     });
   }
@@ -589,15 +591,16 @@ let issues = [];
 /** How the pushes approved here ended, as the host last said: kept, as an approval's own
  *  answer can come after the word that it was pushed. */
 let outcomes = [];
+let outcomesAt = 0;
 const poll = async (tag) => {
   const began = performance.now();
   let next = null;
   try {
     const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
-    if (!answer.ok) { current = false; disarmAll(); say(body.error || `HTTP ${answer.status}`); }
-    else { pending = body.pending; render(pending, issues); outcomes = body.done || []; for (const outcome of outcomes) ended(outcome); current = true; next = body.tag; }
-  } catch (error) { current = false; disarmAll(); say(`the host daemon did not answer: ${error.message}`); }
+    if (!answer.ok) { current = false; moved(); say(body.error || `HTTP ${answer.status}`); }
+    else { pending = body.pending; render(pending, issues); outcomes = body.done || []; outcomesAt = performance.now(); for (const outcome of outcomes) ended(outcome); current = true; next = body.tag; }
+  } catch (error) { current = false; moved(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };
 const pollIssues = async () => {

@@ -1121,8 +1121,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           try {
             await backend.approve(signed);
           } catch (error) {
-            approvals.splice(approvals.indexOf(approval), 1);
+            const at = approvals.indexOf(approval);
+            if (at >= 0) approvals.splice(at, 1);
             hearPusher();
+            // (And the pages told: a word heard for it meanwhile is not theirs to keep.)
+            tell();
             throw error;
           }
           log(
