@@ -43,27 +43,64 @@ const ago = (since) => {
   return minutes < 1 ? "just now" : minutes < 120 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
 };
 
-// A shell whose tab went (closed, a laptop's lid, a reload) is still there, as it was: when
-// this page opens, it says so and offers to go back to it, before it opens another.
-const offerLeft = async () => {
-  let body = null;
+// The shells no tab reads, from the host: each with its token, and what it shows last.
+const leftOpen = async () => {
   try {
     const answer = await fetch("/sessions", { credentials: "same-origin", headers: window.desolateKey.headers });
-    body = answer.ok ? await answer.json() : null;
+    const body = answer.ok ? await answer.json() : null;
+    return body && Array.isArray(body.left) ? body : null;
   } catch {
-    /* the host says why when a shell is asked for */
+    return null; // the host says why when a shell is asked for
   }
-  const left = body && Array.isArray(body.left) ? body.left : [];
+};
+
+// A shell whose tab went (closed, a laptop's lid) is still there, as it was: when this page
+// opens, it says so and offers to go back to it, before it opens another. Each by a number
+// and what it shows last, its prompt saying where it is now: two "Back to the shell in" one
+// folder could not be told apart (dogfooding, 2026-11-22).
+const offerLeft = async () => {
+  const body = await leftOpen();
+  const left = body ? body.left : [];
   if (!left.length) return start();
   note(`${left.length === 1 ? "A shell" : `${left.length} shells`} you left without closing ${left.length === 1 ? "is" : "are"} still open in the git VM:`);
   const made = [];
   const choose = (then) => () => { for (const b of made) b.remove(); then(); };
-  for (const s of left) {
-    note(`  in ${s.where}, left ${ago(s.since)}`);
-    made.push(button(`Back to the shell in ${s.where} (${ago(s.since)})`, choose(() => attach(s.id, s.token, body))));
-  }
+  left.forEach((s, i) => {
+    note(`  ${i + 1}. opened in ${s.where}, left ${ago(s.since)}${s.last ? `; it shows: ${s.last}` : ""}`);
+    made.push(button(`Back to shell ${i + 1} (left ${ago(s.since)})`, choose(() => attach(s.id, s.token, body))));
+  });
   made.push(button("New shell", choose(start)));
   status.textContent = "waiting for you";
+};
+
+// The shell this tab reads, kept across a reload of the same address (this tab's own
+// storage): a reload comes back to it, as the editor's terminals do, where it asked to check
+// out again and left a second shell (dogfooding, 2026-11-22).
+const KEPT = "desolate-git-shell";
+const keep = (id) => { try { sessionStorage.setItem(KEPT, JSON.stringify({ id, address: location.search })); } catch { /* not kept */ } };
+const unkeep = () => { try { sessionStorage.removeItem(KEPT); } catch { /* none */ } };
+const kept = () => {
+  try {
+    const was = JSON.parse(sessionStorage.getItem(KEPT) || "null");
+    return was && was.address === location.search && typeof was.id === "string" ? was.id : null;
+  } catch {
+    return null;
+  }
+};
+/** This tab's shell, once the host has seen its old page go (a moment after the reload). */
+const backToKept = async (id) => {
+  for (let tries = 0; tries < 6; tries++) {
+    const body = await leftOpen();
+    const s = body && body.left.find((left) => left.id === id);
+    if (s) {
+      attach(s.id, s.token, body);
+      return true;
+    }
+    if (!body) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  unkeep();
+  return false;
 };
 
 const start = async () => {
@@ -93,6 +130,7 @@ const start = async () => {
 /** Read shell `id` and type into it. `bounds`: what the host said of it (shell input in base64
  *  characters a request, and the lines to keep for scrolling back). */
 const attach = (id, token, bounds) => {
+  keep(id);
   if (Number.isInteger(bounds.scrollback) && bounds.scrollback > 0) term.options.scrollback = bounds.scrollback;
   // A paste larger than one request is sent in parts, in order: base64 is 4 characters for 3 bytes.
   const part = Math.max(3, Math.floor((Number(bounds.input) || 4) / 4) * 3);
@@ -111,21 +149,26 @@ const attach = (id, token, bounds) => {
   const stream = new EventSource(`/session/${id}/stream?token=${token}&${window.desolateKey.query}`);
   stream.onopen = () => { status.textContent = ""; resize(); term.focus(); };
   stream.onmessage = (event) => term.write(unb64(event.data));
-  stream.addEventListener("end", () => { status.textContent = "the shell ended: reload for another"; stream.close(); });
+  stream.addEventListener("end", () => { unkeep(); status.textContent = "the shell ended: reload for another"; stream.close(); });
   // No reconnecting by itself: a reconnect would replay what the shell printed into what this
-  // tab shows already. The shell itself stays: a reload offers it back, as it was.
+  // tab shows already. The shell itself stays: a reload goes back to it, as it was.
   stream.onerror = () => { stream.close(); status.textContent = "disconnected: reload this page to go back to the shell"; };
 };
 // An address that names a domain's branch changes the clone: the terminal checks that branch
 // out (git-vm.ts checkoutOffered). Any page can send the browser to such an address, so the
 // page says what it would do and waits for the person's click (audit, 2026-11-20). An address
 // with no branch only opens a shell: at once, or after offering back one left open.
-if (domain && branch) {
-  note(`This address asks to check out ${branch} of ${repo}, as the domain ${domain} has it, in your clone in the git VM.`);
-  note("Opened from the dashboard's Open in git, that is what you asked for. If you did not open it, close this tab.");
-  const go = button(`Check out ${branch} from ${domain}`, () => { go.remove(); start(); });
-  status.textContent = "waiting for you";
-} else offerLeft();
+// A reload goes back to this tab's shell first: what the address asked was done in it.
+const mine = kept();
+(mine ? backToKept(mine) : Promise.resolve(false)).then((back) => {
+  if (back) return;
+  if (domain && branch) {
+    note(`This address asks to check out ${branch} of ${repo}, as the domain ${domain} has it, in your clone in the git VM.`);
+    note("Opened from the dashboard's Open in git, that is what you asked for. If you did not open it, close this tab.");
+    const go = button(`Check out ${branch} from ${domain}`, () => { go.remove(); start(); });
+    status.textContent = "waiting for you";
+  } else offerLeft();
+});
 
 // Pushes waiting for approval, beside the terminal: the approval page itself (its /embed),
 // in a frame of its own origin. This page gives it its address and learns from it how many
