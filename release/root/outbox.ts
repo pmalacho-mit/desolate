@@ -69,7 +69,8 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 /** Open a directory under the domains' share and prove it is the one asked for; else why
  *  not, in a few words ("a link", "not there"), for a refusal and a log to say. Never throws.
  *  `settle`: the share may show a directory a moment before it lets it be opened (T4, on vz,
- *  2026-11-21: an honest first offer refused), so it is looked at again while every
+ *  2026-11-21: an honest offer refused, a moment after its workspace had put a directory
+ *  where it had planted a link), so it is looked at again while every
  *  directory on the way is a plain one, every check made again each time: a few tries, a
  *  second at most, blocking. Only for a process of one domain's own (git-remote-desolate),
  *  never rootd's or the state service's loop, which every domain waits on. */
@@ -79,7 +80,8 @@ export const openDir = (dir: string, settle = false): Dir | string => {
     const unsettled =
       typeof opened === "string" &&
       [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
-    if (!settle || !unsettled || tries === OPEN_TRIES || !plainWay(dir)) return opened;
+    if (!settle || !unsettled || !plainWay(dir)) return opened;
+    if (tries === OPEN_TRIES) return `${opened}, at each of ${OPEN_TRIES} looks over a second`;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
   }
 };

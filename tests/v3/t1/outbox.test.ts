@@ -354,7 +354,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       const started = Date.now();
       assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
         refused:
-          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
+          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there, at each of 5 looks over a second)",
       });
       const took = Date.now() - started;
       assert.ok(
