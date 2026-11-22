@@ -118,10 +118,21 @@ const lfsStore = (dir: string, oid: string) =>
  *  repository shares, and git killed mid-write leaves its ref locks behind, which stop every
  *  fetch after it (found by the review of this change). It runs until it is done.
  *
- *  What the helper said, in every try (a bundle it dropped or refused), goes in the log of
- *  the service that fetched: rootd's import, the state service's count of a workspace's
- *  commits, an offer. The first fetch after a domain writes takes what it wrote, so whichever
- *  fetch that is says so; given back to the caller, it was said only when rootd fetched. */
+ *  What the helper said (a bundle it dropped or refused) goes in the log of the service that
+ *  fetched: rootd's import, the state service's count of a workspace's commits, an offer. The
+ *  first fetch after a domain writes takes what it wrote, so whichever fetch that is says so;
+ *  given back to the caller, it was said only when rootd fetched. Only to a log (a file): a
+ *  command's stderr is a person's terminal or an answer (push.ts, a one-shot rootctl), which
+ *  did not say it before either. A failure said already (a refused list stays refused until
+ *  the domain writes it again) is not said again at every count. */
+const failedLast = new Map<string, string>();
+const toLog = () => {
+  try {
+    return fs.fstatSync(2).isFile();
+  } catch {
+    return false;
+  }
+};
 export const fetchDomain = async (domain: string, repo: Repo): Promise<void> => {
   const fetch = () => git(clonePath(repo), ["fetch", "--quiet", "--prune", domain]);
   // rootd imports as a domain writes, and a review imports too: two at once in one clone
@@ -138,12 +149,17 @@ export const fetchDomain = async (domain: string, repo: Repo): Promise<void> => 
     result = await fetch();
     said += result.stderr;
   }
-  const who = path.basename(process.argv[1] ?? "root", ".ts");
-  for (const line of said.split("\n"))
-    if (line)
-      process.stderr.write(
-        `${new Date().toISOString()} ${who}: ${domain} ${repo.owner}/${repo.name}: ${printable(line)}\n`,
-      );
+  const id = `${domain} ${repo.owner}/${repo.name}`;
+  const lines = [...new Set(said.split("\n").filter(Boolean))];
+  if (result.code !== 0 && !lines.length) lines.push(`git fetch ended with ${result.code}`);
+  const text = lines.join("\n");
+  if (text && toLog() && !(result.code !== 0 && failedLast.get(id) === text)) {
+    const who = path.basename(process.argv[1] ?? "root", ".ts");
+    for (const line of lines)
+      fs.writeSync(2, `${new Date().toISOString()} ${who}: ${id}: ${printable(line)}\n`);
+  }
+  if (result.code !== 0) failedLast.set(id, text);
+  else failedLast.delete(id);
   if (result.code !== 0)
     throw new Error(
       `could not bring ${domain}'s branches of ${repo.owner}/${repo.name} into the root clone: ${failure(result.stderr.trim(), 6, () => null)}`,

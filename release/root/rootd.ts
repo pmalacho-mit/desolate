@@ -800,9 +800,8 @@ const importChanged = async (slug: string, repoList: string[]) => {
     const last = imported.get(key);
     if (last && (last.mtime === mtime || Date.now() - last.at < IMPORT_GAP_MS)) continue;
     imported.set(key, { mtime, at: Date.now() });
-    await inClone(id, () => fetchDomain(slug, repo)).catch((error: Error) =>
-      log(`${slug} ${id}: not imported: ${printable(error.message)}`),
-    );
+    // (Why it was not, fetchDomain says in this log.)
+    await inClone(id, () => fetchDomain(slug, repo)).catch(() => {});
   }
 };
 
