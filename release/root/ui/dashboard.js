@@ -338,7 +338,11 @@ const addressOf = (target, against) => {
     if (against === "domain") params.set("against", "domain");
   }
   const query = params.toString();
-  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}`);
+  try {
+    history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}`);
+  } catch {
+    /* an address that cannot be changed: the review is not kept across a reload */
+  }
 };
 /** The next page of the commits, or of the files, added to what is shown ("Show more"). */
 const showMore = async (list) => {
@@ -737,7 +741,7 @@ const reviewPanel = () => {
       reviewing.against === "domain" ? el("span", { class: "sub" }, `(a push would send ${review.pushCommits}, counted against the remote)`) : null),
     // Merged by a squash or a rebase, its commits are not in the base's history, so they are
     // still counted here: said, beside the count (dogfooding, 2026-11-21).
-    landedIn(offer.domain, review) ? el("div", { class: "line sub", "data-review-merged": "" }, pill(`merged into ${landedIn(offer.domain, review)}`, "green", "at this commit, merged on the remote"),
+    review.commits.total && landedIn(offer.domain, review) ? el("div", { class: "line sub", "data-review-merged": "" }, pill(`merged into ${landedIn(offer.domain, review)}`, "green", "at this commit, merged on the remote"),
       ` Its changes are in the remote's ${landedIn(offer.domain, review)}. Merged by a squash or a rebase, these commits are not in its history, so they are still counted and shown here.`) : null,
     review.warnings.length ? el("div", { class: "warnbox" }, review.warnings.map((w) => el("div", {}, pill("warning", "orange"), ` a push of this branch ${w}`))) : null,
     commitList(),
