@@ -29,6 +29,8 @@ const GIT_QUIET_MS = 600_000;
 
 // (DESOLATE_MIRROR_FRESH: a `--fetch` here follows the host's own refresh of the mirror.)
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", DESOLATE_MIRROR_FRESH: "1" };
+// Where git-lfs's pre-push sends: a name nothing resolves, should its agent not be used.
+const LFS_OFFER_URL = "https://offer.desolate.invalid";
 
 /** git's output with its progress settled: a line that git rewrote in place (`\r`, as
  *  `--progress` does) is what it last said there. */
@@ -294,6 +296,18 @@ const main = async (name: string) => {
       // as a new user, 2026-11-16). The refusal that follows sets no upstream, so the next
       // `git push` offers it again.
       await git(clone, ["config", "push.autoSetupRemote", "true"]);
+      // git-lfs's pre-push (`git lfs install` adds it) uploads to an agent that sends nothing:
+      // the offer carries the objects, and the mirror is read-only (desolate-lfs-offer).
+      for (const [key, value] of [
+        ["lfs.pushurl", LFS_OFFER_URL],
+        [`lfs.${LFS_OFFER_URL}.standalonetransferagent`, "desolate-offer"],
+        [
+          "lfs.customtransfer.desolate-offer.path",
+          "/desolate/release/workspace/desolate-lfs-offer",
+        ],
+        ["lfs.customtransfer.desolate-offer.concurrent", "false"],
+      ] as const)
+        await git(clone, ["config", key, value]);
       if (plan.fetch)
         await longGit(`fetching ${checkout.repo} from its mirror`, clone, [
           "fetch",

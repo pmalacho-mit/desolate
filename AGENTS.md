@@ -39,6 +39,8 @@ reach is unreachable on purpose, and is not a bug in the project.
   not make it, set `orange` and say which branch; do not try other ways to send it.
 - Do not add or remove worktrees of your own in a loop: other workspaces share this `.git`.
 - LFS works: files check out from the mirror, and new large files travel with your offer.
+  In a devcontainer, `git lfs` is there only if the project adds it (the devcontainer
+  feature `ghcr.io/devcontainers/features/git-lfs:1`).
 - **A repository of this domain by its GitHub address** (`git@github.com:o/r.git`,
   `https://github.com/o/r.git`: what suede's install and sync, or a git dependency, name) is
   read from the domain's mirror, private or not; a push to that address is an offer. Any
