@@ -108,6 +108,8 @@ export const waiting = (messages: string[], says?: AccountLine[]): Backend => {
     issues: async () => [],
     publishIssue: async () => "",
     refuseIssue: async () => {},
+    pushes: () => () => {},
+    github: () => false,
   };
 };
 /** The texts the keyring was handed to sign, and those taken off the list. */

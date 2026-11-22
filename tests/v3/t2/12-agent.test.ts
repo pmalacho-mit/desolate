@@ -194,7 +194,8 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
       asked.stdout,
       /asked agent stubborn in dev\/w1 to stop \(Ctrl-C\); it has not ended yet\. To end it at once: desolate agent stop dev\/w1 --name stubborn --kill/,
     );
-    await sleep(4000); // past the 3 s at which the holder once killed it, unasked
+    // (That the holder never kills it unasked, past the 3 s at which it once did, is T1's:
+    // t1/agent-holder.test.ts.)
     await stateIs("stubborn", "running");
     // A person who says no: nothing is killed.
     const no = stack.person("Kill it now?", "n", "agent", "stop", "dev/w1", "--name", "stubborn");

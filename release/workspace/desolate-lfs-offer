@@ -1,0 +1,16 @@
+#!/bin/sh
+# git-lfs's pre-push in a workspace, as its transfer agent for uploads (init.ts sets it):
+# each object is reported sent and nothing moves. The offer carries a branch's LFS objects
+# (sync.ts, stageLfs); without this, the pre-push that `git lfs install` adds wrote them
+# into the read-only mirror and failed the `git push` (dogfooding, 2026-11-21).
+# git-lfs's custom transfer protocol: one JSON line in, one out, until "terminate".
+while IFS= read -r line; do
+  oid=${line#*\"oid\":\"}
+  oid=${oid%%\"*}
+  case $line in
+    *'"event":"init"'*) printf '{}\n' ;;
+    *'"event":"upload"'*) printf '{"event":"complete","oid":"%s"}\n' "$oid" ;;
+    *'"event":"terminate"'*) exit 0 ;;
+    *) printf '{"event":"complete","oid":"%s","error":{"code":1,"message":"a workspace downloads LFS objects from its mirror"}}\n' "$oid" ;;
+  esac
+done

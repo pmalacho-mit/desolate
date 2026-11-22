@@ -238,7 +238,11 @@ and 443 ([what that means for registries and builds](reference.md)).
 - **Commit** as usual, from the terminal or the editor's Source Control. Your commits carry
   your own name and email (your Mac's `git config --global user.name` and `user.email`).
 - **`git pull` and `git fetch`** get what GitHub has now: the workspace asks the root to
-  refresh its copy first (a second or two), and fetches from it.
+  refresh its copy first (a second or two), and fetches from it. Offering a branch makes
+  GitHub's branch of that name its upstream, so once it is pushed `git pull` on it works
+  (until then `git status` calls the upstream "gone": GitHub does not have it yet). Once its
+  pull request is merged, start the next change from the default branch:
+  `git fetch && git switch --no-track -c <next-branch> origin/main`.
 - **`git push`** (or the editor's Sync) hands your branch to the root, which is as far as
   anything in a workspace can push. It says so:
 
@@ -256,7 +260,7 @@ and 443 ([what that means for registries and builds](reference.md)).
   and `git status`, the editor and every other tool would then say GitHub has a branch it
   does not have. The editor's Publish Branch and Sync show a red "Can't push refs to remote.
   Try running Pull first" dialog for the same reason, and the button still says Publish
-  Branch afterwards. Close the dialog: the branch was offered. Show Command Output has the
+  Branch until the push lands. Close the dialog: the branch was offered. Show Command Output has the
   `offered ... at ...` line, and the dashboard lists the branch. Pushing again only offers it
   again (the newer offer replaces the older one), so it does no harm, but there is no need.
 
@@ -379,8 +383,12 @@ to the root, after which you decline it on the approval page.
 
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
-it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes
-is the one desolate's reviewer made of its commits, and what you approve names it.
+it: move it onto the button, then click a moment later (a click before that does nothing,
+and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
+the pack that goes is the one desolate's reviewer made of its commits, and what you approve
+names it. The card then says when the push is on the remote, with **Open a pull request**
+(GitHub's page, into the repository's default branch). Once nothing else waits, the keys go
+back to the shell.
 
 What the approval page shows, and the two choices it may add:
 
