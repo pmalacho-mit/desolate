@@ -1626,6 +1626,9 @@ echo "=====waits"; cat /tmp/waits.lines`,
       const bar = () => page.evaluate<number>(`${card}.querySelector('.actions').offsetHeight`);
       const before = await bar();
       // A click as the pointer arrives is said, not taken: it has not been over Approve a second.
+      // (From elsewhere on the card first: resting on Approve since the page loaded, it would
+      // have armed, as it should.)
+      await page.click(".card.asked .onto");
       await page.click(".card.asked button.approve", "Approve push");
       assert.match(
         await page.evaluate<string>(`${card}.querySelector('.hint').textContent`),
