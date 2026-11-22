@@ -191,7 +191,11 @@ export const lastLine = (printed: string): string => {
     .split("\n")
     // (What a carriage return went back over was written over.)
     .map((line) =>
-      (line.replace(/\r+$/, "").split("\r").pop() ?? "").replace(/[\x00-\x1f\x7f]/g, "").trim(),
+      (line.replace(/\r+$/, "").split("\r").pop() ?? "")
+        .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+        // (A run of spaces wraps into what looks like another shell's line.)
+        .replace(/\s+/g, " ")
+        .trim(),
     )
     .filter(Boolean);
   return [...(lines.at(-1) ?? "")].slice(0, 120).join("");
@@ -208,6 +212,8 @@ declare namespace lastLine {
       [args: [printed: "\x1b]0;a title\x07ls\r\nREADME\r\n\r\n"], expected: "README"],
       [args: [printed: "50%\r100%\r\n"], expected: "100%"],
       [args: [printed: ""], expected: ""],
+      /** no control of any kind, C1 among them, and no run of spaces */
+      [args: [printed: "a\u009b31m b     2. c"], expected: "a31m b 2. c"],
     ]
   >;
 }
