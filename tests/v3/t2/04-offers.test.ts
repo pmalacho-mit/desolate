@@ -1880,6 +1880,12 @@ echo "=====waits"; cat /tmp/waits.lines`,
       "",
       "no origin/pushed-here",
     );
+    // ...and its upstream is origin/pushed-here, so `git pull` gets it once pushed (it said
+    // "no tracking information": dogfooding, 2026-11-21).
+    assert.equal(
+      inWs("dev/w1", `cd ${WT} && git config branch.pushed-here.merge`).stdout.trim(),
+      "refs/heads/pushed-here",
+    );
     const offers = JSON.parse(stack.quiet("offers", "dev", "--json").stdout) as {
       branch: string;
       commit: string;
@@ -1962,6 +1968,29 @@ echo "=====waits"; cat /tmp/waits.lines`,
       /deleting a branch is not something a workspace does/,
     );
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");
+    // With git-lfs's own pre-push hook (`git lfs install` adds it), an LFS file's push is
+    // offered with its object: the hook's upload goes to an agent that sends nothing
+    // (desolate-lfs-offer). Control: aimed at the mirror, as before, it fails the push.
+    const hooks = "/workspaces/acme/widgets/.git/hooks";
+    inWs(
+      "dev/w1",
+      `cd ${WT} && git lfs update --force && git switch -q --no-track -c lfs/hooked origin/main && git lfs track '*.bin' >/dev/null && head -c 20000 /dev/urandom > hooked.bin && git add .gitattributes hooked.bin && git commit -qm hooked`,
+    );
+    const aimed = inWs(
+      "dev/w1",
+      `cd ${WT} && git -c lfs.pushurl=file:///desolate/mirrors/acme/widgets.git push origin lfs/hooked 2>&1`,
+    );
+    assert.match(aimed.stdout, /error trying to create local storage directory/, aimed.stdout);
+    const hooked = inWs("dev/w1", `cd ${WT} && git push origin lfs/hooked 2>&1`);
+    inWs(
+      "dev/w1",
+      `rm -f ${hooks}/pre-push ${hooks}/post-checkout ${hooks}/post-commit ${hooks}/post-merge`,
+    );
+    assert.match(
+      hooked.stdout,
+      /offered acme\/widgets lfs\/hooked at [0-9a-f]{12}, with 1 LFS object\(s\)/,
+      hooked.stdout,
+    );
   });
 
   it("an offer of more LFS objects than the old cap of 2,000 is taken whole, and reviewed whole", () => {
