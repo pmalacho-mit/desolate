@@ -53,10 +53,12 @@ export type AccountFile = {
   removed: number;
   binary?: boolean;
   sensitive?: boolean;
+  /** Its name only looks like one that runs on the forge, or like README.md (lookalike). */
+  lookalike?: boolean;
 };
 /** A file a commit of the push changes that the net change does not list: changed, then put
  *  back. Every commit is pushed, so what was in between is in the history. */
-export type AccountBetween = { path: string; sensitive?: boolean };
+export type AccountBetween = { path: string; sensitive?: boolean; lookalike?: boolean };
 
 export type Account = {
   /** Names this account, for `page` and `diff`. */
