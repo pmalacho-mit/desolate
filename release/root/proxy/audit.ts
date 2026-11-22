@@ -53,7 +53,7 @@ export const AUDIT_MIB = define({
   side: "root",
   default: fromDisk,
   parse: mebibytes(4, 65536),
-  why: "How much of each domain's audit log (what its workspaces reached, and the verdict) the root VM keeps on its disk; `net log` and `net recommend` read what is kept.",
+  why: "How much of each domain's audit log (what its workspaces reached, and the verdict) the root VM keeps on its disk; `net log` and `net recommend` read what is kept. Unset, 1/256 of the root VM's disk, from 16 MiB to 4 GiB.",
 });
 
 /** What a proxy is started with, so that every writer of a domain's log keeps the same

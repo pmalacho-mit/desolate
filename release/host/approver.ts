@@ -61,7 +61,7 @@ export const APPROVER_KIND = define<Kind>({
       ["touchid", "terminal"].includes(text.trim()) ? (text.trim() as Kind) : null,
     { takes: "touchid or terminal" },
   ),
-  why: "Which key approves pushes, made at the first bootstrap: terminal (a software key; you type the branch) or touchid (the Secure Enclave, behind Touch ID). One made already stays what it is.",
+  why: "Which key approves pushes: terminal (a software key; you type the branch) or touchid (the Secure Enclave, behind Touch ID).",
 });
 
 export const kind = (): Kind | null => {

@@ -135,8 +135,10 @@ next: desolate up you--app   (a workspace: a VM with its checkout, its devcontai
 ## 4. Start a workspace
 
 On the dashboard (`desolate ui --open`), a domain with no workspaces offers **Workspace on
-main**: one on the default branch, the domain's own checkout of each repository. Or, for a
-branch of its own:
+main**: one on the default branch, the domain's own checkout of each repository. **New
+workspace**, on every domain's card, makes one too (its name you may leave empty): the first
+takes each repository's default branch, and each after it a branch of its own, named after the
+workspace. Or, for a branch you name:
 
 ```bash
 desolate up you--app --name greet --branch feature/greet-by-name
@@ -199,7 +201,8 @@ written. `desolate list` shows each workspace's size. If the
 first repository (or the first you name with `--checkout`) has a `devcontainer.json`, it
 runs inside the VM, as written. The first
 workspace of a domain builds the domain's environment once (the "template" above); the
-next ones start from it in about 20 seconds.
+next ones start from it in about 20 seconds. Building it can leave a branch named `template`,
+at the default branch's commit, in the domain's Branches: it is desolate's and holds nothing.
 
 The workspace has **no credentials and no network** but its own proxy (HTTP and HTTPS to
 named hosts; `desolate domain you--app net enforce` limits even that to a list).
@@ -369,7 +372,9 @@ to the root, after which you decline it on the approval page.
 The push waits for you, and the approval opens beside the terminal: what the push names, and
 what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
 it; one click, and the root pushes exactly that commit, and nothing else: the pack that goes
-is the one desolate's reviewer made of its commits, and what you approve names it.
+is the one desolate's reviewer made of its commits, and what you approve names it. Once it
+has landed, desolate links GitHub's page for opening its pull request ([after a
+push](reference.md#approving-pushing-and-the-pages-desolate-serves)).
 
 What the approval page shows, and the two choices it may add:
 

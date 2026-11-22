@@ -72,7 +72,7 @@ const RAW_PORTS_TOO = define({
   side: "host",
   default: (): number[] => [],
   parse: ports,
-  why: "Ports where a workspace's server speaks first and its protocol carries no name, besides the databases' and queues' own (3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257): a client there reaches the workspace that had the port first.",
+  why: "Ports of your own where a workspace's server speaks first, as a database does, so a connection there cannot be sent on by the address it was opened to: it goes to the workspace that listened on the port first. On a port not listed, a client that waits for the server is disconnected. The databases' and queues' are listed already (3306, 5432, 6379, 27017, 11211, 5672, 9092, 1433, 26257).",
 });
 
 /** Ports whose protocol carries no name: the known ones, and the person's (`extra`, the

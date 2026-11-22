@@ -32,7 +32,7 @@ export const PACK_WINDOW = define({
   side: "root",
   default: 256,
   parse: mebibytes(16, 65536),
-  why: "the memory each of the reviewer's packing threads may hold of objects it compares (git's pack.windowMemory): more finds smaller deltas in a large push",
+  why: "Memory each of the reviewer's packing threads may use to compare files while it packs a push for you to approve (git's pack.windowMemory): more can make a large push's pack smaller.",
 });
 export const PACK_THREADS = define({
   name: "reviewer.packThreads",
@@ -49,7 +49,7 @@ export const PACK_THREADS = define({
       ),
     ),
   parse: whole(1, 256),
-  why: "how many threads the reviewer packs a push with (git's pack.threads): more is faster, and each holds its own window of memory",
+  why: "How many threads the reviewer packs a push with (git's pack.threads): more is faster, and each uses its own reviewer.packWindowMiB. Unset, the root VM's CPUs, at most as many as a quarter of its memory holds windows for.",
 });
 export const PACK_BIG_FILE = define({
   name: "reviewer.bigFileMiB",
@@ -57,7 +57,7 @@ export const PACK_BIG_FILE = define({
   side: "root",
   default: 64,
   parse: mebibytes(1, 65536),
-  why: "the size from which the reviewer stores a file in a push's pack without looking for deltas (git's core.bigFileThreshold): higher packs large files smaller, holding each whole in memory",
+  why: "The size from which the reviewer packs a file as it is, without comparing it to others (git's core.bigFileThreshold): higher can pack large files smaller, holding each whole in memory.",
 });
 export const KEPT_PACKS = define({
   name: "reviewer.keptPacksMiB",
@@ -74,7 +74,7 @@ export const KEPT_PACKS = define({
     }
   },
   parse: mebibytes(FORGE.packBytes / MiB, 1024 * 1024 * 1024),
-  why: "how much disk the packs the reviewer made and keeps for pushes may take in all: past it, the oldest go first, never one an account still names",
+  why: "How much disk the packs the reviewer made of pushes may take in all (the pack you approve is the one pushed): past it, the oldest go first, never one a review still kept names. Unset, a quarter of the root VM's disk.",
 });
 /** What a reviewer started for the host is told of these: they are read in its process,
  *  which root starts with an environment of nothing else (review-ask.ts). */
