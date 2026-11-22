@@ -85,6 +85,8 @@ const account = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 let rootMoved = () => {};
+let askedOfRoot = 0;
+let rootWaits = true;
 const waitsEnded: string[] = [];
 let slow = "";
 /** The branch whose account names another pack each time it is asked (`changing`). */
@@ -166,13 +168,14 @@ before(async () => {
   server = createServer(
     handler(
       {
-        pending: async () => listed,
         // The root's wait for its list to change (root/approvals.ts, pendingAfter): woken by
-        // `rootMoved`, and ended with its asker (`waitsEnded`).
-        waitPending: async (since, signal) => {
+        // `rootMoved`, and ended with its asker (`waitsEnded`). `askedOfRoot` counts the calls;
+        // `rootWaits` false is a root that answers at once (asked the old way).
+        pending: async (since, signal) => {
+          askedOfRoot += 1;
           for (;;) {
             const tag = `list:${listed.map((w) => w.message).join("\n")}`;
-            if (tag !== since || signal.aborted) return { tag, pending: listed };
+            if (tag !== since || signal.aborted || !rootWaits) return { tag, pending: listed };
             await new Promise<void>((resolve) => {
               rootMoved = resolve;
               signal.addEventListener("abort", () => (waitsEnded.push(since), resolve()), {
@@ -734,6 +737,30 @@ describe("T1 the approval page", () => {
     await moment();
     assert.equal(waitsEnded.length, 1, "the root's wait ended with the page's request");
     assert.equal(waiting.answer.done, false);
+  });
+
+  it("a page that waits has the root asked once, not once a second", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    await listedNow();
+    const heldFor = async () => {
+      askedOfRoot = 0;
+      const waiting = held(`/pending?since=${await tagNow()}`);
+      await moment(3500);
+      assert.equal(waiting.answer.done, false, "nothing new: the page waits");
+      waiting.gone();
+      await moment();
+      return askedOfRoot;
+    };
+    // The page's first look, the held request's own, then one wait for all of the 3.5 s.
+    assert.equal(await heldFor(), 3);
+    // CONTROL: a root that answers at once, as one asked the old way does, is asked again each
+    // second: the count would show a look a second.
+    rootWaits = false;
+    try {
+      assert.ok((await heldFor()) >= 5);
+    } finally {
+      rootWaits = true;
+    }
   });
 
   it("a body over its bound is refused as too large, not as not JSON", async () => {
