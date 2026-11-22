@@ -897,7 +897,7 @@ describe("T1 the approval page", () => {
     await looking.asked;
     assert.deepEqual(looking.answer.body!.done, [
       {
-        nonce: push.nonce,
+        token: pushToken(approveToken(), message),
         pushed: true,
         link: "https://github.com/acme/widgets/compare/issue/12?expand=1",
       },

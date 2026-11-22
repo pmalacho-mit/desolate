@@ -206,8 +206,9 @@ export type PusherSaid = {
   commit: string;
   error?: string;
 };
-/** How a push this page approved ended, as the pusher said: told to the page by its nonce. */
-type Outcome = { nonce: string; pushed: boolean; error?: string; link?: string };
+/** How a push this page approved ended, as the pusher said: told to the page by the token
+ *  over the very text signed (another text under the same nonce is another push). */
+type Outcome = { token: string; pushed: boolean; error?: string; link?: string };
 export type Backend = {
   /** Pushes waiting for a person, as the root lists them (the root's word: only the message
    *  is used, and it is parsed here), once they are not the list `since` tags (root/
@@ -1109,7 +1110,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
             branch: push.branch,
             commit: asked.squash === true ? reviewed!.squash!.commit : push.commit,
             at: Date.now(),
-            outcome: { nonce: push.nonce, pushed: false },
+            outcome: { token: given, pushed: false },
           });
           if (approvals.length > OUTCOMES_KEPT) approvals.shift();
           hearPusher();

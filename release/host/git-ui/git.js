@@ -140,19 +140,23 @@ const show = (open) => {
   if (aside.hidden === !open) return;
   aside.hidden = !open;
   window.dispatchEvent(new Event("resize"));
-  if (!open) term.focus();
 };
-toggle.addEventListener("click", () => { chosen = aside.hidden; show(chosen); });
+toggle.addEventListener("click", () => { chosen = aside.hidden; show(chosen); if (!chosen) term.focus(); });
+// The person decided in the pane (approve.js says so): once nothing waits, the keys go to the
+// shell again, not to the pane last clicked (dogfooding, 2026-11-21: the next command typed
+// went nowhere). A push that leaves the list by itself does not take the keys from the pane.
+let decided = false;
 window.addEventListener("message", (event) => {
-  if (event.origin !== APPROVE_ORIGIN || !event.data || typeof event.data.desolatePending !== "number") return;
+  if (event.origin !== APPROVE_ORIGIN || !event.data) return;
+  if (event.data.desolateDecided === true) decided = true;
+  if (typeof event.data.desolatePending !== "number") return;
   const waiting = Math.max(0, Math.floor(event.data.desolatePending));
   toggle.textContent = waiting ? `Approvals (${waiting})` : "Approvals";
   toggle.classList.toggle("waiting", waiting > 0);
   if (waiting > 0 && chosen !== false) show(true);
   if (waiting === 0 && chosen === null) show(false);
-  // Nothing left to decide: the keys go to the shell again, not to the pane last clicked
-  // (dogfooding, 2026-11-21: the next command typed went nowhere).
-  if (waiting === 0 && document.activeElement === frame) term.focus();
+  if (waiting === 0 && decided && document.activeElement === frame) term.focus();
+  if (waiting === 0) decided = false;
 });
 fetch("/approvals-frame", { credentials: "same-origin", headers: window.desolateKey.headers }).then((answer) => answer.ok ? answer.json() : null).then((body) => {
   if (!body || typeof body.url !== "string" || !body.url.startsWith(`${APPROVE_ORIGIN}/embed#`)) return;

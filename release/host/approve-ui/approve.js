@@ -98,9 +98,15 @@ const whyNotArmed = (card) => {
   return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "rest the pointer on a button a moment, then click" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
+// Whatever changes a card's size (a card folded, a diff opened, what happened said on one, as
+// late as the pusher's word) moves every Approve below it: each waits its second again.
+new ResizeObserver(() => { for (const card of cards.values()) card.changedAt = performance.now(); disarmAll(); }).observe(list);
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
 setInterval(() => { for (const card of cards.values()) if (card.tick && !card.done) card.tick(); }, 1000);
 
+/** Beside the git terminal: the person decided, so its page may give the keys back to the
+ *  shell once nothing waits (git.js). Only a number and a word, to that one origin. */
+const tellTerminal = (message) => { if (EMBED && window.parent !== window) window.parent.postMessage(message, location.origin.replace("//desolate-approve.", "//desolate-git.")); };
 const post = async (what, card, squash) => {
   const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, shown: card.push.shown, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
   const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
@@ -419,7 +425,7 @@ const add = (push, issue) => {
       arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); }
       catch (error) { said(card, `not approved: ${error.message}`); }
       finally { card.busy = false; disarm(card); }
     });
@@ -430,7 +436,7 @@ const add = (push, issue) => {
   element.querySelector(".refuse").addEventListener("click", async (event) => {
     if (!event.isTrusted || card.busy || card.done) return;
     card.busy = true;
-    try { await post("refuse", card); card.done = true; for (const arm of card.arms) arm.button.disabled = true; said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
+    try { await post("refuse", card); card.done = true; tellTerminal({ desolateDecided: true }); for (const arm of card.arms) arm.button.disabled = true; said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
     catch (error) { said(card, error.message); }
     finally { card.busy = false; }
   });
@@ -443,7 +449,7 @@ const carryOn = (card) => card.squashed ? ` Then, to carry on from the squash, i
 /** How a push this page approved ended, as the host heard it from the pusher: said on its card,
  *  with the page to open its pull request (GitHub's, on github.com only). */
 const ended = (outcome) => {
-  const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.nonce === outcome.nonce);
+  const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.token === outcome.token);
   if (!card) return;
   card.ended = true;
   if (!outcome.pushed) return void said(card, `approved, but the pusher said: ${outcome.error}`);
@@ -473,6 +479,7 @@ const choicesOf = (card, review) => {
 const render = (pending, issues) => {
   let changed = false;
   let added = false;
+  let scrollTo = null;
   const seen = new Set();
   for (const issue of issues) {
     seen.add(issue.token);
@@ -493,8 +500,8 @@ const render = (pending, issues) => {
       if (askedFor.commit === push.commit && askedFor.repo === push.repo && askedFor.branch === push.branch) {
         askedFor.commit = "";
         card.element.classList.add("asked");
-        card.element.prepend(el("p", "This tab was opened for this push.", "asked-note"));
-        card.element.scrollIntoView({ block: "start" });
+        card.element.prepend(el("p", "This tab's address names this push, as the dashboard's Push does. If you did not click Push, look twice.", "asked-note"));
+        scrollTo = card.element;
       }
     }
     // (How long the reviewer has been at it is not a change: the page counts that itself.)
@@ -529,12 +536,13 @@ const render = (pending, issues) => {
   // the new card is not pushed below the fold (dogfooding, 2026-11-21: two refused cards above
   // the live one, beside the git terminal). The page moved: every card waits its second again.
   if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); card.changedAt = performance.now(); }
+  if (scrollTo) scrollTo.scrollIntoView({ block: "start" });
   if (changed) disarmAll();
   const waiting = [...cards.values()].filter((card) => !card.gone).length;
   document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
   // (A number, to that one origin.)
-  if (EMBED && window.parent !== window) window.parent.postMessage({ desolatePending: waiting }, location.origin.replace("//desolate-approve.", "//desolate-git."));
+  tellTerminal({ desolatePending: waiting });
   // Nothing waiting: said as a state of its own, with what makes something appear here. A
   // grey line alone read as a page that did not work (dogfooding, 2026-11-17, after
   // `desolate approve --web --open` with nothing waiting).
