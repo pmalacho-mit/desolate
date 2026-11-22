@@ -1703,7 +1703,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     // The root removes what it finds by NAME, in the directory it checked: the link goes,
     // what it pointed at is never opened, and the person is told something was dropped.
     const dropped = /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/;
-    assert.match(said(lied.stdout, dropped), dropped, lied.stdout);
+    assert.match(said(lied, dropped), dropped, lied.stdout);
     assert.ok(
       !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
         fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
@@ -1755,7 +1755,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     const header = inRootClone("git fetch dev 2>&1");
     const over =
       /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/;
-    assert.match(saidOfHeader(header.stdout, over), over);
+    assert.match(saidOfHeader(header, over), over);
     // Control: the list as the workspace wrote it, and the many branches it does not name
     // are pruned, as an honest list says.
     fs.writeFileSync(path.join(sync, "refs.json"), kept);

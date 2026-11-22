@@ -800,12 +800,8 @@ const importChanged = async (slug: string, repoList: string[]) => {
     const last = imported.get(key);
     if (last && (last.mtime === mtime || Date.now() - last.at < IMPORT_GAP_MS)) continue;
     imported.set(key, { mtime, at: Date.now() });
-    // What it dropped or refused is said here: it took it, so no `git fetch` in the root
-    // clone will say it (T2 04 and 10 look for it in either).
-    await inClone(id, () => fetchDomain(slug, repo)).then(
-      (said) =>
-        said.split("\n").forEach((line) => line && log(`${slug} ${id}: ${printable(line)}`)),
-      (error: Error) => log(`${slug} ${id}: not imported: ${printable(error.message)}`),
+    await inClone(id, () => fetchDomain(slug, repo)).catch((error: Error) =>
+      log(`${slug} ${id}: not imported: ${printable(error.message)}`),
     );
   }
 };

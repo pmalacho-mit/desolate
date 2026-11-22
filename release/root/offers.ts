@@ -116,9 +116,13 @@ const lfsStore = (dir: string, oid: string) =>
  *  work and not a wait on a peer, and it is quiet, so there is no silence to time either. Nor
  *  is it ended when whoever asked goes away: it writes the clone every domain of the
  *  repository shares, and git killed mid-write leaves its ref locks behind, which stop every
- *  fetch after it (found by the review of this change). It runs until it is done. Gives
- *  back what the helper said, in every try (what it dropped or refused). */
-export const fetchDomain = async (domain: string, repo: Repo): Promise<string> => {
+ *  fetch after it (found by the review of this change). It runs until it is done.
+ *
+ *  What the helper said, in every try (a bundle it dropped or refused), goes in the log of
+ *  the service that fetched: rootd's import, the state service's count of a workspace's
+ *  commits, an offer. The first fetch after a domain writes takes what it wrote, so whichever
+ *  fetch that is says so; given back to the caller, it was said only when rootd fetched. */
+export const fetchDomain = async (domain: string, repo: Repo): Promise<void> => {
   const fetch = () => git(clonePath(repo), ["fetch", "--quiet", "--prune", domain]);
   // rootd imports as a domain writes, and a review imports too: two at once in one clone
   // can meet on a ref's lock, and the later one tries again, a little later each time (the
@@ -134,11 +138,16 @@ export const fetchDomain = async (domain: string, repo: Repo): Promise<string> =
     result = await fetch();
     said += result.stderr;
   }
+  const who = path.basename(process.argv[1] ?? "root", ".ts");
+  for (const line of said.split("\n"))
+    if (line)
+      process.stderr.write(
+        `${new Date().toISOString()} ${who}: ${domain} ${repo.owner}/${repo.name}: ${printable(line)}\n`,
+      );
   if (result.code !== 0)
     throw new Error(
       `could not bring ${domain}'s branches of ${repo.owner}/${repo.name} into the root clone: ${failure(result.stderr.trim(), 6, () => null)}`,
     );
-  return said;
 };
 
 /** Each checkout of a workspace against the remote: the commits its HEAD has that no branch of
