@@ -68,6 +68,7 @@ code { background: var(--raise); padding: 1px 5px; border-radius: 4px; }
 .summary li.whole { grid-template-columns: minmax(0, 1fr); }
 .summary li.whole > button { justify-self: start; max-width: 100%; text-align: left; }
 .summary .who { color: var(--muted); font-size: 12.5px; }
+.summary li > .looks { grid-column: 1 / -1; color: var(--danger); font-size: 12.5px; }
 /* The file list's +N and -N only: a diff's added lines are .add too, and were set right,
    out of sight (dogfooding, 2026-11-20). */
 .summary li > .add, .summary li > .del { font: 12.5px var(--mono); text-align: right; }

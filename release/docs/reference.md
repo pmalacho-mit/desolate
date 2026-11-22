@@ -27,7 +27,10 @@ What the page and the terminal show of it, all from the reviewer: the commits, t
 change, files a commit changed and a later one changed back (which the net change does not
 show), each commit whole (who wrote it, when, its whole message, its diff), and a warning
 for anything a commit carries that is not shown (a header other than git's four, a
-signature, an encoding). Nothing is cut: every warning, every file that changes what runs
+signature, an encoding). What is an agent's text is made safe: in a name, what would reorder
+or hide it is `?`, and a name that starts or ends in a space, or that NFC would change, is
+quoted as git quotes it; in a message or a diff, each such character is named (`⟨U+001B⟩`).
+A name that only looks like one that runs on the forge or like `README.md` says so. Nothing is cut: every warning, every file that changes what runs
 on the forge and the squash's whole message are shown; every list is counted and comes a
 page at a time, and every diff a page of bytes at a time, however large the push. The
 reviewer takes as long as the push needs (a large first push packs for minutes); the page
@@ -194,6 +197,8 @@ button.
 - **A review's commits** can be read one at a time, or as a run (click, then shift-click):
   the root diffs from the first one's parent to the last (`/diff?...&from=&to=`), and takes
   only commits the review itself lists, in order. Push sends the whole branch all the same.
+  Each one's **Message** shows its author and whole message, made safe as its subject is
+  (bounded at 4,000 characters, the cut marked; the approval page shows it all).
 - **A domain's card** is headed by its name (what commands and workspaces use), then its
   title, when it says more than the name or the domain's one repository.
 

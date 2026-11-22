@@ -467,7 +467,7 @@ const openReview = async (offer, against = "origin") => {
   if (!reviewing || reviewing.gone !== gone) return;
   // Its lists as the first page came: more is added to these copies as it is asked for.
   reviewing = review.error ? { offer, against, fetchedAt, gone, review }
-    : { offer, against, fetchedAt, gone, review, commits: { ...review.commits, items: [...review.commits.items] }, files: review.changes };
+    : { offer, against, fetchedAt, gone, review, commits: { ...review.commits, items: [...review.commits.items] }, files: review.changes, messages: new Set() };
   render();
   if (!review.error) loadDiff();
 };
@@ -653,7 +653,8 @@ const filesChanged = () => {
     el("ul", { class: "files" }, shown.map((c) => el("li", { "data-change": c.path },
       pill(c.status, colour[c.status] || "", c.was !== undefined ? `renamed in this branch, from ${nameShown(c.was)}` : `${c.status} in this branch`),
       el("button", { class: "link mono", type: "button", title: c.was !== undefined ? `${nameShown(c.was)} → ${nameShown(c.path)}: go to it in the diff` : "go to it in the diff", onclick: () => jumpTo(c) }, nameShown(c.path)),
-      c.added === null ? el("span", { class: "sub" }, "binary") : el("span", { class: "counts" }, el("span", { class: "plus" }, `+${c.added}`), " ", el("span", { class: "minus" }, `−${c.removed}`))))),
+      c.added === null ? el("span", { class: "sub" }, "binary") : el("span", { class: "counts" }, el("span", { class: "plus" }, `+${c.added}`), " ", el("span", { class: "minus" }, `−${c.removed}`)),
+      c.lookalike ? el("span", { class: "warn looks" }, "its name has letters that look like others") : null))),
     shown.length < changes.length ? el("div", { class: "sub" }, `${changes.length - shown.length} of the ${changes.length.toLocaleString()} listed do not match`) : null,
     moreOf(files, "files", "file"));
 };
@@ -680,10 +681,15 @@ const commitList = () => {
         : [el("strong", {}, commits.total === 1 ? "One commit" : `All ${total} commits, combined`), el("span", { class: "sub" }, commits.total > 1 ? "Click one to see its changes alone; shift-click for a run of them." : "")]),
     el("ol", { class: "commit-list" }, commits.items.map((c, i) => {
       const on = Boolean(p && i >= p.lo && i <= p.hi);
+      // Who wrote it and its whole message, on asking: what a push puts on the remote (made
+      // safe in the root, as its subject is).
+      const open = reviewing.messages.has(c.commit);
       return el("li", {}, el("button", { type: "button", class: `commit-pick${on ? " on" : ""}`, "data-pick": c.commit, "aria-pressed": String(on), title: `${c.subject}\n\nIts changes alone (shift-click: a run of commits)`,
         onmousedown: (event) => { if (event.shiftKey) event.preventDefault(); },
         onclick: (event) => pickCommit(i, event.shiftKey) },
-        el("span", { class: "hash mono" }, short(c.commit)), el("span", { class: "subject" }, c.subject)));
+        el("span", { class: "hash mono" }, short(c.commit)), el("span", { class: "subject" }, c.subject)),
+        el("button", { class: "quiet small", type: "button", "data-message": c.commit, "aria-expanded": String(open), title: "who wrote it, and its whole message", onclick: () => { if (open) reviewing.messages.delete(c.commit); else reviewing.messages.add(c.commit); render(); } }, open ? "Hide" : "Message"),
+        open ? el("pre", { class: "mono commit-message", "data-message-text": c.commit }, `Author: ${c.author}\n\n${c.subject}${c.body ? `\n\n${c.body}` : ""}`) : null);
     })),
     moreOf(commits, "commits", "commit"));
 };

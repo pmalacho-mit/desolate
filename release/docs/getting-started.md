@@ -339,6 +339,10 @@ the remote's default branch as last fetched (**Fetch now** fetches it).
 - **One commit at a time:** click a commit to see its changes alone, and shift-click another
   for a run of them; the files and the diff follow, and the list says how many of the commits
   you are seeing. **Show all** goes back. **Push** always sends the whole branch.
+- **Who wrote a commit, and its whole message:** a commit's **Message** shows them, made
+  safe as its subject is. A file whose name only looks like one that runs on the forge, or
+  like `README.md` (a Cyrillic Е, a division slash), says "its name has letters that look
+  like others".
 - **Names carry an icon in their kind's colour:** a locked shield for a **domain**, a screen
   for a **workspace**, and for a **repository**, a **branch** and a **commit** GitHub's own icons.
   Hover one for its kind. Click a domain or a workspace to go to its card or row.
@@ -395,8 +399,12 @@ What the approval page shows, and the two choices it may add:
 
 - **Files changed in between.** The file list is the net change. Each commit is pushed,
   though, so a file one commit added and a later one took out again is in the history. The
-  page lists those files, and **Show each commit whole** shows every commit on its own:
-  who wrote it, when, its whole message and its diff.
+  page lists those files, and **Show each commit whole** shows every commit on its own
+  (one commit too): who wrote it, when, its whole message and its diff.
+- **Names and messages read as they are.** What would reorder or hide text (a right-to-left
+  override, a zero-width space, a newline, an escape) is shown as `?` in a name and named
+  (`⟨U+202E⟩`) in a message or diff; a name that starts or ends in a space is quoted, as git
+  quotes it; a name that only looks like a workflow or `README.md` says so.
 - **Nothing is cut.** A long list shows a page and a **Show more** for the rest; a long
   diff, a page and **Show more of it**. Every warning, and every file that changes what runs
   on the forge, is shown before you approve. A large push takes the reviewer a while: the

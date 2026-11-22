@@ -229,6 +229,9 @@ body.reviewing main { margin-right: var(--review-w, min(820px, 56vw)); max-width
 .commits-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s1) var(--s2); min-height: var(--row); font-size: 13px; }
 .commits.picking .commits-head { padding: 6px var(--s3); border-radius: 8px; background: color-mix(in srgb, var(--link) 9%, var(--card)); border: 1px solid color-mix(in srgb, var(--link) 30%, transparent); }
 ol.commit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; max-height: 14em; overflow: auto; }
+ol.commit-list > li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+/* A commit's author and whole message, on asking: in a box of its own, wrapped. */
+pre.commit-message { grid-column: 1 / -1; margin: 2px 0 var(--s2); padding: var(--s2) var(--s3); background: var(--raise); border-radius: 6px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 14em; overflow: auto; }
 button.commit-pick { width: 100%; min-height: 26px; padding: 0 var(--s2); justify-content: flex-start; gap: var(--s3); border: 1px solid transparent; background: none; box-shadow: none; color: var(--ink); font: 13px var(--font); text-align: left; border-radius: 6px; user-select: none; }
 button.commit-pick:hover { background: var(--hover); opacity: 1; }
 button.commit-pick .hash { color: var(--k-commit); flex: none; }
@@ -243,6 +246,7 @@ button.commit-pick.on { background: color-mix(in srgb, var(--link) 12%, var(--ca
 .files-changed ul.files { list-style: none; margin: 0; padding: 0; display: grid; max-height: 18em; overflow: auto; }
 .files-changed li { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; column-gap: var(--s3); align-items: center; min-height: 28px; }
 .files-changed li > .pill { justify-self: start; }
+.files-changed li > .looks { grid-column: 2 / -1; font-size: 12px; }
 .files-changed button.link { overflow-wrap: anywhere; text-align: left; font-family: var(--mono); font-size: 12.5px; }
 .files-changed .counts { display: inline-grid; grid-template-columns: 5ch 5ch; column-gap: var(--s2); justify-items: end; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
 .files-changed .plus { color: var(--green); }

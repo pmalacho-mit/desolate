@@ -16,10 +16,11 @@ import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
 import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
+import { lookalike } from "./reviewer-git.ts";
 import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
 import type { DiffPage } from "../shared/review-account.ts";
 import { readHead } from "../shared/status.ts";
-import { failure, printable, SAFE_MOST } from "../shared/text.ts";
+import { CUT, failure, printable, printableLines, SAFE_MOST } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Expect,
@@ -644,7 +645,8 @@ const missingLfs = async (repo: Repo, commit: string) =>
 // has a cap, no number a person is shown is the size of a cut, and nothing here has a timer:
 // git runs until it is done, or until whoever asked goes away (R4).
 
-export type Commit = { commit: string; subject: string };
+/** `author`: its name and email; `body`: its message after the subject (bodyOf). */
+export type Commit = { commit: string; subject: string; author: string; body: string };
 /** A file a diff changes: how, and how many lines (null: binary). `was`: the path a renamed
  *  file had. */
 export type Change = {
@@ -653,6 +655,8 @@ export type Change = {
   added: number | null;
   removed: number | null;
   was?: string;
+  /** Its name only looks like one that runs on the forge, or like README.md (lookalike). */
+  lookalike?: boolean;
 };
 export type Review = {
   domain: string;
@@ -711,6 +715,7 @@ export const changesOf = (nameStatus: string, numstat: string): Change[] => {
                 : "changed",
       ...(counts.get(path) ?? { added: null, removed: null }),
       ...(letter === "R" ? { was: parts[i + 1]! } : {}),
+      ...(lookalike(path) ? { lookalike: true } : {}),
     });
     if (moved) i += 1;
   }
@@ -750,6 +755,15 @@ declare namespace changesOf {
     ]
   >;
   export type Nothing = Expect<Invoke<typeof changesOf, [nameStatus: "", numstat: ""]>, "=", []>;
+  /** a name that only looks like README.md (its E is Cyrillic) says so */
+  export type Lookalike = Expect<
+    Invoke<
+      typeof changesOf,
+      [nameStatus: "A\u0000READM\u0415.md\u0000", numstat: "1\t0\tREADM\u0415.md\u0000"]
+    >,
+    "=",
+    [{ path: "READM\u0415.md"; status: "added"; added: 1; removed: 0; lookalike: true }]
+  >;
 }
 
 /** What a branch is compared with: the remote's default branch as the mirror has it
@@ -864,8 +878,20 @@ const placeOf = (value: unknown): number => {
 const countIn = async (clone: string, range: string) =>
   Number((await gitOk(clone, ["rev-list", "--count", range])).trim()) || 0;
 
-/** A page of a range's commits, newest first, and how many it holds in all. A subject is a
- *  commit's own text: made safe to show, and bounded against a flood (shared/text.ts). */
+/** A commit's message after its subject, as the review shows it on asking: its lines kept,
+ *  made safe, and bounded against a flood as any one text is (SAFE_MOST), the cut marked
+ *  (also when what was cut is only spaces before more: the fresh review of this change). */
+const bodyOf = (body: string) => {
+  const long = body.length > SAFE_MOST * 4;
+  const chars = [...printableLines(long ? body.slice(0, SAFE_MOST * 4) : body.trimEnd())];
+  return long || chars.length > SAFE_MOST
+    ? `${chars.slice(0, SAFE_MOST - 1).join("")}${CUT}`
+    : chars.join("");
+};
+
+/** A page of a range's commits, newest first, and how many it holds in all. Its subject,
+ *  author and message are a commit's own text: made safe to show, and bounded against a
+ *  flood (shared/text.ts). (git shows no message past a NUL, so one ends each field.) */
 const commitsIn = async (clone: string, range: string, from: number): Promise<Listed<Commit>> => {
   const total = await countIn(clone, range);
   const start = Math.min(from, total);
@@ -873,7 +899,7 @@ const commitsIn = async (clone: string, range: string, from: number): Promise<Li
     start < total
       ? await gitOk(clone, [
           "log",
-          "--format=%H%x09%s",
+          "--format=%H%x00%an <%ae>%x00%s%x00%b%x00",
           `--skip=${start}`,
           `--max-count=${PAGE}`,
           range,
@@ -881,11 +907,14 @@ const commitsIn = async (clone: string, range: string, from: number): Promise<Li
       : "";
   return {
     items: log
-      .split("\n")
+      .split("\x00\n")
       .filter(Boolean)
-      .map((line) => ({
-        commit: line.slice(0, line.indexOf("\t")),
-        subject: printable(line.slice(line.indexOf("\t") + 1)),
+      .map((entry) => entry.split("\x00"))
+      .map(([commit, author, subject, body]) => ({
+        commit: commit!,
+        subject: printable(subject),
+        author: printable(author),
+        body: bodyOf(body ?? ""),
       })),
     total,
     from: start,
