@@ -319,6 +319,7 @@ export const FEATURES: Feature[] = [
       "release/host/failures.ts",
       "release/host/daemon.ts",
       "release/host/cli.ts",
+      "release/host/browser.ts",
       "release/host/settings.ts",
       "release/host/paths.ts",
       "release/host/carry.ts",
