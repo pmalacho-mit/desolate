@@ -18,53 +18,53 @@ let n = 0;
 const target = () => path.join(dir, `to-${n++}`);
 
 describe("T1 taking in a file another side wrote", () => {
-  it("a plain file that hashes to its name is taken, as a copy", () => {
+  it("a plain file that hashes to its name is taken, as a copy", async () => {
     const from = path.join(dir, "good");
     fs.writeFileSync(from, content);
     const to = target();
-    assert.equal(takeHashed(from, to, oid, 1024), null);
+    assert.equal(await takeHashed(from, to, oid, 1024), null);
     assert.deepEqual(fs.readFileSync(to), content);
     assert.notEqual(fs.statSync(to).ino, fs.statSync(from).ino);
     assert.deepEqual(leftovers(), []);
   });
-  it("a wrong hash is refused, and nothing is left", () => {
+  it("a wrong hash is refused, and nothing is left", async () => {
     const from = path.join(dir, "liar");
     fs.writeFileSync(from, "something else\n");
     const to = target();
-    assert.equal(takeHashed(from, to, oid, 1024), "it does not hash to its name");
+    assert.equal(await takeHashed(from, to, oid, 1024), "it does not hash to its name");
     assert.equal(fs.existsSync(to), false);
     assert.deepEqual(leftovers(), []);
   });
-  it("a link, even to a good file, is not followed", () => {
+  it("a link, even to a good file, is not followed", async () => {
     const link = path.join(dir, "link");
     fs.symlinkSync(path.join(dir, "good"), link);
     assert.equal(
-      takeHashed(link, target(), oid, 1024),
+      await takeHashed(link, target(), oid, 1024),
       "not a plain file of a size desolate takes",
     );
   });
-  it("a FIFO is refused at once: the reader does not block on it", () => {
+  it("a FIFO is refused at once: the reader does not block on it", async () => {
     const fifo = path.join(dir, "fifo");
     execFileSync("mkfifo", [fifo]);
     const started = Date.now();
     assert.equal(
-      takeHashed(fifo, target(), oid, 1024),
+      await takeHashed(fifo, target(), oid, 1024),
       "not a plain file of a size desolate takes",
     );
     assert.ok(Date.now() - started < 1000);
   });
-  it("a file over the size is refused before a byte is copied", () => {
+  it("a file over the size is refused before a byte is copied", async () => {
     const big = path.join(dir, "big");
     fs.writeFileSync(big, Buffer.alloc(4096));
     const to = target();
-    assert.equal(takeHashed(big, to, oid, 1024), "not a plain file of a size desolate takes");
+    assert.equal(await takeHashed(big, to, oid, 1024), "not a plain file of a size desolate takes");
     assert.equal(fs.existsSync(to), false);
     assert.deepEqual(leftovers(), []);
   });
-  it("what is there already is kept, and not written through", () => {
+  it("what is there already is kept, and not written through", async () => {
     const to = target();
     fs.writeFileSync(to, content);
-    assert.equal(takeHashed(path.join(dir, "liar"), to, oid, 1024), null);
+    assert.equal(await takeHashed(path.join(dir, "liar"), to, oid, 1024), null);
     assert.deepEqual(fs.readFileSync(to), content);
   });
 

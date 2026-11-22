@@ -506,7 +506,7 @@ export const ops: Record<string, Op> = {
               ),
               said,
             };
-          const why = takeHashed(from, to, oid, limits.FORGE.lfsObjectBytes);
+          const why = await takeHashed(from, to, oid, limits.FORGE.lfsObjectBytes);
           if (why)
             return { pushed: false, error: `the LFS object ${oid.slice(0, 12)}: ${why}`, said };
         }

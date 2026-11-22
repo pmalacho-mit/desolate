@@ -218,19 +218,19 @@ declare namespace copyOutSync {
 /** An object named by its sha256, taken from `from` to `to` only if it hashes to its name:
  *  through a `.part` file beside `to`, which is gone afterwards whatever happened. Null when
  *  it was taken (or `to` was there already), else why not. */
-export const takeHashed = (
+export const takeHashed = async (
   from: string,
   to: string,
   sha256: string,
   most: number,
   mode = 0o644,
-): string | null => {
+): Promise<string | null> => {
   if (fs.existsSync(to)) return null;
   const source = openPlain(from, most);
   if (!source) return "not a plain file of a size desolate takes";
   const part = `${to}.part-${process.pid}`;
   try {
-    if (copyOutSync(source, part, mode) !== sha256) return "it does not hash to its name";
+    if ((await copyOut(source, part, mode)) !== sha256) return "it does not hash to its name";
     fs.renameSync(part, to);
     return null;
   } catch (error) {
