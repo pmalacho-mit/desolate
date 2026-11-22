@@ -20,9 +20,15 @@ import type { repeat } from "../.harness/shared-text.ts";
 import type { all, chunks, failsAfter, longLine } from "../.harness/shared-review-account.ts";
 
 /** What a push sends: the pack the reviewer made and keeps (its sha256, and its size in
- *  bytes), and the LFS objects its commits point to, each `<oid> <size>` as its pointer
- *  says. The host puts these in the text the person signs. */
-export type Sends = { pack: string; size: number; lfs: string[] };
+ *  bytes), and the LFS objects its commits point to: how many, their bytes as their pointers
+ *  say, and their list's digest (shared/approval.ts, lfsDigest), which the host puts in the
+ *  text the person signs. The list itself, however long, stays in the root: the reviewer
+ *  gives it to the pusher, which checks it against that digest. */
+export type Sends = {
+  pack: string;
+  size: number;
+  lfs: { count: number; bytes: number; digest: string };
+};
 
 /** The person's other choice: the commits pushed as one. Its tree is the commit's own, its
  *  parent is where the commit leaves the remote's history, and its author, committer and
@@ -41,6 +47,7 @@ export type Squash = {
 
 export type AccountCommit = { commit: string; subject: string; author: string };
 export type AccountFile = {
+  /** Made safe to show (printable); a name that is not UTF-8 as git quotes it ("caf\351"). */
   path: string;
   added: number;
   removed: number;
@@ -58,7 +65,8 @@ export type Account = {
   warnings: string[];
   /** The commits a push sends, first to last: the first page, and the true total. */
   commits: Listed<AccountCommit>;
-  /** The files the push changes, net. */
+  /** The files the push changes, net. This list and `between` put the `sensitive` ones (what
+   *  runs on the forge) first, so that they are on the first page; then git's order. */
   files: Listed<AccountFile>;
   between: Listed<AccountBetween>;
   sends: Sends;
@@ -82,7 +90,9 @@ export type DiffPage = { text: string; from: number; next: number | null; total:
 
 /** What is asked of the reviewer. `account`: the account of a push. `page`: more of one of
  *  its lists, from entry `from`. `diff`: a page of a diff, of one file, of one commit, or of
- *  the net change, from byte `from` (0 when not said). */
+ *  the net change, from byte `from` (0 when not said). A diff's `{file}` is a `path` exactly
+ *  as the account lists it, compared as text, never a pattern: the diff is of every file
+ *  listed so. */
 export type AccountRequest =
   | { op: "account"; repo: string; branch: string; commit: string; onto: string | null }
   | { op: "page"; key: string; list: "commits" | "files" | "between"; from: number }
@@ -157,8 +167,10 @@ const isSends = (value: unknown) =>
   isObject(value) &&
   typeof value.pack === "string" &&
   isCount(value.size) &&
-  Array.isArray(value.lfs) &&
-  value.lfs.every((oid) => typeof oid === "string");
+  isObject(value.lfs) &&
+  isCount(value.lfs.count) &&
+  isCount(value.lfs.bytes) &&
+  typeof value.lfs.digest === "string";
 const LISTS = ["commits", "files", "between"] as const;
 
 /** Whether `held`, under the name `kind`, is that kind of line: the shape a reader relies

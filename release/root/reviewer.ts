@@ -43,7 +43,7 @@ import { accountLine } from "../shared/review-account.ts";
 import { printable } from "../shared/text.ts";
 import { bundleRefusal } from "./intake.ts";
 import { REVIEWER } from "./layout.ts";
-import { answer, livePacks, oldAnswer } from "./reviewer-account.ts";
+import { answer, livePacks } from "./reviewer-account.ts";
 import { BUNDLE_REF, ensureRepo, gitOk, log, repoDir } from "./reviewer-git.ts";
 import { prunePacks, storedPack } from "./reviewer-packs.ts";
 import type { Say } from "./reviewer-packs.ts";
@@ -270,8 +270,8 @@ const main = async () => {
  *  gone, writing fails, and the work ends), and how the person sees it has not stopped. */
 const SAYING_MS = 5_000;
 
-/** The request, as root wrote it on stdin: its first line (review-ask.ts writes one line, the
- *  host before it wrote a JSON object and ended), at most LIMIT.header. */
+/** The request, as root wrote it on stdin (review-ask.ts): its first line, at most
+ *  LIMIT.header. */
 const request = async (): Promise<unknown> => {
   process.stdin.setEncoding("utf8");
   let text = "";
@@ -289,9 +289,8 @@ const request = async (): Promise<unknown> => {
 /** `node reviewer.ts account` (as this user, started by root for the host: review-ask.ts):
  *  one request, and its answer as shared/review-account.ts's lines: progress while it works,
  *  then the one answer, and the process ends. The root's user can neither ask this nor hold
- *  it up. `node reviewer.ts summary` is the FALLBACK for the host before the stream: the
- *  same progress lines, and then, as the last line, the one JSON object it reads. */
-const once = async (old: boolean) => {
+ *  it up. */
+const once = async () => {
   // Its reader gone (review-ask.ts ended: whoever asked went away), so is the work. What git
   // it was running is ended by review-ask.ts with this process's group, or, when review-ask
   // itself was killed, by its own next write to this process, which has gone.
@@ -308,12 +307,9 @@ const once = async (old: boolean) => {
   const asked = await request();
   let line: string;
   try {
-    line = old
-      ? `${JSON.stringify(await oldAnswer((asked ?? {}) as Record<string, unknown>, say))}\n`
-      : accountLine(await answer(asked, say));
+    line = accountLine(await answer(asked, say));
   } catch (error) {
-    const why = (error as Error).message;
-    line = old ? `${JSON.stringify({ ok: false, error: why })}\n` : accountLine({ error: why });
+    line = accountLine({ error: (error as Error).message });
   }
   await written(line);
 };
@@ -326,8 +322,8 @@ const written = (text: string) =>
   new Promise<void>((resolve) => process.stdout.write(text, () => resolve()));
 
 if (process.argv[1] && fs.realpathSync(process.argv[1]) === new URL(import.meta.url).pathname) {
-  if (process.argv[2] === "account" || process.argv[2] === "summary")
-    once(process.argv[2] === "summary").then(
+  if (process.argv[2] === "account")
+    once().then(
       () => process.exit(0),
       () => process.exit(1),
     );

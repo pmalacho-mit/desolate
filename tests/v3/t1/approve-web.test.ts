@@ -15,7 +15,8 @@ process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31599";
 const { approveToken, embedAddress, handler, issueToken, pushToken } =
   await import("../../../release/host/approve-web.ts");
-const { formatApproval, signedFor } = await import("../../../release/shared/approval.ts");
+const { formatApproval, lfsDigest, signedFor } =
+  await import("../../../release/shared/approval.ts");
 
 const NAME = "desolate-approve.localhost";
 const ORIGIN = `http://${NAME}:31599`;
@@ -28,13 +29,21 @@ const push = {
 };
 const message = formatApproval(push);
 // What desolate's reviewer says the push sends: the host signs the challenge with it.
-// (An LFS entry as the reviewer lists it, and the pusher takes it: "<oid> <size>".)
-const SENDS = { pack: "e".repeat(64), size: 100, lfs: [`${"f".repeat(64)} 12`] };
+// (Its LFS objects as the reviewer says them: the digest of the list the pusher is given.)
+const SENDS = {
+  pack: "e".repeat(64),
+  size: 100,
+  lfs: { count: 1, bytes: 12, digest: lfsDigest([`${"f".repeat(64)} 12`]) },
+};
 const signed = signedFor(message, { commit: push.commit, squashes: null, ...SENDS });
 // A second push, which replaces the remote's branch, with two commits to squash.
 const other = { ...push, branch: "issue/13", onto: "b".repeat(40), nonce: "2".repeat(32) };
 const otherMessage = formatApproval(other);
-const SQUASH_SENDS = { pack: "d".repeat(64), size: 90, lfs: [] };
+const SQUASH_SENDS = {
+  pack: "d".repeat(64),
+  size: 90,
+  lfs: { count: 0, bytes: 0, digest: lfsDigest([]) },
+};
 // A third, which desolate's reviewer cannot describe.
 const unreviewed = { ...push, branch: "issue/14", nonce: "3".repeat(32) };
 const unreviewedMessage = formatApproval(unreviewed);
@@ -796,7 +805,7 @@ describe("T1 the approval page", () => {
     const answer = await approve(good());
     assert.equal(answer.status, 200, answer.body);
     assert.deepEqual(approved, [signed]);
-    assert.match(signed, /\npack: e{64}\nlfs: 1 [0-9a-f]{64}\n/);
+    assert.ok(signed.includes(`\npack: ${"e".repeat(64)}\nlfs: 1 ${SENDS.lfs.digest}\n`));
     const no = await call(
       "POST",
       "/refuse",

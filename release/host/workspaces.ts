@@ -29,6 +29,7 @@ import {
 } from "../shared/size.ts";
 import type { ProjectSize, Size } from "../shared/size.ts";
 import { RUN_MAX } from "../shared/run.ts";
+import { define, valueOf } from "../shared/settings.ts";
 import type { RunResult } from "../shared/run.ts";
 import { terminalFilter } from "../shared/terminal-filter.ts";
 import { BEAT_MS, elapsed } from "../shared/step.ts";
@@ -51,6 +52,20 @@ export type Workspace = WorkspacePlan & { state: string };
 type DomainView = { slug: string; title: string; repos: string[]; workspaces: Workspace[] };
 
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
+
+/** A domain's environment built once, then cloned for each workspace (templates.ts). */
+const TEMPLATES = define<"on" | "off">({
+  name: "workspace.templates",
+  env: "DESOLATE_TEMPLATES",
+  side: "host",
+  default: "on",
+  parse: Object.assign(
+    (text: string) =>
+      ["on", "1"].includes(text.trim()) ? "on" : ["off", "0"].includes(text.trim()) ? "off" : null,
+    { takes: "on or off (or 1 or 0)" },
+  ),
+  why: "Whether a domain's first workspace builds its environment once (its devcontainer, its images) for every later one to start from; off makes each from the base, slower and from nothing.",
+});
 
 export const splitTarget = (target: string | undefined): { domain: string; workspace: string } => {
   const parts = (target ?? "").split("/");
@@ -557,7 +572,7 @@ export const editorUrl = async (w: Workspace): Promise<{ url: string } | { error
   const { port, error } = await editorPort();
   if (error)
     return {
-      error: `the editor's port is not available on this machine: ${error}. Free it, or set DESOLATE_EDITOR_PORT, then: desolate bootstrap`,
+      error: `the editor's port is not available on this machine: ${error}. Free it, or give this stack another: desolate settings set editor.port <port>, desolate down, then desolate bootstrap`,
     };
   // One checkout: its folder. More: the workspace file the workspace's init wrote, with all
   // of them (workspace/init.ts).
@@ -701,7 +716,7 @@ export const up = async (
   if (options.fetch) phase("mirrors refreshed");
   // The domain's template (section 4.7, C3), before this workspace takes its checkouts:
   // made once per environment, then cloned. Not on the fake backend, whose clone carries no
-  // docker images. DESOLATE_TEMPLATES=0 makes every workspace from the base.
+  // docker images. The setting workspace.templates, off, makes every workspace from the base.
   // What the project asks for (its devcontainer.json, as the remote published it): after the
   // person's own choices, before the stack's defaults, and kept within this Mac.
   const asked = await rootctl<ProjectAsk | null>(
@@ -714,7 +729,7 @@ export const up = async (
     : null;
   const domainSize = (view as DomainView & { size?: Partial<Size> }).size;
   let template: string | null = null;
-  if (b.kind !== "fake" && process.env.DESOLATE_TEMPLATES !== "0") {
+  if (b.kind !== "fake" && valueOf(TEMPLATES) === "on") {
     const { ensure } = await import("./templates.ts");
     const say = (line: string) =>
       json ? process.stderr.write(`${forTerminal(line)}\n`) : out(line);
