@@ -384,6 +384,20 @@ declare namespace rowsOf {
   >;
 }
 
+/** A running VM's agents, as its holder says (rowsOf): for the dashboard, which the host's
+ *  daemon tells (host/daemon.ts). (`list` could read each VM's with this too.) */
+export const agentsIn = async (vm: string, workspace: string): Promise<Listed<Row>> => {
+  const said = await backend().exec(vm, [...HOLDER(), "list"], {
+    timeoutMs: 30_000,
+    maxBytes: SAID_MOST,
+  });
+  try {
+    return rowsOf(JSON.parse(said.stdout.trim() || "[]"), workspace);
+  } catch {
+    return rowsOf([], workspace); // no agents there
+  }
+};
+
 /** A line fitted to a terminal `width` columns wide, the cut marked; whole when the width is
  *  not known (a pipe, a file: whatever reads it has all of it). Counted in code points, as
  *  what an agent's command holds is made printable before (one column each, mostly: a wide

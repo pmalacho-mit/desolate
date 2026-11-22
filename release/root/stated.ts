@@ -19,9 +19,9 @@
 // WHAT IT CAN DO
 //   Nothing on the host by itself. The dashboard's actions are queued here; the host's
 //   daemon collects them (GET /host/requests) and runs, as its own CLI, the ones on its
-//   fixed list. A push is the exception that proves the rule: it starts here, as a
-//   `git push origin` in the root clone, and then WAITS, like any raw push, for the person
-//   to approve it on the host (`desolate approve`). Nothing here can approve.
+//   fixed list. A push is the exception that proves the rule: it starts here, as a raw
+//   push (raw-push.ts), and then WAITS for the person to approve it on the host (the
+//   approval page, or `desolate approve`). Nothing here can approve.
 //
 // WHO MAY TALK TO IT
 //   a browser   only as desolate.localhost, only same-origin (the editor gate's rules),
@@ -32,8 +32,8 @@
 // Repository content (branch names, commit subjects, statuses, notes) leaves here as JSON
 // strings and is put on the page as text, never as HTML.
 import { pendingIn } from "./approvals.ts";
+import { catchUp, squashedFrom } from "../shared/approval.ts";
 import { CUT, printable } from "../shared/text.ts";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createServer } from "node:http";
@@ -68,13 +68,15 @@ import { refusal, sameSecret } from "../shared/gate.ts";
 import { carriesCredential, cookieIn, cookieValue, signedInPage } from "../shared/page-key.ts";
 import * as domains from "./domains.ts";
 import { branchesOf, refusalsOf } from "./outbox.ts";
-import { forge, safeIn } from "./git.ts";
-import { APPROVALS, clonePath, domainPath, GITCONFIG, HOST_QUEUE, ROOT } from "./layout.ts";
+import { forge, git } from "./git.ts";
+import { APPROVALS, clonePath, domainPath, HOST_QUEUE, ROOT } from "./layout.ts";
 import * as issues from "./issues.ts";
 import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
 import * as proxy from "./proxy/manage.ts";
 import { landedFor, pushedList } from "./pushed.ts";
+import type { Pushed } from "./pushed.ts";
+import { pushCommit } from "./raw-push.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -561,7 +563,30 @@ declare namespace makingOf {
 // Each workspace's commits against the remote (offers.unpushedOf), for the dashboard's Delete:
 // counted in the background, since it runs git, and again when a HEAD moves or every two
 // minutes (the remote moves too).
-const pushedOf = new Map<string, { heads: string; at: number; result: Unpushed[] }>();
+const pushedOf = new Map<string, { heads: string; at: number; result: Counted[] }>();
+/** A checkout's commits against the remote, and, when the remote's branch is the squash of
+ *  one of them (a squashed push), the command that carries the branch on from the squash: it
+ *  was "on the remote", which the commits squashed were not (dogfooding, 2026-11-21). */
+type Counted = Unpushed & { carryOn?: string };
+const squashOf = async (u: Unpushed): Promise<Counted> => {
+  const parsed = parseRepo(u.repo);
+  if (!parsed || !isBranch(u.branch) || !isCommit(u.commit) || !u.count) return u;
+  const clone = clonePath(parsed);
+  const tip = (
+    await git(clone, [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      `refs/remotes/origin/${u.branch}^{commit}`,
+    ])
+  ).stdout.trim();
+  // (Only a tip the branch does not build on: one it does is a push that is just behind.)
+  const squashed =
+    isCommit(tip) && (await git(clone, ["merge-base", "--is-ancestor", tip, u.commit])).code === 1
+      ? await squashedFrom((args) => git(clone, args), tip, u.commit).catch(() => null)
+      : null;
+  return squashed ? { ...u, carryOn: catchUp(u.branch, squashed, u.branch) } : u;
+};
 // What each workspace's project asks for (its devcontainer.json in the mirror: domains.ts
 // projectSizeOf), for the dashboard's Resize. Read in the same loop: one rev-parse when the
 // spec has not changed.
@@ -598,7 +623,9 @@ const checkPushed = async () => {
         const known = pushedOf.get(key);
         if (known && known.heads === heads && Date.now() - known.at < 120_000) continue;
         try {
-          pushedOf.set(key, { heads, at: Date.now(), result: await offers.unpushedOf(d.slug, w) });
+          const counted = await offers.unpushedOf(d.slug, w);
+          const result = await Promise.all(counted.map(squashOf));
+          pushedOf.set(key, { heads, at: Date.now(), result });
         } catch (error) {
           console.error(`stated: ${key}'s commits could not be counted: ${String(error)}`);
         }
@@ -610,8 +637,18 @@ const checkPushed = async () => {
   }
 };
 
+/** GitHub's page for opening a pushed branch's pull request (null on another forge). */
+const pullRequestOf = (p: Pushed): string | null => {
+  try {
+    return forge().kind === "github" ? pullRequestUrl(p.repo, p.branch, p.base) : null;
+  } catch {
+    return null; // no forge on record
+  }
+};
+
 /** A page of a domain's branches (branchesPage), each marked with the base it has landed in,
- *  if it has (pushed.ts). */
+ *  if it has, or else with what was pushed of it and its pull request's page (pushed.ts):
+ *  the link was only in the activity log, at the foot of the page (dogfooding, 2026-11-21). */
 const branchesFor = (d: { slug: string; repos: string[] }, from: number, pushed = pushedList()) => {
   const page = branchesPage(
     branchesOf(d.slug, d.repos),
@@ -620,7 +657,15 @@ const branchesFor = (d: { slug: string; repos: string[] }, from: number, pushed 
   );
   return {
     ...page,
-    items: page.items.map((b) => ({ ...b, landed: landedFor(pushed, b.repo, b.branch, b.commit) })),
+    items: page.items.map((b) => {
+      const landed = landedFor(pushed, b.repo, b.branch, b.commit);
+      const p = landed ? null : pushed.find((e) => e.repo === b.repo && e.branch === b.branch);
+      return {
+        ...b,
+        landed,
+        pushed: p && !p.landed ? { commit: p.commit, pullRequest: pullRequestOf(p) } : null,
+      };
+    }),
   };
 };
 
@@ -1068,9 +1113,11 @@ declare namespace act {
   >;
 }
 
-/** A push from the dashboard: `git push origin <commit>:<branch>` in the root clone. That
- *  goes to git-remote-desolate-push, which asks the keyring for a challenge and waits for
- *  the person to approve it on the host. This process cannot approve it. */
+/** A push from the dashboard: the commit reviewed, pushed as a raw push is (raw-push.ts),
+ *  so it waits for the person to approve it on the host. This process cannot approve it. It
+ *  was a `git push` through the root terminal's helper, which named it "a raw git push from
+ *  the root's terminal", and after a squash git set origin/<branch> to the commit not pushed
+ *  (dogfooding, 2026-11-21). */
 const push = (
   args: Record<string, unknown>,
   record: (command: string, kept: Record<string, string>) => Action,
@@ -1099,57 +1146,35 @@ const push = (
     kept,
   );
   action.state = "running";
-  said(action, [
-    "waiting for your approval on the host: run `desolate approve` in a terminal there",
-  ]);
-  const child = spawn(
-    "git",
-    [
-      ...safeIn(clonePath(repo)),
-      "-C",
-      clonePath(repo),
-      "push",
-      "--porcelain",
-      "origin",
-      `${kept.commit}:refs/heads/${kept.branch}`,
-    ],
-    {
-      env: { ...process.env, GIT_CONFIG_GLOBAL: GITCONFIG, GIT_TERMINAL_PROMPT: "0" },
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  );
-  const take = (chunk: Buffer) => {
-    said(
-      action,
-      chunk
-        .toString()
-        .split("\n")
-        .map((line) => line.trim())
-        .filter(Boolean),
-    );
+  said(action, ["approve it on the approval page, which Push opened in a new tab"]);
+  const say = (text: string) => {
+    said(action, text.split("\n"));
     changed();
   };
-  child.stdout.on("data", take);
-  child.stderr.on("data", take);
-  child.on("close", (code) => {
-    action.code = code ?? 1;
-    action.state = code === 0 ? "done" : "failed";
-    if (code === 0) {
-      offers.withdraw(kept.domain, kept.repo, kept.branch);
-      said(action, [`pushed ${kept.repo} ${kept.branch} at ${kept.commit}`]);
-      // (Recorded by the push itself, in raw-push.ts; this is only the page's link.)
-      try {
-        const base =
-          offer.base ?? repos.list().find((r) => r.repo === kept.repo)?.defaultBranch ?? null;
-        action.link =
-          (forge().kind === "github" ? pullRequestUrl(kept.repo, kept.branch, base) : null) ??
-          undefined;
-      } catch {
-        /* no forge on record: no link */
+  // Waited for as long as the person takes (R4): the approval page's Refuse ends it.
+  void pushCommit(
+    repo,
+    kept.commit,
+    kept.branch,
+    false,
+    "a push from the dashboard",
+    say,
+    new AbortController().signal,
+  )
+    .catch((error: Error) => error.message)
+    .then((failed) => {
+      action.code = failed ? 1 : 0;
+      action.state = failed ? "failed" : "done";
+      if (failed) say(failed);
+      else {
+        offers.withdraw(kept.domain, kept.repo, kept.branch);
+        // What the remote got: the commit, or the squash of it the person chose.
+        const sent = pushedList().find((p) => p.repo === kept.repo && p.branch === kept.branch);
+        say(`pushed ${kept.repo} ${kept.branch} at ${sent?.commit ?? kept.commit}`);
+        action.link = sent ? (pullRequestOf(sent) ?? undefined) : undefined;
       }
-    }
-    changed();
-  });
+      changed();
+    });
   return action;
 };
 

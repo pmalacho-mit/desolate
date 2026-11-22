@@ -772,6 +772,69 @@ declare namespace lastLines {
   ];
 }
 
+/** A workspace's agents as the dashboard is told of them: the running first, then the one
+ *  that spoke last, a few, each command cut to a line, and how many there are. A VM may list
+ *  a thousand (agent.ts), and the facts are one request, of which the state service takes
+ *  256 KiB (root/stated.ts BODY_BYTES); `desolate agent list` has the rest. */
+const AGENTS_SHOWN = 8;
+const COMMAND_SHOWN = 200;
+const shownAgents = (agents: {
+  items: {
+    name: string;
+    state: string;
+    exit: number | null;
+    started: string;
+    lastOutput: string | null;
+    command: string[];
+  }[];
+  total: number;
+}) => ({
+  items: [...agents.items]
+    .sort(
+      (a, b) =>
+        Number(b.state === "running") - Number(a.state === "running") ||
+        (b.lastOutput ?? b.started).localeCompare(a.lastOutput ?? a.started),
+    )
+    .slice(0, AGENTS_SHOWN)
+    .map((a) => ({
+      name: a.name,
+      state: a.state,
+      exit: a.exit,
+      lastOutput: a.lastOutput,
+      command: a.command.join(" ").slice(0, COMMAND_SHOWN),
+    })),
+  total: agents.total,
+});
+
+declare namespace shownAgents {
+  type Agent<Name extends string, State extends string, Last extends string> = {
+    name: Name;
+    state: State;
+    exit: null;
+    started: "2026-11-21T20:00:00Z";
+    lastOutput: Last;
+    command: ["npx vitest"];
+  };
+  /** the running first, then the one that spoke last; the count is of all of them */
+  export type Order = Expect<
+    Invoke<
+      typeof shownAgents,
+      [
+        agents: {
+          items: [
+            Agent<"old", "exited", "2026-11-21T20:01:00Z">,
+            Agent<"new", "exited", "2026-11-21T20:09:00Z">,
+            Agent<"tests", "running", "2026-11-21T20:05:00Z">,
+          ];
+          total: 3;
+        },
+      ]
+    >,
+    "matches",
+    { items: [{ name: "tests" }, { name: "new" }, { name: "old" }]; total: 3 }
+  >;
+}
+
 /** The memory given to running workspaces: each one's size, else the stack's. */
 const memoryGiven = (
   domains: { workspaces: { vm: string; size?: Partial<Size> }[] }[],
@@ -1881,6 +1944,9 @@ const serve = async () => {
 
   let sentFacts = "";
   let sentAt = 0;
+  // Each running workspace's agents, as last listed (the look below): the dashboard showed
+  // none, and a person found them only with `desolate agent list` (dogfooding, 2026-11-21).
+  const agentsOf = new Map<string, Awaited<ReturnType<typeof import("./agent.ts").agentsIn>>>();
   const tellRoot = async () => {
     const vms = await b.list();
     rootUp = vms.find((vm) => vm.name === ROOT_VM)?.status === "running";
@@ -1914,6 +1980,9 @@ const serve = async () => {
                 .map((p) => ({ port: p, by: holderOf(p) })),
               // What only the host knows of it, in sentences: listeners cut here, connections
               // its link refused. (What the VM left out is in its devcontainer line already.)
+              ...(vm.status === "running" && agentsOf.has(vm.name)
+                ? { agents: shownAgents(agentsOf.get(vm.name)!) }
+                : {}),
               ...(entry.past > 0 || entry.refused.count > 0
                 ? {
                     notes: notesOf(
@@ -1974,6 +2043,12 @@ const serve = async () => {
           await ws.look(w);
         } catch {
           /* gone meanwhile, or not answering: looked at next time */
+        }
+        try {
+          const { agentsIn } = await import("./agent.ts");
+          agentsOf.set(entry.vm, await agentsIn(entry.vm, `${entry.domain}/${entry.workspace}`));
+        } catch {
+          agentsOf.delete(entry.vm); // not answering: none shown, rather than old ones
         }
       }
       void tellRoot().catch(() => {});

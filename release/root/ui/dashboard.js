@@ -24,12 +24,17 @@ const el = (tag, attrs = {}, ...children) => {
 const gitLink = (repo, at) => state && state.stack && state.stack.editorPort
   ? el("a", { class: "button quiet", "data-open-git": repo, href: `http://${state.stack.gitHostname || "desolate-git.localhost"}:${state.stack.editorPort}/?repo=${encodeURIComponent(repo)}${at ? `&domain=${encodeURIComponent(at.domain)}&branch=${encodeURIComponent(at.branch)}` : ""}`, target: "_blank", rel: "noopener noreferrer", title: at ? `A terminal in your clone of ${repo}, on ${at.branch} as ${at.domain} has it: git status, git log, git push` : `A terminal in your clone of ${repo}` }, "Open in git")
   : null;
-/** The approval page (the Mac's own, not this one's) in a tab of its own, as Push starts a
- *  push that waits there for the person. Opened in the click itself, so the browser lets it
- *  open; with no tie back to this page (noopener, and its own Cross-Origin-Opener-Policy). */
-const openApproval = () => {
-  if (state && state.stack && state.stack.approveHostname)
-    window.open(`http://${state.stack.approveHostname}:${state.stack.editorPort}/`, "_blank", "noopener,noreferrer");
+/** The approval page (the Mac's own, not this one's), naming the push it is opened for, for
+ *  it to show that one first. */
+const approvalUrl = (push) => state && state.stack && state.stack.approveHostname
+  ? `http://${state.stack.approveHostname}:${state.stack.editorPort}/?repo=${encodeURIComponent(push.repo)}&branch=${encodeURIComponent(push.branch)}&commit=${encodeURIComponent(push.commit)}`
+  : null;
+/** It in a tab of its own, as Push starts a push that waits there for the person. Opened in
+ *  the click itself, so the browser lets it open; with no tie back to this page (noopener,
+ *  and its own Cross-Origin-Opener-Policy). */
+const openApproval = (push) => {
+  const url = approvalUrl(push);
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
 };
 /** What a name is, said with it: a domain, a workspace, a repository, a branch, a commit (the
  *  same word can be several). A domain or a workspace named with `at` ("<domain>" or
@@ -101,7 +106,15 @@ const toggleFold = (key) => {
   }
   render();
 };
-let domainFilter = "";
+// The domains' filter is kept in this browser, as the folds are: a reload showed every domain
+// again, and a click meant for one landed on another's (dogfooding, 2026-11-21).
+let domainFilter = (() => {
+  try {
+    return localStorage.getItem("desolate-domain-filter") || "";
+  } catch {
+    return "";
+  }
+})();
 let activityFilter = "";
 
 const act = async (key, kind, args) => {
@@ -311,7 +324,22 @@ const pickParams = (r) => (r.pick ? { pickFrom: r.commits.items[r.pick.hi].commi
 const closeReview = () => {
   if (reviewing && reviewing.gone) reviewing.gone.abort();
   reviewing = null;
+  addressOf(null);
   render();
+};
+/** The review open, in the page's address (`?review&domain=...`), so a reload opens it again. */
+const addressOf = (target, against) => {
+  const params = new URLSearchParams(location.search);
+  for (const key of ["review", "domain", "repo", "branch", "against"]) params.delete(key);
+  if (target) {
+    params.set("review", "");
+    params.set("domain", target.domain);
+    params.set("repo", target.repo);
+    params.set("branch", target.branch);
+    if (against === "domain") params.set("against", "domain");
+  }
+  const query = params.toString();
+  history.replaceState(null, "", `${location.pathname}${query ? `?${query}` : ""}`);
 };
 /** The next page of the commits, or of the files, added to what is shown ("Show more"). */
 const showMore = async (list) => {
@@ -418,6 +446,7 @@ const openReview = async (offer, against = "origin") => {
   const fetchedAt = ((state && state.repos.find((r) => r.repo === offer.repo)) || {}).fetchedAt || null;
   const gone = new AbortController();
   reviewing = { offer, against, fetchedAt, gone, loading: true };
+  addressOf(offer, against);
   render();
   let review;
   try {
@@ -526,7 +555,8 @@ const needsYou = () => {
     el("div", { class: "name" }, `A push is waiting for your approval: ${a.repo} ${a.branch}`),
     el("div", { class: "line mono" }, `${a.commit}`),
     a.summary ? el("div", { class: "line sub fit", title: a.summary, "data-approval-from": "" }, a.summary) : null,
-    el("div", { class: "line" }, "Approve it on the host, outside every VM: run ", el("code", {}, "desolate approve"), " in a terminal there.")), el("div", {})));
+    el("div", { class: "line" }, "Approve or refuse it on the approval page, outside every VM (or ", el("code", {}, "desolate approve"), " in a terminal on the Mac).")),
+    el("div", { class: "buttons" }, approvalUrl(a) ? el("a", { class: "button", href: approvalUrl(a), target: "_blank", rel: "noopener noreferrer", "data-approval-page": "" }, "Open the approval page") : null)));
   for (const r of state.refused || []) items.push(el("li", { "data-refused": `${r.domain}/${r.repo}` }, el("span", { class: "dot red" }), el("div", { class: "what" },
     el("div", { class: "name" }, `Refused from ${r.domain}: a bundle of ${r.repo}`),
     el("div", { class: "line mono" }, r.why),
@@ -706,6 +736,10 @@ const reviewPanel = () => {
       ...statView(review.stat),
       review.lfsObjects ? pill(`${review.lfsObjects} LFS object(s)`, "accent", "large files a push would send with it") : null,
       reviewing.against === "domain" ? el("span", { class: "sub" }, `(a push would send ${review.pushCommits}, counted against the remote)`) : null),
+    // Merged by a squash or a rebase, its commits are not in the base's history, so they are
+    // still counted here: said, beside the count (dogfooding, 2026-11-21).
+    landedIn(offer.domain, review) ? el("div", { class: "line sub", "data-review-merged": "" }, pill(`merged into ${landedIn(offer.domain, review)}`, "green", "at this commit, merged on the remote"),
+      ` Its changes are in the remote's ${landedIn(offer.domain, review)}. Merged by a squash or a rebase, these commits are not in its history, so they are still counted and shown here.`) : null,
     review.warnings.length ? el("div", { class: "warnbox" }, review.warnings.map((w) => el("div", {}, pill("warning", "orange"), ` a push of this branch ${w}`))) : null,
     commitList(),
     filesChanged(),
@@ -715,7 +749,7 @@ const reviewPanel = () => {
     el("div", { class: "buttons" }, !review.pushable ? el("span", { class: "sub" }, "Not pushable: cloned --no-push, so there is no write key for it.")
       : reviewing.against === "domain" ? el("span", { class: "sub" }, `A push would send ${review.pushCommits} commit(s), counted against origin: compare with origin to push.`)
       : !offered ? el("span", { class: "sub" }, "Not offered at this commit, so not pushed from here. Open it in git (above) and run git push there, or have the agent run ", el("code", {}, "desolate offer"), ".")
-      : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval(); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
+      : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval({ repo: review.repo, branch: review.branch, commit: review.commit }); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
           busy.has(key) ? "Pushing..." : `Push exactly ${short(review.commit)}${review.isDefault ? ` to ${review.branch}` : ""}`)),
     el("div", { class: "sub" }, "Push opens the approval page in a new tab, where you approve exactly this commit. (Or approve it with ", el("code", {}, "desolate approve"), " in a terminal on the Mac.)"));
 };
@@ -731,10 +765,28 @@ const checkoutLine = (d, w, c) => {
       ? [pill(head.commit ? `detached at ${short(head.commit)}` : "on a branch desolate does not carry", "orange", "not on a branch: commits here reach the root only from a branch")]
       : [named("branch", head.branch, "the branch checked out now"), head.commit ? commitRef(head.commit, `the commit checked out now: ${head.commit}`) : null];
   const remote = !pushed ? null
+    : pushed.carryOn ? pill("squashed on the remote", "orange", `the remote's ${head.branch} is the squash of these commits, so its next push would replace it: carry the branch on from the squash first (below)`, { "data-squashed": "" })
     : pushed.count === 0 ? pill("on the remote", "green", "every commit here is on a branch of the remote (origin)")
       : pushed.count > 0 ? pill(`${pushed.count} not on the remote`, "orange", `${pushed.why}: review and push it, or offer it`)
         : pill("not counted", "gray", pushed.why || "its commits could not be counted against the remote");
   return [pill(c.repo, "repo mono", "the repository"), ...where, remote];
+};
+
+/** A pushed branch, not merged yet: its pull request's page, and Fetch now, which shows a
+ *  merge on the forge at once (the root looks by itself now and then). */
+const pullRequestOf = (b) => b.pushed && typeof b.pushed.pullRequest === "string" && b.pushed.pullRequest.startsWith("https://github.com/")
+  ? el("a", { class: "button quiet small", href: b.pushed.pullRequest, target: "_blank", rel: "noopener noreferrer", "data-pull-request": `${b.repo}/${b.branch}`, title: `GitHub's page for opening ${b.branch}'s pull request, in your browser, as yourself` }, "Open pull request")
+  : null;
+const fetchNow = (repo) => el("button", { class: "quiet small", disabled: busy.has(`fetch:${repo}`), "data-fetch": repo, title: `desolate fetch ${repo}: the remote's branches as they are now, so a pull request merged there shows here at once`, onclick: () => act(`fetch:${repo}`, "repo.fetch", { repo }) }, busy.has(`fetch:${repo}`) ? "Fetching..." : "Fetch now");
+/** What a checkout's branch is on the remote, below its line: pushed (its pull request), or
+ *  squashed there (the command that carries it on). */
+const checkoutAfter = (d, w, c) => {
+  const pushed = (w.pushed || []).find((p) => p.repo === c.repo);
+  const b = c.head && c.head.branch ? branchesOf(d).find((b) => b.repo === c.repo && b.branch === c.head.branch) : null;
+  return [
+    pushed && pushed.carryOn ? el("div", { class: "line sub", "data-carry-on": c.repo }, "To carry on from the squash, in the workspace (what you committed since is kept, on top): ", el("code", {}, pushed.carryOn)) : null,
+    b && b.pushed && !landedOf(d, c) ? el("div", { class: "line", "data-pushed": c.repo }, pill(`pushed ${short(b.pushed.commit)}`, "green", `the remote's ${b.branch} is at ${b.pushed.commit}, pushed from here`), " ", pullRequestOf(b), " ", fetchNow(c.repo)) : null,
+  ];
 };
 
 /** The base a checkout's branch is merged into, when the root saw its pushed commit land
@@ -849,6 +901,19 @@ const sizeLine = (d, w, running, making) => {
   ];
 };
 
+/** Its agents (desolate agent start), as the host last listed them: each one's state, and on
+ *  hover its command, when it last printed, and how to reach it. */
+const agentsLine = (d, w, host) => {
+  const agents = host.agents;
+  if (!agents || !agents.total) return null;
+  const at = `${d.slug}/${w.workspace}`;
+  const word = (a) => (a.state === "exited" && a.exit !== null ? `exited ${a.exit}` : a.state);
+  return el("div", { class: "line", "data-agents": at }, "agents: ",
+    agents.items.map((a) => pill(`${a.name}: ${word(a)}`, a.state === "running" ? "green" : "gray",
+      `${a.command}\nlast output ${a.lastOutput ? ago(a.lastOutput) : "never"}\ndesolate agent attach ${at} --name ${a.name} (or log, or stop)`, { "data-agent": a.name })),
+    agents.total > agents.items.length ? el("span", { class: "sub" }, `and ${agents.total - agents.items.length} more: desolate agent list ${at}`) : null);
+};
+
 const workspaceRow = (d, w) => {
   const host = w.host || {};
   const running = host.status === "running";
@@ -861,6 +926,8 @@ const workspaceRow = (d, w) => {
   const target = { domain: d.slug, workspace: w.workspace };
   const [word, colour, explain] = statusOf(w, host, running);
   const why = deletable(w, running);
+  // All its work merged: the bases it went into, for the step that carries on from them.
+  const merged = allLanded(d, w) ? [...new Set(w.checkouts.map((c) => landedOf(d, c)).filter(Boolean))] : null;
   const remove = el("span", { class: "tip", title: why.length ? `Not deletable yet: ${why.join("; ")}.` : `Delete ${d.slug}/${w.workspace}: its VM goes, nothing in it is unsaved, and every commit is on the remote. Its branches stay in the domain.` },
     el("button", { class: "quiet danger", disabled: why.length > 0 || busy.has(`rm:${d.slug}/${w.workspace}`), "data-delete": `${d.slug}/${w.workspace}`,
       onclick: () => { if (confirm(`Delete ${d.slug}/${w.workspace}? Its VM is removed. Nothing in it is unsaved, and its commits are on the remote; its branches stay in the domain.`)) act(`rm:${d.slug}/${w.workspace}`, "workspace.remove", target); } }, "Delete"));
@@ -874,15 +941,19 @@ const workspaceRow = (d, w) => {
           ? pill(w.outlived ? `started by ${w.startedBy}, since removed` : `started by ${w.startedBy}`, w.outlived ? "orange" : "", w.outlived ? `${w.startedBy} was removed; this one is still here` : `${w.startedBy} asked for it (desolate spawn)`, { "data-started-by": w.startedBy })
           : pill("started by you", "", "you started it: from here, or desolate up", { "data-started-by": "" })),
       making && w.making ? el("div", { class: "line sub fit", "data-making-step": "", title: redact(w.making) }, redact(w.making)) : null,
-      w.checkouts.map((c) => el("div", { class: "checkout", "data-checkout": c.repo }, checkoutLine(d, w, c),
+      w.checkouts.map((c) => [el("div", { class: "checkout", "data-checkout": c.repo }, checkoutLine(d, w, c),
         landedOf(d, c) ? pill(`merged into ${landedOf(d, c)}`, "green", "its branch, at this commit, is merged on the remote", { "data-merged": landedOf(d, c) }) : null,
         c.head && c.head.branch && branchesOf(d).some((b) => b.repo === c.repo && b.branch === c.head.branch)
-          ? el("button", { class: "quiet small", "data-diff-checkout": c.repo, title: `What ${c.head.branch} changes against the remote's ${(state.repos.find((r) => r.repo === c.repo) || {}).defaultBranch || "default branch"}`, onclick: () => openReview({ domain: d.slug, repo: c.repo, branch: c.head.branch }) }, "Diff") : null)),
+          ? el("button", { class: "quiet small", "data-diff-checkout": c.repo, title: `What ${c.head.branch} changes against the remote's ${(state.repos.find((r) => r.repo === c.repo) || {}).defaultBranch || "default branch"}`, onclick: () => openReview({ domain: d.slug, repo: c.repo, branch: c.head.branch }) }, "Diff") : null),
+        checkoutAfter(d, w, c)]),
       // What it said of itself: its colour as a dot (the word was the dot again), then its words.
       says ? el("div", { class: "line", "data-says": says.color }, el("span", { class: `said ${says.color}`, title: `its status: ${says.color} (desolate status set)` }), says.message) : null,
-      allLanded(d, w) ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. ", running ? "Stop frees its memory; " : "", "Delete removes it.") : null,
+      merged ? el("div", { class: "line sub", "data-done": "" }, "Its work is merged. To carry on in it, start the next branch from what was merged, in each checkout: ",
+        el("code", {}, `git fetch && git switch --no-track -c <next-branch> origin/${merged.length === 1 ? merged[0] : "<its base>"}`),
+        `. Or ${running ? "Stop frees its memory, and " : ""}Delete removes it.`) : null,
       host.devcontainer ? el("div", { class: "line" }, pill(/^FAILED/.test(host.devcontainer) ? "devcontainer failed" : "devcontainer", /^FAILED/.test(host.devcontainer) ? "red" : "", "the project's devcontainer, in its VM"), " ", host.devcontainer.replace(/^up \(/, "(")) : null,
       sizeLine(d, w, running, making),
+      agentsLine(d, w, host),
       (host.ports || []).length ? el("div", { class: "line" }, "dev servers: ", host.ports.map((p, i) => [i ? " " : "", el("a", { href: p.url, target: "_blank", rel: "noopener", class: "pill accent", title: `its server on port ${p.port}, at its own name` }, `:${p.port}`)])) : null,
       // A port this Mac holds (another user's program, often, on a shared Mac): the
       // workspace's server on it is not forwarded, and its address reaches that program.
@@ -896,6 +967,12 @@ const workspaceRow = (d, w) => {
       remove]));
 };
 
+/** The base a reviewed branch, at the commit reviewed, has landed in (pushed.ts), or null. */
+const landedIn = (slug, review) => {
+  const d = state.domains.find((x) => x.slug === slug);
+  const b = d && branchesOf(d).find((b) => b.repo === review.repo && b.branch === review.branch && b.commit === review.commit);
+  return b && b.landed ? b.landed : null;
+};
 /** A domain's branches shown: the snapshot's first page (those checked out first), then the
  *  pages asked for since (GET /branches), each branch once. */
 const branchesMore = new Map(); // slug -> { items, asking, error }
@@ -936,9 +1013,10 @@ const branchList = (d) => {
       el("div", { class: "what" },
         el("div", { class: "name" }, named("branch", b.branch), " ", named("repo", b.repo),
           offered(b) ? pill("offered", "blue", "a workspace offered it for you to review and push") : null,
-          b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null),
+          b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null,
+          b.pushed ? pill(`pushed ${short(b.pushed.commit)}`, "green", `the remote's ${b.branch} is at ${b.pushed.commit}, pushed from here`) : null),
         el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? [" · checked out in ", where(b).map((w) => named("workspace", w))] : "")),
-      el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))),
+      el("div", { class: "buttons" }, pullRequestOf(b), el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))),
     list.length < shown.total
       ? el("div", { class: "sub more", "data-branches-more": d.slug }, andMore(shown, "branch", "branches"), " ",
           el("button", { class: "quiet small", type: "button", disabled: Boolean(more.asking), onclick: () => moreBranches(d, d.branches.items.length + (more.items || []).length) }, more.asking ? "Reading..." : "Show more"),
@@ -967,6 +1045,21 @@ const firstWorkspace = (d) => {
       busy.has(key) ? "Starting..." : `Workspace on ${branches.join(" + ")}`));
 };
 
+/** What New workspace makes, said before the click: its name (w1, w2... when none is typed,
+ *  as the root names one: domains.ts plan), and for each repository the branch it is on: the
+ *  domain's own checkout of the default branch while no workspace holds it, else a new
+ *  branch named after the workspace, from the default branch (nothing said so: dogfooding,
+ *  2026-11-21). */
+const newNames = new Map(); // slug -> the name typed
+const newWorkspaceSays = (d) => {
+  const typed = newNames.get(d.slug) || "";
+  let name = typed;
+  for (let n = 1; !name; n++) if (!d.workspaces.some((w) => w.workspace === `w${n}`)) name = `w${n}`;
+  const held = (repo) => d.workspaces.some((w) => w.checkouts.some((c) => c.repo === repo && c.kind === "main"));
+  return el("div", { class: "line sub", "data-new-workspace-says": d.slug }, `New workspace makes ${name}: `,
+    defaultsOf(d).map((x, i) => [i ? "; " : "", el("span", { class: "mono" }, x.repo), held(x.repo) ? [" on a new branch ", el("span", { class: "mono" }, name), ` from ${x.branch}`] : [" on ", el("span", { class: "mono" }, x.branch), ", the domain's own checkout"]]), ".");
+};
+
 /** The domain `desolate clone` made a repository (owner--repo), for that repository alone. */
 const homeTip = (repo) => `${repo}'s home domain: desolate made it when ${repo} was cloned, for that repository alone. Its workspaces see ${repo} and nothing else, with this domain's own secrets and network rules. To work on ${repo} together with other repositories, make a new domain with them (New domain below): each domain is a trust boundary of its own.`;
 
@@ -984,7 +1077,7 @@ const domainCard = (d) => {
     d.title && d.title !== d.slug && !(d.repos.length === 1 && d.repos[0] === d.title) ? el("span", { class: "domain-title", title: "the domain's title" }, d.title) : null,
     d.home ? pill("home domain", "accent", homeTip(d.home), { "data-home": d.home }) : null,
     el("span", { class: "grow" }),
-    d.building ? pill("building", "blue pulse", "its environment is being built for its first workspace")
+    d.building ? pill("building", "blue pulse", "its environment is being built: before its first workspace, and again when the project's devcontainer or desolate's own VM image has changed")
       : d.workspaces.length ? pill(`${running} of ${d.workspaces.length} running`, running ? "green" : "", "its workspaces: running, of all") : pill("no workspaces", "", "nothing made in it yet"));
   const repos = el("div", { class: "repos" }, d.repos.length ? d.repos.map((r) => pill(r, "repo mono", d.home === r ? homeTip(r) : "a repository of this domain")) : el("span", { class: "sub" }, "No repositories yet."));
   if (isFolded) return el("div", { class: "card", "data-domain": d.slug, "data-folded": "" }, head, repos);
@@ -1001,16 +1094,17 @@ const domainCard = (d) => {
     el("ul", { class: "rows" },
       // The domain's environment, built once, before its first workspace (host/templates.ts).
       d.building ? el("li", { "data-building": d.slug }, el("span", { class: "dot blue", title: "building" }),
-        el("div", { class: "what" }, el("div", { class: "name" }, "Building this domain's environment", pill("being built", "blue pulse", "once, before its first workspace: its workspaces start from it")),
+        el("div", { class: "what" }, el("div", { class: "name" }, "Building this domain's environment", pill("being built", "blue pulse", "its workspaces start from it: built before the first, and again when the project's devcontainer or desolate's own VM image has changed since")),
           d.building.line ? el("div", { class: "line sub" }, redact(d.building.line)) : null)) : null,
       d.workspaces.map((w) => workspaceRow(d, w))),
     firstOne ? firstWorkspace(d) : null,
     (state.issues || []).some((i) => i.domain === d.slug && i.state === "published") ? el("div", { class: "line sub", "data-published-issues": "" }, "Issues published lately: ",
       (state.issues || []).filter((i) => i.domain === d.slug && i.state === "published").map((i, n) => [n ? ", " : "", i.url && /^https:\/\/github\.com\//.test(i.url) ? el("a", { href: i.url, target: "_blank", rel: "noopener noreferrer" }, i.title) : i.title])) : null,
     branchList(d),
-    d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); } },
-      el("input", { name: "name", placeholder: "name (optional)", pattern: slugPattern(), "aria-label": "workspace name" }),
+    d.repos.length ? el("form", { class: "inline", onsubmit: (event) => { event.preventDefault(); const name = event.target.elements.name.value.trim(); act(key, "workspace.up", { domain: d.slug, workspace: name }); event.target.reset(); newNames.delete(d.slug); } },
+      el("input", { name: "name", placeholder: "name (optional)", pattern: slugPattern(), "aria-label": "workspace name", oninput: (event) => { newNames.set(d.slug, event.target.value.trim()); render(); } }),
       el("button", { class: firstOne ? "quiet" : "", disabled: busy.has(key), title: "A workspace of its own: a VM with the repositories. The first takes each one's default branch (brought up to the remote's when it has nothing of its own); each after it, a branch named after it" }, busy.has(key) ? "Starting..." : "New workspace")) : null,
+    d.repos.length ? newWorkspaceSays(d) : null,
     // Adding a repository is set apart from making a workspace: it changes the domain.
     d.home ? [el("hr", { class: "split" }), el("div", { class: "inline sub", "data-home-note": "" }, "This is ", el("span", { class: "mono" }, d.home), "'s home domain: it holds that repository alone. ",
       el("button", { class: "quiet small", type: "button", "data-new-domain-with": d.home, onclick: () => openNewDomain([d.home]) }, `New domain with ${d.home}...`), " to work on it with others.")]
@@ -1070,6 +1164,33 @@ const drawHost = () => {
     : !state ? "connecting to the root..."
       : state.hostConnected ? "host connected" : "host not connected: VM states are as last known; run `desolate bootstrap` on the host";
 };
+/** "Needs you" rows come and go as anyone's pushes and offers do, and moved what was below
+ *  them under the pointer: a click landed in the gap they left (dogfooding, 2026-11-21). With
+ *  the pointer below them, what is there stays put: the page scrolls by what they grew, and
+ *  holds the room of what they shrank, until the pointer goes above it or leaves the page. */
+let pointerY = null;
+let held = 0;
+const hold = (px) => {
+  held = Math.max(0, px);
+  document.getElementById("domains-section").style.marginTop = held ? `${held}px` : "";
+};
+const keepPut = (change) => {
+  const below = document.getElementById("domains-section");
+  const before = below.getBoundingClientRect().top;
+  change();
+  if (pointerY === null || pointerY < before) return hold(0);
+  const moved = below.getBoundingClientRect().top - before;
+  if (moved < 0) return hold(held - moved);
+  const taken = Math.min(held, moved);
+  hold(held - taken);
+  if (moved > taken) window.scrollBy(0, moved - taken);
+};
+document.addEventListener("pointermove", (event) => {
+  pointerY = event.clientY;
+  if (held && pointerY < document.getElementById("domains-section").getBoundingClientRect().top) hold(0);
+});
+document.documentElement.addEventListener("mouseleave", () => { pointerY = null; hold(0); });
+
 const render = () => {
   if (!state) return drawHost();
   const stack = document.getElementById("stack");
@@ -1081,8 +1202,10 @@ const render = () => {
   if (!defaults.hidden) defaults.href = `http://${state.stack.approveHostname}:${state.stack.editorPort}/editor-defaults`;
   drawHost();
   const needs = needsYou();
-  document.getElementById("needs").hidden = needs.length === 0;
-  document.getElementById("needs-list").replaceChildren(...needs);
+  keepPut(() => {
+    document.getElementById("needs").hidden = needs.length === 0;
+    document.getElementById("needs-list").replaceChildren(...needs);
+  });
   // (Where the diff was scrolled to, kept: its element is the same one, moved.)
   const scrolled = shownDiff && shownDiff.node.isConnected ? [...shownDiff.node.querySelectorAll("[data-diff]")].map((n) => [n, n.scrollTop, n.scrollLeft]) : [];
   // (And where the review's lists were scrolled to: they are drawn again, and grow as the
@@ -1138,9 +1261,10 @@ const render = () => {
   document.title = needs.length ? `(${needs.length}) desolate` : "desolate";
 };
 
-// `?review&domain=<d>&repo=<owner/repo>&branch=<b>`: open that offer's review when the
-// state first shows it. A link to a review, for `desolate review` to print and for a
-// screenshot. It names an offer; it carries nothing that is run.
+// `?review&domain=<d>&repo=<owner/repo>&branch=<b>[&against=domain]`: open that branch's
+// review when the state first shows its domain with that repository. A link to a review, for
+// `desolate review` to print, for a screenshot, and for a reload. It names a branch; it
+// carries nothing that is run.
 const asked = new URLSearchParams(location.search);
 let pending = asked.has("review");
 const arrived = (now) => {
@@ -1152,8 +1276,11 @@ const arrived = (now) => {
     if (fetchedAt && fetchedAt !== reviewing.fetchedAt) openReview(reviewing.offer, reviewing.against);
   }
   if (!pending) return;
-  const offer = state.offers.find((o) => o.domain === asked.get("domain") && o.repo === asked.get("repo") && o.branch === asked.get("branch"));
-  if (offer) { pending = false; openReview(offer); }
+  const d = state.domains.find((x) => x.slug === asked.get("domain"));
+  if (d && d.repos.includes(asked.get("repo")) && asked.get("branch")) {
+    pending = false;
+    openReview({ domain: d.slug, repo: asked.get("repo"), branch: asked.get("branch") }, asked.get("against") === "domain" ? "domain" : "origin");
+  }
 };
 /** The event stream, tried again when it fails: at once nearly (a root restarting is back in
  *  a second or two), then a little later each time, to half a minute; after a few failures in
@@ -1177,7 +1304,16 @@ const listen = () => {
 // The page's own controls, made once: folding a section, the filters, a new domain, and the
 // review's width.
 for (const button of document.querySelectorAll("button.fold[data-fold]")) button.addEventListener("click", () => toggleFold(button.dataset.fold));
-document.getElementById("domain-filter").addEventListener("input", (event) => { domainFilter = event.target.value.trim().toLowerCase(); render(); });
+document.getElementById("domain-filter").value = domainFilter;
+document.getElementById("domain-filter").addEventListener("input", (event) => {
+  domainFilter = event.target.value.trim().toLowerCase();
+  try {
+    localStorage.setItem("desolate-domain-filter", domainFilter);
+  } catch {
+    /* kept for now */
+  }
+  render();
+});
 document.getElementById("activity-filter").addEventListener("input", (event) => { activityFilter = event.target.value.trim().toLowerCase(); render(); });
 document.getElementById("new-domain-open").addEventListener("click", () => (newDomain ? ((newDomain = null), render()) : openNewDomain()));
 (() => {
