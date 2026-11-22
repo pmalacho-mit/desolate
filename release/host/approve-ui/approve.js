@@ -84,6 +84,7 @@ const disarm = (card) => {
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
+setInterval(() => { for (const card of cards.values()) if (card.tick && !card.done) card.tick(); }, 1000);
 
 const post = async (what, card, squash) => {
   const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, shown: card.push.shown, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
@@ -230,8 +231,14 @@ const pagedList = (card, name, listed, ul, line, noun, onPage) => {
 const summaryOf = (review, card) => {
   const box = document.createDocumentFragment();
   if (!review || review.working) {
-    // No deadline: the person waits as long as they choose to, or refuses (R4).
-    box.append(el("p", `desolate's reviewer is working out what this push would send: ${review ? workingText(review.working) : "starting"}. It may take a while for a large push; Approve arms when it has said. Or refuse it.`));
+    // No deadline: the person waits as long as they choose to, or refuses (R4). How long, the
+    // page counts from what the host said (the host tells it only what changes).
+    const p = el("p");
+    const since = performance.now() - (review ? review.working.seconds * 1000 : 0);
+    const say = () => { p.textContent = `desolate's reviewer is working out what this push would send: ${review ? workingText({ ...review.working, seconds: Math.floor((performance.now() - since) / 1000) }) : "starting"}. It may take a while for a large push; Approve arms when it has said. Or refuse it.`; };
+    say();
+    if (card) card.tick = say;
+    box.append(p);
     return box;
   }
   if (!review.account) {
@@ -273,6 +280,8 @@ const summaryOf = (review, card) => {
       li.append(el("code", f.path));
       if (f.binary) li.append(el("span", "binary", "who"));
       else li.append(el("span", `+${f.added}`, "add"), el("span", `−${f.removed}`, "del"));
+      // Its own diff, asked for by its path (the reviewer takes it literally).
+      if (card) li.append(...diffToggle(card, ["Diff", "Hide its diff"], `file=${encodeURIComponent(f.path)}`));
       return li;
     };
     const sensitiveNote = el("p", "", "error");
@@ -443,8 +452,10 @@ const render = (pending, issues) => {
       list.append(card.element);
       changed = true;
     }
-    const shown = JSON.stringify(push.review);
+    // (How long the reviewer has been at it is not a change: the page counts that itself.)
+    const shown = JSON.stringify(push.review && push.review.working ? { working: { ...push.review.working, seconds: 0 } } : push.review);
     if (shown !== card.shown) {
+      card.tick = null;
       // The click names the very account drawn (`shown`): the host signs no other.
       card.push.shown = push.shown;
       try {
@@ -481,18 +492,32 @@ const render = (pending, issues) => {
   const empty = [...cards.values()].length === 0;
   document.getElementById("empty").hidden = !empty;
   document.body.classList.toggle("nothing", empty);
-  say(waiting || empty ? "" : "Nothing else is waiting. This page checks every second.");
+  say(waiting || empty ? "" : "Nothing else is waiting. A push that waits is shown here as it comes.");
 };
 
-const poll = async () => {
+// What waits: asked for once, then again with the answer's tag, which the host holds until
+// there is something new to show (approve-web.ts). At most once a second, whatever comes.
+// The issues to publish are asked for every second.
+let pending = null;
+let issues = [];
+const poll = async (tag) => {
+  const began = performance.now();
+  let next = null;
   try {
-    const answer = await fetch("/pending", { credentials: sendCookie, headers: credential });
+    const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
-    const asked = await fetch("/issues", { credentials: sendCookie, headers: credential });
-    const issues = asked.ok ? (await asked.json()).issues : [];
     if (!answer.ok) { current = false; disarmAll(); say(body.error || `HTTP ${answer.status}`); }
-    else { render(body.pending, issues); current = true; }
+    else { pending = body.pending; render(pending, issues); current = true; next = body.tag; }
   } catch (error) { current = false; disarmAll(); say(`the host daemon did not answer: ${error.message}`); }
-  setTimeout(poll, 1000);
+  setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };
-poll();
+const pollIssues = async () => {
+  try {
+    const asked = await fetch("/issues", { credentials: sendCookie, headers: credential });
+    issues = asked.ok ? (await asked.json()).issues : [];
+    if (pending) render(pending, issues);
+  } catch { /* said by the poll of what waits */ }
+  setTimeout(pollIssues, 1000);
+};
+poll(null);
+pollIssues();

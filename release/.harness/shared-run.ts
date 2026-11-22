@@ -152,9 +152,12 @@ export const nestedLeftRunning = async (): Promise<boolean> => {
 /** A process runs a `sleep` with run() and a signal, listens for SIGTERM itself (so it lives
  *  on), and is sent SIGTERM: what does its run answer? `escapee`: the program run starts the
  *  `sleep` (10 s) in a session of its own, holding the run's output, and exits; the answer
- *  then also says whether it came soon (within twice ENDING_MS), not when the sleep ends. */
+ *  then also says whether it came soon (within twice ENDING_MS, three times when `during`),
+ *  not when the sleep ends. `during`: that run is begun by the process's own listener of the
+ *  signal, while run() is ending the one it had. */
 export const answerWhenItsRunnerEnds = async (
   escapee = false,
+  during = false,
 ): Promise<{ code: number; stdout: string; stderr: string; soon?: boolean }> => {
   const runner = spawn(
     NODE[0]!,
@@ -162,14 +165,23 @@ export const answerWhenItsRunnerEnds = async (
       ...NODE.slice(1),
       "-e",
       `import { run } from ${JSON.stringify(RUN_TS)};
-       process.on("SIGTERM", () => {});
        const program = process.argv[1] === "escapee"
          ? [process.execPath, ["-e", 'require("node:child_process").spawn("sleep", ["10"], { detached: true, stdio: "inherit" }).unref()']]
          : ["sh", ["-c", "exec sleep 30"]];
-       const answer = run(program[0], program[1], { signal: new AbortController().signal });
+       const signal = new AbortController().signal;
+       let answer;
+       if (process.argv[2] === "during") {
+         run("sh", ["-c", "exec sleep 30"], { signal });
+         answer = new Promise((resolve) =>
+           process.on("SIGTERM", () => resolve(run(program[0], program[1], { signal }))));
+       } else {
+         process.on("SIGTERM", () => {});
+         answer = run(program[0], program[1], { signal });
+       }
        process.stderr.write("running\\n");
        process.stdout.write(JSON.stringify(await answer));`,
       escapee ? "escapee" : "plain",
+      during ? "during" : "before",
     ],
     { stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -184,5 +196,5 @@ export const answerWhenItsRunnerEnds = async (
   runner.kill("SIGTERM");
   await new Promise((resolve) => runner.on("close", resolve));
   const answer = JSON.parse(out);
-  return escapee ? { ...answer, soon: Date.now() - told < 2 * ENDING_MS } : answer;
+  return escapee ? { ...answer, soon: Date.now() - told < (during ? 3 : 2) * ENDING_MS } : answer;
 };

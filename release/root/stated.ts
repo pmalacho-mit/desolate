@@ -43,7 +43,9 @@ import { actionRefusal, hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
 import { stateEvents } from "../shared/events.ts";
 import { LIMIT as ISSUE } from "../shared/issues.ts";
 import { writeJson } from "../shared/json.ts";
-import { formatBytes, NAMES, over } from "../shared/limits.ts";
+import { formatBytes, NAMES } from "../shared/limits.ts";
+import { listed, PAGE } from "../shared/listed.ts";
+import type { Listed } from "../shared/listed.ts";
 import { outlived } from "../shared/plan.ts";
 import type { Unpushed } from "../shared/plan.ts";
 import type { Stats } from "../shared/stats.ts";
@@ -137,23 +139,43 @@ declare namespace readToken {
 }
 
 const hostToken = () => readToken(TOKEN_FILE);
-/** The branches a snapshot carries for one domain: at most BRANCHES_SHOWN, those checked out
- *  in a workspace first, with how many the domain has in all. */
-export const BRANCHES_SHOWN = 200;
-export const snapshotBranches = <B extends { repo: string; branch: string }, L>(
-  all: B[],
-  checkedOut: Set<string>,
-  landed: (b: B) => L,
-): { branches: (B & { landed: L })[]; branchesTotal: number } => {
-  const first = all.filter((b) => checkedOut.has(`${b.repo}\n${b.branch}`));
-  const rest = all.filter((b) => !checkedOut.has(`${b.repo}\n${b.branch}`));
-  return {
-    branches: [...first, ...rest]
-      .slice(0, Math.max(BRANCHES_SHOWN, first.length))
-      .map((b) => ({ ...b, landed: landed(b) })),
-    branchesTotal: all.length,
-  };
+/** A page of a domain's branches, as the dashboard lists them: those a workspace has checked
+ *  out first, so that every workspace row's own branch is on the first page, however many
+ *  that takes; then the rest, a page at a time (GET /branches). The list is the domain's to
+ *  write (R7: tens of thousands is allowed), and the first page is in the snapshot every open
+ *  dashboard is sent on each change. `checkedOut`: `<repo>\n<branch>` of each. */
+export const branchesPage = <B extends { repo: string; branch: string }>(
+  all: readonly B[],
+  checkedOut: readonly string[],
+  from: number,
+): Listed<B> => {
+  const out = new Set(checkedOut);
+  const first = all.filter((b) => out.has(`${b.repo}\n${b.branch}`));
+  const ordered = [...first, ...all.filter((b) => !out.has(`${b.repo}\n${b.branch}`))];
+  return listed(ordered, from, from > 0 ? PAGE : Math.max(PAGE, first.length));
 };
+
+declare namespace branchesPage {
+  type A = { repo: "acme/app"; branch: "a" };
+  type B = { repo: "acme/app"; branch: "b" };
+  type C = { repo: "acme/app"; branch: "c" };
+  /** a branch checked out comes first, though last in the domain's list; the rest follow, and
+   *  the total is all of them, whatever the page holds */
+  export type Pages = Table<
+    typeof branchesPage,
+    [
+      [
+        args: [all: [A, B, C], checkedOut: ["acme/app\nc"], from: 0],
+        expected: { items: [C, A, B]; total: 3; from: 0 },
+      ],
+      [
+        args: [all: [A, B, C], checkedOut: [], from: 2],
+        expected: { items: [C]; total: 3; from: 2 },
+      ],
+      [args: [all: [A, B, C], checkedOut: [], from: 7], expected: { items: []; total: 3; from: 3 }],
+    ]
+  >;
+}
 
 /** The person's browser's credential for the dashboard. The host made it and installed it
  *  as root; `desolate ui` prints the dashboard's address with it. The name and the origin
@@ -207,6 +229,7 @@ type HostFacts = {
       ports?: { port: number; url: string }[];
       reserved?: number[];
       heldOnMac?: { port: number; by: string }[];
+      notes?: string[];
     }
   >;
   at?: string;
@@ -263,15 +286,29 @@ const forget = (action: Action) => {
  *  (and is handed to every poll) until the host reports on it: a poll whose connection
  *  died takes nothing with it. The host runs each id once. */
 const waiters = new Set<() => void>();
-const queued = () =>
-  actions.filter((action) => action.state === "queued" && action.kind !== "offer.push");
+/** The oldest of them, as many as fit in REQUESTS_BYTES (one at least, which BODY_BYTES
+ *  bounds): the rest are handed over once these are reported on. A quarter of what the host
+ *  reads of one answer (daemon.ts, STATE_ANSWER_BYTES), so a flood of large requests, the
+ *  dashboard's or a domain's, never makes that answer one the host refuses whole. */
+const REQUESTS_BYTES = 4 * 1024 * 1024;
+const queued = () => {
+  const out: Action[] = [];
+  let bytes = 0;
+  for (const action of actions) {
+    if (action.state !== "queued" || action.kind === "offer.push") continue;
+    bytes += Buffer.byteLength(JSON.stringify(action));
+    if (out.length > 0 && bytes > REQUESTS_BYTES) break;
+    out.push(action);
+  }
+  return out;
+};
 
 const pendingApprovals = () =>
   pendingIn(APPROVALS).map(({ approval, summary }) => ({
     repo: approval.repo,
     branch: approval.branch,
     commit: approval.commit,
-    summary,
+    summary: printable(summary, undefined, " "),
   }));
 
 /** The last HEAD each checkout was seen on: a read that caught one half written (null) shows
@@ -573,6 +610,20 @@ const checkPushed = async () => {
   }
 };
 
+/** A page of a domain's branches (branchesPage), each marked with the base it has landed in,
+ *  if it has (pushed.ts). */
+const branchesFor = (d: { slug: string; repos: string[] }, from: number, pushed = pushedList()) => {
+  const page = branchesPage(
+    branchesOf(d.slug, d.repos),
+    domains.workspaces(d.slug).flatMap((w) => w.checkouts.map((c) => `${c.repo}\n${c.branch}`)),
+    from,
+  );
+  return {
+    ...page,
+    items: page.items.map((b) => ({ ...b, landed: landedFor(pushed, b.repo, b.branch, b.commit) })),
+  };
+};
+
 const snapshot = () => {
   // What was pushed and has since landed in the branch it was for (pushed.ts): a branch
   // still at that commit is marked "merged into <base>".
@@ -589,17 +640,9 @@ const snapshot = () => {
         const repo = parseRepo(r);
         return repo !== null && domainNameFor(repo) === d.slug;
       }) ?? null,
-    // A page of them, and how many there are (R2): the snapshot is sent whole to every open
-    // dashboard on each change, and a domain's own list may name tens of thousands (R7: it
-    // is the domain's to write). Those a workspace has checked out first, so each row's own
-    // branch is among them; `desolate branches <domain>` lists every one.
-    ...snapshotBranches(
-      branchesOf(d.slug, d.repos),
-      new Set(
-        domains.workspaces(d.slug).flatMap((w) => w.checkouts.map((c) => `${c.repo}\n${c.branch}`)),
-      ),
-      (b) => landedFor(pushed, b.repo, b.branch, b.commit),
-    ),
+    // Their first page, and how many there are (R2): `desolate branches <domain>` and the
+    // dashboard's Show more (GET /branches) have the rest.
+    branches: branchesFor(d, 0, pushed),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
     // The domain's environment, while it is built for its first workspace: shown as that,
@@ -925,18 +968,19 @@ declare namespace quote {
 
 const act = (
   kind: string,
-  args: Record<string, string>,
+  args: Record<string, unknown>,
   from: { signed?: boolean } = {},
 ): Action | { error: string } => {
   // A spawn or a close is a workspace's signed request, never a click on the dashboard.
   if (SIGNED_KINDS.has(kind) && !from.signed)
     return { error: `'${kind}' is asked for by a workspace, not from the dashboard` };
   const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const record = (command: string): Action => {
+  // A push keeps its four names; any other action, the arguments hostArgv took.
+  const record = (command: string, kept: Record<string, string>): Action => {
     const action: Action = {
       id,
       kind,
-      args,
+      args: kept,
       command,
       state: "queued",
       lines: [],
@@ -965,7 +1009,10 @@ const act = (
   // The command shown is the one the host will run: the dashboard teaches the CLI. A
   // workspace's spawn carries a whole command: its start is enough to know it by.
   const shown = `desolate ${argv.map(quote).join(" ")}`;
-  const action = record(shown.length > 600 ? `${shown.slice(0, 599)}${CUT}` : shown);
+  const action = record(
+    shown.length > 600 ? `${shown.slice(0, 599)}${CUT}` : shown,
+    args as Record<string, string>,
+  );
   for (const wake of [...waiters]) wake();
   return action;
 };
@@ -1013,6 +1060,10 @@ declare namespace act {
           error: "the dashboard does not do that: those are not arguments 'workspace.start' takes";
         },
       ],
+      [
+        args: [kind: "workspace.start", args: { domain: "acme"; workspace: 7 }],
+        expected: { error: "the dashboard does not do that: its workspace is not text" },
+      ],
     ]
   >;
 }
@@ -1021,23 +1072,31 @@ declare namespace act {
  *  goes to git-remote-desolate-push, which asks the keyring for a challenge and waits for
  *  the person to approve it on the host. This process cannot approve it. */
 const push = (
-  args: Record<string, string>,
-  record: (command: string) => Action,
+  args: Record<string, unknown>,
+  record: (command: string, kept: Record<string, string>) => Action,
 ): Action | { error: string } => {
   const repo = parseRepo(args.repo);
   if (!isSlug(args.domain) || !repo || !isBranch(args.branch) || !isCommit(args.commit))
     return {
       error: "a push names a domain, a repository, a branch and the commit that was reviewed",
     };
+  // What is kept is what was checked.
+  const kept = {
+    domain: args.domain,
+    repo: args.repo as string,
+    branch: args.branch,
+    commit: args.commit,
+  };
   const offer = offers
-    .offersOf(args.domain)
-    .find((o) => o.repo === args.repo && o.branch === args.branch);
-  if (!offer || offer.commit !== args.commit)
+    .offersOf(kept.domain)
+    .find((o) => o.repo === kept.repo && o.branch === kept.branch);
+  if (!offer || offer.commit !== kept.commit)
     return {
-      error: `${args.branch} is no longer offered at ${args.commit.slice(0, 12)}: it moved, or was withdrawn. Review it again.`,
+      error: `${kept.branch} is no longer offered at ${kept.commit.slice(0, 12)}: it moved, or was withdrawn. Review it again.`,
     };
   const action = record(
-    `desolate push ${args.domain} ${args.repo} ${args.branch} --expect ${args.commit}`,
+    `desolate push ${kept.domain} ${kept.repo} ${kept.branch} --expect ${kept.commit}`,
+    kept,
   );
   action.state = "running";
   said(action, [
@@ -1052,7 +1111,7 @@ const push = (
       "push",
       "--porcelain",
       "origin",
-      `${args.commit}:refs/heads/${args.branch}`,
+      `${kept.commit}:refs/heads/${kept.branch}`,
     ],
     {
       env: { ...process.env, GIT_CONFIG_GLOBAL: GITCONFIG, GIT_TERMINAL_PROMPT: "0" },
@@ -1076,14 +1135,14 @@ const push = (
     action.code = code ?? 1;
     action.state = code === 0 ? "done" : "failed";
     if (code === 0) {
-      offers.withdraw(args.domain!, args.repo!, args.branch!);
-      said(action, [`pushed ${args.repo} ${args.branch} at ${args.commit}`]);
+      offers.withdraw(kept.domain, kept.repo, kept.branch);
+      said(action, [`pushed ${kept.repo} ${kept.branch} at ${kept.commit}`]);
       // (Recorded by the push itself, in raw-push.ts; this is only the page's link.)
       try {
         const base =
-          offer.base ?? repos.list().find((r) => r.repo === args.repo)?.defaultBranch ?? null;
+          offer.base ?? repos.list().find((r) => r.repo === kept.repo)?.defaultBranch ?? null;
         action.link =
-          (forge().kind === "github" ? pullRequestUrl(args.repo!, args.branch!, base) : null) ??
+          (forge().kind === "github" ? pullRequestUrl(kept.repo, kept.branch, base) : null) ??
           undefined;
       } catch {
         /* no forge on record: no link */
@@ -1222,10 +1281,6 @@ const body = (req: IncomingMessage): Promise<unknown> =>
     });
     req.on("error", reject);
   });
-/** The most one argument of a dashboard action may be, in characters: the bound
- *  shared/actions.ts puts on what a click may carry to the host (its `hostArgv`; the longest
- *  honest one is a branch's name, limits.ts's NAMES.branch). */
-const ARG_MOST = NAMES.branch;
 const SECURITY = {
   "content-security-policy":
     "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
@@ -1309,7 +1364,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
         code?: number;
       };
       const action = actions.find((a) => a.id === report.id);
-      if (action) {
+      // (The host sends an end again when its answer was lost: an ended action takes no more.)
+      if (action && action.state !== "done" && action.state !== "failed") {
         action.state = report.done ? (report.code === 0 ? "done" : "failed") : "running";
         if (report.done) action.code = report.code;
         said(action, (report.lines ?? []).map(String));
@@ -1512,6 +1568,13 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     });
     return;
   }
+  // More of a domain's branches than the snapshot's first page: the page from `from` on.
+  if (req.method === "GET" && url.pathname === "/branches") {
+    const slug = url.searchParams.get("domain");
+    const d = domains.domains().find((domain) => domain.slug === slug);
+    if (!d) return json(res, 404, { error: "no such domain" });
+    return json(res, 200, branchesFor(d, Number(url.searchParams.get("from"))));
+  }
   // A review (root/offers.ts): what a branch would send, then more of its lists and its
   // diff, a page at a time, as the person reads. None has a timer here: git runs for as long
   // as the page waits, and what only reads is ended when the page goes away (the review
@@ -1616,20 +1679,10 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       !String(req.headers["content-type"] ?? "").startsWith("application/json")
     )
       return json(res, 403, { error: "actions come from the dashboard itself" });
-    const request = (await body(req)) as { kind?: string; args?: Record<string, unknown> };
-    // Each argument is a short text (shared/actions.ts takes no longer one from a click).
-    // One that is not is refused, by name: left out, the command ran without it.
-    const args: Record<string, string> = {};
-    for (const [key, value] of Object.entries(request.args ?? {})) {
-      if (typeof value !== "string")
-        return json(res, 400, { error: `the argument '${printable(key, 40)}' is not text` });
-      if (value.length > ARG_MOST)
-        return json(res, 400, {
-          error: over(`the argument '${printable(key, 40)}'`, ARG_MOST, value.length, "characters"),
-        });
-      args[key] = value;
-    }
-    const result = act(String(request.kind ?? ""), args);
+    const request = (await body(req)) as { kind?: unknown; args?: unknown };
+    // Every argument is checked once, by the action (shared/actions.ts, or push's own names),
+    // and refused in its words: one not text, or past its bound, is never left out.
+    const result = act(String(request.kind ?? ""), (request.args ?? {}) as Record<string, unknown>);
     changed();
     return "error" in result
       ? json(res, 400, result)

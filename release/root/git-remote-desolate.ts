@@ -211,7 +211,8 @@ const main = async () => {
   const list = async () => {
     // The domain's whole list, or none: git prunes <domain>/* to what this answers, so a
     // list that could not be read whole fails the fetch, out loud, and nothing is pruned.
-    const listed = refsOf(slug, repo);
+    // (Its own process, on this domain's lane: it may wait for the share to settle.)
+    const listed = refsOf(slug, repo, true);
     if ("refused" in listed) {
       noteRefusal(slug, repo, listed.refused);
       return fail(

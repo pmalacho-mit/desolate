@@ -129,6 +129,7 @@ desolate: this push needs your confirmation.
   LFS         0 object(s), only those its commits point to
   sends       3 commit(s) the remote does not have, 1 file(s)
               (desolate's reviewer, in the root)
+  push        acme/widgets offered <commit>
 Type the branch name (offered) to push, or anything else to refuse: offered
 pushed acme/widgets offered at <commit> (3 commit(s)).
 [exit 0]
