@@ -27,10 +27,16 @@ const VISIBILITY = EMBED && "IntersectionObserver" in window && "isVisible" in I
 let pointerInside = false;
 const READY_MS = 1000;
 const DWELL_MS = 300;
+/** How long a word about a click stays before the hint says again what arming waits for. */
+const SAID_MS = 3000;
 const list = document.getElementById("list");
 const status = document.getElementById("status");
 const template = document.getElementById("card");
 const cards = new Map(); // the push's token (over its exact text) -> card
+// The push this tab was opened for: the dashboard's Push names it in the address's fragment
+// (which the host never sees). Its card, if one names exactly that, is marked and scrolled to
+// once; it arms and signs as any other.
+const askedFor = EMBED ? {} : Object.fromEntries(new URLSearchParams(location.hash.slice(1)));
 
 const attending = () => document.visibilityState === "visible" && (document.hasFocus() || (EMBED && pointerInside));
 let attentiveSince = attending() ? performance.now() : 0;
@@ -78,14 +84,38 @@ const ready = (card, arm) => current && reviewedOf(card) && attentiveSince !== 0
 const armedOf = (card) => card.arms.find((a) => a.armedAt);
 const disarm = (card) => {
   for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
-  if (card.done) return;
+  if (card.done || performance.now() < card.saidUntil) return;
+  arming(card, whyNotArmed(card));
+};
+/** The hint while arming: one line, cut if it must (approve.css), so it never changes the
+ *  bar's height under the pointer. */
+const arming = (card, text) => { card.hint.classList.remove("said"); card.hint.textContent = text; card.hint.title = text; };
+/** What happened, in full (it may take lines): kept until the next arming. */
+const said = (card, text) => {
+  card.hint.classList.add("said"); card.hint.textContent = text; card.hint.title = ""; card.saidUntil = Infinity;
+  // Decided: nothing on it takes keys any more.
+  if (card.done) for (const input of card.element.querySelectorAll("input")) input.disabled = true;
+};
+/** Why no button of `card` is armed now, as the hint says it. */
+const whyNotArmed = (card) => {
   const first = card.arms.find((a) => !a.wrap.hidden);
-  card.hint.textContent = !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer over a button to arm it" : "arming in a moment...";
+  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer on a button, then click a moment later" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
+// Whatever changes a card's size (a card folded, a diff opened, what happened said on one, as
+// late as the pusher's word) moves every Approve below it: each waits its second again.
+// So does the page scrolling: it moves Approve under a pointer that did not move.
+const moved = () => { for (const card of cards.values()) card.changedAt = performance.now(); disarmAll(); };
+new ResizeObserver(moved).observe(list);
+window.addEventListener("scroll", moved, { passive: true });
 setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
 setInterval(() => { for (const card of cards.values()) if (card.tick && !card.done) card.tick(); }, 1000);
 
+/** Beside the git terminal: the person decided, so its page may give the keys back to the
+ *  shell once nothing waits (git.js). Only a number and a word, to that one origin. */
+const tellTerminal = (message) => { if (EMBED && window.parent !== window) window.parent.postMessage(message, location.origin.replace("//desolate-approve.", "//desolate-git.")); };
+// A key typed in the pane: the person is still at work here (git.js keeps the keys here).
+document.addEventListener("keydown", () => tellTerminal({ desolateTyping: true }), true);
 const post = async (what, card, squash) => {
   const sent = card.issue ? { path: "/issue", body: { id: card.issue.id, token: card.issue.token, do: what === "approve" ? "publish" : "refuse" } } : { path: `/${what}`, body: { nonce: card.push.nonce, token: card.push.token, shown: card.push.shown, commit: card.push.commit, squash: squash === true, replace: card.replaces && card.typed } };
   const answer = await fetch(sent.path, { method: "POST", headers: { "content-type": "application/json", ...credential }, body: JSON.stringify(sent.body), credentials: sendCookie });
@@ -233,12 +263,14 @@ const summaryOf = (review, card) => {
   if (!review || review.working) {
     // No deadline: the person waits as long as they choose to, or refuses (R4). How long, the
     // page counts from what the host said (the host tells it only what changes).
-    const p = el("p");
+    // What it is doing, on one line (approve.css): ticking each second, it never changes the
+    // card's height, which would make every card wait its second again.
+    const p = el("p", undefined, "working");
     const since = performance.now() - (review ? review.working.seconds * 1000 : 0);
-    const say = () => { p.textContent = `desolate's reviewer is working out what this push would send: ${review ? workingText({ ...review.working, seconds: Math.floor((performance.now() - since) / 1000) }) : "starting"}. It may take a while for a large push; Approve arms when it has said. Or refuse it.`; };
+    const say = () => { p.textContent = `desolate's reviewer is working out what this push would send: ${review ? workingText({ ...review.working, seconds: Math.floor((performance.now() - since) / 1000) }) : "starting"}`; p.title = p.textContent; };
     say();
     if (card) card.tick = say;
-    box.append(p);
+    box.append(p, el("p", "It may take a while for a large push; Approve arms when it has said. Or refuse it."));
     return box;
   }
   if (!review.account) {
@@ -372,7 +404,7 @@ const add = (push, issue) => {
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
   const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, visible: VISIBILITY ? false : undefined }));
-  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
+  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
   for (const arm of arms) {
     if (watcher) watcher.observe(arm.wrap);
     // (A disabled button gets no pointer events in every browser: these are on its wrapper,
@@ -383,21 +415,29 @@ const add = (push, issue) => {
       disarm(card);
       arm.armedAt = performance.now();
       arm.button.disabled = false;
-      card.hint.textContent = "";
+      card.saidUntil = 0;
+      arming(card, issue ? "armed: click to publish" : "armed: click to approve");
     });
     arm.wrap.addEventListener("pointerleave", () => disarm(card));
+    // A click on a button not armed (the wrapper has it: approve.css) does nothing, and says
+    // why, for a few seconds: a click ignored in silence read as a page that did not work.
+    arm.wrap.addEventListener("click", () => {
+      if (arm.armedAt || card.done || card.busy) return;
+      arming(card, `not armed yet: ${whyNotArmed(card)}`);
+      card.saidUntil = performance.now() + SAID_MS;
+    });
     arm.button.addEventListener("click", async (event) => {
       // A real pointer's click, on a button armed a moment ago: not a key, not a script.
       if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
       // Armed a moment ago, and clicked at once: said, so the person knows to rest a moment.
-      if (performance.now() - arm.armedAt < DWELL_MS) { card.hint.textContent = "hold still on the button a moment, then click"; return; }
+      if (performance.now() - arm.armedAt < DWELL_MS) { arming(card, "hold still on the button a moment, then click"); return; }
       card.busy = true;
       arm.button.disabled = true;
-      card.hint.textContent = issue ? "publishing..." : "approving...";
+      arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.hint.textContent = issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : arm.squash ? `approved, squashed into one commit: the push continues in the root. Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "approved: the push continues in the root"; }
-      catch (error) { card.hint.textContent = `not approved: ${error.message}`; }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); }
+      catch (error) { said(card, `not approved: ${error.message}`); }
       finally { card.busy = false; disarm(card); }
     });
   }
@@ -407,12 +447,27 @@ const add = (push, issue) => {
   element.querySelector(".refuse").addEventListener("click", async (event) => {
     if (!event.isTrusted || card.busy || card.done) return;
     card.busy = true;
-    try { await post("refuse", card); card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"; }
-    catch (error) { card.hint.textContent = error.message; }
+    try { await post("refuse", card); card.done = true; tellTerminal({ desolateDecided: true }); for (const arm of card.arms) arm.button.disabled = true; said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
+    catch (error) { said(card, error.message); }
     finally { card.busy = false; }
   });
   disarm(card);
   return card;
+};
+
+/** After a squash, how the workspace's branch goes on from it. */
+const carryOn = (card) => card.squashed ? ` Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "";
+/** How a push this page approved ended, as the host heard it from the pusher: said on its card,
+ *  with the page to open its pull request (GitHub's, on github.com only). */
+const ended = (outcome) => {
+  const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.token === outcome.token);
+  if (!card) return;
+  card.ended = true;
+  if (!outcome.pushed) return void said(card, `approved, but the pusher said: ${outcome.error}`);
+  said(card, `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it. `);
+  if (typeof outcome.link === "string" && outcome.link.startsWith("https://github.com/"))
+    card.hint.append(Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
+  card.hint.append(carryOn(card));
 };
 
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
@@ -434,6 +489,8 @@ const choicesOf = (card, review) => {
 
 const render = (pending, issues) => {
   let changed = false;
+  let added = false;
+  let scrollTo = null;
   const seen = new Set();
   for (const issue of issues) {
     seen.add(issue.token);
@@ -441,7 +498,7 @@ const render = (pending, issues) => {
     const card = add(null, issue);
     cards.set(issue.token, card);
     list.append(card.element);
-    changed = true;
+    changed = added = true;
   }
   for (const push of pending) {
     seen.add(push.token);
@@ -450,7 +507,13 @@ const render = (pending, issues) => {
       card = add(push);
       cards.set(push.token, card);
       list.append(card.element);
-      changed = true;
+      changed = added = true;
+      if (askedFor.commit === push.commit && askedFor.repo === push.repo && askedFor.branch === push.branch) {
+        askedFor.commit = "";
+        card.element.classList.add("asked");
+        card.element.prepend(el("p", "This tab's address names this push, as the dashboard's Push does. If you did not click Push, look twice.", "asked-note"));
+        scrollTo = card.element;
+      }
     }
     // (How long the reviewer has been at it is not a change: the page counts that itself.)
     const shown = JSON.stringify(push.review && push.review.working ? { working: { ...push.review.working, seconds: 0 } } : push.review);
@@ -476,16 +539,21 @@ const render = (pending, issues) => {
   for (const card of cards.values())
     if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
-      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; card.hint.textContent = "no longer waiting (approved elsewhere, refused, or given up)"; }
+      if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; said(card, "no longer waiting (approved elsewhere, refused, or given up)"); }
       card.element.classList.add("gone");
       changed = true;
     }
+  // Something new to decide: what was decided before folds to its names and its outcome, so
+  // the new card is not pushed below the fold (dogfooding, 2026-11-21: two refused cards above
+  // the live one, beside the git terminal). The page moved: every card waits its second again.
+  if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); card.changedAt = performance.now(); }
+  if (scrollTo) scrollTo.scrollIntoView({ block: "start" });
   if (changed) disarmAll();
   const waiting = [...cards.values()].filter((card) => !card.gone).length;
   document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
   // (A number, to that one origin.)
-  if (EMBED && window.parent !== window) window.parent.postMessage({ desolatePending: waiting }, location.origin.replace("//desolate-approve.", "//desolate-git."));
+  tellTerminal({ desolatePending: waiting });
   // Nothing waiting: said as a state of its own, with what makes something appear here. A
   // grey line alone read as a page that did not work (dogfooding, 2026-11-17, after
   // `desolate approve --web --open` with nothing waiting).
@@ -507,7 +575,7 @@ const poll = async (tag) => {
     const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
     if (!answer.ok) { current = false; disarmAll(); say(body.error || `HTTP ${answer.status}`); }
-    else { pending = body.pending; render(pending, issues); current = true; next = body.tag; }
+    else { pending = body.pending; render(pending, issues); for (const outcome of body.done || []) ended(outcome); current = true; next = body.tag; }
   } catch (error) { current = false; disarmAll(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };
