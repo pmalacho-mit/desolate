@@ -81,7 +81,7 @@ export const openDir = (dir: string, settle = false): Dir | string => {
     const opened = openOnce(dir);
     const unsettled =
       typeof opened === "string" &&
-      [NOT_THERE, LINK, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
+      [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
     if (!settle || !unsettled || !settling(dir)) return opened;
     if (tries === OPEN_TRIES) return `${opened}, at each of ${OPEN_TRIES} looks over a second`;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
