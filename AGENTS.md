@@ -103,8 +103,13 @@ layout). `release/` is what ships: the `release` branch is that folder, publishe
 ```bash
 make test                                    # T1: tsc, node tests, in-source tests. Under a minute
 docker build -t desolate/base:latest -f release/image/Dockerfile release   # once per VM, 90 s
-tests/v3/run.sh t2                           # T2: the whole stack in containers. About 18 min
+tests/v3/run.sh affected                     # T1, then the T2 suites this change touches
+tests/v3/run.sh t2                           # T2: the whole stack in containers, three suites at a time. About 12 min
 ```
+
+While you work, run `run.sh affected`: it maps the files you changed to the suites that test
+them (`tests/v3/features.ts`). Run the whole of T2 before a change goes into `main`, and T4 too
+when it touches a boundary.
 
 One T2 suite. In a workspace, `run.sh` sets `TMPDIR` to `/desolate/scratch/tests`, and
 `DOCKER_HOST` to the VM's own Docker socket: the devcontainer's relay in front of it closes a
