@@ -263,7 +263,7 @@ export const take = async (
       return { ok: false, error: "an LFS object is named by its sha256 and its size" };
     const target = lfsStore(path.join(clone, ".git", "lfs", "objects"), item.oid);
     if (!fs.existsSync(target)) {
-      const taken = takeLfs(domain, id, item.oid, item.size as number, target);
+      const taken = await takeLfs(domain, id, item.oid, item.size as number, target);
       if ("error" in taken) return { ok: false, error: taken.error, fix: "offer again" };
     } else dropLfs(domain, id, item.oid);
   }
