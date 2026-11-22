@@ -829,7 +829,7 @@ echo "$c1 $c2 $c3 $c4"`);
     assert.equal(saidChain.squash?.committer, "chain <chain@example.invalid>");
     assert.equal(
       saidChain.squash?.message,
-      "control\n\nSquashed from 6 commits:\n- control\n- stored\n- (no message)\n- put back\n- with headers\n- hidden\n",
+      "hidden\n\nSquashed from 6 commits:\n- control\n- stored\n- (no message)\n- put back\n- with headers\n- hidden\n",
     );
     // The commits are listed first to last, and each one's own diff is its own: asked for by
     // the commit, it is that commit whole, and no other.
@@ -1196,7 +1196,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.equal(said.squash?.count, 2);
     assert.equal(
       said.squash?.message,
-      "add notes\n\nSquashed from 2 commits:\n- add notes\n- tidy up\n",
+      "tidy up\n\nSquashed from 2 commits:\n- add notes\n- tidy up\n",
     );
     // Squashed: one commit, the tip's tree, on main; the file in between is nowhere on the forge.
     const squashed = stack.person(
@@ -1591,7 +1591,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.equal((await act("refuse", large!)).status, 200);
   });
 
-  it("the approval page by a person's pointer: the tab's push is marked, Approve stays armed under it, and the card says the push landed", async () => {
+  it("the approval page by a person's pointer: the tab's push is marked, Approve arms under a pointer at rest once the page stands still, and the card says the push landed", async () => {
     stack.step("the approval page, by a person's pointer");
     const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
     const origin = new URL(address).origin;
@@ -1625,25 +1625,47 @@ echo "=====waits"; cat /tmp/waits.lines`,
       const card = "document.querySelector('.card.asked')";
       const bar = () => page.evaluate<number>(`${card}.querySelector('.actions').offsetHeight`);
       const before = await bar();
-      // The pointer onto Approve arms it, and a click at once is said, not taken.
-      await page.click(".card.asked button.approve", "Approve push");
+      // A click as the pointer arrives is said, not taken: it has not been over Approve a second.
+      // (From elsewhere on the card first: resting on Approve since the page loaded, it would
+      // have armed, as it should.)
+      // (Timed by the page: from the pointer's arrival over Approve to its press.)
+      await page.click(".card.asked .onto");
+      await page.evaluate(
+        `(() => { const w = ${card}.querySelector('button.approve').parentElement; window.arrivedAt = 0; w.addEventListener('pointermove', () => { window.arrivedAt ||= performance.now(); }); window.addEventListener('pointerdown', () => { window.pressedAt = performance.now(); }, { capture: true }); return true; })()`,
+      );
+      await page.click(".card.asked button.approve", "Approve push", { atOnce: true });
+      const took = await page.evaluate<number>("window.pressedAt - window.arrivedAt");
+      assert.ok(took < 1000, `the press came ${took} ms after the pointer arrived: not at once`);
       assert.match(
         await page.evaluate<string>(`${card}.querySelector('.hint').textContent`),
-        /hold still/,
-      );
-      assert.equal(
-        await bar(),
-        before,
-        "arming kept the bar's height: Approve stayed under the pointer",
+        /^not armed yet/,
       );
       assert.equal(
         forgeRefs("acme/widgets")["web-pointer"],
         undefined,
         "a click at once pushed nothing",
       );
-      // Still armed a moment later, under the same pointer: the click is the approval.
-      await sleep(500);
-      assert.equal(await page.evaluate(`${card}.querySelector('button.approve').disabled`), false);
+      // The pointer at rest on it, sending nothing: Approve arms within a second or so (the
+      // page's own clock, under load: waited for, not slept), and the bar keeps its height.
+      const armed = `${card}.querySelector('button.approve').disabled === false`;
+      await page.until(armed, "Approve armed under a pointer at rest", 10_000);
+      assert.equal(
+        await bar(),
+        before,
+        "arming kept the bar's height: Approve stayed under the pointer",
+      );
+      // A change to the page (a scroll moves Approve under a still pointer) disarms it at once,
+      // and it arms again only once the page has stood still a second under the pointer.
+      const changedAt = await page.evaluate<number>(
+        "(() => { window.dispatchEvent(new Event('scroll')); return performance.now(); })()",
+      );
+      assert.equal(await page.evaluate(armed), false, "a change disarms at once");
+      await page.until(armed, "Approve armed again", 10_000);
+      assert.ok(
+        (await page.evaluate<number>("performance.now()")) - changedAt >= 1000,
+        "not before the page stood still a second",
+      );
+      // The click is the approval.
       await page.click(".card.asked button.approve", "Approve push");
       await page.until(
         `/^pushed: the remote's web-pointer has it/.test(${card}.querySelector('.hint').textContent)`,

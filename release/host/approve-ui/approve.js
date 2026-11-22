@@ -2,10 +2,12 @@
 // markup: a commit's subject or a file's name is whatever an agent wrote.
 //
 // Arming. The Approve button takes a click only when (1) the page has been visible and
-// focused for a second, (2) the card has been on the page, unchanged, for a second, (3) the
-// pointer has then MOVED over the button (a card shifted under a still pointer arms
-// nothing), and (4) a third of a second has passed since. Any change to the page (a card
-// added, gone, or its summary arriving) disarms every button. Keys do not approve.
+// focused for a second, (2) the card has been on the page, unchanged, for a second, and (3)
+// the pointer has been over the button for that second, moving or at rest (a pointer at rest
+// was never armed, and a click soon after arriving was refused: dogfooding, 2026-11-22). Any
+// change to the page (a card added, gone, its summary arriving, a scroll) disarms every
+// button, and the second starts again: a card that shifted under a still pointer arms only
+// once it has stood still under it. Keys do not approve.
 //
 // Embedded beside the git terminal (/embed, approve-web.ts): the key from the address's
 // fragment is the credential (sent as a header), the pointer over the frame counts as
@@ -26,7 +28,6 @@ const sendCookie = EMBED ? "omit" : "same-origin";
 const VISIBILITY = EMBED && "IntersectionObserver" in window && "isVisible" in IntersectionObserverEntry.prototype;
 let pointerInside = false;
 const READY_MS = 1000;
-const DWELL_MS = 300;
 /** How long a word about a click stays before the hint says again what arming waits for. */
 const SAID_MS = 3000;
 const list = document.getElementById("list");
@@ -62,8 +63,9 @@ const watcher = VISIBILITY ? new IntersectionObserver((entries) => {
     for (const card of cards.values()) {
       const arm = card.arms.find((a) => a.wrap === entry.target);
       if (!arm) continue;
-      arm.visible = entry.isVisible && entry.intersectionRatio >= 0.99;
-      if (!arm.visible) disarm(card);
+      const visible = entry.isVisible && entry.intersectionRatio >= 0.99;
+      // Covered, or shown again: a change, and the second starts again (the fresh review).
+      if (visible !== arm.visible) { arm.visible = visible; changed(card); }
     }
   }
 }, { threshold: [0, 1], trackVisibility: true, delay: 100 }) : null;
@@ -99,7 +101,7 @@ const said = (card, text) => {
 /** Why no button of `card` is armed now, as the hint says it. */
 const whyNotArmed = (card) => {
   const first = card.arms.find((a) => !a.wrap.hidden);
-  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer on a button, then click a moment later" : "arming in a moment...";
+  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "rest the pointer on a button: it arms after a second" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 // Whatever changes a card's size (a card folded, a diff opened, what happened said on one, as
@@ -108,7 +110,29 @@ const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 const moved = () => { for (const card of cards.values()) card.changedAt = performance.now(); disarmAll(); };
 new ResizeObserver(moved).observe(list);
 window.addEventListener("scroll", moved, { passive: true });
-setInterval(() => { for (const card of cards.values()) if (!armedOf(card) && !card.done) disarm(card); }, 250);
+/** Armed, if the pointer has been over it (moving or not) for a second while nothing on the
+ *  page changed. */
+const tryArm = (card, arm) => {
+  if (card.done || card.busy || armedOf(card) || performance.now() < card.saidUntil || !arm.overSince || performance.now() - arm.overSince < READY_MS || !ready(card, arm)) return;
+  arm.armedAt = performance.now();
+  arm.button.disabled = false;
+  card.saidUntil = 0;
+  arming(card, card.issue ? "armed: click to publish" : "armed: click to approve");
+};
+// (The pointer over a button is read as the browser has it, :hover: a pointer at rest sends
+// no events.)
+setInterval(() => {
+  for (const card of cards.values()) {
+    if (card.done) continue;
+    for (const arm of card.arms) {
+      const over = arm.wrap.matches(":hover");
+      if (!over && arm.overSince) { arm.overSince = 0; if (arm.armedAt) disarm(card); }
+      else if (over && !arm.overSince) arm.overSince = performance.now();
+      tryArm(card, arm);
+    }
+    if (!armedOf(card)) disarm(card);
+  }
+}, 250);
 setInterval(() => { for (const card of cards.values()) if (card.tick && !card.done) card.tick(); }, 1000);
 
 /** Beside the git terminal: the person decided, so its page may give the keys back to the
@@ -414,22 +438,17 @@ const add = (push, issue) => {
     element.querySelector(".commit").textContent = push.commit;
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
-  const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, visible: VISIBILITY ? false : undefined }));
+  const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, overSince: 0, visible: VISIBILITY ? false : undefined }));
   const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
   for (const arm of arms) {
     if (watcher) watcher.observe(arm.wrap);
     // (A disabled button gets no pointer events in every browser: these are on its wrapper,
     // and the button lets them through while disabled: approve.css.)
-    arm.wrap.addEventListener("pointermove", (event) => {
-      if (card.done || card.busy || arm.armedAt || !ready(card, arm)) return;
-      if (event.movementX === 0 && event.movementY === 0) return;
-      disarm(card);
-      arm.armedAt = performance.now();
-      arm.button.disabled = false;
-      card.saidUntil = 0;
-      arming(card, issue ? "armed: click to publish" : "armed: click to approve");
+    arm.wrap.addEventListener("pointermove", () => {
+      if (!arm.overSince) arm.overSince = performance.now();
+      tryArm(card, arm);
     });
-    arm.wrap.addEventListener("pointerleave", () => disarm(card));
+    arm.wrap.addEventListener("pointerleave", () => { arm.overSince = 0; disarm(card); });
     // A click on a button not armed (the wrapper has it: approve.css) does nothing, and says
     // why, for a few seconds: a click ignored in silence read as a page that did not work.
     arm.wrap.addEventListener("click", () => {
@@ -438,17 +457,16 @@ const add = (push, issue) => {
       card.saidUntil = performance.now() + SAID_MS;
     });
     arm.button.addEventListener("click", async (event) => {
-      // A real pointer's click, on a button armed a moment ago: not a key, not a script.
+      // A real pointer's click, on an armed button: not a key, not a script.
       if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
-      // Armed a moment ago, and clicked at once: said, so the person knows to rest a moment.
-      if (performance.now() - arm.armedAt < DWELL_MS) { arming(card, "hold still on the button a moment, then click"); return; }
       card.busy = true;
+      const asked = performance.now();
       arm.button.disabled = true;
       arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); }
-      catch (error) { said(card, `not approved: ${error.message}`); }
+      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); if (outcomesAt >= asked) for (const outcome of outcomes) ended(outcome); }
+      catch (error) { said(card, `not approved: ${error.message}`); card.saidUntil = performance.now() + SAID_MS; }
       finally { card.busy = false; disarm(card); }
     });
   }
@@ -476,7 +494,9 @@ const ended = (outcome) => {
   card.ended = true;
   if (!outcome.pushed) return void said(card, `approved, but the pusher said: ${outcome.error}`);
   said(card, `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it. `);
-  if (typeof outcome.link === "string" && outcome.link.startsWith("https://github.com/"))
+  // A suede proposal (docs/suede.md): the dependency's own Action opens its pull request.
+  if (/^downstream\//.test(card.push.branch)) card.hint.append("The dependency's own Action (suede-downstream-to-main) opens its pull request.");
+  else if (typeof outcome.link === "string" && outcome.link.startsWith("https://github.com/"))
     card.hint.append(Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
   card.hint.append(carryOn(card));
 };
@@ -579,15 +599,19 @@ const render = (pending, issues) => {
 // The issues to publish are asked for every second.
 let pending = null;
 let issues = [];
+/** How the pushes approved here ended, as the host last said: kept, as an approval's own
+ *  answer can come after the word that it was pushed. */
+let outcomes = [];
+let outcomesAt = 0;
 const poll = async (tag) => {
   const began = performance.now();
   let next = null;
   try {
     const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
-    if (!answer.ok) { current = false; disarmAll(); say(body.error || `HTTP ${answer.status}`); }
-    else { pending = body.pending; render(pending, issues); for (const outcome of body.done || []) ended(outcome); current = true; next = body.tag; }
-  } catch (error) { current = false; disarmAll(); say(`the host daemon did not answer: ${error.message}`); }
+    if (!answer.ok) { current = false; moved(); say(body.error || `HTTP ${answer.status}`); }
+    else { pending = body.pending; render(pending, issues); outcomes = body.done || []; outcomesAt = performance.now(); for (const outcome of outcomes) ended(outcome); current = true; next = body.tag; }
+  } catch (error) { current = false; moved(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };
 const pollIssues = async () => {

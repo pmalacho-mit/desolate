@@ -387,9 +387,9 @@ you do, and say what the host is doing meanwhile; Ctrl-C withdraws a push until 
 to the root, after which you decline it on the approval page.
 
 The push waits for you, and the approval opens beside the terminal: what the push names, and
-what it would send, worked out in the root. **Approve** arms only when the pointer moves onto
-it: move it onto the button, then click a moment later (a click before that does nothing,
-and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
+what it would send, worked out in the root. **Approve** arms once the pointer has rested
+on it for a second while nothing on the page changed: rest it on the button, then click (a
+click before that does nothing, and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
 the pack that goes is the one desolate's reviewer made of its commits, and what you approve
 names it. The card then says when the push is on the remote, with **Open a pull request**
 (GitHub's page, into the repository's default branch). Once nothing else waits, the keys go
@@ -411,8 +411,8 @@ What the approval page shows, and the two choices it may add:
   page says what it is doing ("packing (1,200 of 8,000), 2 min") and waits as long as you
   do. Approve arms once it has said what the push sends.
 - **Approve, squashed into one commit.** With two commits or more, this pushes them as one:
-  the last commit's files, on what the branch builds on, with a message listing every
-  commit. Nothing that was in between reaches the remote. The workspace's branch still has
+  the last commit's files, on what the branch builds on, titled by the last commit's subject,
+  with a message listing every commit. Nothing that was in between reaches the remote. The workspace's branch still has
   the commits that were squashed, so to carry on, move it onto the squash. After the push,
   the Mac prints the command, to run in the workspace:
 

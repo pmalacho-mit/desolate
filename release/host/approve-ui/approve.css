@@ -106,8 +106,10 @@ html.embed .card { margin: 10px 0; padding: 12px; }
 html.embed .status { font-size: 13px; }
 html.embed pre.diff { max-height: 40vh; }
 /* The diff, on asking: git's text, coloured by each line's first character. */
-pre.diff { margin: 8px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; max-height: 50vh; overflow: auto; white-space: pre; font: 12.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
-pre.diff span { display: block; min-width: max-content; }
+pre.diff { margin: 8px 0 0; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; max-height: 50vh; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+/* Long lines wrap, as GitHub's diff does: one that scrolled sideways hid its end (dogfooding,
+   2026-11-22). */
+pre.diff span { display: block; }
 pre.diff .add { background: color-mix(in srgb, var(--ok) 16%, transparent); }
 pre.diff .del { background: color-mix(in srgb, var(--danger) 18%, transparent); }
 pre.diff .hunk { color: var(--muted); }
