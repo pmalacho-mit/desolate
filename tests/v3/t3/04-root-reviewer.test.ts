@@ -1,7 +1,7 @@
 // T3 (qemu) and T4 (vz, on a Mac: DESOLATE_TIER=T4). The host asks desolate's reviewer as
 // root in the root VM (host/vm/lima.ts `spawn`, host/daemon.ts `reviewerAsked`), and a
 // question nobody waits for any more must end there: the person's Ctrl-C at the terminal,
-// a CLI killed alone, a page that let go of its question. Each is tried beside a control
+// a CLI killed alone, a page that let go of its question, a git VM push withdrawn with Ctrl-C. Each is tried beside a control
 // asked the same at the same moment and still waited for, which is still running when the
 // other has ended; and once all have ended, none of the reviewer's git is left.
 //
@@ -68,13 +68,13 @@ const until = async (what: string, done: () => boolean, ms: number) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(500)) if (done()) return;
   assert.fail(`${what}: not within ${ms / 1000} s (${JSON.stringify(asking())})`);
 };
-/** A raw `git push` of HEAD from the root's terminal, left waiting for its approval. It must
- *  hold nothing of the call that starts it: on Lima, a command left running with any of the
- *  session's descriptors kept that session, and the synchronous call, open (a first version
- *  held the T4 slot for 90 minutes). So it runs in a session of its own (setsid -f), every
- *  descriptor past the three it redirects closed first; and the call, as the harness's
- *  inRoot makes it, is given a minute, so a run can never hang here. */
-const rawPush = (branch: string) => {
+/** `script` started in `vm` (as its ordinary user) and left running. It must hold nothing
+ *  of the call that starts it: on Lima, a command left running with any of the session's
+ *  descriptors kept that session, and the synchronous call, open (a first version held the
+ *  T4 slot for 90 minutes). So it runs in a session of its own (setsid -f), every descriptor
+ *  past the three it redirects closed first; and the call, as the harness's inRoot makes it,
+ *  is given a minute, so a run can never hang here. */
+const detached = (vm: string, script: string, log: string) => {
   const started = spawnSync(
     process.env.DESOLATE_LIMACTL ?? "limactl",
     [
@@ -82,15 +82,24 @@ const rawPush = (branch: string) => {
       "shell",
       "--workdir",
       "/",
-      `dsl-${stack.instance}-root`,
+      vm,
       "bash",
       "-c",
-      `export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig; cd ${CLONE} && for fd in /proc/$$/fd/*; do n=\${fd##*/}; [ "$n" -gt 2 ] && eval "exec $n>&-"; done 2>/dev/null; setsid -f bash -c 'exec git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1' </dev/null >/dev/null 2>&1; echo started`,
+      `for fd in /proc/$$/fd/*; do n=\${fd##*/}; [ "$n" -gt 2 ] && eval "exec $n>&-"; done 2>/dev/null; setsid -f bash -c "$1" >${log} 2>&1 </dev/null; echo started`,
+      "_",
+      script,
     ],
     { env: stack.env, input: "", encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" },
   );
   assert.match(started.stdout ?? "", /started/, `${started.error ?? ""} ${started.stderr}`);
 };
+/** A raw `git push` of HEAD from the root's terminal, left waiting for its approval. */
+const rawPush = (branch: string) =>
+  detached(
+    `dsl-${stack.instance}-root`,
+    `export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig; cd ${CLONE} && exec git push origin HEAD:refs/heads/${branch}`,
+    `/tmp/${branch}.log`,
+  );
 /** The pushes waiting for approval, as the root's own files list them. */
 const waitingPushes = () =>
   counted(
@@ -281,6 +290,68 @@ describe(
       );
       assert.deepEqual(asking(), { asks: 0, reviewers: 0 });
       inClone("pkill -f 'git push origin HEAD:refs/heads/slow-commi[t]' || true");
+    });
+
+    it("T3 a git VM push, withdrawn with Ctrl-C at its terminal, leaves the list; the control, not withdrawn, stays", async () => {
+      stack.step("a push from the git VM, withdrawn with Ctrl-C");
+      await until("the pushes before have left the list", () => waitingPushes() === 0, 30_000);
+      const made = stack.desolate("git", "acme/widgets");
+      assert.equal(made.code, 0, made.stderr);
+      const vm = `dsl-${stack.instance}-git`;
+      const inGit = (script: string) => stack.inVm(vm, ["bash", "-c", script]);
+      // A terminal of its own, as the git terminal's (git/terminal.py): bash in a pty, the
+      // push typed there, and Ctrl-C typed there when the test says so (SIGUSR1).
+      const terminal = `import os, pty, signal, sys
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir("/git/acme/widgets")
+    os.execvp("bash", ["bash", "--norc", "-i"])
+signal.signal(signal.SIGUSR1, lambda *_: os.write(fd, b"\\x03"))
+os.write(fd, sys.argv[1].encode() + b"\\n")
+while True:
+    try:
+        data = os.read(fd, 65536)
+    except OSError:
+        break
+    if not data:
+        break
+    sys.stdout.buffer.write(data)
+    sys.stdout.flush()
+`;
+      const wrote = stack.inVm(vm, ["bash", "-c", "cat > /tmp/terminal.py"], { input: terminal });
+      assert.equal(wrote.code, 0, wrote.stderr);
+      const commit = inGit(
+        "cd /git/acme/widgets && git switch -q -c withdrawn origin/main && echo w > w.txt && git add w.txt && git -c user.name=p -c user.email=p@example.invalid commit -qm w && echo made",
+      );
+      assert.match(commit.stdout, /made/, commit.stderr);
+      detached(
+        vm,
+        "exec python3 -I /tmp/terminal.py 'git push origin HEAD:refs/heads/withdrawn'",
+        "/tmp/terminal.log",
+      );
+      await until("the push waits for its approval", () => waitingPushes() === 1, 120_000);
+      // CONTROL: not withdrawn, it stays on the list.
+      await sleep(ENDS_MS);
+      assert.equal(waitingPushes(), 1, "CONTROL: a push still waited for stays on the list");
+      inGit("pkill -USR1 -f '/tmp/terminal[.]py'");
+      await until(
+        "the push withdrawn with Ctrl-C leaves the list",
+        () => waitingPushes() === 0,
+        ENDS_MS,
+      );
+      const said = inGit("cat /tmp/terminal.log").stdout;
+      assert.match(said, /Until it is approved, Ctrl-C withdraws it/, said);
+      // And the git VM's next push is taken at once: nothing of the last one holds the host.
+      detached(
+        vm,
+        "cd /git/acme/widgets && exec git push origin HEAD:refs/heads/withdrawn",
+        "/tmp/again.log",
+      );
+      await until("the next push is taken and waits", () => waitingPushes() === 1, 60_000);
+      inGit(
+        "pkill -f 'python3 -I /tmp/terminal[.]py'; pkill -f 'git push origin HEAD:refs/heads/withdraw[n]'",
+      );
+      await until("and leaves when it is stopped", () => waitingPushes() === 0, ENDS_MS);
     });
   },
 );

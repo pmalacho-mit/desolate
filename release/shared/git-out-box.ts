@@ -130,8 +130,14 @@ export const requester = (at: Boxes = GIT_VM_BOXES, pace: typeof PACE = PACE) =>
     for (const name of mine) fs.rmSync(path.join(at.out, name), { force: true });
     mine.clear();
   };
+  // `on`, not `once`: Ctrl-C reaches a push's helper twice (the terminal's SIGINT, and git's,
+  // passed on to the helper it runs), and with no listener left the second killed it before
+  // it had told the host: the push stayed on the approval page (dogfooding, 2026-11-21).
+  let stopping = false;
   const stopped = (signal: NodeJS.Signals, code: number) =>
-    process.once(signal, () => {
+    process.on(signal, () => {
+      if (stopping) return;
+      stopping = true;
       withdraw();
       process.exit(128 + code);
     });
