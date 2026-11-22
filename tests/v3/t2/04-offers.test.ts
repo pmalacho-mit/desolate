@@ -9,7 +9,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack, outboxSaid } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
-import { findChrome, loadPage } from "../lib/browser.ts";
+import { findChrome, loadPage, openBrowser } from "../lib/browser.ts";
 import { lfsDigest, signedFor } from "../../../release/shared/approval.ts";
 
 let stack: Stack;
@@ -956,8 +956,10 @@ echo "$c"`);
     submitted(b);
     const ask = (branch: string, commit: string) =>
       JSON.stringify({ op: "account", repo: "acme/widgets", branch, commit, onto: null });
-    // Packing made slow: the reviewer's first pack-objects after the mark is set waits 100 s
-    // first, longer than the 95 s that used to kill the account.
+    // Packing made slow: the reviewer's first pack-objects after the mark is set waits 20 s
+    // first, four of its 5 s beats. (The 95 s that used to kill an account is gone: nothing on
+    // the account's path has a deadline now, root/reviewer.ts. What is tried here is that a
+    // slow one says so, waits its turn, and ends with its asker.)
     const ran = stack.inRoot(
       [
         "bash",
@@ -967,7 +969,7 @@ echo "$c"`);
 trap 'rm -f /usr/local/bin/git; rm -rf /tmp/slowpack' EXIT
 cat > /usr/local/bin/git <<'W'
 #!/bin/sh
-if [ "$(id -un)" = desolate-reviewer ]; then case " $* " in *" pack-objects "*) rm /tmp/slowpack/once 2>/dev/null && sleep 100;; esac; fi
+if [ "$(id -un)" = desolate-reviewer ]; then case " $* " in *" pack-objects "*) rm /tmp/slowpack/once 2>/dev/null && sleep 20;; esac; fi
 exec /usr/bin/git "$@"
 W
 chmod 755 /usr/local/bin/git
@@ -980,9 +982,10 @@ rm -f /tmp/gone
 { printf '%s\n' "$1" | ask | { grep -m1 -q '"packing the push"'; touch /tmp/gone; }; } &
 until [ -e /tmp/gone ]; do sleep 0.2; done
 sleep 1
-echo "during $(count 'sleep 100') $(count 'reviewer.ts account')"
-sleep 12
-echo "after $(count 'sleep 100') $(count 'reviewer.ts account')"
+echo "during $(count 'sleep 20') $(count 'reviewer.ts account')"
+# Gone within a beat and the asker's grace (review-ask.ts): looked for up to 12 s.
+for _ in $(seq 1 48); do [ "$(count 'sleep 20') $(count 'reviewer.ts account')" = "0 0" ] && break; sleep 0.25; done
+echo "after $(count 'sleep 20') $(count 'reviewer.ts account')"
 wait
 # Asked again and read to the end; and another account asked for meanwhile, which waits.
 touch /tmp/slowpack/once
@@ -1011,7 +1014,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.match(head, /^during [1-9]\d* [1-9]\d*$/m, head);
     assert.match(head, /^after 0 0$/m, "nothing the account started outlives its asker");
     const took = Number(/^took (\d+)$/m.exec(head)?.[1]);
-    assert.ok(took >= 100, `the account took ${took} s`);
+    assert.ok(took >= 20, `the account took ${took} s`);
     const lines = (text: string) =>
       text
         .split("\n")
@@ -1024,7 +1027,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       (l) => "progress" in l && (l.progress as { phase: string }).phase === "packing the push",
     );
     assert.ok(
-      saying.length >= 10,
+      saying.length >= 3,
       `it says what it is doing while it packs: ${saying.length} times`,
     );
     assert.ok("account" in waits.at(-1)!, waitsText.slice(-500));
@@ -1588,6 +1591,71 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.equal((await act("refuse", large!)).status, 200);
   });
 
+  it("the approval page by a person's pointer: the tab's push is marked, Approve stays armed under it, and the card says the push landed", async () => {
+    stack.step("the approval page, by a person's pointer");
+    const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
+    const origin = new URL(address).origin;
+    inRootClone(
+      `setsid nohup git push origin ${commit}:refs/heads/web-pointer >/tmp/web-pointer.log 2>&1 </dev/null & sleep 0.2`,
+    );
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
+    try {
+      const page = await browser.tab(address);
+      const opened = async (named: string) => {
+        await page.goto("about:blank");
+        await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=web-pointer&commit=${named}`);
+        await page.until(
+          "[...document.querySelectorAll('.card')].some((c) => c.querySelector('.branch')?.textContent === 'web-pointer' && c.querySelector('button.approve') && !c.innerText.includes('working out'))",
+          "the push's card, its account shown",
+        );
+        return page.evaluate<string[]>(
+          "[...document.querySelectorAll('.card.asked .branch')].map((e) => e.textContent)",
+        );
+      };
+      // The tab's address names the push it was opened for: another commit marks nothing (the
+      // control); its own marks its card alone, which then signs just what it shows.
+      assert.deepEqual(await opened("0".repeat(40)), []);
+      assert.deepEqual(await opened(commit), ["web-pointer"]);
+      // (The driver centres what it clicks, and a sticky bar is never centred, so it would
+      // scroll the page at each click. A person's pointer does not.)
+      await page.evaluate("Element.prototype.scrollIntoView = function () {}");
+      await sleep(1500);
+      const card = "document.querySelector('.card.asked')";
+      const bar = () => page.evaluate<number>(`${card}.querySelector('.actions').offsetHeight`);
+      const before = await bar();
+      // The pointer onto Approve arms it, and a click at once is said, not taken.
+      await page.click(".card.asked button.approve", "Approve push");
+      assert.match(
+        await page.evaluate<string>(`${card}.querySelector('.hint').textContent`),
+        /hold still/,
+      );
+      assert.equal(
+        await bar(),
+        before,
+        "arming kept the bar's height: Approve stayed under the pointer",
+      );
+      assert.equal(
+        forgeRefs("acme/widgets")["web-pointer"],
+        undefined,
+        "a click at once pushed nothing",
+      );
+      // Still armed a moment later, under the same pointer: the click is the approval.
+      await sleep(500);
+      assert.equal(await page.evaluate(`${card}.querySelector('button.approve').disabled`), false);
+      await page.click(".card.asked button.approve", "Approve push");
+      await page.until(
+        `/^pushed: the remote's web-pointer has it/.test(${card}.querySelector('.hint').textContent)`,
+        "what the pusher said",
+        60_000,
+      );
+      assert.equal(forgeRefs("acme/widgets")["web-pointer"], commit);
+    } finally {
+      await browser.close();
+    }
+  });
+
   it("a repository cloned --no-push is never written: there is no key to write it with", () => {
     stack.step("a repository the root cannot push");
     inWs(
@@ -1703,7 +1771,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     // The root removes what it finds by NAME, in the directory it checked: the link goes,
     // what it pointed at is never opened, and the person is told something was dropped.
     const dropped = /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/;
-    assert.match(said(lied.stdout, dropped), dropped, lied.stdout);
+    assert.match(said(lied, dropped), dropped, lied.stdout);
     assert.ok(
       !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
         fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
@@ -1755,7 +1823,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     const header = inRootClone("git fetch dev 2>&1");
     const over =
       /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/;
-    assert.match(saidOfHeader(header.stdout, over), over);
+    assert.match(saidOfHeader(header, over), over);
     // Control: the list as the workspace wrote it, and the many branches it does not name
     // are pruned, as an honest list says.
     fs.writeFileSync(path.join(sync, "refs.json"), kept);

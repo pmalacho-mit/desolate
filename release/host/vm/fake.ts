@@ -142,6 +142,9 @@ export const fakeBackend = (): Backend => {
       // dockerd (workspaces) and nftables (the root) need it. This is the fake backend: the
       // container is not a boundary and does not pretend to be one.
       "--privileged",
+      // An init as PID 1, as a VM has: `sleep infinity` as PID 1 ignores SIGTERM, so every
+      // stop waited out docker's grace period before the kill.
+      "--init",
       "--tmpfs",
       "/run:exec,mode=755",
       "--tmpfs",

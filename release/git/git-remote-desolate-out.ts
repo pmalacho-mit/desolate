@@ -512,8 +512,10 @@ const main = async (address: string) => {
     mirror: `/desolate/mirrors/${remote.repo}.git`,
     gitDir: git(["rev-parse", "--absolute-git-dir"]).stdout.trim(),
   };
-  // What this leaves in the out-box, and the request it asks: withdrawn if it is stopped.
+  // What this leaves in the out-box, and the request it asks: withdrawn if it is stopped, or
+  // if git goes without a signal reaching this (killed alone: its end of the input closes).
   const box = requester();
+  process.stdin.once("close", box.left);
   const input = readline.createInterface({ input: process.stdin, terminal: false });
   const say = (text: string) => process.stdout.write(text);
   let batch: string[] = [];

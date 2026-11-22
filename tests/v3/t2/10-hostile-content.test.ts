@@ -280,7 +280,7 @@ describe("T2: what a hostile domain sends, the root takes as data", () => {
     assert.match(v3.stdout, /^# v3 git bundle/, v3.stdout + v3.stderr);
     const refused =
       /a bundle from dev was refused and dropped: it is not a bundle a workspace's git writes \(v2\)/;
-    assert.match(said(inRootClone("git fetch dev 2>&1").stdout, refused), refused);
+    assert.match(said(inRootClone("git fetch dev 2>&1"), refused), refused);
     assert.ok(
       !fs.existsSync(path.join(outbox, "sync/acme/widgets/zz-v3.bundle")),
       "and it is gone from the outbox",

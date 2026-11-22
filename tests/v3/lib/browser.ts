@@ -260,6 +260,10 @@ export const openBrowser = async (
         // Where it is, and that it is what the pointer would press there: a page that moved
         // under the pointer (a diff loading above a button) is measured again.
         const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.innerText.includes(${JSON.stringify(text)}))`;
+        // In front first, as the tab a person clicks in is: a tab the page opened (the
+        // dashboard's Push opens the approval page) puts this one behind it, where Chrome
+        // answers each pointer move after 5 s, and every click took 40 s (T2 19, 2026-11-22).
+        await send("Page.bringToFront", {}, sessionId);
         let at: { x: number; y: number } | null = null;
         for (let tries = 0; tries < 10; tries++) {
           at = await evaluate<{ x: number; y: number } | null>(`(() => {

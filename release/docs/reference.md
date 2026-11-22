@@ -70,7 +70,12 @@ so a program listening on another port is sent the cookie, but never the key), i
 (a page an agent wrote, on a workspace's name, is another), a token per push, a JSON body.
 It cannot be framed, and its Approve button arms only after the tab has had your attention
 for a second and the pointer then moves onto it, so a click aimed at something else when a
-window opened under it lands on nothing. Treat the address like a password: anyone with it,
+window opened under it lands on nothing. A click a moment after arming is the approval; one
+sooner, or on a button not armed, does nothing, and the line under the buttons says why.
+Once approved, the card says how the push ended, as the root's pusher reported it, with GitHub's
+page for opening its pull request into the repository's default branch. An address ending in
+`#repo=<owner/repo>&branch=<branch>&commit=<commit>` marks that push's card and scrolls to it;
+cards already decided fold when a new push comes. Treat the address like a password: anyone with it,
 on your Mac, can approve. The pages are served on both `127.0.0.1` and `::1` (where browsers
 look first for these names), or not at all: while another program holds the port on `::1`,
 desolate prints no address with a token in it, and retires the tokens (a tab already open
@@ -626,8 +631,10 @@ Every setting there is (T1 checks that this table names exactly those):
 | `git.scrollbackLines` | `DESOLATE_GIT_SCROLLBACK_LINES` | on the Mac | 5000 | lines the git terminal's browser tab keeps to scroll back through |
 | `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly (QEMU without KVM) |
 | `root.silentSeconds` | `DESOLATE_ROOT_SILENT_SECONDS` | on the Mac | 900 | how long a call to the root VM may hear nothing from it (no progress, no answer) before it is given up |
+| `workspace.silentSeconds` | `DESOLATE_WORKSPACE_SILENT_SECONDS` | on the Mac | 120 | how long a step of a workspace's start may hear nothing from the workspace's VM before it is stopped |
 | `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | an eighth of this Mac's memory at about 85 MB each, 16 to 256 | connections out of one workspace carried to its proxy at once; as many more wait, and past those one is refused |
 | `forward.rawPorts` | `DESOLATE_RAW_PORTS` | on the Mac | none | ports, besides the databases' and queues' own, where a workspace's server speaks first and its protocol carries no name |
+| `workspace.lookSeconds` | `DESOLATE_WORKSPACE_LOOK_SECONDS` | on the Mac | 30 | how often the host looks in each running workspace for what a remove would lose, which the dashboard's Delete shows |
 | `spawn.memoryPercent` | `DESOLATE_SPAWN_MEMORY_PERCENT` | on the Mac | 85 | how much of this Mac's memory the running workspaces may be given before a workspace's own request for another is refused |
 | `agent.logMiB` | `DESOLATE_AGENT_LOG_MIB` | on the Mac | a twentieth of the workspace's disk | the most of an agent's output its log keeps: past it the oldest is dropped, and the log says so |
 | `events.kept` | `DESOLATE_EVENTS_KEPT` | on the Mac | 500 | the last events the host daemon holds for `desolate events --replay <n>` |
