@@ -68,38 +68,45 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /** Open a directory under the domains' share and prove it is the one asked for; else why
  *  not, in a few words ("a link", "not there"), for a refusal and a log to say. Never throws.
- *  `settle`: the share may show a directory a moment before it lets it be opened (T4, on vz,
- *  2026-11-21: an honest offer refused, a moment after its workspace had put a directory
- *  where it had planted a link), so it is looked at again while every
- *  directory on the way is a plain one, every check made again each time: a few tries, a
- *  second at most, blocking. Only for a process of one domain's own (git-remote-desolate),
- *  never rootd's or the state service's loop, which every domain waits on. */
+ *  `settle`: the share may show a directory a moment before it lets it be opened, or still
+ *  show a link the workspace has since replaced with one (T4, on vz, 2026-11-21: an honest
+ *  offer refused as "a link, or not a directory", a moment after its workspace had put a
+ *  directory where it had planted a link). So it is looked at again while every directory
+ *  above is a plain one and `dir` itself one or a link, every check made again each time (a
+ *  link is never opened: O_NOFOLLOW): a few tries, a second at most, blocking. Only for a
+ *  process of one domain's own (git-remote-desolate), never rootd's or the state service's
+ *  loop, which every domain waits on. */
 export const openDir = (dir: string, settle = false): Dir | string => {
   for (let tries = 1; ; tries++) {
     const opened = openOnce(dir);
     const unsettled =
       typeof opened === "string" &&
-      [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
-    if (!settle || !unsettled || !plainWay(dir)) return opened;
+      [NOT_THERE, LINK, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
+    if (!settle || !unsettled || !settling(dir)) return opened;
     if (tries === OPEN_TRIES) return `${opened}, at each of ${OPEN_TRIES} looks over a second`;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
   }
 };
 const OPEN_TRIES = 5;
 const NOT_THERE = "not there";
+const LINK = "a link";
 const NOT_DIR = "a link, or not a directory";
 const OPENED_GONE = "opened, and removed meanwhile";
 const OPENED_ELSEWHERE = "opened at another path than asked: a link on the way";
 const PAUSE = new Int32Array(new SharedArrayBuffer(4));
 
 /** Whether every directory from the domains' share down to `dir` is there and a plain one
- *  (no link), as lstat sees it now: false on anything else, a failure too. */
-const plainWay = (dir: string): boolean => {
+ *  (no link), as lstat sees it now, but for `dir` itself, which may be a link: false on
+ *  anything else, a failure too. */
+const settling = (dir: string): boolean => {
+  const parts = ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)];
   let at = ROOT.domains;
   try {
-    for (const part of ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)]) {
+    for (const [i, part] of parts.entries()) {
       at = path.join(at, part);
-      if (!fs.lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) return false;
+      const stat = fs.lstatSync(at, { throwIfNoEntry: false });
+      if (!(stat?.isDirectory() || (i === parts.length - 1 && stat?.isSymbolicLink())))
+        return false;
     }
     return true;
   } catch {
@@ -124,7 +131,7 @@ const openOnce = (dir: string): Dir | string => {
       return code === "ENOENT"
         ? NOT_THERE
         : code === "ELOOP"
-          ? "a link"
+          ? LINK
           : code === "ENOTDIR"
             ? NOT_DIR
             : `not opened (${code ?? String(error)})`;

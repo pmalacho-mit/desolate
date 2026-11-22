@@ -1,7 +1,7 @@
 // T1. The root reads a domain's outbox as data: what a hostile domain can put there, and
 // what the root makes of it. (P4. The end-to-end version, with git, is in t2/04-offers.)
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -361,20 +361,9 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
         took >= 600 && took < 2000,
         `looked at again for about a second, not more: ${took} ms`,
       );
-      // A link in its place, as the share is still unsettled: refused at once, never opened.
-      restore();
-      fs.rmSync(late, { recursive: true });
-      fs.symlinkSync(path.join(work, "state"), late);
-      opening(late, 100);
-      const linkAt = Date.now();
-      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
-        refused:
-          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
-      });
-      assert.ok(Date.now() - linkAt < 100, "a link on the way is no reason to look again");
       // The way swapped for a file between two looks (lstat then fails): an answer, no throw.
       restore();
-      fs.rmSync(late);
+      fs.rmSync(late, { recursive: true });
       fs.mkdirSync(late);
       opening(late, 100);
       real.lstatSync = ((file: fs.PathLike, ...rest: never[]) => {
@@ -388,6 +377,61 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     } finally {
       restore();
       fs.rmSync(late, { recursive: true, force: true });
+    }
+  });
+
+  it("a link the share still shows where its workspace has put a directory back is waited out by the fetch, never opened; one above is refused at once", () => {
+    // T4 on vz, 2026-11-21: the re-offer a moment after the workspace replaced a link it had
+    // planted with a directory was refused as "a link, or not a directory": the root's view
+    // of the name lagged. Here another process replaces the link while the fetch waits.
+    const secret = path.join(work, "roots-own-2");
+    fs.mkdirSync(secret, { recursive: true });
+    fs.writeFileSync(
+      path.join(secret, "refs.json"),
+      JSON.stringify({ refs: { stolen: "d".repeat(40) } }),
+    );
+    const flip = `${domains}/t1-dom/outbox/sync/acme/flip`;
+    const refused = (repo: string, why: string) => ({
+      refused: `${repo}'s list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (${why})`,
+    });
+    try {
+      fs.symlinkSync(secret, flip);
+      const control = Date.now();
+      assert.deepEqual(
+        outbox.refsOf("t1-dom", "acme/flip"),
+        refused("acme/flip", "a link, or not a directory"),
+      );
+      assert.ok(Date.now() - control < 100, "the control: rootd's readers do not wait on a link");
+      // Replaced by a directory 300 ms into the fetch's wait: taken, the directory's list.
+      const swap = spawn("sh", [
+        "-c",
+        `sleep 0.3 && rm "$1" && mkdir "$1.new" && echo '{"refs":{"main":"${"e".repeat(40)}"}}' > "$1.new/refs.json" && mv "$1.new" "$1"`,
+        "sh",
+        flip,
+      ]);
+      assert.deepEqual(outbox.refsOf("t1-dom", "acme/flip", true), {
+        refs: { main: "e".repeat(40) },
+      });
+      swap.kill();
+      // A link that stays: never opened (its target's list is never read), refused at the bound.
+      fs.rmSync(flip, { recursive: true });
+      fs.symlinkSync(secret, flip);
+      const started = Date.now();
+      assert.deepEqual(
+        outbox.refsOf("t1-dom", "acme/flip", true),
+        refused("acme/flip", "a link, or not a directory, at each of 5 looks over a second"),
+      );
+      const took = Date.now() - started;
+      assert.ok(took >= 600 && took < 2000, `waited about a second, not more: ${took} ms`);
+      // A link above the last component: refused at once, waited or not.
+      fs.mkdirSync(path.join(secret, "app"), { recursive: true });
+      fs.symlinkSync(secret, `${domains}/t1-dom/outbox/sync/linked-owner`);
+      const above = Date.now();
+      assert.ok("refused" in outbox.refsOf("t1-dom", "linked-owner/app", true));
+      assert.ok(Date.now() - above < 100, "a link above is no reason to wait");
+    } finally {
+      fs.rmSync(flip, { recursive: true, force: true });
+      fs.rmSync(`${domains}/t1-dom/outbox/sync/linked-owner`, { force: true });
     }
   });
 
