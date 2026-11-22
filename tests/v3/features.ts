@@ -83,7 +83,13 @@ export const FEATURES: Feature[] = [
       "release/host/approve-ui/approve.js",
       "release/shared/approval.ts",
     ],
-    tests: ["t2/04-offers", "t2/09-ui", "t2/10-hostile-content", "t2/19-journeys"],
+    tests: [
+      "t2/04-offers",
+      "t2/09-ui",
+      "t2/10-hostile-content",
+      "t2/19-journeys",
+      "t3/04-root-reviewer",
+    ],
     docs: [
       "release/docs/getting-started.md: 7. Review, 8. Push it",
       "release/docs/reference.md: Approving, pushing, and the pages desolate serves, What a push is, exactly",
@@ -333,7 +339,13 @@ export const FEATURES: Feature[] = [
       "release/root/layout.ts",
       "release/shared/",
     ],
-    tests: ["t2/01-root", "t2/13-rebuild", "t2/24-requests", "t3/01-boundaries"],
+    tests: [
+      "t2/01-root",
+      "t2/13-rebuild",
+      "t2/24-requests",
+      "t3/01-boundaries",
+      "t3/03-share-lock",
+    ],
     docs: [
       "release/docs/getting-started.md: 1. Install, 2. Bootstrap the stack, Upgrading desolate",
       "release/docs/reference.md",
