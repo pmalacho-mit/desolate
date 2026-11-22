@@ -82,7 +82,7 @@ Programs kept running in a workspace (a dev server, a watcher, a coding agent):
   desolate agent attach|log|stop <domain>/<workspace> [--name <n>]   attach: your terminal on it; Ctrl-] detaches
   desolate agent log <domain>/<workspace> [--all | --lines <n> | --since <10m|date>]   what it printed
   desolate agent stop <domain>/<workspace> [--kill]              Ctrl-C, then asks; --kill ends it at once
-  desolate agent list [<domain>[/<workspace>]] [--json]          every one, in every workspace
+  desolate agent list [<domain>[/<workspace>]] [--json]          the running ones; a workspace named: its every one
 
 Hearing about it, and scripting it:
   desolate notify                                               notifications on this Mac: a push waiting, an offer,
