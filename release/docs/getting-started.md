@@ -201,8 +201,7 @@ written. `desolate list` shows each workspace's size. If the
 first repository (or the first you name with `--checkout`) has a `devcontainer.json`, it
 runs inside the VM, as written. The first
 workspace of a domain builds the domain's environment once (the "template" above); the
-next ones start from it in about 20 seconds. Building it can leave a branch named `template`,
-at the default branch's commit, in the domain's Branches: it is desolate's and holds nothing.
+next ones start from it in about 20 seconds.
 
 The workspace has **no credentials and no network** but its own proxy (HTTP and HTTPS to
 named hosts; `desolate domain you--app net enforce` limits even that to a list).
