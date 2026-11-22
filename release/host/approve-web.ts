@@ -432,8 +432,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   };
   const reviews = new Map<string, Asking>();
   // The approvals this page signed, newest last, and how each ended once the pusher said. Its
-  // log is followed only while a page is open and has a push in front of it, or one approved
-  // that has not ended (the daemon reads it only while someone listens).
+  // log is followed while a page is open and has a push in front of it, and while one approved
+  // has not ended, page or not (the daemon reads it only while someone listens). A page asks
+  // again after each answer, so between two of its asks no page is open: an approval's word
+  // that came then was missed, and its card said "pushing" for good (T2 04, under load).
   const approvals: {
     repo: string;
     branch: string;
@@ -446,7 +448,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   let pages = 0;
   let unhear: (() => void) | null = null;
   const hearPusher = () => {
-    const want = pages > 0 && (reviews.size > 0 || approvals.some(unsaid));
+    const want = (pages > 0 && reviews.size > 0) || approvals.some(unsaid);
     if (want && !unhear)
       unhear = backend.pushes((said) => {
         const done = approvals.find(
@@ -1118,6 +1120,8 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           approvals.push(approval);
           if (approvals.length > OUTCOMES_KEPT) approvals.shift();
           hearPusher();
+          // Not heard of by then: no longer listened for (the dashboard's activity says).
+          setTimeout(hearPusher, HEARD_MS + 1000).unref();
           try {
             await backend.approve(signed);
           } catch (error) {
