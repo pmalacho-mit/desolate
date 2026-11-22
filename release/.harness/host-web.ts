@@ -173,12 +173,15 @@ export const secretsSet = () => given;
 
 // ------------------------------------------------------------------ the reviewer's program
 let started: ChildProcess[] = [];
+let asked: { vm: string; argv: string[]; options: unknown }[] = [];
 /** The VM layer, where every program asked for (`spawn`, with pipes) is `sh -c script` on
  *  this machine: it writes what a reviewer would, on stdout and stderr, and lives as long. */
 export const vmRunning = (script: string) => {
   started = [];
+  asked = [];
   return {
-    spawn: () => {
+    spawn: (vm: string, argv: string[], options: unknown) => {
+      asked.push({ vm, argv, options });
       const child = spawn("sh", ["-c", script], { stdio: ["pipe", "pipe", "pipe"] });
       started.push(child);
       return child;
@@ -188,6 +191,8 @@ export const vmRunning = (script: string) => {
     },
   } as unknown as ReturnType<typeof backend>;
 };
+/** What `vmRunning` was asked to run: in which VM, the program, and how. */
+export const spawnedAs = () => asked;
 const ended = (child: ChildProcess) => child.exitCode !== null || child.signalCode !== null;
 /** How many of the programs `vmRunning` started are still running, a second after the last
  *  was asked to end (a kill takes a moment to arrive); then every one is ended. */

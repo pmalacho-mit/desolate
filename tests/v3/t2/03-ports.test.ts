@@ -263,7 +263,7 @@ else {
   it("a protocol with no name reaches the first workspace that had the port; the others keep the number taken", async () => {
     stack.step("a raw TCP port");
     serve("web/one", "one 5432 raw");
-    assert.ok(await until(() => urlOf("web/one", 5432) !== undefined));
+    assert.ok(await until(() => urlOf("web/one", 5432) !== undefined), JSON.stringify(ports()));
     const raw = await new Promise<string>((resolve) => {
       const socket = net.connect(5432, "127.0.0.1");
       let data = "";
@@ -671,10 +671,14 @@ else {
         .find(Boolean)?.[1];
     assert.ok(await until(() => past() !== undefined, 20_000), JSON.stringify(ports()));
     const one = ports().find((w) => w.workspace === "web/one")!;
-    // (What it took of the workspace's: not the rows that say a port below 1024 is left out,
-    // which the workspace's own report adds since limits 08.)
-    const forwarded = one.forwarded.length + one.reserved.filter((r) => r.port >= 1024).length;
-    assert.ok(forwarded <= 256, `at most 256 taken: ${forwarded}`);
+    // What it took of the workspace's listeners: those forwarded, and those a program on this
+    // machine holds. Not a port kept taken for another workspace (counted, they made 257),
+    // nor one below 1024 (the workspace's own report).
+    const forwarded =
+      one.forwarded.length +
+      one.reserved.filter((r) => r.port >= 1024 && /^listening in the workspace/.test(r.why))
+        .length;
+    assert.ok(forwarded <= 256, `at most 256 taken: ${forwarded}: ${JSON.stringify(one)}`);
     assert.ok(Number(past()) >= 300 - 256, `the rest counted: ${past()}`);
     assert.deepEqual(
       ports().find((w) => w.workspace === "web/two")?.notes,
