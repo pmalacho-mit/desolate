@@ -64,6 +64,7 @@ describe("T1 tab completion", () => {
       "--all",
       "--lines",
       "--name",
+      "--raw",
       "--since",
     ]);
     assert.deepEqual(complete("agent", "stop", "dev/w1", "--k"), ["--kill"]);
