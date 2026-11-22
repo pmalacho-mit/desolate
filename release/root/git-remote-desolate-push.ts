@@ -64,6 +64,11 @@ const main = async () => {
       .split("\n")
       .filter(Boolean);
 
+  // git closes this helper's input when it goes, however it goes: a git killed alone
+  // (SIGKILL) leaves no one to wait for, and its push leaves the approval page.
+  const gone = new AbortController();
+  process.stdin.once("close", () => gone.abort());
+
   const pushOne = async (spec: string): Promise<string> => {
     const parsed = pushSpec(spec);
     if ("answer" in parsed) return parsed.answer;
@@ -79,6 +84,7 @@ const main = async () => {
       forced,
       "a raw git push from the root's terminal",
       (line) => process.stderr.write(`${line}\n`),
+      gone.signal,
     );
     return failed ? `error ${target} ${failed.replace(/\n/g, " ")}` : `ok ${target}`;
   };
