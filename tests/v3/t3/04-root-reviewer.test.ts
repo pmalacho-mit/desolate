@@ -11,7 +11,7 @@
 //
 // Run: tests/v3/run.sh t4   (or t3)
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import { request as httpRequest } from "node:http";
 import type { ClientRequest } from "node:http";
@@ -70,14 +70,26 @@ const until = async (what: string, done: () => boolean, ms: number) => {
 };
 /** A raw `git push` of HEAD from the root's terminal, left waiting for its approval. It must
  *  hold nothing of the call that starts it: on Lima, a command left running with any of the
- *  session's descriptors kept that session, and this synchronous call, open (a first version
- *  held the T4 slot for 90 minutes). So it runs in a session of its own (setsid -f), and every
- *  descriptor past the three it redirects is closed first. */
+ *  session's descriptors kept that session, and the synchronous call, open (a first version
+ *  held the T4 slot for 90 minutes). So it runs in a session of its own (setsid -f), every
+ *  descriptor past the three it redirects closed first; and the call, as the harness's
+ *  inRoot makes it, is given a minute, so a run can never hang here. */
 const rawPush = (branch: string) => {
-  const started = inClone(
-    `for fd in /proc/$$/fd/*; do n=\${fd##*/}; [ "$n" -gt 2 ] && eval "exec $n>&-"; done 2>/dev/null; setsid -f bash -c 'exec git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1' </dev/null >/dev/null 2>&1; echo started`,
+  const started = spawnSync(
+    process.env.DESOLATE_LIMACTL ?? "limactl",
+    [
+      "--tty=false",
+      "shell",
+      "--workdir",
+      "/",
+      `dsl-${stack.instance}-root`,
+      "bash",
+      "-c",
+      `export GIT_CONFIG_GLOBAL=/var/lib/desolate-root/gitconfig; cd ${CLONE} && for fd in /proc/$$/fd/*; do n=\${fd##*/}; [ "$n" -gt 2 ] && eval "exec $n>&-"; done 2>/dev/null; setsid -f bash -c 'exec git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1' </dev/null >/dev/null 2>&1; echo started`,
+    ],
+    { env: stack.env, input: "", encoding: "utf8", timeout: 60_000, killSignal: "SIGKILL" },
   );
-  assert.match(started.stdout, /started/, started.stderr);
+  assert.match(started.stdout ?? "", /started/, `${started.error ?? ""} ${started.stderr}`);
 };
 /** The pushes waiting for approval, as the root's own files list them. */
 const waitingPushes = () =>
