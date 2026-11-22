@@ -2,6 +2,7 @@
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:net";
+import type { Socket } from "node:net";
 import * as path from "node:path";
 import { onTestFinished } from "./vitest.ts";
 import type { backend } from "../host/stack.ts";
@@ -10,6 +11,7 @@ import { devHostname, editorHostname, HOSTNAME_SUFFIX, workspaceVmName } from ".
 import { sniff } from "../shared/sniff.ts";
 import type { Sniffed } from "../shared/sniff.ts";
 import { clientHello } from "./shared-bytes.ts";
+import { clientSending } from "./shared-socket.ts";
 
 // ------------------------------------------------------------------ a stand-in daemon
 /** Stands in for a running host daemon: a socket where the real one keeps its own
@@ -216,3 +218,22 @@ export const shown = (value: unknown): any => {
 export const nameOf = (text: string) => named(text);
 /** Only what a TLS ClientHello to `name` is, as the pages server reads it. */
 export const askedTls = (name: string | null) => helloTo(name).sniffed;
+
+// ------------------------------------------------------------------ clients that say nothing
+/** `count` clients that connect and say nothing, each handed in turn to `hear` (daemon.ts's
+ *  heard) with one set of the silent, `most` at most: which of them were closed for it. */
+export const silentClients = async (
+  hear: (silent: Set<Socket>, client: Socket, quietMs: number, most: number) => Promise<unknown>,
+  count: number,
+  most: number,
+): Promise<boolean[]> => {
+  const silent = new Set<Socket>();
+  const clients: Socket[] = [];
+  for (let i = 0; i < count; i++) {
+    const client = await clientSending([]);
+    clients.push(client);
+    void hear(silent, client, 60_000, most);
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  return clients.map((client) => client.destroyed);
+};
