@@ -132,7 +132,7 @@ export const FEATURES: Feature[] = [
       "release/root/pre-push.ts",
       "release/root/hooks/",
     ],
-    tests: ["t2/04-offers", "t2/10-hostile-content", "t2/19-journeys"],
+    tests: ["t2/04-offers", "t2/10-hostile-content", "t2/19-journeys", "t2/24-requests"],
     docs: [
       "release/docs/getting-started.md: 5. Work in it",
       "release/docs/reference.md: Git in a workspace",
@@ -333,7 +333,7 @@ export const FEATURES: Feature[] = [
       "release/root/layout.ts",
       "release/shared/",
     ],
-    tests: ["t2/01-root", "t2/13-rebuild", "t3/01-boundaries"],
+    tests: ["t2/01-root", "t2/13-rebuild", "t2/24-requests", "t3/01-boundaries"],
     docs: [
       "release/docs/getting-started.md: 1. Install, 2. Bootstrap the stack, Upgrading desolate",
       "release/docs/reference.md",
