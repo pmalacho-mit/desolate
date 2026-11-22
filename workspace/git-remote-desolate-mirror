@@ -6,9 +6,10 @@
 # serves the fetch from the read-only mirror with git's own upload-pack. Before this, `git
 # pull` quietly brought only what the mirror had, until someone ran `desolate fetch`.
 #
-# If the root cannot refresh it (offline, the remote down, this domain's requests used up
-# for the minute), the fetch still happens, from the mirror as it is, and says so.
-# DESOLATE_MIRROR_FRESH=1 skips the request (`desolate fetch` has just made it).
+# What the root says while it works on the request (a long fetch) is shown as it comes. If it
+# cannot refresh the mirror (offline, the remote down, the root stopped), the fetch still
+# happens, from the mirror as it is, and says so. DESOLATE_MIRROR_FRESH=1 skips the request
+# (`desolate fetch` has just made it).
 #
 # git's remote-helper protocol (gitremote-helpers(7)), its "connect" half: git asks to talk
 # to git-upload-pack, and this connects it to the mirror's.
@@ -18,10 +19,9 @@ while IFS= read -r line; do
   case $line in
     capabilities) printf 'connect\n\n' ;;
     'connect git-upload-pack')
-      if [ "${DESOLATE_MIRROR_FRESH:-}" != 1 ] && ! desolate fetch --mirror-only "$repo" >/dev/null 2>/tmp/desolate-mirror.$$; then
-        printf 'desolate: the root could not refresh %s from the remote (%s); fetching what the mirror has\n' "$repo" "$(tail -n 2 /tmp/desolate-mirror.$$ | tr '\n' ' ')" >&2
+      if [ "${DESOLATE_MIRROR_FRESH:-}" != 1 ] && ! desolate fetch --mirror-only "$repo" >/dev/null; then
+        printf 'desolate: fetching what the mirror has of %s, as it is\n' "$repo" >&2
       fi
-      rm -f /tmp/desolate-mirror.$$
       printf '\n'
       exec git -c safe.directory="$mirror" upload-pack "$mirror"
       ;;
