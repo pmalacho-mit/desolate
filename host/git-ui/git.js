@@ -135,22 +135,36 @@ const aside = document.getElementById("approvals");
 const toggle = document.getElementById("toggle");
 const APPROVE_ORIGIN = location.origin.replace("//desolate-git.", "//desolate-approve.");
 let chosen = null; // the person's choice, once made: true open, false closed
+const frame = document.getElementById("frame");
 const show = (open) => {
   if (aside.hidden === !open) return;
   aside.hidden = !open;
   window.dispatchEvent(new Event("resize"));
 };
-toggle.addEventListener("click", () => { chosen = aside.hidden; show(chosen); });
+toggle.addEventListener("click", () => { chosen = aside.hidden; show(chosen); if (!chosen) term.focus(); });
+// The person decided in the pane (approve.js says so): once nothing waits, the keys go to the
+// shell again, not to the pane last clicked (dogfooding, 2026-11-21: the next command typed
+// went nowhere). A push that leaves the list by itself does not take the keys from the pane.
+let decidedAt = -Infinity;
 window.addEventListener("message", (event) => {
-  if (event.origin !== APPROVE_ORIGIN || !event.data || typeof event.data.desolatePending !== "number") return;
+  if (event.origin !== APPROVE_ORIGIN || !event.data) return;
+  if (event.data.desolateDecided === true) decidedAt = performance.now();
+  if (event.data.desolateTyping === true) decidedAt = -Infinity;
+  if (typeof event.data.desolatePending !== "number") return;
   const waiting = Math.max(0, Math.floor(event.data.desolatePending));
   toggle.textContent = waiting ? `Approvals (${waiting})` : "Approvals";
   toggle.classList.toggle("waiting", waiting > 0);
   if (waiting > 0 && chosen !== false) show(true);
   if (waiting === 0 && chosen === null) show(false);
+  // (Soon after the decision only: a push the root takes off the list later, while the person
+  // types in the pane, does not take the keys.)
+  if (waiting === 0 && performance.now() - decidedAt < 5000 && document.activeElement === frame) {
+    decidedAt = -Infinity;
+    term.focus();
+  }
 });
 fetch("/approvals-frame", { credentials: "same-origin", headers: window.desolateKey.headers }).then((answer) => answer.ok ? answer.json() : null).then((body) => {
   if (!body || typeof body.url !== "string" || !body.url.startsWith(`${APPROVE_ORIGIN}/embed#`)) return;
-  document.getElementById("frame").src = body.url;
+  frame.src = body.url;
   toggle.hidden = false;
 }).catch(() => {});
