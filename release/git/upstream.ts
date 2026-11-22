@@ -718,8 +718,9 @@ declare namespace pinnedScript {
 }
 
 /** Step 2: suede's upstream, in a scratch clone, its push caught. Returns the scratch clone and
- *  the commit suede would have pushed. What the script says is shown as it says it: a long
- *  history takes a while to split, and it runs for as long as you let it (Ctrl-C stops it). */
+ *  the commit suede would have pushed. What the script says is shown only if it stops: its
+ *  "pushed" and "OK Proposed upstream" are of the push caught here, and read as if it had gone
+ *  (dogfooding, 2026-11-22). It runs for as long as you let it (Ctrl-C stops it). */
 export const split = async (
   p: Prepared,
   scratch: string,
@@ -763,6 +764,13 @@ export const split = async (
     GIT_LFS_SKIP_SMUDGE: "1",
     GIT_TERMINAL_PROMPT: "0",
   };
+  // Its last lines (a few, as it says on success; more is a flood, and said to be).
+  const said: string[] = [];
+  let unsaid = 0;
+  const show = () => {
+    if (unsaid) say(`    (${unsaid} earlier line${unsaid === 1 ? "" : "s"} not shown)`);
+    for (const line of said) say(`    ${line}`);
+  };
   const ended = await new Promise<string | null>((resolve) => {
     const child = spawn("bash", [script, p.dir, "-r", "dependency", "--no-wait"], {
       cwd: work,
@@ -770,7 +778,13 @@ export const split = async (
       stdio: ["ignore", "pipe", "pipe"],
     });
     const streams = [child.stdout, child.stderr].map((stream) => {
-      const shown = lineByLine((line) => say(`    ${line}`));
+      const shown = lineByLine((line) => {
+        said.push(line);
+        if (said.length > 200) {
+          said.shift();
+          unsaid++;
+        }
+      });
       stream.setEncoding("utf8");
       stream.on("data", shown.add);
       return shown;
@@ -781,11 +795,13 @@ export const split = async (
       resolve(code === 0 ? null : signal ? `ended by ${signal}` : `exit ${code}`);
     });
   });
-  if (ended !== null)
+  if (ended !== null) {
+    show();
     stop(
       `suede's upstream stopped (${ended}): what it said is above`,
       "if it says the tree is behind, git subrepo pull in a workspace first",
     );
+  }
   const refs = bare(caught, ["for-each-ref", "--format=%(objectname) %(refname)"])
     .stdout.split("\n")
     .filter(Boolean);
@@ -793,10 +809,12 @@ export const split = async (
     refs.length !== 1 ||
     refs[0] !== `${refs[0]!.split(" ")[0]} refs/heads/${p.branch}` ||
     !isCommit(refs[0]!.split(" ")[0])
-  )
+  ) {
+    show();
     stop(
       `suede's upstream did not make the one branch it names (${p.branch}): ${printable(refs.join(", ") || "nothing", 300)}`,
     );
+  }
   return { work, split: refs[0]!.split(" ")[0]! };
 };
 
@@ -912,7 +930,7 @@ export const upstream = async (argv: string[], cwdRepo: () => string): Promise<n
     `desolate upstream: ${repoId(consumer)} ${p.dir}/ at ${p.commit.slice(0, 12)}  ->  ${repoId(dependency)} ${p.branch}`,
   );
   say(
-    `  suede's upstream (pinned at ${/^SUEDE_COMMIT=([0-9a-f]{12})/m.exec(fs.readFileSync(path.join(GIT_VM.release, "pins.env"), "utf8"))?.[1] ?? "?"}), in a scratch clone: nothing leaves until you approve`,
+    `  splitting it with suede's upstream (pinned at ${/^SUEDE_COMMIT=([0-9a-f]{12})/m.exec(fs.readFileSync(path.join(GIT_VM.release, "pins.env"), "utf8"))?.[1] ?? "?"}), in a scratch clone: nothing leaves until you approve. A long history takes a while.`,
   );
   const scratch = fs.mkdtempSync(path.join(GIT_VM.scratch, "desolate-upstream-"));
   try {
