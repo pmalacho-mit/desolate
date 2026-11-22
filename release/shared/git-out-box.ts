@@ -130,16 +130,27 @@ export const requester = (at: Boxes = GIT_VM_BOXES, pace: typeof PACE = PACE) =>
     for (const name of mine) fs.rmSync(path.join(at.out, name), { force: true });
     mine.clear();
   };
-  const stopped = (signal: NodeJS.Signals, code: number) =>
-    process.once(signal, () => {
-      withdraw();
-      process.exit(128 + code);
-    });
-  stopped("SIGINT", 2);
-  stopped("SIGTERM", 15);
-  stopped("SIGHUP", 1);
+  // `on`, not `once`: Ctrl-C reaches a push's helper twice (the terminal's SIGINT, and git's,
+  // passed on to the helper it runs), and with no listener left the second killed it before
+  // it had told the host: the push stayed on the approval page (dogfooding, 2026-11-21).
+  let stopping = false;
+  const stop = (code: number) => {
+    if (stopping) return;
+    stopping = true;
+    withdraw();
+    process.exit(code);
+  };
+  process.on("SIGINT", () => stop(130));
+  process.on("SIGTERM", () => stop(143));
+  process.on("SIGHUP", () => stop(129));
 
   return {
+    /** Whoever asked has gone without a signal (git, killed alone, closed this program's
+     *  input): what is being asked is withdrawn, and the program ends. Nothing when nothing
+     *  is asked: git closes the input after every push, and that one is answered. */
+    left: () => {
+      if (asked !== null) stop(1);
+    },
     /** The path for a file of this program's in the out-box (`name` from `named`): removed
      *  again if the program stops before the host has answered. */
     leave: (name: string) => {
