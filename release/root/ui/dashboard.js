@@ -143,6 +143,11 @@ const button = (label, key, kind, args, quiet = false) =>
 // Characters that reorder or hide what is shown (bidi controls, zero-width ones): in a diff a
 // person reviews, each is shown as itself, named, so the line reads as git stores it.
 const unhidden = (line) => line.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
+// A file's name as a person reads it in a list: what `unhidden` names, and control characters
+// too (a newline would read as a space), and a trailing space marked. A name that reads as
+// another (a right-to-left override turning notes-<U+202E>dm.hs into "notes-sh.md") is shown
+// as git stores it (safety-colleague, dogfooding 2026-11-22).
+const nameShown = (name) => unhidden(String(name)).replace(/[\u0000-\u001f\u007f]/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`).replace(/ +$/, (spaces) => "⟨space⟩".repeat(spaces.length));
 // Given `tokens` (shared/ui/highlight.js, a line's code in its syntax's colours), each line of
 // code is drawn in colour; its text is the same either way.
 const hasColour = (tokens, i) => Boolean(tokens && tokens[i] && typeof DesolateHighlight !== "undefined");
@@ -646,8 +651,8 @@ const filesChanged = () => {
     el("summary", {}, r.pick ? `Files ${one ? "this commit changes" : "these commits change"} (${files.total.toLocaleString()} of ${r.review.changes.total.toLocaleString()})` : `Files changed (${files.total.toLocaleString()})`),
     files.total > 6 ? el("input", { class: "filter", placeholder: "filter files", "aria-label": "filter the files changed", value: filesFilter, oninput: (event) => { filesFilter = event.target.value; render(); const box = document.querySelector("#review .files-changed .filter"); if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); } } }) : null,
     el("ul", { class: "files" }, shown.map((c) => el("li", { "data-change": c.path },
-      pill(c.status, colour[c.status] || "", c.was !== undefined ? `renamed in this branch, from ${c.was}` : `${c.status} in this branch`),
-      el("button", { class: "link mono", type: "button", title: c.was !== undefined ? `${c.was} → ${c.path}: go to it in the diff` : "go to it in the diff", onclick: () => jumpTo(c) }, c.path),
+      pill(c.status, colour[c.status] || "", c.was !== undefined ? `renamed in this branch, from ${nameShown(c.was)}` : `${c.status} in this branch`),
+      el("button", { class: "link mono", type: "button", title: c.was !== undefined ? `${nameShown(c.was)} → ${nameShown(c.path)}: go to it in the diff` : "go to it in the diff", onclick: () => jumpTo(c) }, nameShown(c.path)),
       c.added === null ? el("span", { class: "sub" }, "binary") : el("span", { class: "counts" }, el("span", { class: "plus" }, `+${c.added}`), " ", el("span", { class: "minus" }, `−${c.removed}`)),
       c.lookalike ? el("span", { class: "warn looks" }, "its name has letters that look like others") : null))),
     shown.length < changes.length ? el("div", { class: "sub" }, `${changes.length - shown.length} of the ${changes.length.toLocaleString()} listed do not match`) : null,

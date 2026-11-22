@@ -131,19 +131,24 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     const all = stack.quiet("agent", "log", "dev/w1", "--name", "loud", "--all");
     assert.equal(all.code, 0, all.stderr);
     const head =
-      /^\[desolate: ([\d.]+) MiB of older output was dropped here: the log keeps the newest 1\.0 MiB \(the setting agent\.logMiB\)\]\r\n(\d+)\r\n/.exec(
+      /^\[desolate: ([\d.]+) MiB of older output was dropped here: the log keeps the newest 1\.0 MiB \(the setting agent\.logMiB\)\]\n(\d+)\n/.exec(
         all.stdout,
       );
     assert.ok(head, all.stdout.slice(0, 300));
     assert.ok(Number(head[2]) > 100000, "the oldest output went, from a whole line on");
     assert.match(
       all.stdout,
-      /\r\n400000\r\n\r\n\[desolate: the agent ended, exit 0\]\r\n$/,
+      /\n400000\n\n\[desolate: the agent ended, exit 0\]\n$/,
       "the newest is kept",
     );
     // A page from the end, and what comes before it said, on stderr: stdout is the log alone.
+    // To a pipe, as text; --raw, as the terminal had it.
     const page = stack.desolate("agent", "log", "dev/w1", "--name", "loud", "--lines", "3");
-    assert.equal(page.stdout, "400000\r\n\r\n[desolate: the agent ended, exit 0]\r\n");
+    assert.equal(page.stdout, "400000\n\n[desolate: the agent ended, exit 0]\n");
+    assert.equal(
+      stack.desolate("agent", "log", "dev/w1", "--name", "loud", "--lines", "3", "--raw").stdout,
+      "400000\r\n\r\n[desolate: the agent ended, exit 0]\r\n",
+    );
     assert.match(
       page.stderr,
       /desolate: [\d.]+ (KiB|MiB) of earlier output is not shown \(all of it: desolate agent log dev\/w1 --name loud --all\)/,
@@ -168,6 +173,72 @@ describe("T2 desolate agent: kept running, attached to, stopped", () => {
     const echo = stack.quiet("agent", "log", "dev/w1", "--name", "echo");
     assert.match(echo.stdout, /^in \/workspaces\//);
     assert.doesNotMatch(echo.stdout + echo.stderr, /dropped|not shown/);
+  });
+
+  it("a program's colours are taken out of its log to a pipe (--raw keeps them); one whose holder is gone is lost, and how to start it again is said", async () => {
+    assert.equal(
+      stack.desolate(
+        "agent",
+        "start",
+        "dev/w1",
+        "--name",
+        "watcher",
+        "--",
+        "bash",
+        "-c",
+        "printf '\\033[1;32m✓\\033[0m 3 passed\\n'; sleep 600",
+      ).code,
+      0,
+    );
+    await stateIs("watcher", "running");
+    let log = "";
+    for (let i = 0; i < 20 && !/passed/.test(log); i++) {
+      log = stack.desolate("agent", "log", "dev/w1", "--name", "watcher").stdout;
+      if (!/passed/.test(log)) await sleep(250);
+    }
+    assert.equal(log, "✓ 3 passed\n");
+    assert.match(
+      stack.desolate("agent", "log", "dev/w1", "--name", "watcher", "--raw").stdout,
+      /^\u001b\[1;32m✓\u001b\[0m 3 passed\r\n$/,
+      "(the control) --raw: as its terminal had it",
+    );
+    // Its holder gone, as when the workspace's VM stops: lost, not started again by anything.
+    stack.quiet(
+      "exec",
+      "dev/w1",
+      "--vm",
+      "--",
+      "pkill",
+      "-9",
+      "-f",
+      "agent-holder.py start watcher",
+    );
+    await stateIs("watcher", "lost");
+    const again =
+      "desolate agent start dev/w1 --name watcher -- bash -c 'printf '\\''\\033[1;32m✓\\033[0m 3 passed\\n'\\''; sleep 600'";
+    const listed = stack.quiet("agent", "list", "dev/w1").stdout;
+    assert.ok(listed.includes(`    lost: it was running when its workspace's VM stopped`), listed);
+    assert.ok(listed.includes(`To start it again: ${again}`), listed);
+    assert.match(
+      stack.quiet("agent", "list").stdout,
+      /that ended in dev\/w1, \d+ of them lost when its VM stopped: desolate agent list dev\/w1 lists them, and how to start them again/,
+    );
+    const read = stack.desolate("agent", "log", "dev/w1", "--name", "watcher");
+    assert.equal(read.stdout, "✓ 3 passed\n", "its log is kept");
+    assert.ok(read.stderr.includes(`desolate: watcher is lost: `), read.stderr);
+    // The command it gives starts it again, on the same log.
+    const words = spawnSync("bash", ["-c", 'eval "set -- $1"; printf "%s\\0" "$@"', "_", again], {
+      encoding: "utf8",
+    }).stdout.split("\0");
+    assert.equal(words.shift(), "desolate");
+    assert.equal(stack.desolate(...words.slice(0, -1)).code, 0);
+    await stateIs("watcher", "running");
+    for (let i = 0; i < 20 && !/passed[\s\S]*passed/.test(log); i++) {
+      log = stack.desolate("agent", "log", "dev/w1", "--name", "watcher").stdout;
+      if (!/passed[\s\S]*passed/.test(log)) await sleep(250);
+    }
+    assert.match(log, /^✓ 3 passed\n[\s\S]*✓ 3 passed\n$/);
+    assert.equal(stack.desolate("agent", "stop", "dev/w1", "--name", "watcher", "--kill").code, 0);
   });
 
   it("stop is Ctrl-C, then asks the person before anything is killed; --kill for scripts", async () => {
