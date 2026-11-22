@@ -27,6 +27,14 @@ const press = async (selector: string, text: string, ms = 120_000) => {
   );
   await page.click(selector, text);
 };
+/** The approval pages Push opened, closed, as a person closes the tab they approved in. (A
+ *  journey after one was left open had its first pointer move go unanswered: the browser
+ *  held 19 for 40 minutes, then failed it at the 120 s bound. The tab in front is the
+ *  suspect.) */
+const closeApprovalTabs = async () => {
+  for (const p of await browser.pages())
+    if (p.url.startsWith("http://desolate-approve.localhost:")) await browser.closePage(p.targetId);
+};
 /** An agent's work in the workspace, then its `git push`: an offer. */
 const agent = (script: string) => {
   const done = stack.quiet(
@@ -310,6 +318,7 @@ describe("T2 journeys through the dashboard", () => {
       60_000,
     );
     assert.equal(forgeRefs()["feature/greet"], head, "the remote has exactly the commit reviewed");
+    await closeApprovalTabs();
     // And the row no longer says it is not on the remote.
     await page.until(
       `/on the remote/.test(document.querySelector('${row}').innerText) && !/not on the remote/.test(document.querySelector('${row}').innerText)`,
@@ -362,6 +371,7 @@ describe("T2 journeys through the dashboard", () => {
     assert.equal(approved.code, 0, approved.stdout);
     await page.until(`!document.querySelector('${offer}')`, "the offer of main gone", 60_000);
     assert.equal(forgeRefs()["main"], head, "main on the remote is the commit reviewed");
+    await closeApprovalTabs();
   });
 
   it("a stopped workspace resized from the dashboard, started again, and deleted once nothing in it would be lost", async () => {

@@ -128,9 +128,13 @@ export const openBrowser = async (
   const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
     new Promise<Record<string, unknown>>((resolve, reject) => {
       const id = nextId++;
+      // (Where it was asked from: the error is made in a timer, whose stack names no step.)
+      const asked = new Error().stack?.split("\n").slice(2).join("\n") ?? "";
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Error(`the browser did not answer ${method} in ${CDP_MS / 1000} s`));
+        const error = new Error(`the browser did not answer ${method} in ${CDP_MS / 1000} s`);
+        error.stack = `${error.message}\n${asked}`;
+        reject(error);
       }, CDP_MS);
       timer.unref(); // (one the browser never answers as it closes holds nothing open)
       pending.set(id, (result) => {
@@ -385,7 +389,11 @@ export const openBrowser = async (
       await send("Target.detachFromTarget", { sessionId });
     }
   };
-  return { load, tab, pages, textOf, close };
+  /** A page closed (a tab a page opened, once it is done with). */
+  const closePage = async (targetId: string) => {
+    await send("Target.closeTarget", { targetId });
+  };
+  return { load, tab, pages, textOf, closePage, close };
 };
 
 /** One page in a Chrome of its own, with the profile `profile`, closed after. */
