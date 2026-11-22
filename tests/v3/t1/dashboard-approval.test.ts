@@ -15,7 +15,11 @@ const SOURCE = path.resolve(import.meta.dirname, "../../../release/root/ui/dashb
  *  that answers every use with another, so only what it defines is exercised. */
 const anything: unknown = new Proxy(function () {}, {
   get: (_, key) =>
-    key === Symbol.iterator ? [][Symbol.iterator] : key === Symbol.toPrimitive ? () => "" : anything,
+    key === Symbol.iterator
+      ? [][Symbol.iterator]
+      : key === Symbol.toPrimitive
+        ? () => ""
+        : anything,
   apply: () => anything,
   construct: () => anything as object,
 });
@@ -68,7 +72,9 @@ describe("T1 the approval page's address, as the dashboard opens it", () => {
   });
 
   it("encodes what a push names, so a name cannot add a part or a query", () => {
-    const url = new URL(page.approvalUrl({ repo: "acme/app", branch: "x&commit=f00?tkn=1#y", commit })!);
+    const url = new URL(
+      page.approvalUrl({ repo: "acme/app", branch: "x&commit=f00?tkn=1#y", commit })!,
+    );
     assert.equal(url.search, "");
     const named = new URLSearchParams(url.hash.slice(1));
     assert.deepEqual([...named.keys()], ["repo", "branch", "commit"]);
