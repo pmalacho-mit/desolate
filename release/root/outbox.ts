@@ -66,24 +66,81 @@ export const WHY_MOST = 300;
 type Dir = { at: (name: string) => string; names: () => string[]; close: () => void };
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
-/** Open a directory under the domains' share and prove it is the one asked for; else null. */
-export const openDir = (dir: string): Dir | null => {
+/** Open a directory under the domains' share and prove it is the one asked for; else why
+ *  not, in a few words ("a link", "not there"), for a refusal and a log to say. Never throws.
+ *  `settle`: the share may show a directory a moment before it lets it be opened (T4, on vz,
+ *  2026-11-21: an honest offer refused, a moment after its workspace had put a directory
+ *  where it had planted a link), so it is looked at again while every
+ *  directory on the way is a plain one, every check made again each time: a few tries, a
+ *  second at most, blocking. Only for a process of one domain's own (git-remote-desolate),
+ *  never rootd's or the state service's loop, which every domain waits on. */
+export const openDir = (dir: string, settle = false): Dir | string => {
+  for (let tries = 1; ; tries++) {
+    const opened = openOnce(dir);
+    const unsettled =
+      typeof opened === "string" &&
+      [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
+    if (!settle || !unsettled || !plainWay(dir)) return opened;
+    if (tries === OPEN_TRIES) return `${opened}, at each of ${OPEN_TRIES} looks over a second`;
+    Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
+  }
+};
+const OPEN_TRIES = 5;
+const NOT_THERE = "not there";
+const NOT_DIR = "a link, or not a directory";
+const OPENED_GONE = "opened, and removed meanwhile";
+const OPENED_ELSEWHERE = "opened at another path than asked: a link on the way";
+const PAUSE = new Int32Array(new SharedArrayBuffer(4));
+
+/** Whether every directory from the domains' share down to `dir` is there and a plain one
+ *  (no link), as lstat sees it now: false on anything else, a failure too. */
+const plainWay = (dir: string): boolean => {
+  let at = ROOT.domains;
+  try {
+    for (const part of ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)]) {
+      at = path.join(at, part);
+      if (!fs.lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const openOnce = (dir: string): Dir | string => {
   let fd: number | null = null;
   try {
     const wanted = path.join(
       fs.realpathSync(ROOT.domains),
       path.relative(ROOT.domains, path.resolve(dir)),
     );
-    fd = fs.openSync(
-      dir,
-      fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
-    );
-    if (fs.readlinkSync(`/proc/self/fd/${fd}`) !== wanted)
-      throw new Error("not the directory that was asked for");
+    try {
+      fd = fs.openSync(
+        dir,
+        fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW,
+      );
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      return code === "ENOENT"
+        ? NOT_THERE
+        : code === "ELOOP"
+          ? "a link"
+          : code === "ENOTDIR"
+            ? NOT_DIR
+            : `not opened (${code ?? String(error)})`;
+    }
+    let at: string;
+    try {
+      at = fs.readlinkSync(`/proc/self/fd/${fd}`);
+    } catch {
+      return "not proved: this system has no /proc/self/fd";
+    }
+    // (Not the path itself: a refusal reaches the domain, and the path is the root's.)
+    if (at !== wanted) return at === `${wanted} (deleted)` ? OPENED_GONE : OPENED_ELSEWHERE;
     const held = fd;
     fd = null;
     return {
-      at: (name) => {
+      at: (name: string) => {
         if (!NAME.test(name)) throw new Error("not a file name");
         return `/proc/self/fd/${held}/${name}`;
       },
@@ -95,7 +152,8 @@ export const openDir = (dir: string): Dir | null => {
       close: () => fs.closeSync(held),
     };
   } catch {
-    return null;
+    // (No more than that: what threw names the root's own paths, and this reaches the domain.)
+    return "not opened";
   } finally {
     if (fd !== null) fs.closeSync(fd);
   }
@@ -179,7 +237,7 @@ export const drain = <T>(
   most: number,
 ): ({ name: string; data: T } | { name: string; data: null; why: string })[] => {
   const dir = openDir(directory);
-  if (!dir) return [];
+  if (typeof dir === "string") return [];
   try {
     return dir
       .names()
@@ -208,11 +266,15 @@ const syncDir = (domain: string, repo: string) => path.join(outbox(domain), "syn
  *  that leads nowhere among them) is something there, and not taken for nothing. */
 const notThere = (base: string, below: string): boolean => {
   let at = base;
-  for (const part of ["", ...below.split("/")]) {
-    at = path.join(at, part);
-    const stat = fs.lstatSync(at, { throwIfNoEntry: false });
-    if (!stat) return true;
-    if (!stat.isDirectory()) return false;
+  try {
+    for (const part of ["", ...below.split("/")]) {
+      at = path.join(at, part);
+      const stat = fs.lstatSync(at, { throwIfNoEntry: false });
+      if (!stat) return true;
+      if (!stat.isDirectory()) return false;
+    }
+  } catch {
+    /* something there that is in the way (a component swapped for a file): not nothing */
   }
   return false;
 };
@@ -230,20 +292,17 @@ const notThere = (base: string, below: string): boolean => {
 export const refsOf = (
   domain: string,
   repo: string,
+  settle = false,
 ): { refs: Record<string, string> } | { refused: string } => {
   if (!parseRepo(repo)) return { refused: `'${printable(repo, 100)}' is not a repository` };
   const what = `${repo}'s list of branches (refs.json)`;
-  // Not opened, and then found there, plain: it appeared between the two looks (a workspace
-  // making it for its first sync, seen through the share a moment apart). Looked at again,
-  // once: what is there and still cannot be opened is not a plain directory. (T4, on vz,
-  // 2026-11-21: an honest first offer was refused for this, with the Mac busy.)
-  let dir = openDir(syncDir(domain, repo));
-  if (!dir && !notThere(outbox(domain), path.join("sync", repo)))
-    dir = openDir(syncDir(domain, repo));
-  if (!dir)
+  const dir = openDir(syncDir(domain, repo), settle);
+  if (typeof dir === "string")
     return notThere(outbox(domain), path.join("sync", repo))
       ? { refs: {} }
-      : { refused: `${what} could not be read: its directory in the outbox is not a plain one` };
+      : {
+          refused: `${what} could not be read: its directory in the outbox is not a plain one (${dir})`,
+        };
   let text: string;
   try {
     const opened = openIn(dir, "refs.json", REFS_BYTES, what);
@@ -315,7 +374,7 @@ export const takeBundles = (
   most = Infinity,
 ): { copies: string[]; dropped: string[]; more: boolean } => {
   const dir = openDir(syncDir(domain, repo));
-  if (!dir) return { copies: [], dropped: [], more: false };
+  if (typeof dir === "string") return { copies: [], dropped: [], more: false };
   const copies: string[] = [];
   const dropped: string[] = [];
   let more = false;
@@ -436,9 +495,10 @@ export const takeLfs = async (
   if (!isLfsOid(oid)) return { error: "not an LFS object id" };
   const dir = openDir(path.join(outbox(domain), "lfs", repo));
   const what = `the LFS object ${oid.slice(0, 12)}`;
-  const opened = dir
-    ? openIn(dir, oid, FORGE.lfsObjectBytes, what, "the forge stores")
-    : { why: `${what} is not there`, absent: true };
+  const opened =
+    typeof dir !== "string"
+      ? openIn(dir, oid, FORGE.lfsObjectBytes, what, "the forge stores")
+      : { why: `${what} is not there`, absent: true };
   const tmp = `${target}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     if (!isOpened(opened))
@@ -452,13 +512,13 @@ export const takeLfs = async (
     if ((await copyOut(opened, tmp)) !== oid)
       return { error: `the LFS object ${oid.slice(0, 12)} does not hash to its id` };
     fs.renameSync(tmp, target);
-    removeIn(dir!, oid);
+    removeIn(dir as Dir, oid);
     return { ok: true };
   } catch (error) {
     return { error: `${what} could not be copied: ${(error as Error).message}` };
   } finally {
     if (isOpened(opened)) fs.closeSync(opened.fd);
-    dir?.close();
+    if (typeof dir !== "string") dir.close();
     fs.rmSync(tmp, { force: true });
   }
 };
@@ -510,7 +570,7 @@ declare namespace takeLfs {
 export const dropLfs = (domain: string, repo: string, oid: string) => {
   if (!isLfsOid(oid)) return;
   const dir = openDir(path.join(outbox(domain), "lfs", repo));
-  if (!dir) return;
+  if (typeof dir === "string") return;
   try {
     removeIn(dir, oid);
   } finally {
