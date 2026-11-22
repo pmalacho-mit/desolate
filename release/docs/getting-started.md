@@ -256,7 +256,8 @@ and 443 ([what that means for registries and builds](reference.md)).
   with an error, on purpose. If git counted it as pushed, it would record `origin/<branch>`,
   and `git status`, the editor and every other tool would then say GitHub has a branch it
   does not have. The editor's Publish Branch and Sync show a red "Can't push refs to remote.
-  Try running Pull first" dialog for the same reason. Close the dialog: the branch was offered. Show Command Output has the
+  Try running Pull first" dialog for the same reason, and the button still says Publish
+  Branch until the push lands. Close the dialog: the branch was offered. Show Command Output has the
   `offered ... at ...` line, and the dashboard lists the branch. Pushing again only offers it
   again (the newer offer replaces the older one), so it does no harm, but there is no need.
 
