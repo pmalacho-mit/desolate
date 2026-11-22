@@ -3,7 +3,9 @@
 //
 //   desolate fetch [<owner/repo>]   the root refreshes the mirror from the remote (with its
 //                                   read key; this VM has none), then this fetches every
-//                                   remote here: origin, root, and each domain's
+//                                   remote of the clone: origin, root, and each domain's.
+//                                   Unnamed: the clone you are in and the others of its
+//                                   domains; outside a clone, every clone here
 //   desolate upstream [<consumer>] <dependency-dir> <owner/repo> [--from <ref>]
 //                                   suede's upstream, desolate's pinned copy: a consumer's
 //                                   change to a vendored dependency, proposed to the
@@ -85,6 +87,66 @@ const repoOf = (named: string | undefined): string => {
   );
 };
 
+/** The clones `desolate fetch` fetches when none is named: the one you are in (`here`) and
+ *  every other clone of a domain it is in (a domain is a remote of each of its clones,
+ *  host/git-vm.ts ensureGitClone); outside a clone, every one. `remotes`: each clone's. */
+export const toFetch = (here: string | null, remotes: Record<string, string[]>): string[] => {
+  const all = Object.keys(remotes);
+  if (here === null) return all;
+  const domains = (remotes[here] ?? []).filter((r) => r !== "origin" && r !== "root");
+  return [here, ...all.filter((c) => c !== here && remotes[c]!.some((r) => domains.includes(r)))];
+};
+
+declare namespace toFetch {
+  export type Cases = Table<
+    typeof toFetch,
+    [
+      [
+        args: [
+          here: "acme/web",
+          remotes: {
+            "acme/api": ["origin", "root", "standup"];
+            "acme/web": ["origin", "root", "standup"];
+            "acme/other": ["origin", "root", "pantry"];
+          },
+        ],
+        expected: ["acme/web", "acme/api"],
+      ],
+      /** origin and root are every clone's: they make no two clones kin */
+      [
+        args: [
+          here: "acme/web",
+          remotes: { "acme/web": ["origin", "root"]; "acme/api": ["origin", "root"] },
+        ],
+        expected: ["acme/web"],
+      ],
+      [
+        args: [here: null, remotes: { "acme/web": ["origin"]; "acme/api": ["origin"] }],
+        expected: ["acme/web", "acme/api"],
+      ],
+    ]
+  >;
+}
+
+/** The clone the current directory is in, if it is one. */
+const here = () =>
+  cloneOf(spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim());
+
+/** Each clone here (/git/<owner>/<repo>), with its remotes. */
+const remotesHere = (): Record<string, string[]> => {
+  const found: Record<string, string[]> = {};
+  for (const owner of fs.readdirSync("/git", { withFileTypes: true })) {
+    if (!owner.isDirectory()) continue;
+    for (const name of fs.readdirSync(`/git/${owner.name}`, { withFileTypes: true })) {
+      const repo = `${owner.name}/${name.name}`;
+      if (!name.isDirectory() || !isRepo(repo) || !fs.existsSync(`/git/${repo}/.git`)) continue;
+      const listed = spawnSync("git", ["-C", `/git/${repo}`, "remote"], { encoding: "utf8" });
+      found[repo] = listed.stdout.split("\n").filter(Boolean);
+    }
+  }
+  return found;
+};
+
 /** The exit code of `desolate` with no verb it knows: 0 when the usage was asked for. */
 export const usageExit = (verb: string | undefined) => (verb && verb !== "help" ? 64 : 0);
 
@@ -102,24 +164,41 @@ declare namespace usageExit {
 const main = async (argv: string[]) => {
   const [verb, ...args] = argv;
   if (verb === "fetch") {
-    const repo = repoOf(args[0]);
-    const dir = `/git/${repo}`;
-    if (!fs.existsSync(path.join(dir, ".git")))
-      fail(`no clone of ${repo} here`, `on the Mac: desolate git ${repo}`);
-    const reply = await requester().ask(newId(), { op: "fetch", repo }, (line) =>
-      process.stderr.write(`${line}\n`),
-    );
-    for (const line of Array.isArray(reply.said) ? reply.said : [])
-      process.stderr.write(`${String(line)}\n`);
-    if (reply.fetched !== true)
-      fail(
-        `the root could not refresh ${repo}: ${String(reply.error ?? "no reason given")}`,
-        `on the Mac: desolate fetch ${repo}`,
+    const all = args[0] ? {} : remotesHere();
+    const clones = args[0] ? [repoOf(args[0])] : toFetch(here(), all);
+    let failed = 0;
+    for (const repo of clones) {
+      const dir = `/git/${repo}`;
+      if (!fs.existsSync(path.join(dir, ".git"))) {
+        process.stderr.write(
+          `desolate: no clone of ${repo} here\n  fix: on the Mac: desolate git ${repo}\n`,
+        );
+        failed++;
+        continue;
+      }
+      const reply = await requester().ask(newId(), { op: "fetch", repo }, (line) =>
+        process.stderr.write(`${line}\n`),
       );
-    const fetched = spawnSync("git", ["-C", dir, "fetch", "--all", "--prune"], {
-      stdio: "inherit",
-    });
-    process.exit(fetched.status ?? 1);
+      for (const line of Array.isArray(reply.said) ? reply.said : [])
+        process.stderr.write(`${String(line)}\n`);
+      if (reply.fetched !== true) {
+        process.stderr.write(
+          `desolate: the root could not refresh ${repo}: ${String(reply.error ?? "no reason given")}\n  fix: on the Mac: desolate fetch ${repo}\n`,
+        );
+        failed++;
+        continue;
+      }
+      const fetched = spawnSync("git", ["-C", dir, "fetch", "--all", "--prune"], {
+        stdio: "inherit",
+      });
+      if (fetched.status !== 0) failed++;
+    }
+    // Which were fetched, said plainly: the one you are in was, alone, and another clone of
+    // the same domain showed a main two merges old (dogfooding, 2026-11-22).
+    process.stderr.write(
+      `desolate: fetched ${clones.length - failed} of ${clones.length}: ${clones.join(", ")}${clones.length < Object.keys(all).length ? " (the clones of its domains; in /git, desolate fetch fetches every clone)" : ""}\n`,
+    );
+    process.exit(failed ? 1 : 0);
   } else if (verb === "upstream") {
     const { upstream, Stop } = await import("./upstream.ts");
     try {
@@ -132,7 +211,9 @@ const main = async (argv: string[]) => {
     process.stdout.write(
       [
         "desolate, in the git VM:",
-        "  desolate fetch [<owner/repo>]   refresh the mirror from the remote, then git fetch --all",
+        "  desolate fetch [<owner/repo>]   refresh the mirror from the remote, then git fetch --all:",
+        "                                  the clone named, or the one you are in and the other",
+        "                                  clones of its domains, or (in /git) every clone",
         "  git push origin <branch>        push it: you approve it on the approval page",
         "  git push <domain> <branch>      deliver it to a domain: its workspaces see root/<branch>",
         "  git fetch <domain>              what a domain's workspaces wrote: <domain>/<branch>",

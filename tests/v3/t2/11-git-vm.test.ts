@@ -214,7 +214,9 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     await type(
       "echo from-the-git-vm > note.txt && git add note.txt && git -c user.name=person -c user.email=p@example.invalid commit -qm 'from the git VM' && git push origin HEAD:refs/heads/from-git\n",
     );
-    await screen(/handed to the root\. Approve it beside this terminal/);
+    await screen(
+      /handed to the root; nothing has gone to the remote\. Approve it on the approval page/,
+    );
     const commit = stack
       .inVm(gitVm(), ["git", "-C", "/git/acme/widgets", "rev-parse", "HEAD"])
       .stdout.trim();
@@ -340,17 +342,17 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     // (A shell an earlier test left open is offered back instead of a new one's greeting:
     // waiting for the greeting alone spent the whole minute every run.)
     const first = await person.load(address, {
-      until: /desolate's git VM|Back to the shell in/,
+      until: /desolate's git VM|Back to shell \d+/,
       ms: 60_000,
     });
-    assert.match(first.stdout, /desolate's git VM|Back to the shell in/, first.stdout.slice(-600));
+    assert.match(first.stdout, /desolate's git VM|Back to shell \d+/, first.stdout.slice(-600));
     const opened = await person.load(fromElsewhere, {
-      until: /Back to the shell in|desolate's git VM|desolate ui --open|refused/,
+      until: /Back to shell \d+|desolate's git VM|desolate ui --open|refused/,
       ms: 60_000,
     });
     assert.match(
       opened.stdout,
-      /Back to the shell in \/git\/acme\/widgets[\s\S]*New shell/,
+      /Back to shell \d+ \(left [^)]*\)<\/button>[\s\S]*New shell/,
       opened.stdout.slice(-600),
     );
   });
@@ -580,7 +582,24 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       "cd /git/acme/widgets && git push desolate-out::acme/widgets@empty review/notes 2>&1; true",
     ]);
     assert.match(refused.stdout, /not in the domain 'empty'/);
-    // desolate fetch: the root refreshes the mirror, and every remote is fetched.
+    // desolate fetch: the root refreshes the mirror, and every remote is fetched: of this
+    // clone and of every other clone of its domains, said by name (dogfooding, 2026-11-22: the
+    // other clone's main was two merges old). A clone of no domain of its is not fetched.
+    for (const repo of ["acme/gadgets", "acme/loner"]) {
+      stack.seed(repo, (dir) => {
+        fs.writeFileSync(path.join(dir, "README.md"), `# ${repo}\n`);
+        git(dir, "add", "-A");
+        git(dir, "commit", "--quiet", "-m", "seed");
+      });
+      assert.equal(stack.quiet("clone", repo, "--no-domain").code, 0);
+    }
+    assert.equal(
+      stack.quiet("domain", "create", "pair", "--repo", "acme/widgets", "--repo", "acme/gadgets")
+        .code,
+      0,
+    );
+    for (const repo of ["acme/widgets", "acme/gadgets", "acme/loner"])
+      assert.equal(stack.desolate("git", repo).code, 0);
     const fetched = stack.inVm(gitVm(), [
       "bash",
       "-lc",
@@ -588,8 +607,19 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     ]);
     assert.match(
       fetched.stdout,
-      /the root is refreshing acme\/widgets from its remote[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*EXIT=0/,
+      /the root is refreshing acme\/widgets from its remote[\s\S]*Fetching origin[\s\S]*Fetching dev[\s\S]*the root is refreshing acme\/gadgets from its remote[\s\S]*Fetching pair[\s\S]*desolate: fetched 2 of 2: acme\/widgets, acme\/gadgets \(the clones of its domains; in \/git, desolate fetch fetches every clone\)\nEXIT=0/,
       fetched.stdout,
+    );
+    assert.doesNotMatch(fetched.stdout, /loner/);
+    const everyOne = stack.inVm(gitVm(), [
+      "bash",
+      "-lc",
+      "cd /git && desolate fetch 2>&1; echo EXIT=$?",
+    ]);
+    assert.match(
+      everyOne.stdout,
+      /desolate: fetched 3 of 3: [\s\S]*acme\/loner[\s\S]*\nEXIT=0/,
+      everyOne.stdout,
     );
   });
 
@@ -692,6 +722,67 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       said = await read(700);
     assert.match(said, /kept-42 in \/git\/acme\/widgets\/\.git/, said.slice(-800));
     await type("exit\n");
+  });
+
+  it("a reload of Open in git's address goes back to the tab's own shell, and shells left are told apart", async () => {
+    // (Dogfooding, 2026-11-22: a reload asked to check out again and left a second shell, and
+    // the bare page then offered two "Back to the shell in" one folder.)
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(
+      chrome,
+      fs.mkdtempSync(path.join(stack.work, "chrome-git-reload-")),
+    );
+    after(() => browser.close());
+    const address = /(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!;
+    const tab = await browser.tab(`${address}&domain=dev&branch=from-git`);
+    await tab.click("button", "Check out from-git from dev");
+    const mine = await tab.until<string>(
+      `document.body.innerText.includes("from-git is at dev/from-git") && JSON.parse(sessionStorage.getItem("desolate-git-shell") || "{}").id`,
+      "the checkout, in a shell",
+      60_000,
+    );
+    const left = `fetch("/sessions", { credentials: "same-origin", headers: window.desolateKey.headers }).then((r) => r.json()).then((b) => b.left)`;
+    await tab.evaluate("setTimeout(() => location.reload(), 50), true");
+    await sleep(1000);
+    await tab.until(
+      `document.body.innerText.includes("from-git is at dev/from-git") && document.getElementById("status").textContent === ""`,
+      "the same shell, as it was",
+    );
+    assert.equal(
+      await tab.evaluate(
+        `[...document.querySelectorAll("button")].some((b) => b.innerText.includes("Check out"))`,
+      ),
+      false,
+      "nothing asked again",
+    );
+    assert.equal(
+      await tab.evaluate<string>(`JSON.parse(sessionStorage.getItem("desolate-git-shell")).id`),
+      mine,
+    );
+    assert.equal(
+      (await tab.evaluate<{ id: string }[]>(left)).some((s) => s.id === mine),
+      false,
+      "the tab reads it again: no shell of its was left behind for another",
+    );
+    // CONTROL: another tab, which has no shell of its own: offered the one left, by a number
+    // and what it shows last (its prompt: where it is now).
+    await tab.close();
+    const other = await browser.tab(address.replace(/tkn=[0-9a-f]+&/, ""));
+    const offered = await other.until<string>(
+      `/Back to shell \\d+ \\(left just now\\)/.test(document.body.innerText) && document.body.innerText`,
+      "the shell left, offered back",
+    );
+    assert.match(
+      offered,
+      /\d+\. opened in \/git\/acme\/widgets, left just now; it shows: \S*\/git\/acme\/widgets\$/,
+      offered,
+    );
+    const ours = (await other.evaluate<{ id: string; last: string }[]>(left)).find(
+      (s) => s.id === mine,
+    );
+    assert.match(ours?.last ?? "", /\/git\/acme\/widgets\$$/);
+    await other.close();
   });
 
   it("an offered branch's new LFS file checks out in the git VM, from the root's store, whole", async () => {
