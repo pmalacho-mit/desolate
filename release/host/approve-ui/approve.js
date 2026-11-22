@@ -129,7 +129,7 @@ const post = async (what, card, squash) => {
 // shows nothing: the classes shared/text.ts's printable replaces, and the blank Braille
 // pattern), but for a tab and a carriage return that ends a line: in a diff a person
 // approves from, each is shown as itself, named, so the line reads as git stores it.
-const HIDES = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u2800\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
+const HIDES = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
 const unhidden = (line) => line.replace(HIDES, (c, at) => c === "\t" || c === "\n" || (c === "\r" && (at + 1 === line.length || line[at + 1] === "\n")) ? c : `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
 const kindOf = (line) => line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
 /** git's text, a line a span; given `tokens` (shared/ui/highlight.js), each line of code in
@@ -139,7 +139,9 @@ const diffView = (text, tokens) => {
   text.split("\n").forEach((line, i) => {
     const span = el("span", undefined, kindOf(line));
     const code = tokens && tokens[i];
-    if (code && typeof DesolateHighlight !== "undefined") span.append(document.createTextNode(line[0]), ...DesolateHighlight.paint(code, unhidden));
+    // (Coloured, unhidden sees a token at a time: a line with a carriage return inside it is
+    // shown plain, where the return is named.)
+    if (code && !/\r(?!$)/.test(line) && typeof DesolateHighlight !== "undefined") span.append(document.createTextNode(line[0]), ...DesolateHighlight.paint(code, unhidden));
     else span.textContent = unhidden(line) || " ";
     pre.append(span);
   });

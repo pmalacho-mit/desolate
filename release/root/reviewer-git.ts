@@ -67,11 +67,16 @@ declare namespace shown {
  *  `\ooo`), so that it does not read as another name. A UTF-8 name with a quote or a
  *  backslash is quoted too, as git does, so that none reads as a quoted one; and one that
  *  starts or ends in a space (or the blank Braille pattern, which printable keeps), which on
- *  a page reads as the name without it. */
+ *  a page reads as the name without it; and one NFC changes (printable shows text in NFC: a
+ *  Kelvin sign would read as K). */
 export const named = (raw: string): string => {
   const bytes = Buffer.from(raw, "latin1");
   const text = bytes.toString("utf8");
-  if (Buffer.from(text, "utf8").equals(bytes) && !/["\\]|^[\s\u2800]|[\s\u2800]$/u.test(text))
+  if (
+    Buffer.from(text, "utf8").equals(bytes) &&
+    !/["\\]|^[\s\u2800]|[\s\u2800]$/u.test(text) &&
+    text.normalize("NFC") === text
+  )
     return shown(text);
   const quoted = [...raw].map((c) =>
     c >= "\x80" ? `\\${c.charCodeAt(0).toString(8)}` : c === '"' || c === "\\" ? `\\${c}` : c,
@@ -91,6 +96,7 @@ declare namespace named {
       [args: [raw: '"caf\\351.txt"'], expected: '"\\"caf\\\\351.txt\\""'],
       /** and one with a space at its end, which would read as the name without it */
       [args: [raw: "package.json "], expected: '"package.json "'],
+      [args: [raw: "\u00e2\u0084\u00aaeys.pem"], expected: '"\\342\\204\\252eys.pem"'],
       [args: [raw: "README.md\u00e2\u00a0\u0080"], expected: '"README.md\\342\\240\\200"'],
       [args: [raw: "a b.txt"], expected: "a b.txt"],
     ]
