@@ -24,17 +24,16 @@ const el = (tag, attrs = {}, ...children) => {
 const gitLink = (repo, at) => state && state.stack && state.stack.editorPort
   ? el("a", { class: "button quiet", "data-open-git": repo, href: `http://${state.stack.gitHostname || "desolate-git.localhost"}:${state.stack.editorPort}/?repo=${encodeURIComponent(repo)}${at ? `&domain=${encodeURIComponent(at.domain)}&branch=${encodeURIComponent(at.branch)}` : ""}`, target: "_blank", rel: "noopener noreferrer", title: at ? `A terminal in your clone of ${repo}, on ${at.branch} as ${at.domain} has it: git status, git log, git push` : `A terminal in your clone of ${repo}` }, "Open in git")
   : null;
-/** The approval page (the Mac's own, not this one's), naming the push it is opened for, for
- *  it to show that one first. */
-const approvalUrl = (push) => state && state.stack && state.stack.approveHostname
-  ? `http://${state.stack.approveHostname}:${state.stack.editorPort}/?repo=${encodeURIComponent(push.repo)}&branch=${encodeURIComponent(push.branch)}&commit=${encodeURIComponent(push.commit)}`
+/** The approval page (the Mac's own, not this one's): its bare address, the only one another
+ *  site may open (host/approve-web.ts). */
+const approvalUrl = () => state && state.stack && state.stack.approveHostname
+  ? `http://${state.stack.approveHostname}:${state.stack.editorPort}/`
   : null;
 /** It in a tab of its own, as Push starts a push that waits there for the person. Opened in
  *  the click itself, so the browser lets it open; with no tie back to this page (noopener,
  *  and its own Cross-Origin-Opener-Policy). */
-const openApproval = (push) => {
-  const url = approvalUrl(push);
-  if (url) window.open(url, "_blank", "noopener,noreferrer");
+const openApproval = () => {
+  if (approvalUrl()) window.open(approvalUrl(), "_blank", "noopener,noreferrer");
 };
 /** What a name is, said with it: a domain, a workspace, a repository, a branch, a commit (the
  *  same word can be several). A domain or a workspace named with `at` ("<domain>" or
@@ -556,7 +555,7 @@ const needsYou = () => {
     el("div", { class: "line mono" }, `${a.commit}`),
     a.summary ? el("div", { class: "line sub fit", title: a.summary, "data-approval-from": "" }, a.summary) : null,
     el("div", { class: "line" }, "Approve or refuse it on the approval page, outside every VM (or ", el("code", {}, "desolate approve"), " in a terminal on the Mac).")),
-    el("div", { class: "buttons" }, approvalUrl(a) ? el("a", { class: "button", href: approvalUrl(a), target: "_blank", rel: "noopener noreferrer", "data-approval-page": "" }, "Open the approval page") : null)));
+    el("div", { class: "buttons" }, approvalUrl() ? el("a", { class: "button", href: approvalUrl(), target: "_blank", rel: "noopener noreferrer", "data-approval-page": "" }, "Open the approval page") : null)));
   for (const r of state.refused || []) items.push(el("li", { "data-refused": `${r.domain}/${r.repo}` }, el("span", { class: "dot red" }), el("div", { class: "what" },
     el("div", { class: "name" }, `Refused from ${r.domain}: a bundle of ${r.repo}`),
     el("div", { class: "line mono" }, r.why),
@@ -749,7 +748,7 @@ const reviewPanel = () => {
     el("div", { class: "buttons" }, !review.pushable ? el("span", { class: "sub" }, "Not pushable: cloned --no-push, so there is no write key for it.")
       : reviewing.against === "domain" ? el("span", { class: "sub" }, `A push would send ${review.pushCommits} commit(s), counted against origin: compare with origin to push.`)
       : !offered ? el("span", { class: "sub" }, "Not offered at this commit, so not pushed from here. Open it in git (above) and run git push there, or have the agent run ", el("code", {}, "desolate offer"), ".")
-      : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval({ repo: review.repo, branch: review.branch, commit: review.commit }); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
+      : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval(); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
           busy.has(key) ? "Pushing..." : `Push exactly ${short(review.commit)}${review.isDefault ? ` to ${review.branch}` : ""}`)),
     el("div", { class: "sub" }, "Push opens the approval page in a new tab, where you approve exactly this commit. (Or approve it with ", el("code", {}, "desolate approve"), " in a terminal on the Mac.)"));
 };
@@ -785,7 +784,7 @@ const checkoutAfter = (d, w, c) => {
   const b = c.head && c.head.branch ? branchesOf(d).find((b) => b.repo === c.repo && b.branch === c.head.branch) : null;
   return [
     pushed && pushed.carryOn ? el("div", { class: "line sub", "data-carry-on": c.repo }, "To carry on from the squash, in the workspace (what you committed since is kept, on top): ", el("code", {}, pushed.carryOn)) : null,
-    b && b.pushed && !landedOf(d, c) ? el("div", { class: "line", "data-pushed": c.repo }, pill(`pushed ${short(b.pushed.commit)}`, "green", `the remote's ${b.branch} is at ${b.pushed.commit}, pushed from here`), " ", pullRequestOf(b), " ", fetchNow(c.repo)) : null,
+    b && b.pushed && !landedOf(d, c) ? el("div", { class: "line", "data-pushed": c.repo }, pill(`pushed ${short(b.pushed.commit)}`, "green", `desolate pushed ${b.pushed.commit} to the remote's ${b.branch}`), " ", pullRequestOf(b), " ", fetchNow(c.repo)) : null,
   ];
 };
 
@@ -1014,7 +1013,7 @@ const branchList = (d) => {
         el("div", { class: "name" }, named("branch", b.branch), " ", named("repo", b.repo),
           offered(b) ? pill("offered", "blue", "a workspace offered it for you to review and push") : null,
           b.landed ? pill(`merged into ${b.landed}`, "green", "at this commit, merged on the remote") : null,
-          b.pushed ? pill(`pushed ${short(b.pushed.commit)}`, "green", `the remote's ${b.branch} is at ${b.pushed.commit}, pushed from here`) : null),
+          b.pushed ? pill(`pushed ${short(b.pushed.commit)}`, "green", `desolate pushed ${b.pushed.commit} to the remote's ${b.branch}`) : null),
         el("div", { class: "line" }, el("span", { class: "mono" }, short(b.commit)), where(b).length ? [" · checked out in ", where(b).map((w) => named("workspace", w))] : "")),
       el("div", { class: "buttons" }, pullRequestOf(b), el("button", { class: "quiet", onclick: () => openReview({ domain: d.slug, repo: b.repo, branch: b.branch }) }, "Review"))))),
     list.length < shown.total

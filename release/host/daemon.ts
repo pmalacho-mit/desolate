@@ -777,6 +777,8 @@ declare namespace lastLines {
  *  a thousand (agent.ts), and the facts are one request, of which the state service takes
  *  256 KiB (root/stated.ts BODY_BYTES); `desolate agent list` has the rest. */
 const AGENTS_SHOWN = 8;
+/** Three quarters of what root/stated.ts takes of a request (BODY_BYTES, 256 KiB). */
+const FACTS_MOST = 192 * 1024;
 const COMMAND_SHOWN = 200;
 const shownAgents = (agents: {
   items: {
@@ -2013,6 +2015,10 @@ const serve = async () => {
       },
       workspaces,
     };
+    // Agents are what a VM may make many of (a domain's agent spawns workspaces): left out
+    // when the facts would come near what the state service takes, so nothing else freezes.
+    if (JSON.stringify(facts).length > FACTS_MOST)
+      for (const w of Object.values(workspaces) as { agents?: unknown }[]) delete w.agents;
     const text = JSON.stringify(facts);
     // Said when it changes, and now and then regardless, so the service knows the host is there.
     if (text === sentFacts && Date.now() - sentAt < 45_000) return;
@@ -2033,6 +2039,8 @@ const serve = async () => {
       const running = new Set(
         (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
       );
+      // (A VM stopped since is not shown with the agents it had.)
+      for (const vm of agentsOf.keys()) if (!running.has(vm)) agentsOf.delete(vm);
       for (const entry of entries.values()) {
         if (!running.has(entry.vm)) continue;
         try {

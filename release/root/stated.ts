@@ -624,7 +624,8 @@ const checkPushed = async () => {
         if (known && known.heads === heads && Date.now() - known.at < 120_000) continue;
         try {
           const counted = await offers.unpushedOf(d.slug, w);
-          const result = await Promise.all(counted.map(squashOf));
+          // (A squash not looked for is a count still shown.)
+          const result = await Promise.all(counted.map((u) => squashOf(u).catch(() => u)));
           pushedOf.set(key, { heads, at: Date.now(), result });
         } catch (error) {
           console.error(`stated: ${key}'s commits could not be counted: ${String(error)}`);
