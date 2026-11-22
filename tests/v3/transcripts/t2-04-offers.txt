@@ -159,7 +159,7 @@ desolate: this push needs your confirmation.
   as          A Person <person@example.invalid>
   committer   A Person <person@example.invalid>
               authored <time>, committed <time>
-  message     add notes
+  message     tidy up
               Squashed from 2 commits:
               - add notes
               - tidy up

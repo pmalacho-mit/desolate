@@ -255,8 +255,14 @@ export const openBrowser = async (
         }
       },
       /** The first element matching `selector` (and holding `text`, if given), clicked: the
-       *  pointer moves there, presses and lets go (holding shift, if asked). */
-      click: async (selector: string, text = "", options: { shift?: boolean } = {}) => {
+       *  pointer moves there, presses and lets go (holding shift, if asked). `atOnce`: in one
+       *  move, pressed straight after, unchecked: a click as the pointer arrives, which the
+       *  eight moves and the check take too long to be under load (T2 04, 2026-11-22). */
+      click: async (
+        selector: string,
+        text = "",
+        options: { shift?: boolean; atOnce?: boolean } = {},
+      ) => {
         // Where it is, and that it is what the pointer would press there: a page that moved
         // under the pointer (a diff loading above a button) is measured again.
         const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.innerText.includes(${JSON.stringify(text)}))`;
@@ -274,6 +280,11 @@ export const openBrowser = async (
             return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
           })()`);
           if (!at) throw new Error(`nothing to click: ${selector} ${text}`);
+          if (options.atOnce) {
+            await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...at }, sessionId);
+            pointer = at;
+            break;
+          }
           for (let i = 1; i <= 8; i++) {
             const p = {
               x: pointer.x + ((at.x - pointer.x) * i) / 8,
