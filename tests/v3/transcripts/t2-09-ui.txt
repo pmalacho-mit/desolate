@@ -80,6 +80,8 @@ approvals    http://desolate-approve.localhost:31591/?tkn=<token>
 to sign this browser in to every page at once: desolate ui --open (or --link, to print the link)
 [exit 0]
 
+## the review of names that read as others
+
 ## a long branch, counted and paged
 
 $ desolate review web acme/app long

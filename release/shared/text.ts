@@ -14,12 +14,13 @@ import type { keptAt, newlinesThen, notKept, repeat } from "../.harness/shared-t
 /** Controls, format characters (bidirectional overrides, zero-width), private-use and
  *  unassigned code points, half of a surrogate pair, and the line and paragraph separators.
  *  Then the marks and letters that show nothing and are not format characters: the
- *  combining grapheme joiner, the Hangul and Mongolian fillers, and the variation selectors
+ *  combining grapheme joiner, the Hangul and Mongolian fillers, the two Khmer vowels Unicode
+ *  says not to use (they draw nothing: the second fresh review of #227 U5), and the variation selectors
  *  past the sixteen (U+E0100 on), which no text needs and which carry hidden bytes. The first
  *  sixteen choose how a character looks (U+FE0F: as an emoji), so one is kept after a
  *  character; a run of them is the same smuggling, and from the second on they are unsafe. */
 const UNSAFE =
-  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u180b-\u180f\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
 
 /** The most of a text printable passes when its caller names no bound: a bound against a
  *  flood (a megabyte of status would fill a terminal's scrollback and a page's memory), not
@@ -83,6 +84,7 @@ declare namespace printable {
        *  variation selectors (one, after a character, chooses how it looks, and stays) */
       [args: [value: "a\ud800b"], expected: "a?b"],
       [args: [value: "a\u3164b\u034fc"], expected: "a?b?c"],
+      [args: [value: "README.md\u17b4"], expected: "README.md?"],
       [args: [value: "\u2764\ufe0f ok"], expected: "\u2764\ufe0f ok"],
       [args: [value: "x\ufe00\ufe01\ufe02"], expected: "x\ufe00??"],
       [args: [value: "x\u{e0100}\u{e0101}"], expected: "x??"],

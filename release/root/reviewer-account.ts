@@ -40,6 +40,7 @@ import {
   gitOk,
   gitStream,
   has,
+  lookalike,
   named,
   pathspec,
   SENSITIVE,
@@ -575,6 +576,7 @@ const account = async (
         removed: Number(removed) || 0,
         ...(added === "-" ? { binary: true } : {}),
         ...(SENSITIVE.test(raw) ? { sensitive: true } : {}),
+        ...(lookalike(Buffer.from(raw, "latin1").toString("utf8")) ? { lookalike: true } : {}),
       });
       if (SUEDE_CORE.test(raw)) core += 1;
     }
@@ -582,8 +584,11 @@ const account = async (
       warnings.push(
         `it changes suede's own machinery (${core} file(s) under .suede/core/), which every consumer of this code runs: worth a second look`,
       );
-    // What runs on the forge first, so on the first page (sort keeps git's order otherwise).
-    files.sort((a, b) => Number(Boolean(b.sensitive)) - Number(Boolean(a.sensitive)));
+    // What runs on the forge first, then what only looks like it (or like README.md), so on
+    // the first page (sort keeps git's order otherwise).
+    const rank = (f: { sensitive?: boolean; lookalike?: boolean }) =>
+      f.sensitive ? 2 : f.lookalike ? 1 : 0;
+    files.sort((a, b) => rank(b) - rank(a));
     const sensitive = files.filter((f) => f.sensitive).length;
     if (sensitive > PAGE)
       warnings.push(
@@ -629,8 +634,12 @@ const account = async (
     const net = new Set(files.map((f) => f.raw));
     const between = [...new Set(touched.filter((name) => !net.has(name)))]
       .sort()
-      .map((raw) => ({ path: named(raw), ...(SENSITIVE.test(raw) ? { sensitive: true } : {}) }))
-      .sort((a, b) => Number(Boolean(b.sensitive)) - Number(Boolean(a.sensitive)));
+      .map((raw) => ({
+        path: named(raw),
+        ...(SENSITIVE.test(raw) ? { sensitive: true } : {}),
+        ...(lookalike(Buffer.from(raw, "latin1").toString("utf8")) ? { lookalike: true } : {}),
+      }))
+      .sort((a, b) => rank(b) - rank(a));
     const first = order.slice(0, PAGE);
     const result: Account = {
       key,
