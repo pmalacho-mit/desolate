@@ -26,7 +26,7 @@ import {
 } from "../shared/size.ts";
 import { printable } from "../shared/text.ts";
 import { APPROVER_KIND } from "./approver.ts";
-import { RELEASE_DIR } from "./paths.ts";
+import { HOME, RELEASE_DIR } from "./paths.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
@@ -85,7 +85,7 @@ export const applies = (setting: Setting<unknown>): string => {
   if (setting === GIT_CPUS || setting === GIT_MEMORY)
     return "the git VM has it when it starts again: desolate down, then desolate git";
   if (setting === APPROVER_KIND)
-    return "the next bootstrap that makes an approver makes this kind; one made already stays what it is";
+    return `the next bootstrap makes an approver of this kind if there is none; to replace the one there is, move ${path.join(HOME, "approver")} aside first`;
   if (setting === WORKSPACE_CPUS || setting === WORKSPACE_MEMORY || setting === WORKSPACE_DISK)
     return "a workspace made from now on has it (one already made keeps its size: desolate resize)";
   switch (setting.side) {
@@ -115,6 +115,9 @@ declare namespace applies {
     >,
   ];
 }
+
+/** A default worked out from what it is used on (a VM's size, a disk), which only that has. */
+const WORKED_OUT = "worked out when it is used";
 
 const shown = (value: unknown): string =>
   Array.isArray(value)
@@ -174,37 +177,49 @@ export const listing = (setting: Setting<unknown>): Listing => {
 
 /** `desolate settings [--json]`. */
 export const list = async (out: (line: string) => void, json: boolean) => {
-  const rows = (await all()).map(listing);
+  const settings = await all();
+  const rows = settings.map(listing);
   if (json) return out(JSON.stringify(rows));
   out(
-    "Settings: what depends on this Mac or on you. Each is read where it says; a variable in your shell comes first, on the Mac.",
+    "Settings: what depends on this Mac or on you, for every domain and workspace on it (a domain may set its own secrets.heldMiB). Each is read where it says; a variable in your shell comes first, on the Mac.",
   );
   out(
     "Change one: desolate settings set <name> <value>. Back to its default: desolate settings unset <name>.",
   );
-  for (const row of rows) {
+  for (const [i, row] of rows.entries()) {
+    const setting = settings[i]!;
     const value = row.error
       ? `(refused: ${row.error})`
       : row.value === null
-        ? `(worked out ${WHERE[row.side]})`
+        ? `the default, ${WORKED_OUT} (how: below)`
         : shown(row.value);
     const from =
       row.from === "environment"
         ? `from ${row.env} in this shell`
         : row.from === "stored"
           ? "set by you"
-          : row.from === "default"
+          : row.from === "default" && row.value !== null
             ? "the default"
             : null;
     const fallback =
       row.from === "default" || row.default === undefined
         ? ""
-        : `; default ${row.default === null ? `worked out ${WHERE[row.side]}` : shown(row.default)}`;
+        : `; default ${row.default === null ? WORKED_OUT : shown(row.default)}`;
     out(`  ${row.name} = ${value}${from ? ` (${from}${fallback})` : ""}`);
     out(`      ${row.why}`);
-    out(`      read ${WHERE[row.side]}; ${row.env}`);
+    out(`      read ${WHERE[row.side]}, ${row.env}; a change: ${applies(setting)}`);
   }
 };
+
+declare namespace list {
+  /** each setting says when a change to it applies (every setting there is, and a default
+   *  worked out in a VM: tests/v3/t1/settings.test.ts) */
+  export type Applies = Expect<
+    Invoke<typeof said, [run: typeof settings, args: [argv: [], json: false]]>,
+    "includes",
+    "      read on the Mac, DESOLATE_ROOT_MEMORY_MIB; a change: the root VM has it when it starts again: desolate down, then desolate bootstrap"
+  >;
+}
 
 const named = async (
   name: string | undefined,
@@ -267,7 +282,7 @@ export const unset = async (name: string | undefined, out: (line: string) => voi
   if (was) save(stored);
   const fallback = listing(setting).default;
   out(
-    `${setting.name}: ${was ? "back to" : "was not set, and is"} its default${fallback === null ? ` (worked out ${WHERE[setting.side]})` : ` (${shown(fallback)})`}${was ? `: ${applies(setting)}` : ""}.`,
+    `${setting.name}: ${was ? "back to" : "was not set, and is"} its default${fallback === null ? ` (${WORKED_OUT})` : ` (${shown(fallback)})`}${was ? `: ${applies(setting)}` : ""}.`,
   );
   shadowed(setting, out);
 };

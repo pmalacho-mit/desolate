@@ -13,7 +13,7 @@
 // scroll back through). Its log keeps the newest of what it printed, up to the setting
 // agent.logMiB, and is read for as long as it is there, after the agent has ended too. Many
 // agents can run at once, one or more per workspace, each in its own VM: `desolate agent list`
-// shows them all.
+// shows the running ones, and a workspace's every one when it is named.
 //
 // What the holder in the VM says (its errors, its log, its list) is the VM's, where an agent
 // is root: made safe before it reaches a terminal. A holder started before this file (its log
@@ -474,8 +474,22 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
   const ago = (when: string | null) =>
     when ? `${Math.max(0, Math.round((Date.now() - Date.parse(when)) / 1000))} s ago` : "never";
   const width = process.stdout.isTTY ? process.stdout.columns : undefined;
+  // Bare, the running ones: every agent that had ended on the Mac (other people's, days-old
+  // test runs) was 179 lines (dogfooding, 2026-11-21). Named, a workspace's every one.
+  const ended = only
+    ? []
+    : found.flatMap((rows) => rows.items.filter((a) => a.state !== "running"));
+  const where = [...new Set(ended.map((a) => a.workspace))];
+  const endedLine = `${ended.length} that ended ${where.length === 1 ? `in ${where[0]}` : `in ${where.length} workspaces`}: desolate agent list ${where.length === 1 ? where[0] : "<domain>/<workspace>"} lists them`;
+  if (ended.length && ended.length === found.reduce((n, rows) => n + rows.total, 0))
+    return out(`no agents running (${endedLine})`);
   for (const rows of found) {
-    const page = { ...rows, items: rows.items.slice(0, PAGE) };
+    const items = only ? rows.items : rows.items.filter((a) => a.state === "running");
+    const page = {
+      ...rows,
+      items: items.slice(0, PAGE),
+      total: rows.total - (rows.items.length - items.length),
+    };
     for (const a of page.items)
       out(
         fitted(
@@ -489,6 +503,7 @@ export const list = async (only: string | undefined, out: Out, json: boolean) =>
         `  ${rows.items[0]!.workspace}: ${rest}${rows.total > rows.items.length ? ` (it lists more than ${AGENTS_MOST}: they are not shown)` : ` (every one: desolate agent list ${rows.items[0]!.workspace} --json)`}`,
       );
   }
+  if (ended.length) out(`  (and ${endedLine})`);
 };
 
 declare namespace list {
@@ -543,6 +558,61 @@ declare namespace list {
         Invoke<typeof rootAsked>,
         "matches",
         [{ op: "domain.list" }, { op: "exec"; args: { vm: "dsl-main-ddb30a57cc" } }]
+      >,
+    ]
+  >;
+  /** bare, a person sees what is running, and how to see the rest; named, every one */
+  export type Running = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "domain.list": [
+              {
+                slug: "acme";
+                workspaces: [
+                  { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc"; checkouts: [] },
+                ];
+              },
+            ];
+          },
+        ]
+      >,
+      Invoke<
+        typeof vmAnswers,
+        [
+          answers: {
+            list: [{ name: "dsl-main-ddb30a57cc"; status: "running"; labels: {} }];
+            exec: {
+              code: 0;
+              stdout: '[{"name":"web","state":"running","command":["npm","run","dev"],"exit":null},{"name":"old","state":"exited","command":["make"],"exit":0}]';
+            };
+          },
+        ]
+      >,
+      Invoke<typeof list, [only: undefined, out: typeof collect, json: false]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof said>,
+        "=",
+        [
+          "  acme/w1  web  running  started never, last output never  npm run dev",
+          "  (and 1 that ended in acme/w1: desolate agent list acme/w1 lists them)",
+        ]
+      >,
+      Given<
+        Invoke<typeof list, [only: "acme/w1", out: typeof collect, json: false]>,
+        Expect<
+          Invoke<typeof said>,
+          "=",
+          [
+            "  acme/w1  old  exited (exit 0)  started never, last output never  make",
+            "  acme/w1  web  running  started never, last output never  npm run dev",
+          ]
+        >
       >,
     ]
   >;

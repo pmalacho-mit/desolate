@@ -121,6 +121,22 @@ done
 rm -f /var/lib/desolate/*.log
 sync`;
 
+/** Run in the builder, as the user its checkouts are made as, with a worktree's clone, path,
+ *  branch and base: the worktree and its branch go when they hold nothing (the branch's every
+ *  commit is the base's, the worktree has no change but what is ignored, the build's own
+ *  output). A domain whose main checkout another workspace holds gives the build a worktree
+ *  named for it, and its `template` branch stayed in the domain's Branches, made by nobody
+ *  (dogfooding, 2026-11-21). Anything of a person's there is kept. */
+export const UNBRANCH = `cd "$1" || exit 0
+git rev-parse --verify --quiet "refs/heads/$3" >/dev/null || exit 0
+git merge-base --is-ancestor "refs/heads/$3" "$4" 2>/dev/null || git merge-base --is-ancestor "refs/heads/$3" "origin/$4" 2>/dev/null || exit 0
+if [ -e "$2/.git" ]; then
+  [ -z "$(git -C "$2" status --porcelain)" ] || exit 0
+  git worktree unlock "$2" 2>/dev/null
+  git worktree remove --force "$2" || exit 1
+fi
+git branch -D "$3" >/dev/null`;
+
 /** The domain's template for its environment as published now: present, or built now.
  *  null when the domain has no spec, or the build did not come up (the workspace is then made
  *  from desolate's base, as before, and `say` says why). */
@@ -276,6 +292,15 @@ const ensureOrThrow = async (
       `  no template: ${printableLines((error as Error).message)}. This workspace is made from desolate's base.`,
     );
   } finally {
+    const up = (await b.info(name).catch(() => null))?.status === "running";
+    for (const c of up ? builder.checkouts.filter((c) => c.kind === "worktree") : []) {
+      const argv = [`/workspaces/${c.repo}`, c.path, c.branch, c.base];
+      const gone = await b
+        .exec(name, ["sh", "-c", UNBRANCH, "unbranch", ...argv], { timeoutMs: 120_000 })
+        .catch((error: Error) => ({ code: 1, stdout: "", stderr: error.message }));
+      if (gone.code !== 0)
+        say(`  the build's worktree of ${c.repo} stays: ${printableLines(gone.stderr.trim())}`);
+    }
     await disconnectWorkspace(name).catch(() => {});
     await rootctl("proxy.stop", { vm: name }, { quiet: true }).catch(() => {});
     await rootctl("workspace.remove", { domain, name: "template" }, { quiet: true }).catch(

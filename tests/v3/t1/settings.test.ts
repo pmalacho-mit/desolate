@@ -178,6 +178,26 @@ describe("T1 settings: every one is found, and named in the docs", () => {
     }
   });
 
+  it("as a person reads them: Mac-wide, when a change applies, a VM's own default said to be", () => {
+    const shown = desolate(["settings"]);
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /^Settings: .*for every domain and workspace on it/);
+    const lines = shown.stdout.split("\n");
+    for (const row of listed())
+      assert.ok(
+        lines.some(
+          (line) => line.startsWith(`      read `) && line.includes(`${row.env}; a change: `),
+        ),
+        `${row.name} does not say when a change applies`,
+      );
+    assert.ok(
+      lines.includes(
+        "  reviewer.packThreads = the default, worked out when it is used (how: below)",
+      ),
+      shown.stdout,
+    );
+  });
+
   it("reference.md's table names exactly the settings there are, each by its variable", () => {
     const doc = fs.readFileSync(path.join(release, "docs/reference.md"), "utf8");
     const section = doc.slice(doc.indexOf("\n## Settings\n"));
