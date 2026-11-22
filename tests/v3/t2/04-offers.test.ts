@@ -956,8 +956,10 @@ echo "$c"`);
     submitted(b);
     const ask = (branch: string, commit: string) =>
       JSON.stringify({ op: "account", repo: "acme/widgets", branch, commit, onto: null });
-    // Packing made slow: the reviewer's first pack-objects after the mark is set waits 100 s
-    // first, longer than the 95 s that used to kill the account.
+    // Packing made slow: the reviewer's first pack-objects after the mark is set waits 20 s
+    // first, four of its 5 s beats. (The 95 s that used to kill an account is gone: nothing on
+    // the account's path has a deadline now, root/reviewer.ts. What is tried here is that a
+    // slow one says so, waits its turn, and ends with its asker.)
     const ran = stack.inRoot(
       [
         "bash",
@@ -967,7 +969,7 @@ echo "$c"`);
 trap 'rm -f /usr/local/bin/git; rm -rf /tmp/slowpack' EXIT
 cat > /usr/local/bin/git <<'W'
 #!/bin/sh
-if [ "$(id -un)" = desolate-reviewer ]; then case " $* " in *" pack-objects "*) rm /tmp/slowpack/once 2>/dev/null && sleep 100;; esac; fi
+if [ "$(id -un)" = desolate-reviewer ]; then case " $* " in *" pack-objects "*) rm /tmp/slowpack/once 2>/dev/null && sleep 20;; esac; fi
 exec /usr/bin/git "$@"
 W
 chmod 755 /usr/local/bin/git
@@ -980,9 +982,10 @@ rm -f /tmp/gone
 { printf '%s\n' "$1" | ask | { grep -m1 -q '"packing the push"'; touch /tmp/gone; }; } &
 until [ -e /tmp/gone ]; do sleep 0.2; done
 sleep 1
-echo "during $(count 'sleep 100') $(count 'reviewer.ts account')"
-sleep 12
-echo "after $(count 'sleep 100') $(count 'reviewer.ts account')"
+echo "during $(count 'sleep 20') $(count 'reviewer.ts account')"
+# Gone within a beat and the asker's grace (review-ask.ts): looked for up to 12 s.
+for _ in $(seq 1 48); do [ "$(count 'sleep 20') $(count 'reviewer.ts account')" = "0 0" ] && break; sleep 0.25; done
+echo "after $(count 'sleep 20') $(count 'reviewer.ts account')"
 wait
 # Asked again and read to the end; and another account asked for meanwhile, which waits.
 touch /tmp/slowpack/once
@@ -1011,7 +1014,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     assert.match(head, /^during [1-9]\d* [1-9]\d*$/m, head);
     assert.match(head, /^after 0 0$/m, "nothing the account started outlives its asker");
     const took = Number(/^took (\d+)$/m.exec(head)?.[1]);
-    assert.ok(took >= 100, `the account took ${took} s`);
+    assert.ok(took >= 20, `the account took ${took} s`);
     const lines = (text: string) =>
       text
         .split("\n")
@@ -1024,7 +1027,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       (l) => "progress" in l && (l.progress as { phase: string }).phase === "packing the push",
     );
     assert.ok(
-      saying.length >= 10,
+      saying.length >= 3,
       `it says what it is doing while it packs: ${saying.length} times`,
     );
     assert.ok("account" in waits.at(-1)!, waitsText.slice(-500));
@@ -1768,7 +1771,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     // The root removes what it finds by NAME, in the directory it checked: the link goes,
     // what it pointed at is never opened, and the person is told something was dropped.
     const dropped = /dropped from dev's outbox: the bundle zz-link\.bundle is not a plain file/;
-    assert.match(said(lied.stdout, dropped), dropped, lied.stdout);
+    assert.match(said(lied, dropped), dropped, lied.stdout);
     assert.ok(
       !fs.existsSync(path.join(sync, "zz-link.bundle")) &&
         fs.lstatSync(path.join(sync, "zz-link.bundle"), { throwIfNoEntry: false }) === undefined,
@@ -1820,7 +1823,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     const header = inRootClone("git fetch dev 2>&1");
     const over =
       /was refused and dropped: its list of refs \(the bundle's header\) is \d+ bytes, over the 4194304 allowed/;
-    assert.match(saidOfHeader(header.stdout, over), over);
+    assert.match(saidOfHeader(header, over), over);
     // Control: the list as the workspace wrote it, and the many branches it does not name
     // are pruned, as an honest list says.
     fs.writeFileSync(path.join(sync, "refs.json"), kept);

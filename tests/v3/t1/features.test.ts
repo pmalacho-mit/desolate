@@ -30,6 +30,21 @@ describe("T1 the map of features", () => {
     assert.deepEqual(loose, [], "add each to a feature in tests/v3/features.ts");
   });
 
+  it("every T2 and T3 suite is named by a feature, so a change can find it", () => {
+    const named = new Set(FEATURES.flatMap((f) => f.tests));
+    const suites = ["t2", "t3"].flatMap((tier) =>
+      fs
+        .readdirSync(path.join(ROOT, "tests/v3", tier))
+        .filter((f) => f.endsWith(".test.ts"))
+        .map((f) => `${tier}/${f.slice(0, -".test.ts".length)}`),
+    );
+    assert.deepEqual(
+      suites.filter((s) => !named.has(s)),
+      [],
+      "add each to a feature's tests in tests/v3/features.ts",
+    );
+  });
+
   it("every suite, doc part and screenshot it names exists", () => {
     const shots = fs.readFileSync(path.join(ROOT, "tests/v3/demo/screenshots.ts"), "utf8");
     const named = /SHOTS=([a-z,]+)/.exec(shots)?.[1]?.split(",") ?? [];

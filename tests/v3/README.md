@@ -3,11 +3,20 @@
 ```bash
 tests/v3/run.sh t1     # static and unit: seconds, anywhere                    (make test)
 tests/v3/run.sh t2     # end to end on the fake backend: minutes; needs Docker (make e2e-fast)
+tests/v3/run.sh affected   # T1, then the T2 suites a change since origin/main touches
 tests/v3/run.sh t3     # end to end on real VMs: tens of minutes under emulation (make e2e-slow)
 tests/v3/run.sh t4     # t3's tests on a Mac's own VMs (vz): about 3 minutes on an M1
 ```
 
 A tier whose needs are not met fails and says what to install. It never skips.
+
+T2 runs its suites three at a time, longest first, each on a stack of its own, and
+`03-ports` alone after them (it asserts what listens on the whole machine's loopback). Each
+suite's workspaces listen on ports no other suite uses: the host forwards a workspace's port
+at the same number, so two suites on one port would take it from each other. It ends with
+the slowest steps. `run.sh t2 <suite>...` runs those suites the same way. While developing,
+`run.sh affected` is enough (`node tests/v3/affected.ts` says why each suite is there); the
+whole of T2 is the check before a merge into main.
 
 | Tier | Backend | Proves | Does not prove |
 |---|---|---|---|
