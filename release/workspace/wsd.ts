@@ -404,7 +404,8 @@ const watch = async () => {
           // Debounce: a rebase moves a branch many times in a second.
           await sleep(500);
           await syncRepo(repo);
-          seen.set(repo, JSON.stringify(await branches(repo)));
+          // Before the sync, not after: a commit made during it was counted seen, unwritten.
+          seen.set(repo, now);
         }
         await importDeliveries(repo);
       } catch (error) {
