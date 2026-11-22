@@ -70,7 +70,12 @@ so a program listening on another port is sent the cookie, but never the key), i
 (a page an agent wrote, on a workspace's name, is another), a token per push, a JSON body.
 It cannot be framed, and its Approve button arms only after the tab has had your attention
 for a second and the pointer then moves onto it, so a click aimed at something else when a
-window opened under it lands on nothing. Treat the address like a password: anyone with it,
+window opened under it lands on nothing. A click a moment after arming is the approval; one
+sooner, or on a button not armed, does nothing, and the line under the buttons says why.
+Once approved, the card says how the push ended, as the root's pusher reported it, with GitHub's
+page for opening its pull request into the repository's default branch. An address ending in
+`#repo=<owner/repo>&branch=<branch>&commit=<commit>` marks that push's card and scrolls to it;
+cards already decided fold when a new push comes. Treat the address like a password: anyone with it,
 on your Mac, can approve. The pages are served on both `127.0.0.1` and `::1` (where browsers
 look first for these names), or not at all: while another program holds the port on `::1`,
 desolate prints no address with a token in it, and retires the tokens (a tab already open

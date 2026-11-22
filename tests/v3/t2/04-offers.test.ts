@@ -9,7 +9,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack, outboxSaid } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
-import { findChrome, loadPage } from "../lib/browser.ts";
+import { findChrome, loadPage, openBrowser } from "../lib/browser.ts";
 import { lfsDigest, signedFor } from "../../../release/shared/approval.ts";
 
 let stack: Stack;
@@ -1589,6 +1589,71 @@ echo "=====waits"; cat /tmp/waits.lines`,
       ["a large file"],
     );
     assert.equal((await act("refuse", large!)).status, 200);
+  });
+
+  it("the approval page by a person's pointer: the tab's push is marked, Approve stays armed under it, and the card says the push landed", async () => {
+    stack.step("the approval page, by a person's pointer");
+    const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
+    const origin = new URL(address).origin;
+    inRootClone(
+      `setsid nohup git push origin ${commit}:refs/heads/web-pointer >/tmp/web-pointer.log 2>&1 </dev/null & sleep 0.2`,
+    );
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
+    try {
+      const page = await browser.tab(address);
+      const opened = async (named: string) => {
+        await page.goto("about:blank");
+        await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=web-pointer&commit=${named}`);
+        await page.until(
+          "[...document.querySelectorAll('.card')].some((c) => c.querySelector('.branch')?.textContent === 'web-pointer' && c.querySelector('button.approve') && !c.innerText.includes('working out'))",
+          "the push's card, its account shown",
+        );
+        return page.evaluate<string[]>(
+          "[...document.querySelectorAll('.card.asked .branch')].map((e) => e.textContent)",
+        );
+      };
+      // The tab's address names the push it was opened for: another commit marks nothing (the
+      // control); its own marks its card alone, which then signs just what it shows.
+      assert.deepEqual(await opened("0".repeat(40)), []);
+      assert.deepEqual(await opened(commit), ["web-pointer"]);
+      // (The driver centres what it clicks, and a sticky bar is never centred, so it would
+      // scroll the page at each click. A person's pointer does not.)
+      await page.evaluate("Element.prototype.scrollIntoView = function () {}");
+      await sleep(1500);
+      const card = "document.querySelector('.card.asked')";
+      const bar = () => page.evaluate<number>(`${card}.querySelector('.actions').offsetHeight`);
+      const before = await bar();
+      // The pointer onto Approve arms it, and a click at once is said, not taken.
+      await page.click(".card.asked button.approve", "Approve push");
+      assert.match(
+        await page.evaluate<string>(`${card}.querySelector('.hint').textContent`),
+        /hold still/,
+      );
+      assert.equal(
+        await bar(),
+        before,
+        "arming kept the bar's height: Approve stayed under the pointer",
+      );
+      assert.equal(
+        forgeRefs("acme/widgets")["web-pointer"],
+        undefined,
+        "a click at once pushed nothing",
+      );
+      // Still armed a moment later, under the same pointer: the click is the approval.
+      await sleep(500);
+      assert.equal(await page.evaluate(`${card}.querySelector('button.approve').disabled`), false);
+      await page.click(".card.asked button.approve", "Approve push");
+      await page.until(
+        `/^pushed: the remote's web-pointer has it/.test(${card}.querySelector('.hint').textContent)`,
+        "what the pusher said",
+        60_000,
+      );
+      assert.equal(forgeRefs("acme/widgets")["web-pointer"], commit);
+    } finally {
+      await browser.close();
+    }
   });
 
   it("a repository cloned --no-push is never written: there is no key to write it with", () => {

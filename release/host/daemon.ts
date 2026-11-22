@@ -49,7 +49,7 @@ import { handler as gitPage } from "./git-web.ts";
 import { mint } from "./signin.ts";
 import { hub, pusherEvent, stateEvents } from "./events.ts";
 import { checkoutOffered, ensureGitClone, ensureGitVm, GIT_VM, watchGitOut } from "./git-vm.ts";
-import type { Backend as ApprovalBackend } from "./approve-web.ts";
+import type { Backend as ApprovalBackend, PusherSaid } from "./approve-web.ts";
 import { accountLines } from "../shared/review-account.ts";
 import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
 import { statusDir } from "../shared/status.ts";
@@ -59,7 +59,7 @@ import { sniffSocket } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
-import { backend, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
+import { backend, config, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -726,6 +726,12 @@ const approvalBackend = (): ApprovalBackend => {
       return url;
     },
     refuseIssue: async (issue) => (await import("./issues.ts")).refuseIssue(issue),
+    pushes: (heard) =>
+      events.listen(0, (line) => {
+        const e = JSON.parse(line) as PusherSaid & { source: string };
+        if (e.source === "pusher") heard(e);
+      }),
+    github: () => config()?.forge.kind === "github",
   };
 };
 
