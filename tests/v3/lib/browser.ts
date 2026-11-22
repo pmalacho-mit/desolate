@@ -44,6 +44,8 @@ export const findChrome = () =>
   ].find((file) => file && fs.existsSync(file)) ?? "";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** The most one DevTools call may take before it fails. */
+const CDP_MS = 120_000;
 
 export type Loaded = { stdout: string; stderr: string };
 export type LoadOptions = { until?: RegExp; ms?: number; settle?: number; screenshot?: string };
@@ -120,10 +122,21 @@ export const openBrowser = async (
     } else if (message.method && message.sessionId)
       listeners.get(message.sessionId)?.(message.method, message.params ?? {});
   });
+  // Every call is bounded: a browser that stops answering fails the test that asked, rather
+  // than holding the suite (a 40-minute hang in 19-journeys' resize, 2026-11-22). Long enough
+  // for an evaluate that awaits the page.
   const send = (method: string, params: Record<string, unknown> = {}, sessionId?: string) =>
-    new Promise<Record<string, unknown>>((resolve) => {
+    new Promise<Record<string, unknown>>((resolve, reject) => {
       const id = nextId++;
-      pending.set(id, resolve);
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new Error(`the browser did not answer ${method} in ${CDP_MS / 1000} s`));
+      }, CDP_MS);
+      timer.unref(); // (one the browser never answers as it closes holds nothing open)
+      pending.set(id, (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      });
       ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
 
@@ -213,7 +226,7 @@ export const openBrowser = async (
     const said: string[] = [];
     listeners.set(sessionId, (method, p) => {
       if (method === "Page.javascriptDialogOpening")
-        void send("Page.handleJavaScriptDialog", { accept: true }, sessionId);
+        void send("Page.handleJavaScriptDialog", { accept: true }, sessionId).catch(() => {});
       else if (method === "Runtime.exceptionThrown")
         said.push(
           `Uncaught ${p.exceptionDetails?.exception?.description ?? p.exceptionDetails?.text ?? ""}`,
@@ -344,7 +357,7 @@ export const openBrowser = async (
     return self;
   };
   const close = async () => {
-    await Promise.race([send("Browser.close"), sleep(5000)]);
+    await Promise.race([send("Browser.close").catch(() => {}), sleep(5000)]);
     ws.close();
     await Promise.race([exited, sleep(5000)]);
     browser.kill();
