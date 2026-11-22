@@ -368,7 +368,9 @@ describe("T1 the git terminal", () => {
     const child = spawn("python3", ["-I", "release/git/terminal.py", os.tmpdir()], {
       cwd: path.join(import.meta.dirname, "../../.."),
       stdio: ["pipe", "pipe", "pipe"],
-      env: { PATH: process.env.PATH, HOME: home },
+      // No history: the bash outlives its kill a moment and wrote ~/.bash_history while
+      // after() removed HOME (ENOTEMPTY, on a busy Mac).
+      env: { PATH: process.env.PATH, HOME: home, HISTFILE: "/dev/null" },
     });
     children.push(child);
     let said = "";
