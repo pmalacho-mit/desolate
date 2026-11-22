@@ -13,7 +13,7 @@ import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
-import { findChrome, loadPage } from "../lib/browser.ts";
+import { findChrome, loadPage, openBrowser } from "../lib/browser.ts";
 
 let stack: Stack;
 let port = 0;
@@ -980,6 +980,118 @@ describe("T2 section 4.8: the root UI", () => {
       "0 0",
       "no editor's server runs in the root VM",
     );
+  });
+
+  it("the review shows each name as text that reads as no other, says which only look like others, and each commit's author and whole message on asking (control: a name as written)", async () => {
+    stack.step("the review of names that read as others");
+    // The files and the message as bytes, by printf's octal escapes: the script is ASCII.
+    const octal = (text: string) =>
+      [...Buffer.from(text, "utf8")]
+        .map((b) =>
+          b >= 0x20 && b < 0x7f && !"\\%'".includes(String.fromCharCode(b))
+            ? String.fromCharCode(b)
+            : `\\${b.toString(8).padStart(3, "0")}`,
+        )
+        .join("");
+    const files = [
+      "notes-‮dm.hs",
+      "ok.txt\nREADME.md",
+      "package.json ",
+      "READMЕ.md",
+      ".github∕workflows∕x.yml",
+      "notes/plain.md",
+    ];
+    const message =
+      "docs: a typo\n\nReviewed by desolate: no warnings.\n\u001b[31mred\u001b[0m and ‮right to left\n";
+    const work = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      [
+        "git checkout -q -b names main",
+        ...files.map(
+          (f) =>
+            `mkdir -p "$(dirname "$(printf '${octal(f)}')")" && echo x > "$(printf '${octal(f)}')"`,
+        ),
+        `printf '${octal(message)}' > /tmp/names.msg`,
+        "git add -A",
+        "git -c user.name='desolate reviewer (approved)' -c user.email=someone@example.test commit -q --cleanup=verbatim -F /tmp/names.msg",
+        "desolate offer",
+        "git rev-parse HEAD",
+      ].join(" && "),
+    );
+    assert.equal(work.code, 0, work.stderr);
+    const tip = work.stdout.trim().split("\n").pop()!;
+    assert.ok(
+      await until(async () =>
+        (await state()).offers.some((o) => o.branch === "names" && o.commit === tip),
+      ),
+    );
+    // What the root sends the page: the author and the message made safe, as the subject is;
+    // the paths as they are (they name the files), the lookalikes marked.
+    const review = JSON.parse(
+      (await http("GET", "/review?domain=web&repo=acme%2Fapp&branch=names")).body,
+    ) as {
+      commits: { items: { commit: string; subject: string; author: string; body: string }[] };
+      changes: { items: { path: string; lookalike?: boolean }[] };
+    };
+    assert.deepEqual(review.commits.items[0], {
+      commit: tip,
+      subject: "docs: a typo",
+      author: "desolate reviewer (approved) <someone@example.test>",
+      body: "Reviewed by desolate: no warnings.\n?[31mred?[0m and ?right to left",
+    });
+    assert.deepEqual(
+      review.changes.items
+        .filter((c) => files.includes(c.path))
+        .map((c) => [c.path, Boolean(c.lookalike)])
+        .sort(),
+      files.map((f) => [f, f === "READMЕ.md" || f.startsWith(".github∕")]).sort(),
+    );
+    // On the page, by a person's pointer: each name as git stores it, its hidden characters
+    // and a trailing space named; the plain name as written (the control); the lookalikes said.
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
+    try {
+      const page = await browser.tab(
+        `http://${HOST}:${port}/?tkn=${token}&review&domain=web&repo=acme%2Fapp&branch=names`,
+      );
+      await page.until("document.querySelector('[data-files-changed] li')", "the files changed");
+      const shown = await page.evaluate<[string, string][]>(
+        "[...document.querySelectorAll('[data-files-changed] li')].map((li) => [li.querySelector('button.link').textContent, li.querySelector('.looks')?.textContent ?? ''])",
+      );
+      const LOOKS = "its name has letters that look like others";
+      for (const [name, looks] of [
+        ["notes-⟨U+202E⟩dm.hs", ""],
+        ["ok.txt⟨U+000A⟩README.md", ""],
+        ["package.json⟨space⟩", ""],
+        ["READMЕ.md", LOOKS],
+        [".github∕workflows∕x.yml", LOOKS],
+        ["notes/plain.md", ""],
+      ])
+        assert.ok(
+          shown.some(([n, l]) => n === name && l === looks),
+          `${JSON.stringify(name)} in ${JSON.stringify(shown)}`,
+        );
+      // The subject as now; who wrote it and the whole message when asked for.
+      assert.equal(await page.evaluate("document.querySelector('[data-message-text]')"), null);
+      await page.click(`[data-message="${tip}"]`, "Message");
+      const said = await page.until<string>(
+        `document.querySelector('[data-message-text="${tip}"]')?.textContent`,
+        "the commit's message",
+      );
+      assert.equal(
+        said,
+        "Author: desolate reviewer (approved) <someone@example.test>\n\ndocs: a typo\n\nReviewed by desolate: no warnings.\n?[31mred?[0m and ?right to left",
+      );
+      await page.click(`[data-message="${tip}"]`, "Hide");
+      assert.equal(await page.evaluate("document.querySelector('[data-message-text]')"), null);
+    } finally {
+      await browser.close();
+    }
   });
 
   it("a branch of 250 commits: the review counts every one, pages them, and the 41st is pickable", async () => {

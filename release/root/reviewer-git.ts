@@ -65,11 +65,19 @@ declare namespace shown {
 /** A path as git has it (`raw`: its bytes, a character a byte), as the account shows it: as
  *  text when it is UTF-8, and when it is not, as git quotes it (each byte past ASCII as
  *  `\ooo`), so that it does not read as another name. A UTF-8 name with a quote or a
- *  backslash is quoted too, as git does, so that none reads as a quoted one. */
+ *  backslash is quoted too, as git does, so that none reads as a quoted one; and one that
+ *  starts or ends in a space (or the blank Braille pattern, which printable keeps), which on
+ *  a page reads as the name without it; and one NFC changes (printable shows text in NFC: a
+ *  Kelvin sign would read as K). */
 export const named = (raw: string): string => {
   const bytes = Buffer.from(raw, "latin1");
   const text = bytes.toString("utf8");
-  if (Buffer.from(text, "utf8").equals(bytes) && !/["\\]/.test(text)) return shown(text);
+  if (
+    Buffer.from(text, "utf8").equals(bytes) &&
+    !/["\\]|^[\s\u2800]|[\s\u2800]$/u.test(text) &&
+    text.normalize("NFC") === text
+  )
+    return shown(text);
   const quoted = [...raw].map((c) =>
     c >= "\x80" ? `\\${c.charCodeAt(0).toString(8)}` : c === '"' || c === "\\" ? `\\${c}` : c,
   );
@@ -86,6 +94,11 @@ declare namespace named {
       [args: [raw: 'a"\\ÿ'], expected: '"a\\"\\\\\\377"'],
       /** and a UTF-8 name that looks quoted is quoted itself */
       [args: [raw: '"caf\\351.txt"'], expected: '"\\"caf\\\\351.txt\\""'],
+      /** and one with a space at its end, which would read as the name without it */
+      [args: [raw: "package.json "], expected: '"package.json "'],
+      [args: [raw: "\u00e2\u0084\u00aaeys.pem"], expected: '"\\342\\204\\252eys.pem"'],
+      [args: [raw: "README.md\u00e2\u00a0\u0080"], expected: '"README.md\\342\\240\\200"'],
+      [args: [raw: "a b.txt"], expected: "a b.txt"],
     ]
   >;
 }
@@ -144,6 +157,63 @@ declare namespace SENSITIVE {
       [args: [string: "docs/gitmodules.md"], expected: false],
       [args: [string: "suede.nests/README.md"], expected: false],
       [args: [string: "README.md"], expected: false],
+    ]
+  >;
+}
+
+/** Letters and marks that look like ASCII ones, as the ASCII they look like: Cyrillic and
+ *  Greek capitals and small letters that are Latin ones to the eye, and slashes, dots and
+ *  dashes. A few, for `lookalike`: not a table of every confusable character. */
+const LOOKS = new Map(
+  [
+    ["АВЕЅІЈКМНОРСТХ", "ABESIJKMHOPCTX"],
+    ["аеѕіјорсухԁһӏ", "aesijopcyxdhl"],
+    ["ΑΒΕΖΗΙΚΜΝΟΡΤΥΧοι", "ABEZHIKMNOPTYXoi"],
+    ["ı∕⁄⧸․‐‑‒–−", "i///.-----"],
+  ].flatMap(([from, to]) => [...from!].map((c, i): [string, string] => [c, to![i]!])),
+);
+/** Files a person knows by name, whose lookalike is worth a word. */
+const COMMON =
+  /(^|\/)((README|LICEN[CS]E|COPYING|SECURITY|CONTRIBUTING|CHANGELOG)(\.[a-z]+)?|package(-lock)?\.json|Makefile|Dockerfile|go\.mod|Cargo\.toml|pyproject\.toml|setup\.py|requirements\.txt)$/i;
+
+/** Whether a path (as text) only looks like one that runs on the forge or that a person knows
+ *  by name: read as the ASCII its letters look like (NFKD, accents dropped, then LOOKS), it is
+ *  such a path, and as written it is not. A small check, to say so beside the name: what is
+ *  pushed does not depend on it. */
+export const lookalike = (path: string): boolean => {
+  if (!/[^\x00-\x7f]/.test(path)) return false;
+  // A character at a time, each as one at most: a character NFKD makes many of (U+FDFA is
+  // eighteen) is left as it is, so the check costs what the name's length does.
+  const folded = [...path]
+    .map((c) => {
+      const as = LOOKS.get(c) ?? c.normalize("NFKD").replace(/\p{M}/gu, "");
+      return [...as].length === 1 ? as : c;
+    })
+    .join("");
+  const known = (p: string) => SENSITIVE.test(p) || COMMON.test(p);
+  return known(folded) && !known(path);
+};
+
+declare namespace lookalike {
+  /** a name that reads as a workflow, or as README.md, and is not */
+  export type Looks = Table<
+    typeof lookalike,
+    [
+      [args: [path: ".github\u2215workflows\u2215ci.yml"], expected: true],
+      [args: [path: "READM\u0415.md"], expected: true],
+      [args: [path: "docs/\u0420ackage.json"], expected: true],
+      [args: [path: "\uff0egitmodules"], expected: true],
+    ]
+  >;
+  /** the names themselves, and other names past ASCII, are not */
+  export type DoesNot = Table<
+    typeof lookalike,
+    [
+      [args: [path: "README.md"], expected: false],
+      [args: [path: ".github/workflows/ci.yml"], expected: false],
+      [args: [path: "docs/caf\u00e9.md"], expected: false],
+      [args: [path: "caf\u00e9/README.md"], expected: false],
+      [args: [path: "\u043f\u0440\u0438\u0432\u0435\u0442.txt"], expected: false],
     ]
   >;
 }
