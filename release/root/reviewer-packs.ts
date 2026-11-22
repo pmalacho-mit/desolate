@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
 import type { Repo } from "../shared/names.ts";
+import { lfsDigest } from "../shared/approval.ts";
 import type { Sends } from "../shared/review-account.ts";
 import { startOf } from "../shared/lock.ts";
 import { define, mebibytes, valueOf, whole } from "../shared/settings.ts";
@@ -150,7 +151,7 @@ export const prepare = async (
     const kept = typeof last.pack === "string" ? storedPack(repo, last.pack) : null;
     if (kept && Number.isFinite(last.at) && Date.now() - (last.at as number) < PACKS.freshMs) {
       touchPack(repo, kept.sends.pack);
-      return kept.sends;
+      return sendsOf(kept.sends);
     }
   } catch {
     /* none yet */
@@ -237,16 +238,76 @@ export const prepare = async (
     );
   }
   say({ phase: "listing the push's LFS objects" });
-  const sends: Sends = { pack: hash.digest("hex"), size, lfs: await pointersIn(dir, tip, known) };
+  const made: Packed = { pack: hash.digest("hex"), size, lfs: await pointersIn(dir, tip, known) };
   // Its own name is its digest: the same bytes made twice are the same file.
-  fs.renameSync(temporary, path.join(where, `${sends.pack}.pack`));
-  atomically(path.join(where, `${sends.pack}.json`), JSON.stringify({ size, lfs: sends.lfs }));
-  atomically(record, JSON.stringify({ pack: sends.pack, at: Date.now() }));
-  return sends;
+  fs.renameSync(temporary, path.join(where, `${made.pack}.pack`));
+  atomically(path.join(where, `${made.pack}.json`), JSON.stringify({ size, lfs: made.lfs }));
+  atomically(record, JSON.stringify({ pack: made.pack, at: Date.now() }));
+  return sendsOf(made);
 };
 
+/** A kept pack as the pusher is given it: its LFS objects listed whole, `<oid> <size>`. */
+type Packed = { pack: string; size: number; lfs: string[] };
+/** As the account says it: the list's count, bytes and digest, as the person signs them
+ *  (shared/approval.ts, signedFor) and the pusher checks them, over the very list it is given. */
+export const sendsOf = ({ pack, size, lfs }: Packed): Sends => {
+  const each = [...new Set(lfs)];
+  return {
+    pack,
+    size,
+    lfs: {
+      count: each.length,
+      bytes: each.reduce((n, entry) => n + Number(entry.split(" ")[1] || 0), 0),
+      digest: lfsDigest(each),
+    },
+  };
+};
+
+declare namespace sendsOf {
+  /** each object once, by the size its pointer says; the digest is the signed one's */
+  export type Counts = Table<
+    typeof sendsOf,
+    [
+      [
+        args: [packed: { pack: "p"; size: 9; lfs: [] }],
+        expected: {
+          pack: "p";
+          size: 9;
+          lfs: {
+            count: 0;
+            bytes: 0;
+            digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+          };
+        },
+      ],
+      [
+        args: [
+          packed: {
+            pack: "p";
+            size: 9;
+            lfs: [
+              "1111111111111111111111111111111111111111111111111111111111111111 40",
+              "2222222222222222222222222222222222222222222222222222222222222222 2",
+              "1111111111111111111111111111111111111111111111111111111111111111 40",
+            ];
+          },
+        ],
+        expected: {
+          pack: "p";
+          size: 9;
+          lfs: {
+            count: 2;
+            bytes: 42;
+            digest: "b516fe65100db0c19dca6e1e426a22ffa6dcd68d9979e0d195a7a8a67c66c1af";
+          };
+        },
+      ],
+    ]
+  >;
+}
+
 /** The kept pack with this sha256, if there is one: its file, and what it sends. */
-export const storedPack = (repo: Repo, pack: string): { file: string; sends: Sends } | null => {
+export const storedPack = (repo: Repo, pack: string): { file: string; sends: Packed } | null => {
   if (!SHA256.test(pack)) return null;
   try {
     const where = packsDir(repo);

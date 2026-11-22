@@ -190,7 +190,12 @@ export const lfsDigest = (oids: readonly string[]): string =>
  *  reviewer's answer. */
 export const signedFor = (
   message: unknown,
-  sends: { commit: string; squashes: string | null; pack: string; lfs: string[] },
+  sends: {
+    commit: string;
+    squashes: string | null;
+    pack: string;
+    lfs: { count: number; digest: string };
+  },
 ): string => {
   const challenge = parseApproval(message);
   if (!challenge) throw new Error("not a push approval; nothing was signed");
@@ -199,7 +204,7 @@ export const signedFor = (
     commit: sends.commit,
     squashes: sends.squashes,
     pack: sends.pack,
-    lfs: { count: new Set(sends.lfs).size, digest: lfsDigest(sends.lfs) },
+    lfs: { count: sends.lfs.count, digest: sends.lfs.digest },
   });
 };
 

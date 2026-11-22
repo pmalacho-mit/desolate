@@ -903,7 +903,6 @@ export const forgeFiles = async (
  *  warning, the squash's whole message. What is signed can be read (R1); a terminal wraps. */
 export const reviewedLines = (s: Account, forge: string[], squashed: boolean): string[] => {
   const sends = squashed ? s.squash?.sends : s.sends;
-  const lfsBytes = (sends?.lfs ?? []).reduce((n, e) => n + Number(e.split(" ")[1] || 0), 0);
   const square = s.squash;
   return [
     // (One a line: a long name cannot push the others, or the count, off the end.)
@@ -917,8 +916,8 @@ export const reviewedLines = (s: Account, forge: string[], squashed: boolean): s
     squashed
       ? `sends       ${s.commits.total} commit(s) the remote does not have, squashed into one, ${s.files.total} file(s)`
       : `sends       ${s.commits.total} commit(s) the remote does not have, ${s.files.total} file(s)`,
-    ...(sends?.lfs.length
-      ? [`            ${sends.lfs.length} LFS object(s) with them, ${formatBytes(lfsBytes)}`]
+    ...(sends?.lfs.count
+      ? [`            ${sends.lfs.count} LFS object(s) with them, ${formatBytes(sends.lfs.bytes)}`]
       : []),
     ...(!squashed && s.between.total
       ? [

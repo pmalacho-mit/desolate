@@ -303,8 +303,9 @@ const isSends = (v: unknown): v is Account["sends"] => {
     typeof sends.pack === "string" &&
     /^[0-9a-f]{64}$/.test(sends.pack) &&
     Number.isSafeInteger(sends.size) &&
-    Array.isArray(sends.lfs) &&
-    sends.lfs.every((entry) => typeof entry === "string")
+    Number.isSafeInteger(sends.lfs?.count) &&
+    Number.isSafeInteger(sends.lfs?.bytes) &&
+    /^[0-9a-f]{64}$/.test(String(sends.lfs?.digest))
   );
 };
 /** Each entry of a list, as the page and the terminal read it: its texts are text, its
@@ -1769,7 +1770,11 @@ declare namespace handler {
   type Sends = {
     pack: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
     size: 100;
-    lfs: [];
+    lfs: {
+      count: 0;
+      bytes: 0;
+      digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    };
   };
   type Reviewed = {
     key: "k1";
@@ -1792,7 +1797,11 @@ declare namespace handler {
       sends: {
         pack: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
         size: 90;
-        lfs: [];
+        lfs: {
+          count: 0;
+          bytes: 0;
+          digest: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        };
       };
     };
   };
