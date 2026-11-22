@@ -68,11 +68,17 @@ const until = async (what: string, done: () => boolean, ms: number) => {
   for (const end = Date.now() + ms; Date.now() < end; await sleep(500)) if (done()) return;
   assert.fail(`${what}: not within ${ms / 1000} s (${JSON.stringify(asking())})`);
 };
-/** A raw `git push` of HEAD from the root's terminal, left waiting for its approval. */
-const rawPush = (branch: string) =>
-  inClone(
-    `setsid nohup git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1 </dev/null & sleep 0.2`,
+/** A raw `git push` of HEAD from the root's terminal, left waiting for its approval. It must
+ *  hold nothing of the call that starts it: on Lima, a command left running with any of the
+ *  session's descriptors kept that session, and this synchronous call, open (a first version
+ *  held the T4 slot for 90 minutes). So it runs in a session of its own (setsid -f), and every
+ *  descriptor past the three it redirects is closed first. */
+const rawPush = (branch: string) => {
+  const started = inClone(
+    `for fd in /proc/$$/fd/*; do n=\${fd##*/}; [ "$n" -gt 2 ] && eval "exec $n>&-"; done 2>/dev/null; setsid -f bash -c 'exec git push origin HEAD:refs/heads/${branch} >/tmp/${branch}.log 2>&1' </dev/null >/dev/null 2>&1; echo started`,
   );
+  assert.match(started.stdout, /started/, started.stderr);
+};
 /** The pushes waiting for approval, as the root's own files list them. */
 const waitingPushes = () =>
   counted(
