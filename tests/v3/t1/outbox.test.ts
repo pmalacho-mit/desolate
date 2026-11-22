@@ -35,10 +35,10 @@ describe(
       fs.writeFileSync(`${dir}/refs.json`, JSON.stringify({ refs: { main: "a".repeat(40) } }));
       fs.writeFileSync(`${dir}/a.bundle`, "x");
       fs.writeFileSync(`${domains}/t1-dom/outbox/requests/r.json`, JSON.stringify({ op: "fetch" }));
-      assert.equal(mod.openDir(dir), null);
+      assert.equal(mod.openDir(dir), "not proved: this system has no /proc/self/fd");
       assert.deepEqual(mod.refsOf("t1-dom", "acme/widgets"), {
         refused:
-          "acme/widgets's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one",
+          "acme/widgets's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not proved: this system has no /proc/self/fd)",
       });
       assert.deepEqual(mod.takeBundles("t1-dom", "acme/widgets"), {
         copies: [],
@@ -308,6 +308,89 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.rmSync(`${lfs}/${oid}`, { force: true });
   });
 
+  it("a directory the share shows before it lets it be opened is looked at again by the fetch, a second at most; a link never; the root's own loops never", async () => {
+    // A share a moment inconsistent (vz's virtiofs, T4 2026-11-21: an honest first offer
+    // refused): lstat shows the directory, and opening it fails, `failing` times.
+    const { createRequire, syncBuiltinESMExports } = await import("node:module");
+    const real = createRequire(import.meta.url)("node:fs") as typeof fs;
+    const open = real.openSync;
+    const opening = (dir: string, failing: number) => {
+      let left = failing;
+      real.openSync = ((file: fs.PathLike, ...rest: never[]) => {
+        if (String(file) === dir && left-- > 0)
+          throw Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" });
+        return (open as (...args: unknown[]) => number)(file, ...rest);
+      }) as typeof fs.openSync;
+      syncBuiltinESMExports();
+    };
+    const lstat = real.lstatSync;
+    const restore = () => (
+      (real.openSync = open),
+      (real.lstatSync = lstat),
+      syncBuiltinESMExports()
+    );
+    const late = `${domains}/t1-dom/outbox/sync/acme/late`;
+    fs.mkdirSync(late, { recursive: true });
+    fs.writeFileSync(`${late}/refs.json`, JSON.stringify({ refs: { main: "c".repeat(40) } }));
+    try {
+      opening(late, 2);
+      assert.deepEqual(
+        outbox.refsOf("t1-dom", "acme/late", true),
+        { refs: { main: "c".repeat(40) } },
+        "the fetch takes it once it opens",
+      );
+      opening(late, 2);
+      const once = Date.now();
+      assert.deepEqual(
+        outbox.refsOf("t1-dom", "acme/late"),
+        {
+          refused:
+            "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
+        },
+        "the control: rootd and the dashboard, which every domain waits on, do not wait",
+      );
+      assert.ok(Date.now() - once < 100);
+      opening(late, 100);
+      const started = Date.now();
+      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
+        refused:
+          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there, at each of 5 looks over a second)",
+      });
+      const took = Date.now() - started;
+      assert.ok(
+        took >= 600 && took < 2000,
+        `looked at again for about a second, not more: ${took} ms`,
+      );
+      // A link in its place, as the share is still unsettled: refused at once, never opened.
+      restore();
+      fs.rmSync(late, { recursive: true });
+      fs.symlinkSync(path.join(work, "state"), late);
+      opening(late, 100);
+      const linkAt = Date.now();
+      assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
+        refused:
+          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there)",
+      });
+      assert.ok(Date.now() - linkAt < 100, "a link on the way is no reason to look again");
+      // The way swapped for a file between two looks (lstat then fails): an answer, no throw.
+      restore();
+      fs.rmSync(late);
+      fs.mkdirSync(late);
+      opening(late, 100);
+      real.lstatSync = ((file: fs.PathLike, ...rest: never[]) => {
+        if (String(file) === late)
+          throw Object.assign(new Error("ENOTDIR: not a directory"), { code: "ENOTDIR" });
+        return (lstat as (...args: unknown[]) => fs.Stats)(file, ...rest);
+      }) as typeof fs.lstatSync;
+      syncBuiltinESMExports();
+      assert.equal(outbox.openDir(late, true), "not there");
+      assert.ok("refused" in outbox.refsOf("t1-dom", "acme/late", true));
+    } finally {
+      restore();
+      fs.rmSync(late, { recursive: true, force: true });
+    }
+  });
+
   it("a symlink anywhere on the way to a file is not followed: not at the end, not at a directory above", () => {
     // What a workspace can do in its outbox: make any component a symlink. In the root VM
     // it would resolve to the root's own files.
@@ -339,7 +422,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       outbox.refsOf("t1-dom", "acme/linked"),
       {
         refused:
-          "acme/linked's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one",
+          "acme/linked's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory)",
       },
       "a refs list reached through a symlinked directory is not read",
     );
@@ -348,7 +431,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.symlinkSync(`${work}/nowhere`, `${domains}/t1-dom/outbox/sync/acme/dangling`);
     assert.deepEqual(outbox.refsOf("t1-dom", "acme/dangling"), {
       refused:
-        "acme/dangling's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one",
+        "acme/dangling's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory)",
     });
     fs.symlinkSync(`${work}/nowhere`, `${domains}/t1-dom/outbox/sync/dangling-owner`);
     assert.ok("refused" in outbox.refsOf("t1-dom", "dangling-owner/app"));
