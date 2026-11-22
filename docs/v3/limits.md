@@ -145,8 +145,8 @@ export const withLock: <T>(
   pid that is now another process, or a zombie). Where the system will not say (a /proc
   read that failed, a holder file that is there and could not be read just now), the
   holder is taken for alive.
-- `dir` is there while the lock is held. Beside it, for moments, are others named after it
-  (`<dir>.new-<id>`, `.heir-<id>` and a right's own `.heir-<id>.heir-<id>`, `.gone-<x>`,
+- `dir` is there while the lock is held. Beside it are others named after it, usually for moments, though a killed heir's `.heir-<id>` and a `.beat-<id>` stay until a later take sweeps them
+  (`<dir>.new-<id>`, `.heir-<id>` and a right's own `.heir-<id>.heir-<id>`, `.heir-<id>.new-<id>`, `.heir-<id>.gone-<x>`, `.gone-<x>`,
   `.beat-<id>`): whatever sweeps the lock's
   folder leaves them (as `root/reviewer.ts` sweeps its home at start, by a list of names).
   Something in the lock's place that is no lock of ours (a directory holding other files,
