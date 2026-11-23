@@ -75,15 +75,26 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
  *  above is a plain one and `dir` itself one or a link, every check made again each time (a
  *  link is never opened: O_NOFOLLOW): a few tries, a second at most, blocking. Only for a
  *  process of one domain's own (git-remote-desolate), never rootd's or the state service's
- *  loop, which every domain waits on. */
+ *  loop, which every domain waits on.
+ *
+ *  Not seen since: on 2026-11-23 a probe on real VMs (vz, virtiofs mounted rw,relatime in
+ *  both VMs) opened, from the root VM, 2,400 directories a workspace VM had just made or
+ *  just renamed a file into, every one at the first look (at most 12 ms after the
+ *  workspace's mkdir returned), quiet and with a T2 suite loading the Mac, and watched
+ *  sync/<repo> through two restarts of the workspace and 70 honest offers: no look at it
+ *  failed while it was there; while 01-boundaries' first offer had failed so twice that day. So the refusal says
+ *  what lstat saw at its last look (a link, or a directory that would not open as one):
+ *  the next one tells which, and the wait is not lengthened on a guess. */
 export const openDir = (dir: string, settle = false): Dir | string => {
   for (let tries = 1; ; tries++) {
     const opened = openOnce(dir);
     const unsettled =
       typeof opened === "string" &&
       [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
-    if (!settle || !unsettled || !settling(dir)) return opened;
-    if (tries === OPEN_TRIES) return `${opened}, at each of ${OPEN_TRIES} looks over a second`;
+    const seen = settle && unsettled ? settling(dir) : null;
+    if (!seen) return opened;
+    if (tries === OPEN_TRIES)
+      return `${opened}, at each of ${OPEN_TRIES} looks over a second; lstat saw ${seen}`;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
   }
 };
@@ -96,21 +107,21 @@ const OPENED_ELSEWHERE = "opened at another path than asked: a link on the way";
 const PAUSE = new Int32Array(new SharedArrayBuffer(4));
 
 /** Whether every directory from the domains' share down to `dir` is there and a plain one
- *  (no link), as lstat sees it now, but for `dir` itself, which may be a link: false on
- *  anything else, a failure too. */
-const settling = (dir: string): boolean => {
+ *  (no link), as lstat sees it now, but for `dir` itself, which may be a link: what `dir`
+ *  is then ("a directory", "a link"); null on anything else, a failure too. */
+const settling = (dir: string): "a directory" | "a link" | null => {
   const parts = ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)];
   let at = ROOT.domains;
   try {
     for (const [i, part] of parts.entries()) {
       at = path.join(at, part);
       const stat = fs.lstatSync(at, { throwIfNoEntry: false });
-      if (!(stat?.isDirectory() || (i === parts.length - 1 && stat?.isSymbolicLink())))
-        return false;
+      if (stat?.isDirectory()) continue;
+      return i === parts.length - 1 && stat?.isSymbolicLink() ? "a link" : null;
     }
-    return true;
+    return "a directory";
   } catch {
-    return false;
+    return null;
   }
 };
 
@@ -286,6 +297,11 @@ const notThere = (base: string, below: string): boolean => {
   return false;
 };
 
+/** How a refusal of a list whose directory could not be opened begins, after the list's
+ *  name: not a verdict on what the domain sent, which the offer's answer tells apart
+ *  (offers.ts). */
+export const UNREAD = "could not be read: its directory in the outbox is not a plain one";
+
 /** A domain's list of the branches of one repository (refs.json, which its workspaces write
  *  beside each bundle: workspace/sync.ts), read as data: the one reader of that file, for
  *  the root's remote helper (what git fetches, and prunes the rest of) and for the dashboard.
@@ -308,7 +324,7 @@ export const refsOf = (
     return notThere(outbox(domain), path.join("sync", repo))
       ? { refs: {} }
       : {
-          refused: `${what} could not be read: its directory in the outbox is not a plain one (${dir})`,
+          refused: `${what} ${UNREAD} (${dir})`,
         };
   let text: string;
   try {
