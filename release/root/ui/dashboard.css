@@ -200,7 +200,8 @@ ol.steps li.done { color: var(--soft); }
 .field { display: flex; flex-direction: column; gap: var(--s1); margin: 0; font-size: 13px; color: var(--soft); }
 .wide { width: 100%; height: auto; min-height: var(--btn); font: inherit; padding: 6px var(--s2); border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: inherit; }
 textarea.wide { font: 13px/1.45 var(--mono); resize: vertical; }
-/* (min-width 0: a long line in a code block scrolls in its box; it made the page 4,687 px wide.) */
+/* (min-width 0: a long line in a code block scrolls in its box; it made the page scroll
+   sideways by 3,515 px in a 1,180 px window.) */
 .markdown { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: var(--s2) 14px; overflow-wrap: anywhere; }
 .markdown pre { overflow: auto; padding: var(--s2); border-radius: 6px; background: var(--raise); }
 .markdown code { font-family: var(--mono); font-size: 12.5px; }

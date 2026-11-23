@@ -33,9 +33,9 @@ body.nothing .lede { display: none; }
 html.embed .empty .more { display: none; }
 h1 { font-size: 20px; font-weight: 650; letter-spacing: -0.015em; }
 .lede, .from, .hint, .status { color: var(--muted); }
-/* Its text wraps anywhere: a name with no space (a branch of 200 characters, said on the card
-   once pushed) made the page 2,437 px wide in a 1,280 px window. Laid out as it is drawn, so
-   nothing moves later. */
+/* Its text wraps anywhere: a name with no space (a branch of 200 characters, in a replace's
+   prompt to type it and on its Replace button) made the page scroll sideways by 941 px in a
+   1,280 px window, Replace out of sight. Laid out as it is drawn, so nothing moves later. */
 .card { display: grid; grid-template-columns: minmax(0, 1fr); overflow-wrap: anywhere; gap: var(--s4); background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: var(--s5) var(--s6); margin: var(--s5) 0; box-shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04); }
 .card > * { margin-top: 0; margin-bottom: 0; }
 .names { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: var(--s2) var(--s4); align-items: center; margin: 0; }
