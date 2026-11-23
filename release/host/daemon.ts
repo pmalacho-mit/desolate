@@ -94,10 +94,10 @@ import type {
 import type {
   answerOf,
   answers,
-  askedOver,
   daemonAnswering,
   failsAtOnce,
   failsHalfway,
+  heldWatch,
   keepLog,
   linesInPieces,
   endsOf,
@@ -134,24 +134,18 @@ const WSD_MOST = 64 * 1024;
  *  lines that chunk ended, or an Error once a line is longer than `most` bytes. Never more
  *  than `most` bytes of an unfinished line are kept: what the VM sends past that is not read. */
 export const lineReader = (most = WSD_MOST) => {
-  let kept: Buffer[] = [];
-  let size = 0;
+  let kept = Buffer.alloc(0);
   const tooLong = () => new Error(`the workspace's daemon sent a line of more than ${most} bytes`);
   return (chunk: Buffer): string[] | Error => {
     const lines: string[] = [];
-    let from = 0;
-    for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10, from)) {
-      if (size + end - from > most) return tooLong();
-      lines.push(Buffer.concat([...kept, chunk.subarray(from, end)]).toString("utf8"));
-      kept = [];
-      size = 0;
-      from = end + 1;
+    let data = Buffer.concat([kept, chunk]);
+    for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10)) {
+      if (end > most) return tooLong();
+      lines.push(data.subarray(0, end).toString("utf8"));
+      data = data.subarray(end + 1);
     }
-    if (size + chunk.length - from > most) return tooLong();
-    if (from < chunk.length) {
-      kept.push(Buffer.from(chunk.subarray(from)));
-      size += chunk.length - from;
-    }
+    if (data.length > most) return tooLong();
+    kept = Buffer.from(data);
     return lines;
   };
 };
@@ -203,107 +197,6 @@ declare namespace lineReader {
   ];
 }
 
-/** One request to a workspace's daemon over `stream` (a dial to its socket): the request as a
- *  line, and the first line back, as a JSON object. Bounded as lineReader is, given up on
- *  after `timeoutMs`, and the stream destroyed however it ends. A stream that ends or fails
- *  before a whole line, or a line that is not an object, is a workspace that could not be
- *  asked. (Not ended after the request: socat would stop reading half a second later.) */
-export const askOver = (
-  stream: Duplex,
-  request: Record<string, unknown>,
-  timeoutMs = 15_000,
-  most = WSD_MOST,
-): Promise<Record<string, unknown>> =>
-  new Promise((resolve, reject) => {
-    const read = lineReader(most);
-    let done = false;
-    const settle = (result: Record<string, unknown> | Error) => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      stream.destroy();
-      if (result instanceof Error) reject(result);
-      else resolve(result);
-    };
-    const timer = setTimeout(
-      () => settle(new Error(`the workspace's daemon did not answer in ${timeoutMs} ms`)),
-      timeoutMs,
-    );
-    stream.on("data", (chunk: Buffer) => {
-      const lines = read(chunk);
-      if (lines instanceof Error) settle(lines);
-      else if (lines.length > 0) settle(wsdReply(lines[0]!));
-    });
-    const gone = () => settle(new Error("the workspace's daemon closed without answering"));
-    stream.on("error", (error) => settle(error));
-    stream.on("end", gone);
-    stream.on("close", gone);
-    stream.write(`${JSON.stringify(request)}\n`);
-  });
-
-declare namespace askOver {
-  /** the request goes as one line, and the first line back is the answer */
-  export type Asks = Expect<
-    Invoke<
-      typeof askedOver,
-      [
-        ask: typeof askOver,
-        request: { op: "ports"; reserve: [5173] },
-        chunks: ['{"ok":true,"listeners":[3000]}\n{"ignored":1}\n'],
-        end: false,
-      ]
-    >,
-    "=",
-    {
-      sent: ['{"op":"ports","reserve":[5173]}\n'];
-      reply: { ok: true; listeners: [3000] };
-      destroyed: true;
-    }
-  >;
-  /** not answered, and the stream let go each way: past the bound, an end with no whole
-   *  line, a line that is not an answer, and a daemon that says nothing */
-  export type NotAnswered = [
-    Expect<
-      Invoke<
-        typeof askedOver,
-        [
-          ask: typeof askOver,
-          request: {},
-          chunks: ['{"ok":true,"x":"aaaa', 'aaaaaaa"}\n'],
-          end: false,
-          most: 16,
-        ]
-      >,
-      "matches",
-      { error: "the workspace's daemon sent a line of more than 16 bytes"; destroyed: true }
-    >,
-    Expect<
-      Invoke<
-        typeof askedOver,
-        [ask: typeof askOver, request: {}, chunks: ['{"ok":true}'], end: true]
-      >,
-      "matches",
-      { error: "the workspace's daemon closed without answering"; destroyed: true }
-    >,
-    Expect<
-      Invoke<
-        typeof askedOver,
-        [ask: typeof askOver, request: {}, chunks: ["[3000]\n"], end: false]
-      >,
-      "matches",
-      { error: "the workspace's daemon answered something that is not an answer"; destroyed: true }
-    >,
-    Expect<
-      Invoke<
-        typeof askedOver,
-        [ask: typeof askOver, request: {}, chunks: [], end: false, most: 16, timeoutMs: 20]
-      >,
-      "matches",
-      { error: "the workspace's daemon did not answer in 20 ms"; destroyed: true }
-    >,
-  ];
-}
-
 /** A line of a workspace daemon's, as JSON: an object, or an Error saying it was none. */
 const wsdReply = (line: string): Record<string, unknown> | Error => {
   try {
@@ -318,10 +211,12 @@ const wsdReply = (line: string): Record<string, unknown> | Error => {
 
 /** How long to wait before a workspace's watch that ended is opened again: a second, doubling
  *  to 30 s while each lasts less than 30 s, and a second again after one that lasted. Each
- *  open is a session into the VM: a daemon there that is gone costs one every 30 s. In the
- *  first minute after it was registered, a second: a workspace is registered before its
- *  services start (workspaces.ts, startServices), so its daemon comes a few seconds later,
- *  and what it says (its editor's token, its dev servers) is wanted then, not 15 s on. */
+ *  open is one ssh session into the VM (with commands over plain ssh, ticket #250 step 2:
+ *  1.5 MB and 8 ms), so a daemon there that is gone costs one every 30 s, and a daemon that
+ *  comes back is watched within 30 s. In the first minute after the workspace was
+ *  registered, a second: it is registered before its services start (workspaces.ts,
+ *  startServices), and what its daemon says then (its editor's token, its dev servers) is
+ *  wanted at once. */
 export const reopenAfter = (previous: number, livedMs: number, registeredMs: number) =>
   livedMs >= 30_000 || registeredMs < 60_000
     ? 1000
@@ -343,9 +238,96 @@ declare namespace reopenAfter {
   >;
 }
 
-/** How often the host asks each workspace itself, beside its watch: a lost line cannot leave
- *  the picture wrong for longer, and a daemon too old to be watched is asked only this way. */
-const CHECK_MS = 30_000;
+/** A watch held open: `open` makes its stream, which is sent `first()`; each line on it, as
+ *  JSON, goes to `line`, one after another. A stream that ends or fails, sends a line past the
+ *  bound, or whose line `line` refuses, goes to `missed`, and another is opened after
+ *  `delay(previous, livedMs)` ms. So until `close`, there is always a stream, or one about to
+ *  be opened: no path out of a stream's end leaves none. `write` sends on the open one, if any (the next one is sent `first()` again). */
+export const holdWatch = (watch: {
+  open: () => Duplex;
+  first: () => string;
+  line: (reply: Record<string, unknown>) => Promise<void>;
+  missed: (error: unknown) => void;
+  delay: (previous: number, livedMs: number) => number;
+}) => {
+  let stream: Duplex | null = null;
+  let timer: NodeJS.Timeout | null = null;
+  let closed = false;
+  let previous = 0;
+  const start = () => {
+    timer = null;
+    if (closed) return;
+    const held = watch.open();
+    const opened = Date.now();
+    const read = lineReader();
+    let applying = Promise.resolve();
+    stream = held;
+    const end = (error: unknown) => {
+      if (stream !== held) return;
+      stream = null;
+      held.destroy();
+      if (closed) return;
+      watch.missed(error);
+      previous = watch.delay(previous, Date.now() - opened);
+      timer = setTimeout(start, previous);
+    };
+    held.on("data", (chunk: Buffer) => {
+      const lines = read(chunk);
+      if (lines instanceof Error) return end(lines);
+      for (const line of lines) {
+        const reply = wsdReply(line);
+        if (reply instanceof Error) return end(reply);
+        // Kept though its stream ends just after (what it said, it said), not once closed.
+        applying = applying.then(() => (closed ? undefined : watch.line(reply))).catch(end);
+      }
+    });
+    held.on("error", end);
+    held.on("end", () => end(new Error("its watch closed")));
+    held.on("close", () => end(new Error("its watch closed")));
+    held.write(watch.first());
+  };
+  start();
+  return {
+    write: (text: string) => void stream?.write(text),
+    close: () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      const held = stream;
+      stream = null;
+      held?.destroy();
+    },
+  };
+};
+
+declare namespace holdWatch {
+  /** each line is handed on; a stream that ends, one that sends a line past the bound, one
+   *  whose line is refused: each a miss, and another stream is opened every time */
+  export type Reopens = Expect<
+    Invoke<
+      typeof heldWatch,
+      [
+        hold: typeof holdWatch,
+        streams: [
+          { chunks: ['{"ok":true,"listeners":[3000]}\n']; end: true },
+          { chunks: [Invoke<typeof repeated, [text: "x", count: 70000]>]; end: false },
+          { chunks: ['{"ok":false,"error":"busy"}\n']; end: false },
+          { chunks: ['{"ok":true,"listeners":[5173]}\n']; end: false },
+        ],
+      ]
+    >,
+    "=",
+    {
+      sent: ['{"op":"watch"}\n', '{"op":"watch"}\n', '{"op":"watch"}\n', '{"op":"watch"}\n'];
+      lines: ['{"ok":true,"listeners":[3000]}', '{"ok":true,"listeners":[5173]}'];
+      missed: [
+        "its watch closed",
+        "the workspace's daemon sent a line of more than 65536 bytes",
+        "busy",
+      ];
+      openAfterClose: 0;
+    }
+  >;
+}
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Entry = Registered & {
@@ -357,17 +339,11 @@ type Entry = Registered & {
   answeredAt: number;
   /** When it was registered (Date.now()), for its watch's first minute (reopenAfter). */
   registeredAt: number;
-  /** Its watch (a dial to its daemon, held), the reserve last sent on it, and its reopening. */
-  watch: Duplex | null;
+  /** Its watch (a dial to its daemon, held: holdWatch), and the reserve last sent on it. */
+  watch: ReturnType<typeof holdWatch> | null;
   watchSent: string;
-  reopen: NodeJS.Timeout | null;
-  reopenMs: number;
-  /** Its daemon is older than `watch`: asked every CHECK_MS until the VM restarts. */
-  unwatchable: boolean;
   /** What was last logged of it not answering, so a daemon that is gone is said once. */
   missSaid: string;
-  /** Whether a check found other than its watch had said (logged once). */
-  differed: boolean;
   editorToken: string;
   editorTokenEpoch: number;
   devcontainer: string;
@@ -1807,9 +1783,9 @@ const serve = async () => {
       entry.reserved = reservedFor(entry, forwards.keys(), knownRaw, rawOwner);
       // On its watch, when it changed: the VM holds them within the second.
       const sent = reserveLine(entry);
-      if (entry.watch && sent !== entry.watchSent) {
+      if (sent !== entry.watchSent) {
         entry.watchSent = sent;
-        entry.watch.write(sent);
+        entry.watch?.write(sent);
       }
     }
   };
@@ -1826,17 +1802,13 @@ const serve = async () => {
     folder?: unknown;
     unforwarded?: unknown;
   };
-  /** What a workspace's daemon said (asked, or on its watch), checked and kept; throws for an
-   *  answer that does not say what listens. */
-  const apply = async (entry: Entry, reply: WsdSaid) => {
+  /** What a workspace's daemon said on its watch, checked and kept; throws for an answer that
+   *  does not say what listens. */
+  const apply = (entry: Entry, reply: WsdSaid) => {
     // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
     // rest is cut to a line.
     entry.editorToken = editorTokenOf(reply.editorToken);
     entry.editorTokenEpoch = tokenEpochOf(reply.editorTokenEpoch);
-    // A VM still running an older wsd says nothing of it (it is restarted only with the VM):
-    // asked directly, and only once tokens have been retired (review of the final fixes).
-    if (reply.editorTokenEpoch === undefined && retiredAt() > 0)
-      entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
     // Whole from the VM (it once cut it, and this cut it again): made safe here, bounded
     // against a flood only, and fitted to a line by what shows it (R1).
     entry.devcontainer =
@@ -1851,7 +1823,7 @@ const serve = async () => {
     // Fail closed on what the VM says (listenersFrom).
     const ours = b.hostPorts?.() ?? new Set<number>();
     const taken = listenersFrom(reply.listeners, ours);
-    // What the VM itself left out (an older wsd says nothing of it), and what was cut here.
+    // What the VM itself left out, and what was cut here.
     const left = unforwardedOf(reply.unforwarded);
     entry.listeners = taken.listeners;
     entry.low = [...new Set([...left.low, ...taken.low])].sort((x, y) => x - y);
@@ -1878,130 +1850,30 @@ const serve = async () => {
     if (entries.get(entry.vm) === entry) Object.assign(entry, unasked(entry, Date.now(), running));
   };
 
-  /** Ask a workspace's daemon once, over a dial to its socket: no program is started in the VM
-   *  for it (a node there was 50 ms of CPU and 64 MB at its peak; ticket #250). Whether it
-   *  answered. */
-  const sync = async (entry: Entry) => {
-    try {
-      await apply(
-        entry,
-        await askOver(dial(entry.vm, WSD_SOCKET), {
-          op: "ports",
-          reserve: [...entry.reserved],
-        }),
-      );
-      return true;
-    } catch (error) {
-      await missed(entry, error);
-      return false;
-    }
-  };
-
-  // What the host keeps of a workspace's answer, to tell whether a check found it otherwise.
-  // (Its editor's token among it: compared, never logged.)
-  const picture = (entry: Entry) =>
-    JSON.stringify([
-      [...entry.listeners].sort((x, y) => x - y),
-      entry.low,
-      entry.more,
-      entry.past,
-      entry.editorToken,
-      entry.editorTokenEpoch,
-      entry.devcontainer,
-      entry.folder,
-    ]);
-  /** The slow check, every CHECK_MS: asked, and logged once if the watch had said otherwise. A
-   *  watch that is neither open nor being reopened (it never should be) is opened again. */
-  const check = async (entry: Entry) => {
-    const before = picture(entry);
-    const watched = entry.watch !== null;
-    if (!(await sync(entry))) return;
-    if (watched && !entry.differed && picture(entry) !== before) {
-      entry.differed = true;
-      log(
-        `${entry.vm}: asked, its workspace daemon said other than its watch had (said once for this workspace)`,
-      );
-    }
-    if (!entry.watch && !entry.reopen && !entry.unwatchable) watchWorkspace(entry);
-  };
-
-  /** A workspace's watch: one dial to its daemon, held, on which it says what `ports` would
-   *  each time that changes (workspace/wsd.ts, portsService). Each line is checked and kept as
-   *  an ask's answer is, then the forwards and the root are brought up to date, as after a
-   *  pass. One that ends or fails is a miss, and is opened again (reopenAfter). A daemon too
-   *  old to know `watch` (started by an older desolate: a running workspace keeps its daemon
-   *  across a bootstrap) is asked every CHECK_MS instead, until its VM restarts. */
-  const watchWorkspace = (entry: Entry) => {
-    if (entries.get(entry.vm) !== entry || entry.watch || entry.unwatchable) return;
-    const stream = dial(entry.vm, WSD_SOCKET);
-    const opened = Date.now();
-    const read = lineReader();
-    let answered = false;
-    let applying: Promise<void> = Promise.resolve();
-    entry.watch = stream;
-    const end = (error: unknown) => {
-      if (entry.watch !== stream) return;
-      entry.watch = null;
-      stream.destroy();
-      if (entries.get(entry.vm) !== entry) return;
-      if (error !== null)
+  /** A workspace's watch: one dial to its daemon's socket, held (no program started in the VM
+   *  for it: a node there was 50 ms of CPU and 64 MB at its peak, every second; ticket #250),
+   *  on which the daemon says what `ports` would each time that changes (workspace/wsd.ts,
+   *  portsService). Each line is checked and kept, then the forwards and the root are brought
+   *  up to date. One that ends or fails is a miss, and is opened again (reopenAfter). */
+  const watchOf = (entry: Entry) =>
+    holdWatch({
+      open: () => dial(entry.vm, WSD_SOCKET),
+      first: () => {
+        entry.watchSent = reserveLine(entry);
+        return `${JSON.stringify({ op: "watch", reserve: [...entry.reserved].sort((x, y) => x - y) })}\n`;
+      },
+      line: async (reply) => {
+        apply(entry, reply);
+        reconcile();
+        tellRoot().catch(() => {});
+      },
+      missed: (error) =>
         void missed(entry, error).then(() => {
           reconcile();
           tellRoot().catch(() => {});
-        });
-      if (entry.unwatchable) return;
-      entry.reopenMs = reopenAfter(
-        entry.reopenMs,
-        Date.now() - opened,
-        Date.now() - entry.registeredAt,
-      );
-      entry.reopen = setTimeout(() => {
-        entry.reopen = null;
-        watchWorkspace(entry);
-      }, entry.reopenMs);
-    };
-    stream.on("data", (chunk: Buffer) => {
-      const lines = read(chunk);
-      if (lines instanceof Error) return end(lines);
-      for (const line of lines) {
-        const reply = wsdReply(line);
-        if (reply instanceof Error) return end(reply);
-        if (!answered && reply.ok === false && reply.error === "unknown op") {
-          entry.unwatchable = true;
-          log(
-            `${entry.vm}: its workspace daemon was started by an older desolate and cannot be watched: its ports are asked every ${CHECK_MS / 1000} s until the workspace restarts (desolate stop, then desolate start)`,
-          );
-          return end(null);
-        }
-        answered = true;
-        applying = applying.then(async () => {
-          if (entry.watch !== stream) return;
-          try {
-            await apply(entry, reply);
-          } catch (error) {
-            return end(error);
-          }
-          reconcile();
-          tellRoot().catch(() => {});
-        });
-      }
+        }),
+      delay: (previous, livedMs) => reopenAfter(previous, livedMs, Date.now() - entry.registeredAt),
     });
-    stream.on("error", (error) => end(error));
-    const closed = () => end(new Error("its watch closed"));
-    stream.on("end", closed);
-    stream.on("close", closed);
-    entry.watchSent = reserveLine(entry);
-    stream.write(
-      `${JSON.stringify({ op: "watch", reserve: [...entry.reserved].sort((x, y) => x - y) })}\n`,
-    );
-  };
-  const unwatch = (entry: Entry) => {
-    if (entry.reopen) clearTimeout(entry.reopen);
-    entry.reopen = null;
-    const stream = entry.watch;
-    entry.watch = null;
-    stream?.destroy();
-  };
 
   const openLink = (entry: Entry) => {
     const dir = paths.link(entry.vm);
@@ -2145,14 +2017,9 @@ const serve = async () => {
     const existing = entries.get(r.vm);
     if (existing) {
       existing.proxy = r.proxy;
-      // Registered again (started again, or a bootstrap): a daemon that could not be
-      // watched may be a new one now.
-      if (!existing.watch) {
-        unwatch(existing);
-        existing.unwatchable = false;
-        existing.registeredAt = Date.now();
-        watchWorkspace(existing);
-      }
+      // Registered again (started again, or a bootstrap, which may start its daemon again):
+      // its watch is opened again every second for a minute.
+      existing.registeredAt = Date.now();
       return;
     }
     const entry: Entry = {
@@ -2167,11 +2034,7 @@ const serve = async () => {
       registeredAt: Date.now(),
       watch: null,
       watchSent: "",
-      reopen: null,
-      reopenMs: 0,
-      unwatchable: false,
       missSaid: "",
-      differed: false,
       editorToken: "",
       editorTokenEpoch: 0,
       devcontainer: "",
@@ -2236,7 +2099,7 @@ const serve = async () => {
         watch(common, false, (file) => file === null || file === "packed-refs");
       }
     openLink(entry);
-    watchWorkspace(entry);
+    entry.watch = watchOf(entry);
     events.publish(
       events.host("workspace-up", { domain: r.domain, workspace: r.workspace, vm: r.vm }),
     );
@@ -2248,7 +2111,7 @@ const serve = async () => {
       events.host("workspace-down", { domain: entry.domain, workspace: entry.workspace, vm }),
     );
     entry.link?.();
-    unwatch(entry);
+    entry.watch?.close();
     for (const watcher of entry.watchers) watcher.close();
     entries.delete(vm);
     reconcile();
@@ -2758,7 +2621,6 @@ const serve = async () => {
           // Started (again): its agents as they are now, not as before it stopped (they were
           // shown running for a look's while after a restart: dogfooding, 2026-11-22).
           agentsOf.delete(entry.vm);
-          await sync(entry);
           reconcile();
           tellRoot().catch(() => {});
           void listAgents(entry).then(() => tellRoot().catch(() => {}));
@@ -2776,13 +2638,11 @@ const serve = async () => {
             state: { largest: stateLargest, most: STATE_ANSWER_BYTES },
           };
         } else if (request.op === "ports") {
-          await Promise.all([...entries.values()].map(sync));
+          // As the watches last said. A listen that fails says so a moment later: one more
+          // round, and the reservations decided are on their way to the VMs.
           reconcile();
-          // A listen that fails says so a moment later; then one more round, so that the
-          // reservations decided just now are in place inside the VMs before the answer.
           await sleep(50);
           reconcile();
-          await Promise.all([...entries.values()].map(sync));
           reply = {
             ok: true,
             ports: view(),
@@ -2895,14 +2755,9 @@ const serve = async () => {
   } catch (error) {
     log(`could not list workspaces at start: ${String(error)}`);
   }
-  // Each workspace says what changes on its watch: the loop asks them only every CHECK_MS.
-  let checkedAt = Date.now();
+  // Each workspace says what changes on its watch: the loop asks none of them.
   for (;;) {
     const started = Date.now();
-    if (started - checkedAt >= CHECK_MS) {
-      checkedAt = started;
-      await Promise.all([...entries.values()].map(check));
-    }
     reconcile();
     await tellRoot().catch(() => {});
     // The pause is never shorter than a second, and never so short that the loop is all the

@@ -196,40 +196,60 @@ export const linesInPieces = (
   return { lines };
 };
 
-/** One ask (daemon.ts, askOver) over a stand-in for a dial to a workspace's daemon: once the
- *  request has come, it sends `chunks`, then ends if `end`. What was sent to it, the answer
- *  or the error, and whether the stream was let go. */
-export const askedOver = async (
-  ask: (
-    stream: Duplex,
-    request: Record<string, unknown>,
-    timeoutMs?: number,
-    most?: number,
-  ) => Promise<Record<string, unknown>>,
-  request: Record<string, unknown>,
-  chunks: string[],
-  end: boolean,
-  most?: number,
-  timeoutMs?: number,
+/** A watch (daemon.ts, holdWatch) over stand-ins for dials to a workspace's daemon, one per
+ *  open, in turn: each sends its `chunks` once it has been written to, then ends if `end`.
+ *  Reopened at once. Once the last has been opened and has answered, the watch is closed.
+ *  What each was sent, the lines handed on (one with ok other than true refused, as the
+ *  daemon refuses one that does not say what listens), the misses, and how many streams were
+ *  opened after the close. */
+export const heldWatch = async (
+  hold: (watch: {
+    open: () => Duplex;
+    first: () => string;
+    line: (reply: Record<string, unknown>) => Promise<void>;
+    missed: (error: unknown) => void;
+    delay: (previous: number, livedMs: number) => number;
+  }) => { close: () => void },
+  streams: { chunks: (string | Buffer)[]; end: boolean }[],
 ) => {
   const sent: string[] = [];
-  const stream: Duplex = new Duplex({
-    read() {},
-    write(chunk, _encoding, done) {
-      sent.push(String(chunk));
-      if (sent.length === 1) {
-        for (const piece of chunks) stream.push(Buffer.from(piece));
-        if (end) stream.push(null);
-      }
-      done();
+  const lines: string[] = [];
+  const missed: string[] = [];
+  let opened = 0;
+  const watch = hold({
+    open: () => {
+      const script = streams[opened++] ?? { chunks: [], end: false };
+      let written = false;
+      const stream: Duplex = new Duplex({
+        read() {},
+        write(chunk, _encoding, done) {
+          sent.push(String(chunk));
+          if (!written) {
+            written = true;
+            for (const piece of script.chunks)
+              stream.push(typeof piece === "string" ? Buffer.from(piece) : piece);
+            if (script.end) stream.push(null);
+          }
+          done();
+        },
+      });
+      return stream;
     },
+    first: () => '{"op":"watch"}\n',
+    line: async (reply) => {
+      if (reply.ok !== true) throw new Error(String(reply.error));
+      lines.push(JSON.stringify(reply));
+    },
+    missed: (error) => void missed.push((error as Error).message),
+    delay: () => 1,
   });
-  try {
-    const reply = await ask(stream, request, timeoutMs, most);
-    return { sent, reply, destroyed: stream.destroyed };
-  } catch (error) {
-    return { sent, error: (error as Error).message, destroyed: stream.destroyed };
-  }
+  for (let waited = 0; opened < streams.length && waited < 2000; waited += 10)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const before = opened;
+  watch.close();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  return { sent, lines, missed, openAfterClose: opened - before };
 };
 
 /** `count` ports from `from` on, which a type would take a long time to write. */

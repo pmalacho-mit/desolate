@@ -1562,8 +1562,8 @@ declare namespace reservedFor {
   >;
 }
 
-// What a workspace's own daemon says, checked (sync). Shown as text and built into an
-// address: a token is 48 hex, the rest is cut to a line.
+// What a workspace's own daemon says, checked (daemon.ts, apply). Shown as text and built
+// into an address: a token is 48 hex, the rest is cut to a line.
 const editorTokenOf = (value: unknown) =>
   typeof value === "string" && /^[0-9a-f]{48}$/.test(value) ? value : "";
 const tokenEpochOf = (value: unknown) =>
@@ -1608,8 +1608,8 @@ const listenersFrom = (ports: number[], ours: ReadonlySet<number>) => {
 
 /** What the VM says it did not offer for a bound's sake (wsd's `unforwarded`, ticket 8): its
  *  listeners below PORTS.min, and how many of a compose service's came after its mirrors.
- *  Its word, so only whole ports below PORTS.min and a whole count are taken; a VM that
- *  says nothing of it (an older wsd) has none. */
+ *  Its word, so only whole ports below PORTS.min and a whole count are taken, and a VM that
+ *  says nothing of it has none. */
 const unforwardedOf = (value: unknown): { low: number[]; more: number } => {
   const said = (value ?? {}) as { low?: unknown; more?: unknown };
   const low = Array.isArray(said.low)

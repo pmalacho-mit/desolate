@@ -11,7 +11,7 @@
 //   compose   a compose devcontainer's listeners, and its `service:port` forwards, mirrored
 //             onto this VM's loopback (bridge.ts), so they are listeners here like any other.
 //
-// The host speaks to it over a dial to its socket (the VM layer's socat): port numbers in,
+// The host holds a watch on its socket (a dial, the VM layer's socat): port numbers in,
 // taken ports out, nothing else.
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -350,29 +350,25 @@ declare namespace devcontainerSummary {
   >;
 }
 
-/** What `ports` and `watch` answer: what listens here, what is held for the host, what is not
+/** What a watch is answered: what listens here, what is held for the host, what is not
  *  forwarded for a bound's sake, and what the host shows without asking again. */
 const portsReply = async (): Promise<unknown> => {
-  try {
-    const { listeners, low } = await heard();
-    // What is listening and will not be forwarded, for a bound's sake: in this VM, and in a
-    // compose devcontainer's service (bridge.ts). In the devcontainer's line, which the host
-    // shows already, and by itself (`unforwarded`) for `desolate ports`.
-    const service = unmirrored();
-    const unforwarded = {
-      low: [...new Set([...low, ...service.low])].sort((a, b) => a - b),
-      more: service.more,
-    };
-    return {
-      ok: true,
-      listeners,
-      reserved: [...reserved.keys()].sort((a, b) => a - b),
-      unforwarded,
-      ...surfaces(unforwarded),
-    };
-  } catch (error) {
-    return { ok: false, error: String(error) };
-  }
+  const { listeners, low } = await heard();
+  // What is listening and will not be forwarded, for a bound's sake: in this VM, and in a
+  // compose devcontainer's service (bridge.ts). In the devcontainer's line, which the host
+  // shows already, and by itself (`unforwarded`) for `desolate ports`.
+  const service = unmirrored();
+  const unforwarded = {
+    low: [...new Set([...low, ...service.low])].sort((a, b) => a - b),
+    more: service.more,
+  };
+  return {
+    ok: true,
+    listeners,
+    reserved: [...reserved.keys()].sort((a, b) => a - b),
+    unforwarded,
+    ...surfaces(unforwarded),
+  };
 };
 
 /** The line a watcher is sent for `reply`, or null when it is the line it was sent last. */
@@ -420,8 +416,7 @@ const WATCHERS_MOST = 4;
  *  growing in this daemon's memory. */
 const REQUEST_MOST = 65536;
 
-/** The socket's requests, each a line. `ports`: one answer, then the connection ends (what
- *  the host asks now and then, to check). `watch`: one answer at once, and another whenever
+/** The socket's requests, each a line. `watch`: one answer at once, and another whenever
  *  `look` finds it would differ, for as long as the connection lasts; a `reserve` line on it
  *  changes what this VM holds, and is looked at the same way. `hold` takes the ports a
  *  request asks to hold, `answer` makes the answer. A watcher that has not taken its last line
@@ -460,10 +455,9 @@ export const portsService = (
     }
     const watching = watchers.has(connection);
     const op = asked?.op;
-    if (op !== "ports" && op !== "watch" && !(op === "reserve" && watching))
+    if (op !== "watch" && !(op === "reserve" && watching))
       return void connection.end(`${JSON.stringify({ ok: false, error: "unknown op" })}\n`);
     if (Array.isArray(asked.reserve)) hold(asked.reserve.map(Number));
-    if (op === "ports") return void connection.end(`${JSON.stringify(await answer())}\n`);
     if (!watching) {
       if (watchers.size >= most) watchers.keys().next().value?.destroy();
       watchers.set(connection, null);
@@ -485,12 +479,13 @@ export const portsService = (
       if (buffer.length > REQUEST_MOST) socket.destroy();
     });
   };
-  return { connection, look, watching: () => watchers.size > 0 };
+  return { connection, look };
 };
 
 declare namespace portsService {
   /** a watch is answered at once, then again only when the answer differs: a look that
-   *  finds the same says nothing (the control); `ports` is answered once, and ended */
+   *  finds the same says nothing (the control); a request that is not one (`ports`, which
+   *  the host no longer asks) is refused, and ended */
   export type Watch = [
     Expect<
       Invoke<
@@ -513,11 +508,11 @@ declare namespace portsService {
         [
           service: typeof portsService,
           requests: ['{"op":"ports","reserve":[5173]}'],
-          replies: [{ listeners: [3000] }, { listeners: [3000, 5173] }],
+          replies: [{ listeners: [3000] }],
         ]
       >,
       "=",
-      { clients: [{ got: ['{"listeners":[3000]}']; closed: true }]; held: [[5173]] }
+      { clients: [{ got: ['{"ok":false,"error":"unknown op"}']; closed: true }]; held: [] }
     >,
   ];
   /** a reserve on a watch holds what it says, and is answered when that changes the answer;
@@ -598,7 +593,7 @@ const serve = () => {
   createServer(ports.connection).listen(SOCKET, () => fs.chmodSync(SOCKET, 0o600));
   void (async () => {
     for (;;) {
-      if (ports.watching()) await ports.look();
+      await ports.look();
       await sleep(LOOK_MS);
     }
   })();
