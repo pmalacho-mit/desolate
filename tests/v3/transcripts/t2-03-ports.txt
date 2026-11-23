@@ -103,6 +103,12 @@ doctor: all checks passed.
 
 ## more listeners than are forwarded
 
+## ports said by the workspace, as they change
+
+## the workspace daemon started again
+
+## a workspace daemon's line past the bound
+
 ## stop
 
 $ desolate stop web/two

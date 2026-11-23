@@ -16,7 +16,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { createServer } from "node:net";
-import type { Server } from "node:net";
+import type { Server, Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { PORTS } from "../shared/limits.ts";
 import { run, sleep } from "../shared/run.ts";
@@ -24,6 +24,8 @@ import { MIRRORS, tick as bridgeTick, unmirrored } from "./bridge.ts";
 import { branches, domainRepos, importDeliveries, syncRepo } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { repeated } from "../.harness/shared-bytes.ts";
+import type { watching } from "../.harness/workspace-wsd.ts";
 
 const SOCKET = "/run/desolate/wsd.sock";
 /** desolate's own listeners in the VM: never offered for forwarding. */
@@ -348,47 +350,258 @@ declare namespace devcontainerSummary {
   >;
 }
 
+/** What `ports` and `watch` answer: what listens here, what is held for the host, what is not
+ *  forwarded for a bound's sake, and what the host shows without asking again. */
+const portsReply = async (): Promise<unknown> => {
+  try {
+    const { listeners, low } = await heard();
+    // What is listening and will not be forwarded, for a bound's sake: in this VM, and in a
+    // compose devcontainer's service (bridge.ts). In the devcontainer's line, which the host
+    // shows already, and by itself (`unforwarded`) for `desolate ports`.
+    const service = unmirrored();
+    const unforwarded = {
+      low: [...new Set([...low, ...service.low])].sort((a, b) => a - b),
+      more: service.more,
+    };
+    return {
+      ok: true,
+      listeners,
+      reserved: [...reserved.keys()].sort((a, b) => a - b),
+      unforwarded,
+      ...surfaces(unforwarded),
+    };
+  } catch (error) {
+    return { ok: false, error: String(error) };
+  }
+};
+
+/** The line a watcher is sent for `reply`, or null when it is the line it was sent last. */
+export const nextLine = (last: string | null, reply: unknown): string | null => {
+  const line = `${JSON.stringify(reply)}\n`;
+  return line === last ? null : line;
+};
+
+declare namespace nextLine {
+  /** a watch's first answer is sent; then only an answer that differs, in anything it says */
+  export type Changed = Table<
+    typeof nextLine,
+    [
+      [
+        args: [last: null, reply: { ok: true; listeners: [] }],
+        expected: '{"ok":true,"listeners":[]}\n',
+      ],
+      [
+        args: [last: '{"ok":true,"listeners":[3000]}\n', reply: { ok: true; listeners: [3000] }],
+        expected: null,
+      ],
+      [
+        args: [
+          last: '{"ok":true,"listeners":[3000]}\n',
+          reply: { ok: true; listeners: [3000, 5173] },
+        ],
+        expected: '{"ok":true,"listeners":[3000,5173]}\n',
+      ],
+      [
+        args: [
+          last: '{"ok":true,"listeners":[3000]}\n',
+          reply: { ok: true; listeners: [3000]; editorToken: "ab" },
+        ],
+        expected: '{"ok":true,"listeners":[3000],"editorToken":"ab"}\n',
+      ],
+    ]
+  >;
+}
+
+/** The most watchers at once. The host's daemon is the only real one, and keeps one open; a
+ *  few more cover one whose end this daemon has not seen yet. Past it the oldest is let go. */
+const WATCHERS_MOST = 4;
+/** The longest request line: the ports the host asks this VM to hold, a few of them (a JSON
+ *  list of 10,000 ports is under 64 KiB). A longer one is not a request, and is not kept
+ *  growing in this daemon's memory. */
+const REQUEST_MOST = 65536;
+
+/** The socket's requests, each a line. `ports`: one answer, then the connection ends (what
+ *  the host asks now and then, to check). `watch`: one answer at once, and another whenever
+ *  `look` finds it would differ, for as long as the connection lasts; a `reserve` line on it
+ *  changes what this VM holds, and is looked at the same way. `hold` takes the ports a
+ *  request asks to hold, `answer` makes the answer. A watcher that has not taken its last line
+ *  by the time another is due is let go (it is asked to reconnect, not waited for). */
+export const portsService = (
+  hold: (wanted: number[]) => void,
+  answer: () => Promise<unknown>,
+  most = WATCHERS_MOST,
+) => {
+  const watchers = new Map<Socket, string | null>();
+  let looked: Promise<void> = Promise.resolve();
+  // One look at a time, every watcher told what it found: a look started before a reserve
+  // never lands after the reserve's own.
+  const look = () =>
+    (looked = looked.then(async () => {
+      if (watchers.size === 0) return;
+      const reply = await answer();
+      for (const [watcher, last] of watchers) {
+        const line = nextLine(last, reply);
+        if (line === null) continue;
+        if (watcher.writableLength > 0) {
+          watcher.destroy();
+          continue;
+        }
+        watchers.set(watcher, line);
+        watcher.write(line);
+      }
+    }));
+  const request = async (connection: Socket, line: string) => {
+    if (connection.writableEnded || connection.destroyed) return;
+    let asked: { op?: unknown; reserve?: unknown };
+    try {
+      asked = JSON.parse(line) as { op?: unknown; reserve?: unknown };
+    } catch (error) {
+      return void connection.end(`${JSON.stringify({ ok: false, error: String(error) })}\n`);
+    }
+    const watching = watchers.has(connection);
+    const op = asked?.op;
+    if (op !== "ports" && op !== "watch" && !(op === "reserve" && watching))
+      return void connection.end(`${JSON.stringify({ ok: false, error: "unknown op" })}\n`);
+    if (Array.isArray(asked.reserve)) hold(asked.reserve.map(Number));
+    if (op === "ports") return void connection.end(`${JSON.stringify(await answer())}\n`);
+    if (!watching) {
+      if (watchers.size >= most) watchers.keys().next().value?.destroy();
+      watchers.set(connection, null);
+    }
+    await look();
+  };
+  const connection = (socket: Socket) => {
+    let buffer = "";
+    let queue: Promise<void> = Promise.resolve();
+    socket.on("error", () => socket.destroy());
+    socket.on("close", () => watchers.delete(socket));
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      for (let end = buffer.indexOf("\n"); end >= 0; end = buffer.indexOf("\n")) {
+        const line = buffer.slice(0, end);
+        buffer = buffer.slice(end + 1);
+        queue = queue.then(() => request(socket, line));
+      }
+      if (buffer.length > REQUEST_MOST) socket.destroy();
+    });
+  };
+  return { connection, look, watching: () => watchers.size > 0 };
+};
+
+declare namespace portsService {
+  /** a watch is answered at once, then again only when the answer differs: a look that
+   *  finds the same says nothing (the control); `ports` is answered once, and ended */
+  export type Watch = [
+    Expect<
+      Invoke<
+        typeof watching,
+        [
+          service: typeof portsService,
+          requests: ['{"op":"watch","reserve":[]}'],
+          replies: [{ listeners: [3000] }, { listeners: [3000] }, { listeners: [3000, 5173] }],
+        ]
+      >,
+      "=",
+      {
+        clients: [{ got: ['{"listeners":[3000]}', '{"listeners":[3000,5173]}']; closed: false }];
+        held: [[]];
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof watching,
+        [
+          service: typeof portsService,
+          requests: ['{"op":"ports","reserve":[5173]}'],
+          replies: [{ listeners: [3000] }, { listeners: [3000, 5173] }],
+        ]
+      >,
+      "=",
+      { clients: [{ got: ['{"listeners":[3000]}']; closed: true }]; held: [[5173]] }
+    >,
+  ];
+  /** a reserve on a watch holds what it says, and is answered when that changes the answer;
+   *  on a connection that is not a watch it is no request */
+  export type Reserve = [
+    Expect<
+      Invoke<
+        typeof watching,
+        [
+          service: typeof portsService,
+          requests: ['{"op":"watch","reserve":[5173]}\n{"op":"reserve","reserve":[3000]}'],
+          replies: [{ listeners: [] }],
+        ]
+      >,
+      "=",
+      { clients: [{ got: ['{"listeners":[]}']; closed: false }]; held: [[5173], [3000]] }
+    >,
+    Expect<
+      Invoke<
+        typeof watching,
+        [
+          service: typeof portsService,
+          requests: ['{"op":"reserve","reserve":[3000]}'],
+          replies: [{ listeners: [] }],
+        ]
+      >,
+      "=",
+      { clients: [{ got: ['{"ok":false,"error":"unknown op"}']; closed: true }]; held: [] }
+    >,
+  ];
+  /** what a watcher may cost: past `most` watchers the oldest is let go, the others kept;
+   *  a request line past 64 KiB is not kept growing, and its connection is closed */
+  export type Bounds = [
+    Expect<
+      Invoke<
+        typeof watching,
+        [
+          service: typeof portsService,
+          requests: ['{"op":"watch"}', '{"op":"watch"}', '{"op":"watch"}'],
+          replies: [{ listeners: [] }],
+          most: 2,
+        ]
+      >,
+      "=",
+      {
+        clients: [
+          { got: ['{"listeners":[]}']; closed: true },
+          { got: ['{"listeners":[]}']; closed: false },
+          { got: ['{"listeners":[]}']; closed: false },
+        ];
+        held: [];
+      }
+    >,
+    Expect<
+      Invoke<
+        typeof watching,
+        [
+          service: typeof portsService,
+          requests: [Invoke<typeof repeated, [text: "[", count: 65537]>],
+          replies: [{ listeners: [] }],
+        ]
+      >,
+      "=",
+      { clients: [{ got: []; closed: true }]; held: [] }
+    >,
+  ];
+}
+
+/** How often a watch looks, while there is one: one `ss`, which reads the kernel's table in
+ *  milliseconds. Linux says nothing when a socket starts listening (no file to watch, and its
+ *  netlink events are for sockets that close), so it is looked at. */
+const LOOK_MS = 1000;
+
 const serve = () => {
   fs.mkdirSync("/run/desolate", { recursive: true });
   fs.rmSync(SOCKET, { force: true });
-  createServer((connection) => {
-    let buffer = "";
-    connection.on("error", () => connection.destroy());
-    connection.on("data", async (chunk) => {
-      buffer += chunk.toString();
-      const end = buffer.indexOf("\n");
-      // A request is a line from the host: the ports it asks this VM to hold, a few of
-      // them (a JSON list of 10,000 ports is under 64 KiB). A longer line is not one, and is
-      // not kept growing in this daemon's memory.
-      if (end < 0) return buffer.length > 65536 ? connection.destroy() : undefined;
-      let reply: unknown;
-      try {
-        const request = JSON.parse(buffer.slice(0, end)) as { op?: string; reserve?: unknown };
-        if (request.op === "ports") {
-          if (Array.isArray(request.reserve)) reserve(request.reserve.map(Number));
-          const { listeners, low } = await heard();
-          // What is listening and will not be forwarded, for a bound's sake: in this VM, and
-          // in a compose devcontainer's service (bridge.ts). In the devcontainer's line,
-          // which the host shows already, and by itself (`unforwarded`) for `desolate ports`.
-          const service = unmirrored();
-          const unforwarded = {
-            low: [...new Set([...low, ...service.low])].sort((a, b) => a - b),
-            more: service.more,
-          };
-          reply = {
-            ok: true,
-            listeners,
-            reserved: [...reserved.keys()].sort((a, b) => a - b),
-            unforwarded,
-            ...surfaces(unforwarded),
-          };
-        } else reply = { ok: false, error: "unknown op" };
-      } catch (error) {
-        reply = { ok: false, error: String(error) };
-      }
-      connection.end(JSON.stringify(reply) + "\n");
-    });
-  }).listen(SOCKET, () => fs.chmodSync(SOCKET, 0o600));
+  const ports = portsService(reserve, portsReply);
+  createServer(ports.connection).listen(SOCKET, () => fs.chmodSync(SOCKET, 0o600));
+  void (async () => {
+    for (;;) {
+      if (ports.watching()) await ports.look();
+      await sleep(LOOK_MS);
+    }
+  })();
 };
 
 // The domain's refs, watched by comparing them every few seconds (a shared .git on virtiofs

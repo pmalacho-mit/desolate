@@ -121,7 +121,13 @@ const unnamed = (text: string) =>
 export const ws = (
   at: string,
   listening: number[],
-  more: { reserved?: number[]; editorTokenEpoch?: number; low?: number[]; notes?: string[] } = {},
+  more: {
+    reserved?: number[];
+    editorTokenEpoch?: number;
+    low?: number[];
+    notes?: string[];
+    answeredAt?: number;
+  } = {},
 ) => {
   const [domain = "", workspace = ""] = at.split("/");
   return {
@@ -131,6 +137,7 @@ export const ws = (
     listeners: new Set(listening),
     reserved: new Set(more.reserved ?? []),
     editorTokenEpoch: more.editorTokenEpoch ?? 0,
+    answeredAt: more.answeredAt ?? 0,
     ...(more.low ? { low: more.low } : {}),
     ...(more.notes ? { notes: more.notes } : {}),
   };
@@ -243,6 +250,22 @@ export const setOf = (items: any[]): Set<any> => new Set(items);
 /** Which workspace (`at`) had each raw port first, as the daemon keeps it: by VM. */
 export const rawOwners = (owners: Record<string, string>) =>
   new Map(Object.entries(owners).map(([port, at]) => [Number(port), ws(at, []).vm]));
+/** Which workspace ("domain/workspace") a port with no name reaches once `owner` had it and
+ *  the workspaces are now `entries`: rawOwnerFor over those that listen there, in order, as
+ *  the daemon's reconcile asks it. */
+export const rawOwnerAmong = (
+  rawOwnerFor: (current: string | undefined, holders: { vm: string }[]) => string,
+  port: number,
+  owner: string,
+  entries: { listeners: ReadonlySet<number> }[],
+): string => {
+  const kept = entries as { vm: string; listeners: ReadonlySet<number> }[];
+  const vm = rawOwnerFor(
+    ws(owner, []).vm,
+    kept.filter((entry) => entry.listeners.has(port)),
+  );
+  return shown(kept.find((entry) => entry.vm === vm));
+};
 /** What lsof would say holds a port. */
 export const heldByColima = () => "colima, pid 812";
 /** The stack's default memory for a workspace, in MiB. */
