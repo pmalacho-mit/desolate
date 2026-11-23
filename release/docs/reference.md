@@ -252,7 +252,7 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
   port is the Mac's system's, and a workspace may not have the Mac listen on every port.
   `desolate ports` says which ports, or how many, were left out.
 - **Connections in at once,** to a workspace's dev servers and editor, are bounded as those
-  out are (`link.connections`, counted apart), and the Mac carries 1,024 in and out of all
+  out are (`link.connections`, counted apart), and the Mac carries 800 in and out of all
   its workspaces together. Past either, a request is answered 503 with the reason.
 - **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
   clicked) is sent on to the workspace serving that port, at its own name, the path kept;

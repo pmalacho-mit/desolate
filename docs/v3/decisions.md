@@ -1684,7 +1684,7 @@ hundreds of milliseconds) are gone, and the state service is dialed when asked. 
 connection is carried or refused at once. `link.connections` stays, 256 by default, and now
 bounds each workspace twice, apart: its connections out, and its connections in (its dev
 servers, its editor: never counted before), so that a flood one way does not starve the
-other. The Mac carries 1,024 in and out of every workspace together, a fixed bound. Past
+other. The Mac carries 800 in and out of every workspace together, a fixed bound: under sshd's 1,000 sessions a connection (`MaxSessions`, in the root VM and every workspace VM), since every connection out and the dashboard's pipes ride the one control connection to the root VM, with room for the host's own sessions on it. Past
 either, a request is answered 503 with `X-Desolate-Reason`, anything else closed, and
 `desolate ports` and the log say so. A connection counts until its client's socket closes,
 which every end of a pipe comes to (`carrying`, `daemon.ts`). The dashboard's own pipes to

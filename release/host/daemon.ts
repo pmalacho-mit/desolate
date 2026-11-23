@@ -517,8 +517,15 @@ export const LINK_CONNECTIONS = define({
 /** The most connections this Mac carries at once into and out of all its workspaces
  *  together. Each is a socket of this daemon's, which carries every workspace, and an ssh
  *  session: about 1.5 MB here, and 1.2 MB in the VM it reaches (200 held at once in the
- *  root VM, which has 3.9 GiB: measured on the M1, 2026-11-23). */
-const CONNECTIONS_MOST = 1024;
+ *  root VM, which has 3.9 GiB: measured on the M1, 2026-11-23). Every connection out is a
+ *  session on the one control connection to the root VM as its login user, and so are the
+ *  dashboard's pipes to the state service; sshd takes 1,000 sessions a connection, in the
+ *  root VM and every workspace VM (root/start.sh, workspace/start.sh: MaxSessions). So this
+ *  stays under 1,000, with room for the host's own sessions on that connection. */
+const CONNECTIONS_MOST = 800;
+
+/** `n` connections, the word agreeing with the count. */
+const connections = (n: number) => `${n} connection${n === 1 ? "" : "s"}`;
 
 /** A connection into a workspace (to its dev servers, its editor) or out of it (its link). */
 type Way = "in" | "out";
@@ -528,9 +535,9 @@ type Way = "in" | "out";
  *  (link.connections), so that a flood one way does not starve the other. */
 const connectionRefusal = (way: Way, theirs: number, all: number, most: number) =>
   all >= CONNECTIONS_MOST
-    ? `this Mac has ${CONNECTIONS_MOST} connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)`
+    ? `this Mac has ${connections(CONNECTIONS_MOST)} into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)`
     : theirs >= most
-      ? `this workspace has ${most} connections ${way} carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`
+      ? `this workspace has ${connections(most)} ${way} carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`
       : null;
 
 declare namespace connectionRefusal {
@@ -540,23 +547,27 @@ declare namespace connectionRefusal {
     typeof connectionRefusal,
     [
       [args: [way: "in", theirs: 0, all: 0, most: 256], expected: null],
-      [args: [way: "in", theirs: 255, all: 1023, most: 256], expected: null],
-      [args: [way: "out", theirs: 255, all: 1023, most: 256], expected: null],
+      [args: [way: "in", theirs: 255, all: 799, most: 256], expected: null],
+      [args: [way: "out", theirs: 255, all: 799, most: 256], expected: null],
       [
         args: [way: "in", theirs: 256, all: 256, most: 256],
         expected: "this workspace has 256 connections in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+      ],
+      [
+        args: [way: "in", theirs: 1, all: 1, most: 1],
+        expected: "this workspace has 1 connection in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
       ],
       [
         args: [way: "out", theirs: 2, all: 2, most: 2],
         expected: "this workspace has 2 connections out carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
       ],
       [
-        args: [way: "in", theirs: 0, all: 1024, most: 256],
-        expected: "this Mac has 1024 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+        args: [way: "in", theirs: 0, all: 800, most: 256],
+        expected: "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
       ],
       [
-        args: [way: "out", theirs: 0, all: 1024, most: 256],
-        expected: "this Mac has 1024 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+        args: [way: "out", theirs: 0, all: 800, most: 256],
+        expected: "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
       ],
     ]
   >;
@@ -687,7 +698,7 @@ declare namespace carrying {
       { carried: 1; refused: [] },
     ]
   >;
-  /** this Mac's bound is in and out of every workspace together: 1024 carried (the control),
+  /** this Mac's bound is in and out of every workspace together: 800 carried (the control),
    *  and the next is refused either way, in any workspace, until one ends */
   export type InAll = Expect<
     Invoke<
@@ -698,8 +709,8 @@ declare namespace carrying {
         steps: [
           [vm: "w1", way: "in", count: 300],
           [vm: "w2", way: "out", count: 300],
-          [vm: "w3", way: "in", count: 300],
-          [vm: "w4", way: "out", count: 124],
+          [vm: "w3", way: "in", count: 100],
+          [vm: "w4", way: "out", count: 100],
           [vm: "w4", way: "in", count: 1],
           [vm: "w1", way: "out", count: 1],
           [vm: "w2", way: "out", count: -1],
@@ -711,21 +722,21 @@ declare namespace carrying {
     [
       { carried: 300; refused: [] },
       { carried: 300; refused: [] },
-      { carried: 300; refused: [] },
-      { carried: 124; refused: [] },
+      { carried: 100; refused: [] },
+      { carried: 100; refused: [] },
       {
         carried: 0;
         refused: [
-          "this Mac has 1024 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+          "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
         ];
       },
       {
         carried: 0;
         refused: [
-          "this Mac has 1024 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+          "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
         ];
       },
-      { ended: 1; all: 1023 },
+      { ended: 1; all: 799 },
       { carried: 1; refused: [] },
     ]
   >;
@@ -739,7 +750,7 @@ declare namespace carrying {
         expected: Invoke<
           typeof busyAnswer,
           [
-            why: "this workspace has 1 connections in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+            why: "this workspace has 1 connection in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
           ]
         >,
       ],
