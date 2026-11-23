@@ -691,6 +691,139 @@ else {
     assert.match(await request(5173, hostOf(urlOf("web/one", 5173)!)), /workspace:one/);
   });
 
+  // The host is told what listens by each workspace's daemon, on a watch it holds; it asks
+  // by itself only every 30 s. None of these call `desolate ports`, which asks at once.
+  const daemonLog = () => fs.readFileSync(path.join(stack.home, "logs", "daemon.log"), "utf8");
+  const hostAt = (target: string, port: number) =>
+    hostOf(urlOf(target, 5173)!).replace(":5173", `:${port}`);
+  const answersAs = async (port: number, host: string, name: string) =>
+    new RegExp(`workspace:${name}`).test(await request(port, host));
+  /** Stop the workspace daemon in a VM, and wait for its end. */
+  const stopWsd = (target: string) =>
+    stack.inVm(
+      vmOf(target),
+      [
+        "bash",
+        "-c",
+        // By what it runs ([w]: not this shell's own line), the real one or a stand-in.
+        "pkill -f 'workspace/[w]sd[.]ts|desolate/[w]sd[.]sock'; while pgrep -f 'workspace/[w]sd[.]ts|desolate/[w]sd[.]sock' >/dev/null; do sleep 0.1; done",
+      ],
+      { root: true },
+    );
+  /** Start `command` as the workspace daemon, as start.sh does, and wait for its socket. */
+  const startWsd = (target: string, command: string) =>
+    stack.inVm(
+      vmOf(target),
+      [
+        "bash",
+        "-c",
+        `rm -f /run/desolate/wsd.sock; setsid runuser -u desolate -- ${command} >>/var/lib/desolate/wsd.log 2>&1 </dev/null & echo $! >/run/desolate/wsd.pid; until [ -S /run/desolate/wsd.sock ]; do sleep 0.1; done`,
+      ],
+      { root: true },
+    );
+  const realWsd = "node --disable-warning=ExperimentalWarning /desolate/release/workspace/wsd.ts";
+
+  it("a listener that appears is forwarded, and one that goes is taken down, without a poll", async () => {
+    stack.step("ports said by the workspace, as they change");
+    const host = hostAt("web/two", 5195);
+    assert.equal(await accepts("127.0.0.1", 5195), false, "control: nothing on 5195 yet");
+    const started = Date.now();
+    serve("web/two", "two 5195");
+    assert.ok(
+      await until(() => answersAs(5195, host, "two"), 5000),
+      "forwarded within seconds, without anyone asking",
+    );
+    assert.ok(Date.now() - started < 5000, `forwarded in ${Date.now() - started} ms`);
+    stack.inVm(vmOf("web/two"), ["pkill", "-f", "serve.mjs two 5195"], { root: true });
+    assert.ok(
+      await until(async () => !(await accepts("127.0.0.1", 5195)), 5000),
+      "and taken down within seconds when it goes",
+    );
+    assert.ok(
+      await answersAs(5173, hostAt("web/two", 5173), "two"),
+      "control: the workspace's other server is still forwarded",
+    );
+  });
+
+  it("a workspace daemon that is stopped and started again: its ports are kept meanwhile, and the host watches the new one", async () => {
+    stack.step("the workspace daemon started again");
+    const [old, next] = [hostAt("web/one", 5173), hostAt("web/one", 5196)];
+    stopWsd("web/one");
+    await sleep(3000);
+    assert.ok(
+      await answersAs(5173, old, "one"),
+      "while its daemon is not there, what it last said is kept: 5173 is still forwarded",
+    );
+    assert.match(daemonLog(), /its workspace daemon could not be asked/);
+    startWsd("web/one", realWsd);
+    serve("web/one", "one 5196");
+    assert.ok(
+      await until(() => answersAs(5196, next, "one"), 15_000),
+      "a new listener is forwarded once the new daemon is watched",
+    );
+  });
+
+  it("a workspace daemon that answers a line past 64 KiB: nothing new of it is forwarded, and that is logged", async () => {
+    stack.step("a workspace daemon's line past the bound");
+    const [mine, theirs] = [hostAt("web/two", 5197), hostAt("web/one", 5198)];
+    const flood = `node -e 'require("net").createServer((c) => { c.on("error", () => {}); c.end(JSON.stringify({ ok: true, listeners: [5197], pad: "x".repeat(70000) }) + "\\n"); }).listen("/run/desolate/wsd.sock")'`;
+    try {
+      stopWsd("web/two");
+      startWsd("web/two", flood);
+      serve("web/two", "two 5197");
+      serve("web/one", "one 5198");
+      assert.ok(
+        await until(() => answersAs(5198, theirs, "one"), 5000),
+        "control: the other workspace's new listener is forwarded",
+      );
+      await sleep(3000);
+      assert.equal(
+        await accepts("127.0.0.1", 5197),
+        false,
+        "the flooding workspace's new listener is not",
+      );
+      assert.match(daemonLog(), /sent a line of more than 65536 bytes/);
+    } finally {
+      stopWsd("web/two");
+      startWsd("web/two", realWsd);
+    }
+    // The control for the bound: the same listener, said by the real daemon, is forwarded.
+    // (The watch's reopening may have backed off to 30 s, and the check asks every 30 s.)
+    assert.ok(
+      await until(() => answersAs(5197, mine, "two"), 45_000),
+      "once its daemon says it within the bound, it is forwarded",
+    );
+  });
+
+  it("a running workspace whose daemon is older than the host's is given a new one by a bootstrap, and is watched after", async () => {
+    stack.step("a workspace daemon from an older desolate");
+    const host = hostAt("web/one", 5199);
+    const vm = vmOf("web/one");
+    const connections = () =>
+      Number(stack.inVm(vm, ["bash", "-c", "cat /tmp/old-wsd.count 2>/dev/null | wc -l"]).stdout);
+    // As a workspace started by a desolate before this one: its daemon does not know `watch`,
+    // and no version of its code is written beside it.
+    const old = `node -e 'require("net").createServer((c) => { require("fs").appendFileSync("/tmp/old-wsd.count", "c\\n"); c.on("error", () => {}); c.on("data", () => c.end(JSON.stringify({ ok: false, error: "unknown op" }) + "\\n")); }).listen("/run/desolate/wsd.sock")'`;
+    stopWsd("web/one");
+    stack.inVm(vm, ["rm", "-f", "/run/desolate/wsd.version", "/tmp/old-wsd.count"], { root: true });
+    startWsd("web/one", old);
+    serve("web/one", "one 5199");
+    // The control: without a bootstrap, the watch is refused, and tried again.
+    assert.ok(await until(() => connections() >= 2, 45_000), "the watch is tried again");
+    assert.equal(await accepts("127.0.0.1", 5199), false, "and its new listener is not forwarded");
+    assert.equal(bootstrap(stack).code, 0);
+    assert.match(
+      stack.inVm(vm, ["cat", "/run/desolate/wsd.version"]).stdout,
+      /^[0-9a-f]{16}$/m,
+      "the bootstrap started this desolate's daemon",
+    );
+    // (Its watch may have backed off to 30 s while the old daemon refused it.)
+    assert.ok(
+      await until(() => answersAs(5199, host, "one"), 45_000),
+      "and the workspace is watched: its listener is forwarded",
+    );
+  });
+
   it("stopping a workspace takes its ports down", async () => {
     stack.step("stop");
     assert.equal(stack.desolate("stop", "web/two").code, 0);
