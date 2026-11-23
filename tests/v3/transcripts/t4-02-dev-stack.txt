@@ -26,6 +26,7 @@ desolate bootstrap: backend vz, instance <instance>
   workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
 bootstrap: 8 step(s) done.
   ok   home: <home>
+  ok   the install folder holds no credential: <repo>/release, shared read-only into every VM
   ok   backend gives isolation: vz
   ok   lima: limactl version 2.3.0
   ok   sandbox-exec (cuts a workspace's egress from outside it): present

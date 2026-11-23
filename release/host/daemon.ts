@@ -88,6 +88,7 @@ import type {
   Mock,
   Mocked,
   Table,
+  Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type {
   answerOf,
@@ -116,6 +117,44 @@ const SOCKET = path.join(paths.state, "daemon.sock");
 const PIDFILE = path.join(paths.state, "daemon.pid");
 const LOG = path.join(paths.logs, "daemon.log");
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
+
+/** The most of a workspace's wsctl answer kept. The VM is not trusted, and an honest answer is
+ *  a line of ports and a token; the service there caps a request at 64 KiB too (wsd.ts). */
+const WSCTL_MOST = 64 * 1024;
+
+/** wsctl's answer: the last line of its stdout, as JSON. One that was stopped at WSCTL_MOST
+ *  (shared/run.ts kills the program and says so) is not read at all, though the part kept may
+ *  end in a whole line: the workspace is then one that could not be asked. */
+export const wsctlReply = (result: { stdout: string; stderr: string }): Record<string, unknown> => {
+  if (result.stderr.endsWith(`(more than ${WSCTL_MOST} bytes of output: stopped)`))
+    throw new Error(`the workspace answered more than ${WSCTL_MOST} bytes`);
+  return JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}");
+};
+
+declare namespace wsctlReply {
+  /** an answer is its last line */
+  export type Reads = Expect<
+    Invoke<
+      typeof wsctlReply,
+      [result: { stdout: 'starting\n{"ok":true,"listeners":[3000]}\n'; stderr: "" }]
+    >,
+    "=",
+    { ok: true; listeners: [3000] }
+  >;
+  /** past the bound it is not read, even when what was kept ends in a whole answer */
+  export type Cut = Throws<
+    Invoke<
+      typeof wsctlReply,
+      [
+        result: {
+          stdout: '{"ok":true,"listeners":[3000]}\n';
+          stderr: "\n(more than 65536 bytes of output: stopped)";
+        },
+      ]
+    >,
+    "the workspace answered more than 65536 bytes"
+  >;
+}
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Entry = Registered & {
@@ -1568,8 +1607,10 @@ const serve = async () => {
       const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], {
         input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }),
         timeoutMs: 15_000,
+        // Not RUN_MAX: what the VM says is not trusted, and is held here every few seconds.
+        maxBytes: WSCTL_MOST,
       });
-      const reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}") as {
+      const reply = wsctlReply(result) as {
         ok?: boolean;
         listeners?: number[];
         error?: string;
