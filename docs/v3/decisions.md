@@ -1296,7 +1296,8 @@ Section 4.8's requirements, and how each came out:
   within 300 ms": the daemon keeps a few connections to the service open ahead of need
   (opening one costs an exec into the VM), and an answer is taken as complete at its
   Content-Length (the relay that carries a connection into a VM holds it open until the
-  caller closes, half a second with socat).
+  caller closes, half a second with socat). (Since 2026-11-23 the service is dialed when
+  asked, a dial being 8 ms: "The rationing goes", below.)
 - **It is a page, not an extension.** See `spec-progress.md`.
 - **On the Mac (vz)**, measured on the M1 with five workspaces running: `/state` through the
   forwarder in 1.7 ms (median of 6; one of 92 ms), against the 300 ms budget; a status a
@@ -1671,9 +1672,23 @@ silent sockets. A pusher log line over 1 MiB no longer stops every later push's 
 **Measured** on the M1: one carried connection was a `limactl shell` of its own, 83 MB and
 2 MB for its ssh; so the default is an eighth of the Mac's memory at 85 MiB each (16 to 256),
 and the top is the root's sshd `MaxSessions`, 1000. (Since 2026-11-23 a connection is a plain
-ssh session, 1.5 MB: "The forwarder's way into a VM", above. The setting and its default are
-unchanged until the rationing goes.) Left: multiplexing a link into one
+ssh session, 1.5 MB: "The forwarder's way into a VM", above.) Left: multiplexing a link into one
 session, which would remove the setting, needs a demultiplexer beside the root's proxy.
+
+**The rationing goes, and connections in are counted** (#250, step 4). With a connection at
+1.5 MB on the Mac (3.3 MB resident), 8 ms to open, and about 1.2 MB in the root VM with 200
+held at once (3.9 GiB there; measured on the M1, 2026-11-23), nothing is worth waiting for:
+the queue, the memory arithmetic and the dashboard's stock of ready sessions into the root
+(five, kept for three minutes after the dashboard was used, against a dial of tens to
+hundreds of milliseconds) are gone, and the state service is dialed when asked. A
+connection is carried or refused at once. `link.connections` stays, 256 by default, and now
+bounds each workspace twice, apart: its connections out, and its connections in (its dev
+servers, its editor: never counted before), so that a flood one way does not starve the
+other. The Mac carries 1,024 in and out of every workspace together, a fixed bound. Past
+either, a request is answered 503 with `X-Desolate-Reason`, anything else closed, and
+`desolate ports` and the log say so. A connection counts until its client's socket closes,
+which every end of a pipe comes to (`carrying`, `daemon.ts`). The dashboard's own pipes to
+the root's state service are not a workspace's and are not counted.
 
 **The egress proxy** (#182). `net recommend` showed 60 hosts and printed a `net allow` for
 those 60; following it, then `net enforce`, cut off the rest. Every host is now counted, and
