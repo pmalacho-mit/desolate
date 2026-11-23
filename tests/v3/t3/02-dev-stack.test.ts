@@ -19,6 +19,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { vmStatus } from "../../../release/host/vm/lima.ts";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
@@ -208,12 +209,44 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
       );
     });
 
-    it("T3 resize: a stopped workspace's VM gets its new CPUs, memory and disk, and keeps what is on its disk", () => {
+    it("T3 resize: a stopped workspace's VM gets its new CPUs, memory and disk, and keeps what is on its disk", async () => {
       stack.step("resize, in a real VM");
       const running = stack.desolate("resize", "dev/w1", "--cpus", "2");
       assert.notEqual(running.code, 0, "control: refused while it runs");
       assert.match(running.stderr, /a VM's size changes only while it is stopped/);
       assert.equal(stack.quiet("stop", "dev/w1").code, 0);
+      // A VM's status as desolate reads it from Lima's pid files and its host agent's socket
+      // (lima.ts, vmStatus) is what `limactl list` says, for this one, stopped, and the root
+      // VM, running.
+      for (const [name, expected] of [
+        [vm, "stopped"],
+        [`dsl-${stack.instance}-root`, "running"],
+      ] as const) {
+        const listed = spawnSync(
+          process.env.DESOLATE_LIMACTL ?? "limactl",
+          ["--tty=false", "list", "--format", "{{.Status}}", name],
+          { env: stack.env, encoding: "utf8" },
+        );
+        assert.equal(listed.status, 0, listed.stderr);
+        const said = listed.stdout.trim();
+        assert.equal(
+          said === "Running" ? "running" : said === "" ? "missing" : "stopped",
+          expected,
+        );
+        assert.equal(
+          await vmStatus(path.join(stack.home, "lima", name), stack.backend as "qemu" | "vz"),
+          expected,
+          `${name}: limactl list said ${said}`,
+        );
+      }
+      // Sessions are ssh with Lima's ssh.config for the VM (lima.ts, sessionArgs), which sends
+      // a variable of this Mac's only where SendEnv names one: Lima's names none.
+      const config = fs.readFileSync(
+        path.join(stack.home, "lima", `dsl-${stack.instance}-root`, "ssh.config"),
+        "utf8",
+      );
+      assert.match(config, /^\s*Host lima-/m, "control: Lima's ssh.config, read");
+      assert.doesNotMatch(config, /SendEnv|SetEnv/i, config);
       const resized = stack.desolate(
         "resize",
         "dev/w1",

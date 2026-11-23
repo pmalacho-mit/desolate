@@ -1233,7 +1233,7 @@ export const resize = async (target: string | undefined, given: Partial<Size>, o
   }
   const b = backend();
   const status = (await b.info(w.vm)).status;
-  if (status === "running" || status === "suspended")
+  if (status === "running")
     refuse(
       `${name} is ${status}: a VM's size changes only while it is stopped`,
       `desolate stop ${name}`,
@@ -1316,8 +1316,7 @@ export const start = async (target: string | undefined, out: Out) => {
       false,
     );
   }
-  if (info.status === "suspended") await b.resume(w.vm);
-  else if (info.status !== "running") await b.start(w.vm);
+  if (info.status !== "running") await b.start(w.vm);
   const { devcontainer, editorDown, editorStarting } = await startServices(w);
   await rootctl(
     "workspace.state",
@@ -1333,6 +1332,18 @@ export const start = async (target: string | undefined, out: Out) => {
   else if (editorStarting) out(`  editor${STILL_STARTING}`);
 };
 
+/** The look at each checkout (its paths are the script's arguments). The host runs it by
+ *  itself every workspace.lookSeconds, beside whatever a person or an agent is doing in the
+ *  same repository, so it must take no lock there: a plain \`git status\` refreshes the index
+ *  under .git/index.lock, and a \`git checkout\` or \`git commit\` that began in that moment
+ *  failed with "Unable to create .git/index.lock: File exists" (seen on the M1, 2026-11-23:
+ *  a test run's checkout, as its workspace started). */
+export const LOOK_EACH = `for p in "$@"; do
+  s=$(git --no-optional-locks -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
+  [ -z "$s" ] || echo "UNCOMMITTED $p"
+  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
+done`;
+
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
  *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
  *  its branches are written out for the root. What the VM says is its word about itself. */
@@ -1343,11 +1354,7 @@ const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
       "it is not running, so what it holds cannot be looked at (a person removes it: desolate rm)",
     ];
   const script = `${sync ? `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"` : ""}
-for p in "$@"; do
-  s=$(git -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
-  [ -z "$s" ] || echo "UNCOMMITTED $p"
-  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
-done`;
+${LOOK_EACH}`;
   const looked = await b.exec(
     w.vm,
     ["bash", "-c", script, "_", ...w.checkouts.map((c) => c.path)],
@@ -1627,8 +1634,12 @@ export const exec = async (
       `it has: ${w.checkouts.map((c) => c.repo).join(", ")}`,
     );
   const b = backend();
-  // (Not asked first whether the VM runs: that is a round trip on every exec. A stopped VM's
-  // exec fails at once, and is said as such below.)
+  // (Asked first whether the VM runs: on Lima that is a few files and a connect, no process.)
+  if ((await b.info(w.vm)).status !== "running")
+    refuse(
+      `${w.domain}/${w.workspace} is not running`,
+      `desolate start ${w.domain}/${w.workspace}`,
+    );
   // In the project's devcontainer when the workspace has one that is up, else in the VM
   // itself (enter.sh decides, inside the VM); --vm asks for the VM itself.
   const child = b.spawn(w.vm, [
@@ -1651,17 +1662,9 @@ export const exec = async (
     const filter = terminalFilter();
     child.stderr!.on("data", (chunk: Buffer) => process.stderr.write(filter(chunk)));
   } else child.stderr!.pipe(process.stderr);
-  let lima = "";
-  child.stderr!.on("data", (chunk: Buffer) => {
-    if (lima.length < 2000) lima += chunk.toString("utf8");
-  });
   const code = await new Promise<number>((resolve) =>
     child.on("close", (status) => resolve(status ?? 1)),
   );
-  if (code !== 0 && /instance .* is stopped|is not running/i.test(lima))
-    process.stderr.write(
-      `desolate: ${w.domain}/${w.workspace} is not running\n  fix: desolate start ${w.domain}/${w.workspace}\n`,
-    );
   // A full-screen program's modes, off again: the terminal is your shell's.
   if (process.stdout.isTTY) process.stdout.write(shown.reset());
   process.stdin.unpipe();
