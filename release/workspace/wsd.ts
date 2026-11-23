@@ -19,7 +19,7 @@ import { createServer } from "node:net";
 import type { Server, Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { PORTS } from "../shared/limits.ts";
-import { run, sleep } from "../shared/run.ts";
+import { sleep } from "../shared/run.ts";
 import { MIRRORS, tick as bridgeTick, unmirrored } from "./bridge.ts";
 import { branches, domainRepos, importDeliveries, syncRepo } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -73,44 +73,48 @@ const reserve = (wanted: number[]) => {
   }
 };
 
-/** Each listener in `ss -H -ltn` output that a dev server could be: on loopback or every
- *  address (not the docker bridge's, not a network interface's). */
-const heardIn = (ss: string): number[] => {
+/** What a dev server binds, as the kernel writes a local address in /proc/net/tcp and tcp6
+ *  (each 32-bit word in the machine's order, which is little-endian on every VM desolate
+ *  makes): every address, IPv4 and IPv6, and loopback, IPv4 and IPv6. Not the docker
+ *  bridge's, not a network interface's. */
+const DEV_BINDS = new Set([
+  "00000000",
+  "0100007F",
+  "00000000000000000000000000000000",
+  "00000000000000000000000001000000",
+]);
+
+/** Each port in /proc/net/tcp and tcp6 text listening (state 0A) on an address a dev server
+ *  binds. A line that is not such an entry, whole, is passed over. */
+const heardIn = (proc: string): number[] => {
   const ports = new Set<number>();
-  for (const line of ss.split("\n")) {
-    const local = line.trim().split(/\s+/)[3];
-    if (!local) continue;
-    const at = local.lastIndexOf(":");
-    const port = Number(local.slice(at + 1));
-    const address = local
-      .slice(0, at)
-      .replace(/^\[|\]$/g, "")
-      .replace(/%.*$/, "");
-    if (!Number.isInteger(port) || port < 1 || port > PORTS.max) continue;
-    // Loopback and wildcard listeners: what a dev server binds. Not the docker bridge's.
-    if (!["0.0.0.0", "127.0.0.1", "*", "::", "::1"].includes(address)) continue;
-    ports.add(port);
+  for (const line of proc.split("\n")) {
+    const [, local, , state] = line.trim().split(/\s+/);
+    const at = /^([0-9A-F]{8}|[0-9A-F]{32}):([0-9A-F]{4})$/.exec(local ?? "");
+    const port = at ? parseInt(at[2]!, 16) : 0;
+    if (state === "0A" && at && DEV_BINDS.has(at[1]!) && port > 0) ports.add(port);
   }
   return [...ports].sort((a, b) => a - b);
 };
 
-/** The ports in `ss -H -ltn` output a dev server holds: on loopback or every address, from
+/** The ports in /proc/net/tcp and tcp6 a dev server holds: on loopback or every address, from
  *  PORTS.min up, not desolate's own and not one this VM holds for the host. */
-export const listenersOf = (ss: string, held: readonly number[]): number[] =>
-  heardIn(ss).filter((port) => port >= PORTS.min && !INTERNAL.has(port) && !held.includes(port));
+export const listenersOf = (proc: string, held: readonly number[]): number[] =>
+  heardIn(proc).filter((port) => port >= PORTS.min && !INTERNAL.has(port) && !held.includes(port));
 
 /** The listeners there that are below PORTS.min, which the host never forwards (a port
  *  below 1024 on the Mac is the system's): named, so that it can be said. Not the VM's own. */
-export const lowOf = (ss: string): number[] =>
-  heardIn(ss).filter((port) => port < PORTS.min && !OWN_LOW.has(port));
+export const lowOf = (proc: string): number[] =>
+  heardIn(proc).filter((port) => port < PORTS.min && !OWN_LOW.has(port));
 
 declare namespace listenersOf {
-  /** what a dev server binds, in each spelling ss gives; each port once, in order */
+  /** what a dev server binds, on each address it may (127.0.0.1, 0.0.0.0, [::], [::1]); each
+   *  port once, in order; not one on another address (fe80::1, the last line) */
   export type DevServers = Expect<
     Invoke<
       typeof listenersOf,
       [
-        ss: "LISTEN 0 511 127.0.0.1:5173 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:3000 0.0.0.0:*\nLISTEN 0 511 [::]:3000 [::]:*\nLISTEN 0 511 *:8080 *:*\nLISTEN 0 511 [::1]:9229 [::]:*\nLISTEN 0 4096 [fe80::1%eth0]:7000 [::]:*\n",
+        proc: "  sl  local_address rem_address   st tx_queue\n0: 0100007F:1435 00000000:0000 0A 00000000:00000000\n0: 00000000:0BB8 00000000:0000 0A 00000000:00000000\n0: 00000000000000000000000000000000:0BB8 00000000:0000 0A 00000000:00000000\n0: 00000000000000000000000000000000:1F90 00000000:0000 0A 00000000:00000000\n0: 00000000000000000000000001000000:240D 00000000:0000 0A 00000000:00000000\n0: 000080FE000000000000000001000000:1B58 00000000:0000 0A 00000000:00000000\n",
         held: [],
       ]
     >,
@@ -123,24 +127,38 @@ declare namespace listenersOf {
     Invoke<
       typeof listenersOf,
       [
-        ss: "LISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:15080 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:15443 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:5174 0.0.0.0:*\nLISTEN 0 511 172.17.0.1:4000 0.0.0.0:*\nLISTEN 0 511 192.168.5.15:4001 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:5173 0.0.0.0:*\n\n",
+        proc: "0: 3500007F:0035 00000000:0000 0A 00000000:00000000\n0: 00000000:3AE8 00000000:0000 0A 00000000:00000000\n0: 00000000:3C53 00000000:0000 0A 00000000:00000000\n0: 00000000:1436 00000000:0000 0A 00000000:00000000\n0: 010011AC:0FA0 00000000:0000 0A 00000000:00000000\n0: 0F05A8C0:0FA1 00000000:0000 0A 00000000:00000000\n0: 00000000:1435 00000000:0000 0A 00000000:00000000\n\n",
         held: [5174],
       ]
     >,
     "=",
     [5173]
   >;
+  /** what is not a listening entry, whole, is passed over: the header, a connection (state
+   *  01), an address or port that is not hex of its length, a line cut short, port 0; the
+   *  last line is the control */
+  export type Malformed = Expect<
+    Invoke<
+      typeof listenersOf,
+      [
+        proc: "  sl  local_address rem_address   st tx_queue\n0: 0100007F:0FA0 00000000:0000 01 00000000:00000000\n0: zz00007F:0FA2 00000000:0000 0A\n0: 0100007F:FA3 00000000:0000 0A\n0: 0100007F 0A\ngarbage\n0: 0100007F:0000 00000000:0000 0A 00000000:00000000\n0: 0100007F:0BB8 00000000:0000 0A 00000000:00000000\n",
+        held: [],
+      ]
+    >,
+    "=",
+    [3000]
+  >;
 }
 
 declare namespace lowOf {
-  /** a server on a privileged port, in each spelling: named, once, in order; the VM's ssh
+  /** a server on a privileged port, on each address: named, once, in order; the VM's ssh
    *  and its resolver (on every address, and on systemd's own) and everything from 1024 up
    *  are not */
   export type Low = Expect<
     Invoke<
       typeof lowOf,
       [
-        ss: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 [::]:80 [::]:*\nLISTEN 0 511 127.0.0.1:443 0.0.0.0:*\nLISTEN 0 128 0.0.0.0:22 0.0.0.0:*\nLISTEN 0 4096 127.0.0.53%lo:53 0.0.0.0:*\nLISTEN 0 32 0.0.0.0:53 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:3000 0.0.0.0:*\n",
+        proc: "0: 00000000:0050 00000000:0000 0A 00000000:00000000\n0: 00000000000000000000000000000000:0050 00000000:0000 0A 00000000:00000000\n0: 0100007F:01BB 00000000:0000 0A 00000000:00000000\n0: 00000000:0016 00000000:0000 0A 00000000:00000000\n0: 3500007F:0035 00000000:0000 0A 00000000:00000000\n0: 00000000:0035 00000000:0000 0A 00000000:00000000\n0: 00000000:0BB8 00000000:0000 0A 00000000:00000000\n",
       ]
     >,
     "=",
@@ -148,12 +166,19 @@ declare namespace lowOf {
   >;
 }
 
-/** What is listening here now: what the host may forward, and what it will not. (Five
- *  seconds for `ss`, which reads the kernel's table in milliseconds: past it the answer is
- *  an empty list, and the next one, seconds later, is asked again.) */
-const heard = async () => {
-  const ss = (await run("ss", ["-H", "-ltn"], { timeoutMs: 5000 })).stdout;
-  return { listeners: listenersOf(ss, [...reserved.keys()]), low: lowOf(ss) };
+/** What is listening here now: what the host may forward, and what it will not. Read from
+ *  the kernel's tables, with no program started (`ss` was one a second while watched). */
+const heard = () => {
+  const proc = ["/proc/net/tcp", "/proc/net/tcp6"]
+    .map((file) => {
+      try {
+        return fs.readFileSync(file, "utf8");
+      } catch {
+        return ""; // no IPv6 in this kernel
+      }
+    })
+    .join("\n");
+  return { listeners: listenersOf(proc, [...reserved.keys()]), low: lowOf(proc) };
 };
 
 /** What the host shows about this workspace without asking again: the editor's token (the
@@ -353,7 +378,7 @@ declare namespace devcontainerSummary {
 /** What a watch is answered: what listens here, what is held for the host, what is not
  *  forwarded for a bound's sake, and what the host shows without asking again. */
 const portsReply = async (): Promise<unknown> => {
-  const { listeners, low } = await heard();
+  const { listeners, low } = heard();
   // What is listening and will not be forwarded, for a bound's sake: in this VM, and in a
   // compose devcontainer's service (bridge.ts). In the devcontainer's line, which the host
   // shows already, and by itself (`unforwarded`) for `desolate ports`.
@@ -581,8 +606,8 @@ declare namespace portsService {
   ];
 }
 
-/** How often a watch looks, while there is one: one `ss`, which reads the kernel's table in
- *  milliseconds. Linux says nothing when a socket starts listening (no file to watch, and its
+/** How often a watch looks, while there is one: a read of the kernel's two tables, no program
+ *  started. Linux says nothing when a socket starts listening (no file to watch, and its
  *  netlink events are for sockets that close), so it is looked at. */
 const LOOK_MS = 1000;
 
