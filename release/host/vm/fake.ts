@@ -21,7 +21,7 @@ import { INSTANCE } from "../paths.ts";
 import { runStreamed } from "./stream.ts";
 import { GUEST_USER } from "./types.ts";
 import { socatAddress } from "./types.ts";
-import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
+import type { Backend, Check, ExecOptions, VmInfo, VmSpec, VmStatus } from "./types.ts";
 import type { Expect, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type { endOf, spawnFailed } from "../../.harness/host-vm.ts";
 
@@ -186,11 +186,9 @@ export const fakeBackend = (): Backend => {
   };
 
   const status = async (name: string): Promise<VmStatus> => {
-    const result = await docker(["inspect", "-f", "{{.State.Status}} {{.State.Paused}}", name]);
+    const result = await docker(["inspect", "-f", "{{.State.Status}}", name]);
     if (result.code !== 0) return "missing";
-    const [state, paused] = result.stdout.trim().split(" ");
-    if (paused === "true") return "suspended";
-    return state === "running" ? "running" : "stopped";
+    return result.stdout.trim() === "running" ? "running" : "stopped";
   };
 
   const labelsOf = async (name: string): Promise<Record<string, string>> => {
@@ -289,12 +287,6 @@ export const fakeBackend = (): Backend => {
         name,
       ]);
     },
-    async suspend(name) {
-      await must("docker", ["pause", name]);
-    },
-    async resume(name) {
-      await must("docker", ["unpause", name]);
-    },
     async destroy(name) {
       await docker(["rm", "-f", "-v", name]);
       await docker(["volume", "rm", "-f", `${name}-docker`]);
@@ -369,63 +361,6 @@ export const fakeBackend = (): Backend => {
     link() {
       return { guest: "unix:/desolate/link/proxy.sock" };
     },
-
-    async listeners(name): Promise<Listener[]> {
-      const result = await docker(["exec", "-u", "0:0", name, "ss", "-H", "-ltn"], {
-        timeoutMs: 10_000,
-      });
-      if (result.code !== 0)
-        throw new Error(`cannot list listeners in ${name}: ${result.stderr.trim()}`);
-      return parseSs(result.stdout);
-    },
   };
   return backend;
 };
-
-/** `ss -H -ltn` lines: `LISTEN 0 511 0.0.0.0:5173 0.0.0.0:*`. */
-export const parseSs = (text: string): Listener[] => {
-  const seen = new Map<string, Listener>();
-  for (const line of text.split("\n")) {
-    const local = line.trim().split(/\s+/)[3];
-    if (!local) continue;
-    const at = local.lastIndexOf(":");
-    const port = Number(local.slice(at + 1));
-    if (!Number.isInteger(port) || port < 1) continue;
-    const address = local
-      .slice(0, at)
-      .replace(/^\[|\]$/g, "")
-      .replace(/%.*$/, "");
-    seen.set(`${address}:${port}`, { port, address });
-  }
-  return [...seen.values()].sort((a, b) => a.port - b.port);
-};
-
-declare namespace parseSs {
-  /** each listener once, by port: IPv4, IPv6 in brackets, and a link-local zone dropped */
-  export type Listeners = Expect<
-    Invoke<
-      typeof parseSs,
-      [
-        text: "LISTEN 0 511 0.0.0.0:5173 0.0.0.0:*\nLISTEN 0 4096 [::]:5173 [::]:*\nLISTEN 0 128 127.0.0.1:31580 0.0.0.0:*\nLISTEN 0 128 [fe80::1%eth0]:8080 [::]:*\n",
-      ]
-    >,
-    "=",
-    [
-      { port: 5173; address: "0.0.0.0" },
-      { port: 5173; address: "::" },
-      { port: 8080; address: "fe80::1" },
-      { port: 31580; address: "127.0.0.1" },
-    ]
-  >;
-  /** the same address and port twice is one listener; a line that names no port is none */
-  export type Ignores = Expect<
-    Invoke<
-      typeof parseSs,
-      [
-        text: "LISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:80 0.0.0.0:*\nLISTEN 0 1 *:* *:*\ngarbage\n\n",
-      ]
-    >,
-    "=",
-    [{ port: 80; address: "0.0.0.0" }]
-  >;
-}

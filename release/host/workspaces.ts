@@ -1226,7 +1226,7 @@ export const resize = async (target: string | undefined, given: Partial<Size>, o
   }
   const b = backend();
   const status = (await b.info(w.vm)).status;
-  if (status === "running" || status === "suspended")
+  if (status === "running")
     refuse(
       `${name} is ${status}: a VM's size changes only while it is stopped`,
       `desolate stop ${name}`,
@@ -1309,8 +1309,7 @@ export const start = async (target: string | undefined, out: Out) => {
       false,
     );
   }
-  if (info.status === "suspended") await b.resume(w.vm);
-  else if (info.status !== "running") await b.start(w.vm);
+  if (info.status !== "running") await b.start(w.vm);
   const { devcontainer, editorDown, editorStarting } = await startServices(w);
   await rootctl(
     "workspace.state",

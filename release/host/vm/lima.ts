@@ -32,11 +32,11 @@ import { define, valueOf, whole } from "../../shared/settings.ts";
 import { because } from "../failures.ts";
 import { imageFingerprint } from "../image.ts";
 import { INSTANCE, paths, RELEASE_DIR } from "../paths.ts";
-import { duplexOf, parseSs } from "./fake.ts";
+import { duplexOf } from "./fake.ts";
 import { runStreamed } from "./stream.ts";
 import { socatAddress } from "./types.ts";
 import { shareRefused } from "./shares.ts";
-import type { Backend, Check, ExecOptions, Listener, VmInfo, VmSpec, VmStatus } from "./types.ts";
+import type { Backend, Check, ExecOptions, VmInfo, VmSpec, VmStatus } from "./types.ts";
 import type {
   Call,
   Expect,
@@ -1402,14 +1402,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         },
       });
     },
-    async suspend() {
-      throw new Error(
-        `the ${kind} backend cannot suspend a VM (Lima has no suspend to disk for it); stop it instead`,
-      );
-    },
-    async resume(name) {
-      return backend.start(name);
-    },
     async destroy(name) {
       await lima(["delete", "-f", name], { timeoutMs: 300_000 });
       fs.rmSync(path.join(LIMA_HOME, name), { recursive: true, force: true });
@@ -1550,15 +1542,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         hostPort: m.linkPort,
         token: m.linkToken,
       };
-    },
-
-    async listeners(name): Promise<Listener[]> {
-      const result = await lima(["shell", "--workdir", "/", name, "ss", "-H", "-ltn"], {
-        timeoutMs: 60_000,
-      });
-      if (result.code !== 0)
-        throw new Error(`cannot list listeners in ${name}: ${result.stderr.trim()}`);
-      return parseSs(result.stdout);
     },
 
     hostPorts() {
@@ -2632,10 +2615,5 @@ declare namespace limaBackend {
       Call<Vz, "link", [name: "dsl-main-old"]>,
       "dsl-main-old has no link token: it was made by an older desolate. Remove the workspace and make it again."
     >
-  >;
-  /** there is no suspend: a stop is asked for instead of a pause that is not there */
-  export type NoSuspend = Throws<
-    Call<Vz, "suspend", [name: "dsl-main-0123456789"]>,
-    "the vz backend cannot suspend a VM (Lima has no suspend to disk for it); stop it instead"
   >;
 }
