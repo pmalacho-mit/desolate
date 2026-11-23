@@ -57,10 +57,10 @@ describe("T1 sniff", () => {
     });
   });
 
-  it("HTTP: the first Host header is the one that counts, and the body cannot supply one", () => {
+  it("HTTP: two Host headers name no one, and the body cannot supply one", () => {
     assert.deepEqual(
       sniff(Buffer.from("GET / HTTP/1.1\r\nHost: one.localhost\r\nHost: two.localhost\r\n\r\n")),
-      { kind: "http", name: "one.localhost" },
+      { kind: "http", name: null },
     );
     assert.deepEqual(
       sniff(
