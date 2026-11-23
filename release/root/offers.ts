@@ -14,7 +14,7 @@ import type { Repo } from "../shared/names.ts";
 import { domain as domainOf, domains, workspaces } from "./domains.ts";
 import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
 import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
-import { dropLfs, refusalsOf, takeLfs, UNREAD } from "./outbox.ts";
+import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
 import { lookalike } from "./reviewer-git.ts";
 import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
@@ -248,36 +248,6 @@ export const unpushedOf = async (domain: string, w: WorkspacePlan): Promise<Unpu
   return out;
 };
 
-/** What a workspace is told to do about a bundle the root refused, by the refusal's reason.
- *  A list the root could not open is no verdict on a branch: the share between the two VMs
- *  showed the root something other than the directory the workspace made (T4, 2026-11-23; outbox.ts, openDir). */
-const refusedFix = (why: string) =>
-  why.includes(UNREAD)
-    ? "the share between this workspace's VM and the root's had not yet shown the root what this workspace wrote: offer again (desolate offer)"
-    : "a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new is taken until that branch is deleted here; then offer again";
-
-declare namespace refusedFix {
-  /** an outbox directory the root could not open is offered again; what git refused is
-   *  deleted first (the control: the fix every other refusal had) */
-  export type ByReason = Table<
-    typeof refusedFix,
-    [
-      [
-        args: [
-          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory, at each of 5 looks over a second; lstat saw a directory)",
-        ],
-        expected: "the share between this workspace's VM and the root's had not yet shown the root what this workspace wrote: offer again (desolate offer)",
-      ],
-      [
-        args: [
-          why: "did not import: error: object 0123456789abcdef0123456789abcdef01234567: hasDotgit: contains '.git'",
-        ],
-        expected: "a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new is taken until that branch is deleted here; then offer again",
-      ],
-    ]
-  >;
-}
-
 export const take = async (
   domain: string,
   request: Record<string, unknown>,
@@ -319,7 +289,7 @@ export const take = async (
       return {
         ok: false,
         error: `the root refused this domain's bundle of ${id}: ${refusal.why}`,
-        fix: refusedFix(refusal.why),
+        fix: refusal.fix,
       };
     return {
       ok: false,

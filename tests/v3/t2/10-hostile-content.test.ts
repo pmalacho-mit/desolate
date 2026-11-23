@@ -122,7 +122,7 @@ describe("T2: what a hostile domain sends, the root takes as data", () => {
       assert.ok(!offers().some((o) => o.branch === branch), `${branch}: and no offer`);
       assert.match(
         stack.quiet("offers").stdout,
-        /Refused from dev \(acme\/widgets, .*Delete that branch in the workspace/s,
+        /Refused from dev \(acme\/widgets, .*Nothing new from the domain is taken until that branch is deleted in the workspace/s,
         `${branch}: and the person is told, where they look for offers`,
       );
       if (branch !== cases.at(-1)![0])
@@ -147,7 +147,7 @@ describe("T2: what a hostile domain sends, the root takes as data", () => {
     assert.notEqual(blocked.code, 0, blocked.stdout);
     assert.match(
       blocked.stdout,
-      /the root refused this domain's bundle.*Nothing new is taken until that branch is deleted here/s,
+      /the root refused this domain's bundle.*Nothing new from the domain is taken until that branch is deleted in the workspace/s,
       blocked.stdout,
     );
     inWs(`git checkout -q -f main && git branch -D ${cases.at(-1)![0]} >/dev/null`);

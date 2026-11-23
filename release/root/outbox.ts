@@ -13,7 +13,7 @@ import { printable } from "../shared/text.ts";
 import { copyOut, copyOutSync } from "../shared/copy.ts";
 import { domainPath, ROOT } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aDomain, emptyRoot, pathIn } from "../.harness/root-state.ts";
 
 export const outbox = (domain: string) => path.join(domainPath(domain), "outbox");
@@ -446,10 +446,46 @@ export const takeBundles = (
 // What the root refused from a domain, kept where the person looks (the dashboard, `desolate
 // offers`) and told to the workspace that offered: a refusal nobody hears about is a branch
 // that silently never arrives. Cleared for a repository when a bundle of it is next taken.
-export type Refusal = { domain: string; repo: string; at: string; why: string };
+// Each is read with what to do about it (`fix`), chosen here and only here: the workspace's
+// answer to an offer, `desolate offers` and the dashboard all show this one.
+type Noted = { domain: string; repo: string; at: string; why: string };
+export type Refusal = Noted & { fix: string };
 const refusedFile = (domain: string) => path.join(ROOT.state, "refused", `${domain}.json`);
+const noted = (domain: string): Noted[] => readJson<Noted[]>(refusedFile(domain), []);
 export const refusalsOf = (domain: string): Refusal[] =>
-  readJson<Refusal[]>(refusedFile(domain), []);
+  noted(domain).map((r) => ({ ...r, fix: refusalFix(r.why) }));
+
+/** What to do about a refusal, by its reason. A list the root could not open is no verdict on
+ *  a branch: the share between the two VMs showed the root something other than the
+ *  directory the workspace made (T4, 2026-11-23; openDir, above). Anything else is what git
+ *  refused in a bundle. */
+export const refusalFix = (why: string) =>
+  why.includes(UNREAD)
+    ? "the share between the workspace's VM and the root's had not yet shown the root what the workspace wrote: offer again from the workspace (desolate offer)"
+    : "a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new from the domain is taken until that branch is deleted in the workspace; then offer again from it (desolate offer)";
+
+declare namespace refusalFix {
+  /** an outbox directory the root could not open is offered again; a branch git refused is
+   *  deleted first: each the other's control */
+  export type ByReason = Table<
+    typeof refusalFix,
+    [
+      [
+        args: [
+          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory, at each of 5 looks over a second; lstat saw a directory)",
+        ],
+        expected: "the share between the workspace's VM and the root's had not yet shown the root what the workspace wrote: offer again from the workspace (desolate offer)",
+      ],
+      [
+        args: [
+          why: "did not import: error: object 0123456789abcdef0123456789abcdef01234567: hasDotgit: contains '.git'",
+        ],
+        expected: "a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new from the domain is taken until that branch is deleted in the workspace; then offer again from it (desolate offer)",
+      ],
+    ]
+  >;
+}
+
 export const noteRefusal = (domain: string, repo: string, why: string) => {
   fs.mkdirSync(path.dirname(refusedFile(domain)), { recursive: true, mode: 0o700 });
   // The reason is in part the bundle's author's text: printable ASCII only, and short.
@@ -461,12 +497,12 @@ export const noteRefusal = (domain: string, repo: string, why: string) => {
   };
   writeJson(
     refusedFile(domain),
-    [...refusalsOf(domain).filter((r) => r.repo !== repo), entry].slice(-20),
+    [...noted(domain).filter((r) => r.repo !== repo), entry].slice(-20),
   );
 };
 export const clearRefusal = (domain: string, repo: string) => {
-  const kept = refusalsOf(domain).filter((r) => r.repo !== repo);
-  if (kept.length !== refusalsOf(domain).length) writeJson(refusedFile(domain), kept);
+  const kept = noted(domain).filter((r) => r.repo !== repo);
+  if (kept.length !== noted(domain).length) writeJson(refusedFile(domain), kept);
 };
 
 declare namespace noteRefusal {
@@ -489,6 +525,30 @@ declare namespace noteRefusal {
       [
         { domain: "acme"; repo: "acme/web"; why: "hasDotgit: contains '.git'" },
         { domain: "acme"; repo: "acme/app"; why: "badTree?[2J?" },
+      ]
+    >
+  >;
+  /** each is read with what to do about it, as everyone who shows it shows it (refusalFix) */
+  export type WithItsFix = Given<
+    [
+      Fresh,
+      Invoke<
+        typeof noteRefusal,
+        [
+          domain: "acme",
+          repo: "acme/app",
+          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory)",
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<typeof refusalsOf, [domain: "acme"]>,
+      "matches",
+      [
+        {
+          repo: "acme/app";
+          fix: "the share between the workspace's VM and the root's had not yet shown the root what the workspace wrote: offer again from the workspace (desolate offer)";
+        },
       ]
     >
   >;

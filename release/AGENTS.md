@@ -32,11 +32,14 @@ reach is unreachable on purpose, and is not a bug in the project.
   not pushing, and nothing you do here pushes.** Do not look for a token, install `gh`, or
   add a remote: there is nothing to find. If the pull request should go into a branch other
   than the default one, say which: `desolate offer --base <branch>`.
-- **If an offer is refused** with "the root refused this domain's bundle", some branch in
-  this clone (not necessarily yours) holds an object git considers dangerous: a `.git`
-  directory inside a tree, a `.gitmodules` that is a link or names a command, a malformed
-  object. Nothing new from this domain is taken until that branch is deleted. If you did
-  not make it, set `orange` and say which branch; do not try other ways to send it.
+- **If an offer is refused** with "the root refused this domain's bundle" and a reason that
+  says its directory in the outbox "is not a plain one", the share between this VM and the
+  root's lagged behind what you wrote: offer again (`desolate offer`). With any other reason,
+  some branch in this clone (not necessarily yours) holds an object git considers dangerous
+  (a `.git` directory inside a tree, a `.gitmodules` that is a link or names a command, a
+  malformed object), and nothing new from this domain is taken until that branch is
+  deleted: if you did not make it, set `orange` and say which branch, and do not try other
+  ways to send it.
 - Do not add or remove worktrees of your own in a loop: other workspaces share this `.git`.
 - LFS works: files check out from the mirror, and new large files travel with your offer.
   In a devcontainer, `git lfs` is there only if the project adds it (the devcontainer
