@@ -25,7 +25,8 @@ release/recipes/claude.sh you--app "Greet the user by name, with a test"
 first run): copy the file, change those, and keep the rest. Its credential goes in the same
 way, as a domain secret whose name the workspace holds and whose value the proxy puts in on
 the way to the agent's API (`desolate domain <d> secret set NAME --hosts <api host>
---headers <header>`). Nothing in desolate is specific to any agent; the recipes are where
+--headers <header>`). That gives every workspace of the domain the use of the credential at
+that API, as you, though never its value. Nothing in desolate is specific to any agent; the recipes are where
 the specifics live.
 
 What every recipe is built from:

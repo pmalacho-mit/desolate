@@ -111,11 +111,16 @@ describe("T2 phase 4: a domain's secrets", () => {
     assert.equal(last().authorization, "Bearer MYAPP-API-KEY");
     // Refusals: a name that could be matched by accident, no allowlist, an allowlist that pins nothing.
     for (const [args, why] of [
-      [["KEY", "--hosts", "api.example.test"], /is not a placeholder name/],
-      [["MYAPP-API-KEY"], /names the hosts it may be sent to/],
-      [["MYAPP-API-KEY", "--hosts", "*"], /does not pin a destination/],
-      [["MYAPP-API-KEY", "--hosts", "*.test"], /does not pin a destination/],
-      [["MYAPP-API-KEY", "--hosts", "*example.test"], /does not pin a destination/],
+      [
+        ["KEY", "--hosts", "api.example.test", "--headers", "authorization"],
+        /is not a placeholder name/,
+      ],
+      [["MYAPP-API-KEY", "--headers", "authorization"], /names the hosts it may be sent to/],
+      [["MYAPP-API-KEY", "--hosts", "*", "--anywhere"], /does not pin a destination/],
+      [["MYAPP-API-KEY", "--hosts", "*.test", "--anywhere"], /does not pin a destination/],
+      [["MYAPP-API-KEY", "--hosts", "*example.test", "--anywhere"], /does not pin a destination/],
+      // Where in a request it goes is said: neither --headers nor --anywhere is refused.
+      [["MYAPP-API-KEY", "--hosts", "api.example.test"], /Name its headers, or say --anywhere/],
       [
         ["MYAPP-API-KEY", "--hosts", "api.example.test", "--headers", "not a header"],
         /is not a header name/,
@@ -135,6 +140,8 @@ describe("T2 phase 4: a domain's secrets", () => {
         "MYAPP-API-KEY",
         "--hosts",
         "api.example.test",
+        "--headers",
+        "authorization",
       ).stderr,
       /a secret's value is one line, and not empty/,
     );
@@ -173,6 +180,8 @@ describe("T2 phase 4: a domain's secrets", () => {
         "MYAPP-API-KEY-2",
         "--hosts",
         "api.example.test",
+        "--headers",
+        "authorization",
       ).stderr,
       /MYAPP-API-KEY-2 and MYAPP-API-KEY overlap/,
     );
@@ -187,6 +196,8 @@ describe("T2 phase 4: a domain's secrets", () => {
         "MYAPP-TOKEN-TWO",
         "--hosts",
         "*.example.test",
+        // In the path and the body too: what the tests below of where it is put need.
+        "--anywhere",
       ).code,
       0,
     );
@@ -354,6 +365,8 @@ describe("T2 phase 4: a domain's secrets", () => {
         "MYAPP-WRONG-HOST",
         "--hosts",
         "wrong.other.test",
+        "--headers",
+        "x-api-key",
       ).code,
       0,
     );
@@ -400,7 +413,7 @@ describe("T2 phase 4: a domain's secrets", () => {
     );
     assert.equal(
       stack.desolate("domain", "two", "secret", "list").stdout.trim().split("\n")[0],
-      "the domain two has no secrets. To add one: set <NAME> --hosts <host>[,...] [--headers <header>[,...]]",
+      "the domain two has no secrets. To add one: set <NAME> --hosts <host>[,...] --headers <header>[,...] (or --anywhere)",
     );
   });
 

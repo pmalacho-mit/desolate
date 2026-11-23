@@ -43,7 +43,7 @@ const show = (secrets) => {
     toggle.onclick = () => act(() => post("/secrets/switch", { name: s.name, on: !s.on }), `${s.name} is ${s.on ? "off" : "on"}.`);
     const replace = el("button", "Replace value");
     replace.title = "fill the form with its name, hosts and headers; type the new value";
-    replace.onclick = () => { form.elements.name.value = s.name; form.elements.hosts.value = s.hosts.join(", "); form.elements.headers.value = (s.headers || []).join(", "); $("form-title").textContent = `Replace ${s.name}`; form.elements.value.value = ""; form.elements.value.focus(); };
+    replace.onclick = () => { form.elements.name.value = s.name; form.elements.hosts.value = s.hosts.join(", "); form.elements.headers.value = (s.headers || []).join(", "); form.elements.anywhere.checked = !s.headers; $("form-title").textContent = `Replace ${s.name}`; form.elements.value.value = ""; form.elements.value.focus(); };
     const remove = el("button", "Remove", "danger");
     remove.onclick = () => { if (confirm(`Remove ${s.name} from ${domain}? Its value is deleted in the root; a workspace that sends its name toward ${s.hosts.join(", ")} is refused.`)) act(() => post("/secrets/remove", { name: s.name }), `${s.name} is removed.`); };
     buttons.append(state, toggle, replace, remove);
@@ -82,7 +82,11 @@ select.addEventListener("change", () => {
 form.addEventListener("submit", (event) => {
   event.preventDefault();
   const name = form.elements.name.value.trim();
-  act(() => post("/secrets/set", { name, value: form.elements.value.value, hosts: csv(form.elements.hosts.value), headers: csv(form.elements.headers.value) }), `${name} is held in the root for ${domain}. In a workspace: export SOME_API_KEY=${name} (the name is not a secret).`)
+  // Where in a request it goes is said: no headers only with the box ticked (the Mac checks it too).
+  const headers = csv(form.elements.headers.value);
+  const anywhere = form.elements.anywhere.checked;
+  if (!headers.length && !anywhere) return say("Not saved: name the headers it goes in (usually authorization), or tick \"anywhere in the request\".");
+  act(() => post("/secrets/set", { name, value: form.elements.value.value, hosts: csv(form.elements.hosts.value), headers, anywhere }), `${name} is held in the root for ${domain}. In a workspace: export SOME_API_KEY=${name} (the name is not a secret).`)
     .then(() => { form.elements.value.value = ""; });
 });
 $("clear").addEventListener("click", () => { form.reset(); $("form-title").textContent = "Add a secret"; });

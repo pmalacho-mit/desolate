@@ -446,7 +446,13 @@ way out, only over TLS, only toward the hosts the secret names, only in the head
 Connections to those hosts are the only ones whose TLS the root terminates (the workspace
 trusts its domain's CA for that); everything else stays end to end.
 
-Set one with `desolate domain <d> secret set <NAME> --hosts ...` (the value on stdin), or on
+A secret hands a workspace the use of the credential at its hosts, not its value: a token
+that can write somewhere (a forge, a package registry, a payment account) lets every
+workspace of the domain do that as you, without your approval. It does not belong in a
+domain unless the project needs it.
+
+Set one with `desolate domain <d> secret set <NAME> --hosts <host> --headers authorization`
+(the value on stdin), or on
 the **secrets page**: "Add a secret..." on a domain's card opens it. It is the Mac's own page,
 on the approval page's origin and cookie (open `desolate approve --web --open` once), not the
 dashboard's: the dashboard is served by the root's ordinary user, which never sees a value.
@@ -455,6 +461,13 @@ there once and never to a page again. To see a value, in a terminal on the Mac:
 `desolate domain <d> secret show <NAME>` (only the value goes to stdout). It is read by the
 host's own way into the root VM, as root, as a set is: nothing in a VM, and not the dashboard,
 can ask for it.
+
+A secret for a service that takes its key only in the URL or the body is set with
+`--anywhere` in place of `--headers` ("anywhere in the request" on the page). Its value is
+then put in place of its name anywhere in a request to its hosts, the body included, and a
+response is scrubbed only of the exact value: a service there that sends back what it is
+sent, changed in any way (encoded, spelled out, stored and fetched again), hands the value
+to the workspace.
 
 ![The secrets page: a domain's secrets by name and host, and the form to add one](assets/secrets.png)
 
@@ -475,6 +488,8 @@ entry is judged on the Mac, and no value is printed or sent to a page:
   the workspace, and the plan says so: a dev-only value is the way to keep a real one out.
   And what a browser on your Mac uses (`NEXT_PUBLIC_*`, a publishable key), which never
   passes the proxy.
+- **A token that writes as you** (a GitHub token, an npm token, a Stripe live key) is asked
+  about, never made a secret by the table, and left a value unless you choose it.
 - **What it cannot tell** is asked about on a terminal, or marked on the page, and left a
   value until you name its hosts: `--choose KEY=secret:<host>[,<host>][@<header>]`, or
   `--choose KEY=value`. What you choose is remembered for the domain, on the Mac (keys and

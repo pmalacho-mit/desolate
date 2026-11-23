@@ -11,6 +11,7 @@
 //     (What it shows of a refusal: refusal.ts.)
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Readable } from "node:stream";
 import { Refusal } from "../shared/exit.ts";
 
 const file = (name: string) => path.join(process.env.DESOLATE_HOME!, `nests-${name}.json`);
@@ -87,10 +88,14 @@ export const fakeStack = {
   ROOT_VM: "dsl-main-root",
   config: () => null,
   ensureProxyUser: async () => {},
-  changeSecrets: async () => {
-    throw new Error("no secrets in an in-source test");
-  },
+  // A change to the secrets is asked of the root as `secret.<action>`, with the domain.
+  changeSecrets: (domain: string, action: string, args: Record<string, unknown>) =>
+    rootctl(`secret.${action}`, { domain, ...args }),
 };
+
+/** What stdin gives from now on in this test: `text`, then its end (not a terminal). */
+export const stdinGives = (text: string) =>
+  Object.defineProperty(process, "stdin", { value: Readable.from([text]), configurable: true });
 
 /** What builds a workspace (host/workspaces.ts's specOf and startServices), for a test that
  *  never gets as far as building one. */
@@ -109,4 +114,16 @@ export const said = (): string[] => {
   const all = lines.flatMap((line) => line.split("\n"));
   lines = [];
   return all;
+};
+
+let replies: string[] = [];
+/** What a person answers from now on, one question at a time (`reply` asks). */
+export const repliesAre = (answers: string[]) => {
+  replies = [...answers];
+};
+/** A question put to the person: the next of `repliesAre`'s answers. With none left the test
+ *  fails, rather than asking for ever. */
+export const reply = async (question: string): Promise<string> => {
+  if (!replies.length) throw new Error(`no answer left for: ${question}`);
+  return replies.shift()!;
 };

@@ -52,6 +52,11 @@ describe("T1 tab completion", () => {
     assert.deepEqual(complete("ap"), ["approve"]);
     assert.deepEqual(complete("domain", "dev", ""), ["add", "net", "secret", "show"]);
     assert.deepEqual(complete("domain", "dev", "secret", "o"), ["off", "on"]);
+    assert.deepEqual(complete("domain", "dev", "secret", "set", "DEV-KEY", "--h"), [
+      "--headers",
+      "--hosts",
+    ]);
+    assert.deepEqual(complete("domain", "dev", "secret", "set", "DEV-KEY", "--a"), ["--anywhere"]);
     assert.deepEqual(complete("domain", "dev", "net", "re"), ["recommend"]);
   });
   it("offers the flags and words of net and agent", () => {
