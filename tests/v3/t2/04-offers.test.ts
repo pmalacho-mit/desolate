@@ -1883,43 +1883,51 @@ echo "=====waits"; cat /tmp/waits.lines`,
     }
   });
 
-  it("the approval page is never wider than its window, whatever a push's names: each long text whole, and Approve arms and signs the commit (control: the window's width)", async () => {
+  it("the approval page is never wider than its window, whatever a push's names: each long text whole, and Approve arms and signs the commit (control: a replace of a long branch, on the old stylesheet)", async () => {
     stack.step("the approval page, a push of long names");
     const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
     const origin = new URL(address).origin;
     // A branch as long as a branch may be, and a subject and a file's path of 300 characters
-    // with no space (a path is cut in parts of 255 at most; its slashes are its only breaks).
+    // with no space (a path is cut in parts of 255 at most; its slash is its only break).
+    // Shown on the card as the names, the commit and the file; and, for a replace, in the
+    // prompt to type the branch's name and on the Replace button, where it made the page
+    // 1,988 px wide in a 1,280 px window, Replace out of sight (found 2026-11-23).
     const branch = `web-${"b".repeat(NAMES.branch - 4)}`;
     const subject = "s".repeat(300);
     const file = `${"d".repeat(150)}/${"f".repeat(145)}.txt`;
     assert.equal(file.length, 300);
-    const out = inRootClone(
-      [
-        `git checkout -q --detach ${commit}`,
-        `mkdir -p ${"d".repeat(150)} && echo a line > ${file}`,
-        "git add -A",
-        `git -c user.name=t -c user.email=t@example.invalid commit -qm ${subject}`,
-        "git rev-parse HEAD",
-        "git checkout -q -",
-      ].join(" && "),
-    );
-    assert.equal(out.code, 0, out.stdout + out.stderr);
-    const id = out.stdout.trim().split("\n").pop()!;
-    inRootClone(
-      `setsid nohup git push origin ${id}:refs/heads/${branch} >/tmp/web-long.log 2>&1 </dev/null & sleep 0.2`,
-    );
+    /** A commit on `commit`, of `made` (a shell command), pushed raw to the long branch. */
+    const pushed = (made: string, plus: string) => {
+      const out = inRootClone(
+        [
+          `git checkout -q --detach ${commit}`,
+          made,
+          "git add -A",
+          `git -c user.name=t -c user.email=t@example.invalid commit -qm ${subject}`,
+          "git rev-parse HEAD",
+          "git checkout -q -",
+        ].join(" && "),
+      );
+      assert.equal(out.code, 0, out.stdout + out.stderr);
+      const id = out.stdout.trim().split("\n").pop()!;
+      inRootClone(
+        `setsid nohup git push origin ${plus}${id}:refs/heads/${branch} >/tmp/web-long.log 2>&1 </dev/null & sleep 0.2`,
+      );
+      return id;
+    };
     const chrome = findChrome();
     assert.ok(chrome, "this check needs Chrome or Chromium");
     const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
     const card = "document.querySelector('.card.asked')";
-    // How far the page scrolls sideways, Approve's and Refuse's right edges past the window's,
-    // and each long text as the card shows it.
+    // How far the page scrolls sideways, which of the card's buttons end past the window's
+    // right edge, and each long text as the card shows it.
     const measure = `(() => {
       const page = document.documentElement, c = ${card};
       return { sideways: page.scrollWidth - page.clientWidth,
         outside: [...c.querySelectorAll("button.approve, button.refuse")].filter((b) => b.getBoundingClientRect().right > page.clientWidth + 1).map((b) => b.textContent),
         branch: c.querySelector(".branch").textContent, commit: c.querySelector("li.commit").textContent,
-        files: [...c.querySelectorAll("li.file code")].map((e) => e.textContent), hint: c.querySelector(".hint").textContent };
+        files: [...c.querySelectorAll("li.file code")].map((e) => e.textContent), typed: c.querySelector(".branch-name").textContent,
+        approve: c.querySelector("button.approve").textContent };
     })()`;
     type Measured = {
       sideways: number;
@@ -1927,49 +1935,74 @@ echo "=====waits"; cat /tmp/waits.lines`,
       branch: string;
       commit: string;
       files: string[];
-      hint: string;
+      typed: string;
+      approve: string;
     };
     try {
       const page = await browser.tab(address);
-      await page.goto("about:blank");
-      await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=${branch}&commit=${id}`);
-      await page.until(
-        `${card} && ${card}.querySelector('button.approve') && !${card}.innerText.includes('working out')`,
-        "the card of the long branch, its account shown",
-        120_000,
-      );
-      const shown = await page.evaluate<Measured>(measure);
-      assert.ok(shown.sideways <= 1, `the page scrolls sideways by ${shown.sideways} px`);
-      assert.deepEqual(shown.outside, [], "past the window's right edge");
-      assert.equal(shown.branch, branch);
-      assert.equal(shown.commit, `${id.slice(0, 12)} ${subject}  by t`);
-      assert.ok(shown.files.includes(file), JSON.stringify(shown.files));
-      // Approve arms under the pointer and signs exactly this commit, unsquashed; the card then
-      // says, with the branch's name, that the remote has it, and is still no wider.
-      await page.evaluate(
-        "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') window.posted.push(JSON.parse(o.body)); return f(u, o); }; Element.prototype.scrollIntoView = function () {}",
-      );
-      await sleep(1500);
-      await page.click(".card.asked button.approve", "Approve push");
-      await sleep(500);
-      await page.click(".card.asked button.approve", "Approve push");
-      await page.until(
-        `${card}.querySelector('.hint').textContent.startsWith(${JSON.stringify(`pushed: the remote's ${branch} has it`)})`,
-        "what the pusher said",
-        60_000,
-      );
-      const posted = await page.evaluate<{ commit: string; squash: boolean }[]>("window.posted");
+      /** The push's card, its account shown, measured. */
+      const opened = async (id: string, approve: string) => {
+        await page.goto("about:blank");
+        await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=${branch}&commit=${id}`);
+        await page.until(
+          `${card} && ${card}.querySelector('button.approve').textContent === ${JSON.stringify(approve)} && !${card}.innerText.includes('working out')`,
+          "the card of the long branch, its account shown",
+          120_000,
+        );
+        const seen = await page.evaluate<Measured>(measure);
+        assert.ok(
+          seen.sideways <= 1,
+          `${approve}: the page scrolls sideways by ${seen.sideways} px`,
+        );
+        assert.deepEqual(seen.outside, [], `${approve}: past the window's right edge`);
+        assert.equal(seen.branch, branch);
+        assert.equal(seen.commit, `${id.slice(0, 12)} ${subject}  by t`);
+        return seen;
+      };
+      /** Approve (or Replace) armed under the pointer, clicked: what the page signed, and what
+       *  the remote then has. */
+      const approved = async (id: string, label: string) => {
+        await page.evaluate(
+          "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') window.posted.push(JSON.parse(o.body)); return f(u, o); }; Element.prototype.scrollIntoView = function () {}",
+        );
+        await sleep(1500);
+        await page.click(".card.asked button.approve", label);
+        await sleep(500);
+        await page.click(".card.asked button.approve", label);
+        await page.until(
+          `${card}.querySelector('.hint').textContent.startsWith(${JSON.stringify(`pushed: the remote's ${branch} has it`)})`,
+          "what the pusher said",
+          60_000,
+        );
+        assert.equal(forgeRefs("acme/widgets")[branch], id);
+        return page.evaluate<{ commit: string; squash: boolean; replace: boolean }[]>(
+          "window.posted",
+        );
+      };
+      // A new branch: its names, its commit and its file, each whole.
+      const first = pushed(`mkdir -p ${"d".repeat(150)} && echo a line > ${file}`, "");
+      const seen = await opened(first, "Approve push");
+      assert.ok(seen.files.includes(file), JSON.stringify(seen.files));
       assert.deepEqual(
-        posted.map((p) => [p.commit, p.squash]),
-        [[id, false]],
+        (await approved(first, "Approve push")).map((p) => [p.commit, p.squash, p.replace]),
+        [[first, false, false]],
       );
-      assert.equal(forgeRefs("acme/widgets")[branch], id);
-      const said = await page.evaluate<Measured>(measure);
-      assert.ok(said.sideways <= 1, `said: the page scrolls sideways by ${said.sideways} px`);
-      assert.deepEqual(said.outside, [], "said: past the window's right edge");
+      // A replace of it: the prompt and the button name the branch, whole, and the page is
+      // still its window's width (the control: on the old stylesheet, it was not).
+      const second = pushed("echo another > other.txt", "+");
+      const replace = `Replace ${branch}`;
+      const asked = await opened(second, replace);
+      assert.equal(asked.typed, branch);
+      assert.equal(asked.approve, replace);
       // A picture of it, for a person to look at, beside the suite's own files.
       await page.shot(
         path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), "approve-long-names.png"),
+      );
+      await page.click(".card.asked .replace-name");
+      await page.type(branch);
+      assert.deepEqual(
+        (await approved(second, "Replace")).map((p) => [p.commit, p.squash, p.replace]),
+        [[second, false, true]],
       );
     } finally {
       await browser.close();
