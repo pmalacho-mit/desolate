@@ -30,3 +30,12 @@ export const readState = (name: string): string | null => {
 
 /** What is in state/, sorted. */
 export const stateFiles = (): string[] => fs.readdirSync(path.join(home(), "state")).sort();
+
+/** A file anywhere under the home (not only state/), as something before the test left it. */
+export const writeInHome = (name: string, text: string) => {
+  fs.mkdirSync(path.dirname(path.join(home(), name)), { recursive: true });
+  fs.writeFileSync(path.join(home(), name), text);
+};
+
+/** Whether something is at that path under the home. */
+export const homeHas = (name: string): boolean => fs.existsSync(path.join(home(), name));

@@ -41,10 +41,20 @@ import type {
   Expect,
   Given,
   Invoke,
+  Mock,
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { setEnv } from "../.harness/env.ts";
+import type { emptyHome, homeHas, writeInHome } from "../.harness/home.ts";
+import type {
+  collect,
+  fakeStack,
+  rootAnswers,
+  rootAsked,
+  said,
+  vmAnswers,
+} from "../.harness/host-stack.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
@@ -1441,15 +1451,28 @@ export const remove = async (
   options: { ifClean?: boolean; ifPushed?: boolean } = {},
 ) => {
   if (target && !target.includes("/")) {
+    if (!isSlug(target))
+      refuse(
+        `'${target}' is not a domain name`,
+        "a domain name is a slug: lowercase letters, digits and single dashes, at most 40",
+        EXIT.usage,
+      );
     const result = await rootctl<{ domain: string; kept: string }>(
       "domain.remove",
       { slug: target },
       { quiet: true },
     );
+    // The root's ordinary user answers this, so what the Mac deletes is named by the person's
+    // checked name, and only once the root says it removed exactly that domain.
+    if (result?.domain !== target)
+      refuse(
+        `the root answered about another domain than ${target}, so nothing was removed on this Mac`,
+        "desolate doctor",
+      );
     // Its template is its own and goes with it.
-    await (await import("./templates.ts")).removeAll(result.domain);
-    fs.rmSync(paths.domain(result.domain), { recursive: true, force: true });
-    return out(`removed the domain ${result.domain}; ${result.kept}.`);
+    await (await import("./templates.ts")).removeAll(target);
+    fs.rmSync(paths.domain(target), { recursive: true, force: true });
+    return out(`removed the domain ${target}; ${result.kept}.`);
   }
   const w = await find(target);
   // --if-clean (a workspace closing one it started, or the dashboard's Delete): only if
@@ -1493,6 +1516,81 @@ export const remove = async (
     `removed ${w.domain}/${w.workspace}. Its branches and worktrees stay in the domain's clones.`,
   );
 };
+
+declare namespace remove {
+  type Answer = { "domain.remove": { domain: "acme"; kept: "its clones are kept" } };
+  /** the domain asked about, removed on the Mac once the root says it removed that one */
+  export type Domain = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof writeInHome, [name: "domains/acme/settings.json", text: "{}"]>,
+      Invoke<typeof rootAnswers, [answers: Answer]>,
+      Invoke<typeof vmAnswers, [answers: { list: [] }]>,
+      Invoke<typeof remove, [target: "acme", out: typeof collect]>,
+    ],
+    [
+      Expect<Invoke<typeof said>, "=", ["removed the domain acme; its clones are kept."]>,
+      Expect<Invoke<typeof homeHas, [name: "domains/acme"]>, "=", false>,
+    ]
+  >;
+  /** an answer that names another place (the home itself) or another domain removes nothing
+   *  on the Mac; the domain's own folder stays too */
+  export type AnswerNamesElsewhere = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof writeInHome, [name: "sentinel", text: "kept"]>,
+      Invoke<typeof writeInHome, [name: "domains/acme/settings.json", text: "{}"]>,
+      Invoke<typeof writeInHome, [name: "domains/beta/settings.json", text: "{}"]>,
+    ],
+    [
+      Given<
+        [
+          Invoke<typeof rootAnswers, [answers: { "domain.remove": { domain: ".."; kept: "" } }]>,
+          Invoke<typeof vmAnswers, [answers: { list: [] }]>,
+        ],
+        Expect<
+          Invoke<typeof refusalOf, [f: typeof remove, args: ["acme", typeof collect]]>,
+          "=",
+          {
+            message: "the root answered about another domain than acme, so nothing was removed on this Mac";
+            fix: "desolate doctor";
+            code: 1;
+          }
+        >
+      >,
+      Given<
+        [
+          Invoke<typeof rootAnswers, [answers: { "domain.remove": { domain: "beta"; kept: "" } }]>,
+          Invoke<typeof vmAnswers, [answers: { list: [] }]>,
+        ],
+        Expect<
+          Invoke<typeof refusalOf, [f: typeof remove, args: ["acme", typeof collect]]>,
+          "matches",
+          {
+            message: "the root answered about another domain than acme, so nothing was removed on this Mac";
+          }
+        >
+      >,
+      Expect<Invoke<typeof homeHas, [name: "sentinel"]>, "=", true>,
+      Expect<Invoke<typeof homeHas, [name: "domains/acme/settings.json"]>, "=", true>,
+      Expect<Invoke<typeof homeHas, [name: "domains/beta/settings.json"]>, "=", true>,
+    ]
+  >;
+  /** a name that is not a domain's is refused before the root is asked */
+  export type NotADomain = Given<
+    [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: Answer]>],
+    [
+      Expect<
+        Invoke<typeof refusalOf, [f: typeof remove, args: ["..", typeof collect]]>,
+        "matches",
+        { message: "'..' is not a domain name"; code: 64 }
+      >,
+      Expect<Invoke<typeof rootAsked>, "=", []>,
+    ]
+  >;
+}
 
 /** A command, or an agent, in a workspace. stdin, stdout, stderr and the exit code pass
  *  through. */
