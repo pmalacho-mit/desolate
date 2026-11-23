@@ -1,5 +1,4 @@
 // The stack as the host sees it: which backend, the root VM, and the CLI channel to it.
-import { spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -247,13 +246,14 @@ type Stopped = "silent" | "late" | "cancelled" | "flood";
 /** Ends `child` when no whole line has been heard from it for `silenceMs`, when `totalMs` is
  *  over, when `signal` fires (whoever asked went away), or when a line of it grows past what
  *  `run` would keep; and says so to `stopped` at once, so the call ends then, whatever the
- *  ended program leaves behind. (On Lima the program is limactl, which runs ssh: killed
- *  alone, it leaves that ssh holding the pipes, and a call that waited for them to close
- *  would wait for as long as a frozen root does. So the call is settled when it is given up,
- *  its pipes let go, and the program's own children are killed with it. That is all of what
- *  it started on this side: a command in the VM that ssh's shared connection carries may run
- *  on there, as one does whose terminal closed. A process group of its own would also keep
- *  the terminal's Ctrl-C from it.) */
+ *  ended program leaves behind. (The program is ssh on Lima, `docker exec` on the fake: the
+ *  call is settled when it is given up, and its pipes let go, so it never waits for them to
+ *  close, which takes as long as a frozen root does. A command in the VM that ssh's shared
+ *  connection carries may run on there, as one does whose terminal closed. Until 2026-11-23
+ *  the program was limactl, which ran ssh and, killed alone, left that ssh holding the
+ *  pipes, so its children were killed with it; an ssh starts no child that holds them (a
+ *  control master it starts lets go of them, and serves the next session). A process group
+ *  of its own would also keep the terminal's Ctrl-C from it.) */
 const patience = (child: ChildProcess, asked: Asked, stopped: (why: Stopped) => void) => {
   let why: Stopped | null = null;
   const stop = (reason: Stopped) => {
@@ -263,13 +263,10 @@ const patience = (child: ChildProcess, asked: Asked, stopped: (why: Stopped) => 
     end();
     stopped(reason);
   };
-  /** The program and its children killed, and its pipes let go. Only while it has not
-   *  exited: after that its pid may be another process's. */
+  /** The program killed, and its pipes let go. Only while it has not exited: after that
+   *  its pid may be another process's. */
   const end = () => {
-    if (child.pid && child.exitCode === null && child.signalCode === null) {
-      spawnSync("pkill", ["-KILL", "-P", String(child.pid)], { stdio: "ignore" });
-      child.kill("SIGKILL");
-    }
+    if (child.pid && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     child.stdin?.destroy();
     child.stdout?.destroy();
     child.stderr?.destroy();

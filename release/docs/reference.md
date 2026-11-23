@@ -573,8 +573,8 @@ host:       the daemon checks the signature against w1's key, its age, that it w
   clicks, starting and stopping workspaces among them). The audit of 2026-11-16 is in
   `docs/v3/decisions.md`.
 - **The command** is an argument list all the way: JSON in the request, an argv element
-  after `--` on the host, passed to `limactl shell` (which quotes each argument for the VM),
-  then to the agent holder in the VM. No shell on the Mac reads it.
+  after `--` on the host, handed to ssh as one line in which each argument is quoted for the
+  VM's shell (`host/vm/lima.ts`), then to the agent holder in the VM. No shell on the Mac reads it.
 - **What the host holds itself:** the limit (`~/.desolate/state/spawn.json`; the root has a
   copy, to answer early and show it), and which workspace started which, as it ran them.
   `close` is run only for a workspace the host recorded as started by the one asking, and

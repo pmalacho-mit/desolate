@@ -42,14 +42,17 @@ import type {
   Expect,
   Given,
   Invoke,
+  SkipIfNotFound,
   Table,
   Throws,
 } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type {
+  alone,
   baseYaml,
   cloneCall,
   confinement,
   madeWithoutLinkToken,
+  sessionOf,
   statusOf,
   stepsSaid,
 } from "../../.harness/host-lima.ts";
@@ -371,12 +374,14 @@ const accepts = (socket: string): Promise<boolean> =>
  *  process is up, not that its ssh answers: `start` waits for that itself. */
 export const vmStatus = async (dir: string, driver: "qemu" | "vz"): Promise<VmStatus> => {
   if (!fs.existsSync(path.join(dir, "lima.yaml"))) return "missing";
-  return pidAlive(path.join(dir, "ha.pid")) &&
-    pidAlive(path.join(dir, `${driver}.pid`)) &&
-    (await accepts(path.join(dir, "ha.sock")))
+  return processesUp(dir, driver) && (await accepts(path.join(dir, "ha.sock")))
     ? "running"
     : "stopped";
 };
+/** `vmStatus`'s first half, for a caller that cannot wait for the socket: the host agent's
+ *  and the driver's pid files both name a live process. */
+const processesUp = (dir: string, driver: "qemu" | "vz") =>
+  pidAlive(path.join(dir, "ha.pid")) && pidAlive(path.join(dir, `${driver}.pid`));
 
 declare namespace vmStatus {
   type Vz = Invoke<typeof limaBackend, [kind: "vz"]>;
@@ -846,12 +851,35 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
 
   /** One argument for a remote shell, quoted so that it stays one argument. */
   const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
+  /** The one line a session hands the shell sshd starts in the VM: in `cwd` (/ unless said),
+   *  with `env` set, `argv` exactly as given (after `sudo`, for root), every word quoted so
+   *  that it arrives as the one word it was, whatever it holds. ssh passes a command as one
+   *  string, where `limactl shell` took words and quoted them itself. */
+  const commandLine = (argv: string[], options: ExecOptions, sudo: boolean, totalMs?: number) => {
+    const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
+    const words = [...(sudo ? ["sudo"] : []), ...bounded(totalMs), "env", ...vars, ...argv];
+    return `cd ${quote(options.cwd ?? "/")} && exec ${words.map(quote).join(" ")}`;
+  };
+  /** A command exec runs with a total (`timeoutMs`, `totalMs` here) is held to it in the VM too: ending the ssh on this
+   *  side leaves the program in the VM running (measured on the M1, 2026-11-23, for ssh and
+   *  `limactl shell` alike, with no terminal), so a call made on a timer into a VM that is
+   *  stuck would pile its programs up there. coreutils' `timeout`, in every VM's image: the
+   *  whole second past the Mac's bound, so the Mac's says why first (and a 124 or 137 of its
+   *  own reaches no caller then, which none reads apart from any other failure); TERM, then
+   *  KILL five seconds on, to the command's process group, which is what it started. As root
+   *  it runs under sudo, so that it may end what it runs. Its command reads stdin as before:
+   *  it is in a group of its own, which matters only to a terminal, and these have none. A
+   *  call with no total (streamed, held, dial's socat, attach) is meant to last as long as it
+   *  is wanted; socat ends when its stdin closes. */
+  const bounded = (totalMs?: number) =>
+    totalMs
+      ? ["timeout", "--signal=TERM", "--kill-after=5", String(Math.ceil(totalMs / 1000) + 1)]
+      : [];
   /** Root in the ROOT VM is reached by ssh as root, with Lima's key for this home (on the
    *  host only), on its own control socket: never through the VM's login user, which runs
    *  everything there that reads a domain's data and has no sudo (root/start.sh). */
-  const rootSshArgs = (name: string, argv: string[], options: ExecOptions) => {
-    const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
-    const command = `cd ${quote(options.cwd ?? "/")} && exec ${["env", ...vars, ...argv].map(quote).join(" ")}`;
+  const rootSshArgs = (name: string, argv: string[], options: ExecOptions, totalMs?: number) => {
+    const command = commandLine(argv, options, false, totalMs);
     return [
       "-F",
       path.join(LIMA_HOME, name, "ssh.config"),
@@ -880,19 +908,16 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const pub = fs.readFileSync(path.join(LIMA_HOME, "_config", "user.pub"), "utf8").trim();
       if (!/^ssh-ed25519 [A-Za-z0-9+/=]+( \S+)?$/.test(pub))
         throw new Error(`${LIMA_HOME}/_config/user.pub is not the ed25519 key Lima makes`);
-      const put = await lima(
-        [
-          "shell",
-          "--workdir",
-          "/",
-          name,
+      const put = await run(
+        "ssh",
+        sessionArgs(name, [
           "sudo",
           "-n",
           "bash",
           "-c",
           "install -d -m 0700 -o root -g root /root/.ssh && cat >/root/.ssh/authorized_keys.new && chmod 0600 /root/.ssh/authorized_keys.new && mv /root/.ssh/authorized_keys.new /root/.ssh/authorized_keys",
-        ],
-        { input: pub + "\n", timeoutMs: 60_000 },
+        ]),
+        { env: env(), input: pub + "\n", timeoutMs: 60_000 },
       );
       const again = put.code === 0 ? await probe() : put;
       if (again.code !== 0)
@@ -911,14 +936,68 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   const isRootVm = (name: string) =>
     name === rootVmName(INSTANCE) || meta(name)?.spec.role === "root";
 
-  const shellArgs = (name: string, argv: string[], options: ExecOptions) => {
-    const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
-    const command = options.root
-      ? ["sudo", "env", ...vars, ...argv]
-      : vars.length > 0
-        ? ["env", ...vars, ...argv]
-        : argv;
-    return ["shell", "--workdir", options.cwd ?? "/", name, ...command];
+  /** A session in a VM as its login user (root by `sudo`, `options.root`): ssh with the
+   *  configuration Lima writes for the VM, on Lima's own control connection (its ssh.config
+   *  names it), where `limactl shell` was a Go program of 87 MB that built the same ssh and
+   *  waited on it (measured on the M1, 2026-11-23, Lima 2.3.0: `limactl shell <vm> true`
+   *  77 ms and 87 MB at its peak; the same command over ssh 8 ms and 1.5 MB).
+   *
+   *  - The command runs in a login shell, `"$SHELL" -l -c`, as limactl ran it: the VMs'
+   *    profiles hold what their commands rely on. The git VM's (git/provision.sh) sets
+   *    GIT_NO_LAZY_FETCH, so that a fetch from a mirror or a root's clone, whose config is
+   *    the root's user's, fetches nothing further; the root's (root/start.sh) gives its login
+   *    user the root's git config. A person's `desolate exec` gets the shell a login gives.
+   *  - `-T`: no terminal, unless `terminal` (a person's, for `attach`). limactl 2.3.0 asked for
+   *    one only when its own stdout was a terminal, which attach never gave it (piped to the
+   *    filter, or not a terminal at all), so a session had none.
+   *  - LogLevel=ERROR, as limactl set it: ssh's own notices are not the command's output.
+   *  - Nothing of this Mac's environment goes: ssh sends a variable only where SendEnv names
+   *    it, which neither this nor Lima's ssh.config does, and with -F no other ssh
+   *    configuration is read.
+   *  - `name` comes checked: exec, spawn, attach and dial ask `named` first, and the rest pass
+   *    names this backend made. */
+  const sessionArgs = (
+    name: string,
+    argv: string[],
+    options: ExecOptions = {},
+    { terminal = false, totalMs }: { terminal?: boolean; totalMs?: number } = {},
+  ): string[] => [
+    "-F",
+    path.join(LIMA_HOME, name, "ssh.config"),
+    "-o",
+    "LogLevel=ERROR",
+    terminal ? "-t" : "-T",
+    `lima-${name}`,
+    "--",
+    `exec "$SHELL" -l -c ${quote(commandLine(argv, options, options.root === true, totalMs))}`,
+  ];
+  /** `name`, if it is one of this stack's VMs' names (`PREFIX`, then a VM's own part, as
+   *  shared/names.ts and templates.ts make them): else a refusal, before it is used. */
+  const named = (name: string) => {
+    if (!new RegExp(`^${PREFIX}[a-z0-9][a-z0-9-]{0,39}$`).test(name))
+      throw new Error(`refused a session in '${printable(name, 80)}': not a VM of this stack`);
+    return name;
+  };
+  /** Why no session can be had in a VM now, or null: it is not running (`up`), or it is and
+   *  Lima's ssh configuration for it is not there. Said as desolate says it, with what to do,
+   *  where limactl said "instance ... is stopped, run `limactl start`" and ssh would say
+   *  only that it could not connect. */
+  const unreachable = (name: string, up: boolean): string | null => {
+    if (!up) {
+      const m = meta(name);
+      const labels = m?.spec.labels ?? {};
+      const fix =
+        m?.spec.role === "workspace" && labels.domain && labels.workspace
+          ? `desolate start ${labels.domain}/${labels.workspace}`
+          : m?.spec.role === "git"
+            ? "desolate git"
+            : "desolate bootstrap";
+      return `${labels.title ?? name} is not running; start it: ${fix}`;
+    }
+    const config = path.join(LIMA_HOME, name, "ssh.config");
+    if (!fs.existsSync(config))
+      return `${name} is running, but Lima's ssh configuration for it (${config}) is not there: desolate doctor`;
+    return null;
   };
 
   /** Whether a VM's Lima configuration refuses every forward NO_FORWARDS refuses. */
@@ -977,7 +1056,8 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     const fsType = kind === "qemu" ? "9p" : "virtiofs";
     let last = { missing: m.spec.shares.map((share) => share.guest), wrong: [] as string[] };
     for (const began = performance.now(); performance.now() - began <= 60_000;) {
-      const mounts = await lima(["shell", "--workdir", "/", name, "cat", "/proc/mounts"], {
+      const mounts = await run("ssh", sessionArgs(name, ["cat", "/proc/mounts"]), {
+        env: env(),
         timeoutMs: 30_000,
       });
       if (mounts.code === 0) {
@@ -1151,20 +1231,11 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         // (provision.sh's `==>` lines), so a wait is a wait on something named, and Ctrl-C
         // stops it: provision.sh is idempotent, and bootstrap runs it again.
         return runStreamed(
-          LIMACTL,
-          [
-            "--tty=false",
-            "shell",
-            "--workdir",
-            "/",
-            BASE,
-            "sudo",
-            "env",
-            "DESOLATE_IMAGE_KIND=vm",
-            `DESOLATE_IMAGE_FINGERPRINT=${fingerprint}`,
-            "bash",
-            "/desolate/release/image/provision.sh",
-          ],
+          "ssh",
+          sessionArgs(BASE, ["bash", "/desolate/release/image/provision.sh"], {
+            root: true,
+            env: { DESOLATE_IMAGE_KIND: "vm", DESOLATE_IMAGE_FINGERPRINT: fingerprint },
+          }),
           { env: env(), lines: (line) => provisionStep(line, log) },
         );
       };
@@ -1369,21 +1440,29 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     async exec(name, argv, options = {}): Promise<RunResult> {
+      const why = unreachable(
+        named(name),
+        (await vmStatus(path.join(LIMA_HOME, name), kind)) === "running",
+      );
+      if (why) return { code: 1, stdout: "", stderr: `${why}\n` };
       const asRoot = options.root === true && isRootVm(name);
       if (asRoot) await ensureRootSsh(name);
-      const [command, args] = asRoot
-        ? ["ssh", rootSshArgs(name, argv, options)]
-        : [LIMACTL, ["--tty=false", ...shellArgs(name, argv, options)]];
-      // A long step a person waits on, or an archive: streamed, and under no timer (stream.ts).
-      if (options.lines || options.stdoutTo || options.stdinFrom)
-        return runStreamed(command, args, {
+      // A long step a person waits on, or an archive: streamed, and under no timer (stream.ts),
+      // here or in the VM.
+      const streamed = Boolean(options.lines || options.stdoutTo || options.stdinFrom);
+      const totalMs = streamed ? undefined : options.timeoutMs;
+      const args = asRoot
+        ? rootSshArgs(name, argv, options, totalMs)
+        : sessionArgs(name, argv, options, { totalMs });
+      if (streamed)
+        return runStreamed("ssh", args, {
           env: env(),
           input: options.input,
           lines: options.lines,
           stdoutTo: options.stdoutTo,
           stdinFrom: options.stdinFrom,
         });
-      return run(command, args, {
+      return run("ssh", args, {
         env: env(),
         input: options.input,
         timeoutMs: options.timeoutMs,
@@ -1395,6 +1474,14 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     spawn(name, argv, options = {}) {
+      // (Asked by the VM's processes alone: a spawn is answered at once, and the socket's
+      // answer is not. A host agent gone while its pid lives on leaves ssh to say so.) Refused,
+      // it is a session that ended saying why: a real one, so it ends as any child does.
+      const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name), kind));
+      if (why)
+        return spawn("sh", ["-c", 'printf "%s\\n" "$1" >&2; exit 1', "sh", why], {
+          stdio: ["pipe", "pipe", "pipe"],
+        });
       // Root in the root VM: ssh as root with this home's key, as exec reaches it, never
       // through the login user. On exec's shared connection: a session held open (a review,
       // as long as a person reads a push) starves nothing there, where sshd allows a thousand
@@ -1406,33 +1493,44 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
           stdio: ["pipe", "pipe", "pipe"],
           env: env(),
         });
-      return spawn(LIMACTL, ["--tty=false", ...shellArgs(name, argv, options)], {
+      return spawn("ssh", sessionArgs(name, argv, options), {
         stdio: ["pipe", "pipe", "pipe"],
         env: env(),
       });
     },
 
-    attach(name, argv, options = {}) {
-      // A terminal for the VM's program when this has one (--tty: its output is piped, to be
-      // filtered, so Lima cannot tell from that), and what it prints filtered (attach.ts).
+    async attach(name, argv, options = {}) {
+      const why = unreachable(
+        named(name),
+        (await vmStatus(path.join(LIMA_HOME, name), kind)) === "running",
+      );
+      if (why) {
+        process.stderr.write(`desolate: ${why}\n`);
+        return 1;
+      }
+      // A terminal for the VM's program when a person is at one, both ways (its prompt, its
+      // line editing, Ctrl-C to the program in the VM); what it prints filtered (attach.ts).
+      const terminal = process.stdin.isTTY === true && process.stdout.isTTY === true;
       return attachFiltered(
-        LIMACTL,
-        [
-          `--tty=${process.stdin.isTTY ? "true" : "false"}`,
-          ...shellArgs(name, argv, { cwd: options.cwd }),
-        ],
+        "ssh",
+        sessionArgs(name, argv, { cwd: options.cwd }, { terminal }),
         env(),
       );
     },
 
     dial(name, target) {
-      // A session, not ssh's stdio forwarding, which Lima's control master refuses (measured).
+      // A session running socat, as the fake backend's `docker exec` does. ssh's own stdio
+      // forwarding (`ssh -W`) through Lima's control connection was refused when first tried
+      // and worked on Lima 2.3.0 in a workspace VM (2026-11-23), but reaches TCP only, and a
+      // target may be a unix socket in the VM (a workspace's proxy). Refused by the VM's
+      // processes alone, as spawn is: a connection is answered at once.
+      const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name), kind));
+      if (why) throw new Error(why);
       return duplexOf(
-        spawn(
-          LIMACTL,
-          ["--tty=false", "shell", "--workdir", "/", name, "socat", "STDIO", socatAddress(target)],
-          { stdio: ["pipe", "pipe", "ignore"], env: env() },
-        ),
+        spawn("ssh", sessionArgs(name, ["socat", "STDIO", socatAddress(target)]), {
+          stdio: ["pipe", "pipe", "ignore"],
+          env: env(),
+        }),
       );
     },
 
@@ -1491,17 +1589,10 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     async refreshSessions(name, force = false) {
       const same = force
         ? { code: 1 }
-        : await lima(
-            [
-              "shell",
-              "--workdir",
-              "/",
-              name,
-              "bash",
-              "-c",
-              'test "$(id -G)" = "$(id -G "$(id -un)")"',
-            ],
-            { timeoutMs: 60_000 },
+        : await run(
+            "ssh",
+            sessionArgs(name, ["bash", "-c", 'test "$(id -G)" = "$(id -G "$(id -un)")"']),
+            { env: env(), timeoutMs: 60_000 },
           );
       if (same.code === 0) return;
       await run(
@@ -1666,6 +1757,868 @@ declare namespace limaBackend {
     "=",
     '(version 1)\n(allow default)\n(deny file-issue-extension)\n(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read-write") (require-any (literal "<home>/domains"))))\n'
   >;
+
+  /** A session into a VM is ssh with Lima's configuration for it and one command line, in
+   *  which every argument is quoted to arrive as the one word it was: \`ssh\` is the harness's
+   *  stand-in, which writes down its arguments and runs the line in this machine's /bin/sh,
+   *  so each row shows both the exact argv and what the line ran (printf prints each word it
+   *  was given, ended by a NUL). Each row would fail if a word were split, joined, expanded
+   *  or run; the first is the control. */
+  export type Sessions = Table<
+    typeof sessionOf,
+    [
+      /** the control: a plain word arrives as it was, and the line ssh is given names no SendEnv or SetEnv: nothing of this Mac's environment goes */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "plain"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''plain'\\'''",
+            ],
+          ];
+          said: ["plain"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a space */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "two words"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''two words'\\'''",
+            ],
+          ];
+          said: ["two words"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a single quote */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "it's"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''it'\\''\\'\\'''\\''s'\\'''",
+            ],
+          ];
+          said: ["it's"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** double quotes */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", 'say "hi"'],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''say \"hi\"'\\'''",
+            ],
+          ];
+          said: ['say "hi"'];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a command substitution */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "$(echo injected)"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''$(echo injected)'\\'''",
+            ],
+          ];
+          said: ["$(echo injected)"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** backticks */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "`echo injected`"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''`echo injected`'\\'''",
+            ],
+          ];
+          said: ["`echo injected`"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a semicolon */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "; echo injected"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''; echo injected'\\'''",
+            ],
+          ];
+          said: ["; echo injected"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** an and */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "&& echo injected"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''&& echo injected'\\'''",
+            ],
+          ];
+          said: ["&& echo injected"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a newline */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "line\necho injected"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''line\necho injected'\\'''",
+            ],
+          ];
+          said: ["line\necho injected"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a tab */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "a\tb"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''a\tb'\\'''",
+            ],
+          ];
+          said: ["a\tb"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a leading dash */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "-n"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''-n'\\'''",
+            ],
+          ];
+          said: ["-n"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** an empty string */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", ""],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\'''\\'''",
+            ],
+          ];
+          said: [""];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a glob */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "*"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''*'\\'''",
+            ],
+          ];
+          said: ["*"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a tilde */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "~"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''~'\\'''",
+            ],
+          ];
+          said: ["~"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a name not in ASCII */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "café-日本"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''café-日本'\\'''",
+            ],
+          ];
+          said: ["café-日本"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** 100 KiB in one argument */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "<100k>"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''<100k>'\\'''",
+            ],
+          ];
+          said: ["<100k>"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** a working directory with a space and a quote: the command runs there */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["pwd"],
+          options: { cwd: "<home>/a b'c" },
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''<home>/a b'\\''\\'\\'''\\''c'\\'' && exec '\\''env'\\'' '\\''pwd'\\'''",
+            ],
+          ];
+          said: ["<home>/a b'c\n"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** an environment value holding = and a quote arrives whole */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printenv", "K"],
+          options: { env: { K: "a=b'c" } },
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''K=a=b'\\''\\'\\'''\\''c'\\'' '\\''printenv'\\'' '\\''K'\\'''",
+            ],
+          ];
+          said: ["a=b'c\n"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** root in a workspace VM: by sudo, the command quoted the same */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "as root"],
+          options: { root: true },
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''sudo'\\'' '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''as root'\\'''",
+            ],
+          ];
+          said: ["as root"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** root in the root VM: ssh as root on its own control socket (rootSshArgs), its key looked at first */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-root",
+          argv: ["printf", "%s\\0", "as root"],
+          options: { root: true },
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-root/ssh.config",
+              "-o",
+              "ControlPath=<home>/lima/dsl-main-root/ssh-root.sock",
+              "-o",
+              "ControlMaster=auto",
+              "-o",
+              "ControlPersist=60",
+              "-l",
+              "root",
+              "lima-dsl-main-root",
+              "--",
+              "cd '/' && exec 'env' 'true'",
+            ],
+            [
+              "-F",
+              "<home>/lima/dsl-main-root/ssh.config",
+              "-o",
+              "ControlPath=<home>/lima/dsl-main-root/ssh-root.sock",
+              "-o",
+              "ControlMaster=auto",
+              "-o",
+              "ControlPersist=60",
+              "-l",
+              "root",
+              "lima-dsl-main-root",
+              "--",
+              "cd '/' && exec 'env' 'printf' '%s\\0' 'as root'",
+            ],
+          ];
+          said: ["as root"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** spawn: the same session, live */
+      [
+        args: [
+          backend: Vz,
+          call: "spawn",
+          name: "dsl-main-w1",
+          argv: ["printf", "%s\\0", "spawned"],
+          options: {},
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''printf'\\'' '\\''%s\\0'\\'' '\\''spawned'\\'''",
+            ],
+          ];
+          said: ["spawned"];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** attach with no person at a terminal: no terminal asked for */
+      [
+        args: [backend: Vz, call: "attach", name: "dsl-main-w1", argv: ["true"], options: {}],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''true'\\'''",
+            ],
+          ];
+          said: [];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** attach with a person at a terminal: one asked for (-t) */
+      [
+        args: [
+          backend: Vz,
+          call: "attach",
+          name: "dsl-main-w1",
+          argv: ["true"],
+          options: { terminal: true },
+        ],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-t",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''true'\\'''",
+            ],
+          ];
+          said: [];
+          code: 0;
+          stderr: "";
+        },
+      ],
+      /** dial: socat in a session, to the VM's loopback port */
+      [
+        args: [backend: Vz, call: "dial", name: "dsl-main-w1", argv: ["8080"], options: {}],
+        expected: {
+          ssh: [
+            [
+              "-F",
+              "<home>/lima/dsl-main-w1/ssh.config",
+              "-o",
+              "LogLevel=ERROR",
+              "-T",
+              "lima-dsl-main-w1",
+              "--",
+              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''socat'\\'' '\\''STDIO'\\'' '\\''TCP:127.0.0.1:8080'\\'''",
+            ],
+          ];
+          said: [];
+          code: 0;
+          stderr: "";
+        },
+      ],
+    ]
+  >;
+  /** exec with a total runs its command under `timeout` in the VM, a second past the Mac's
+   *  bound (15 s: 16); the rows above, with none, do not */
+  export type Bounded = Expect<
+    Invoke<
+      typeof sessionOf,
+      [
+        backend: Vz,
+        call: "exec",
+        name: "dsl-main-w1",
+        argv: ["cat"],
+        options: { timeoutMs: 15000; apart: true },
+      ]
+    >,
+    "=",
+    {
+      ssh: [
+        [
+          "-F",
+          "<home>/lima/dsl-main-w1/ssh.config",
+          "-o",
+          "LogLevel=ERROR",
+          "-T",
+          "lima-dsl-main-w1",
+          "--",
+          "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''timeout'\\'' '\\''--signal=TERM'\\'' '\\''--kill-after=5'\\'' '\\''16'\\'' '\\''env'\\'' '\\''cat'\\'''",
+        ],
+      ];
+      said: [];
+      code: 0;
+      stderr: "";
+    }
+  >;
+  /** what that line does in the VM once the Mac has let go of it (its ssh ended, the program
+   *  left running there): one that sleeps past its bound is gone, ended by `timeout` with its
+   *  124; one that finishes in time keeps its own exit code and reads its stdin, as without
+   *  it; and the control, a program that leaves one behind, shows that one left would be
+   *  seen. Run with this machine's own GNU `timeout`, as every VM has it: skipped where there
+   *  is none (macOS has none of its own). */
+  export type BoundInTheVm = SkipIfNotFound<
+    "/usr/bin/timeout",
+    Table<
+      typeof alone,
+      [
+        [
+          args: [
+            backend: Vz,
+            argv: ["sh", "-c", "cat; exit 3"],
+            options: { timeoutMs: 15000; input: "from stdin" },
+          ],
+          expected: { code: 3; said: ["from stdin"]; left: false },
+        ],
+        [
+          args: [
+            backend: Vz,
+            argv: ["sh", "-c", 'echo $$ > "$1"; exec sleep 30', "sh", "<pid>"],
+            options: { timeoutMs: 100 },
+          ],
+          expected: { code: 124; said: []; left: false },
+        ],
+        [
+          args: [
+            backend: Vz,
+            argv: ["sh", "-c", 'sleep 30 >/dev/null 2>&1 & echo $! > "$1"', "sh", "<pid>"],
+            options: { timeoutMs: 100 },
+          ],
+          expected: { code: 0; said: []; left: true },
+        ],
+      ]
+    >
+  >;
+  /** a VM that is not running is refused before any session starts (no ssh is started), in
+   *  desolate's words with its fix, not Lima's or ssh's; the rows above, of a running VM, are
+   *  the control */
+  export type NotRunning = Table<
+    typeof sessionOf,
+    [
+      /** exec: a failed command, saying so */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["true"],
+          options: {},
+          vm: "stopped",
+        ],
+        expected: {
+          ssh: [];
+          said: [];
+          code: 1;
+          stderr: "acme/w1 is not running; start it: desolate start acme/w1\n";
+        },
+      ],
+      /** spawn: a child that ends saying so */
+      [
+        args: [
+          backend: Vz,
+          call: "spawn",
+          name: "dsl-main-w1",
+          argv: ["true"],
+          options: {},
+          vm: "stopped",
+        ],
+        expected: {
+          ssh: [];
+          said: [];
+          code: 1;
+          stderr: "acme/w1 is not running; start it: desolate start acme/w1\n";
+        },
+      ],
+      /** attach: said to the person, as desolate says a refusal */
+      [
+        args: [
+          backend: Vz,
+          call: "attach",
+          name: "dsl-main-w1",
+          argv: ["true"],
+          options: {},
+          vm: "stopped",
+        ],
+        expected: {
+          ssh: [];
+          said: [];
+          code: 1;
+          stderr: "desolate: acme/w1 is not running; start it: desolate start acme/w1\n";
+        },
+      ],
+      /** the root VM's fix is bootstrap */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-root",
+          argv: ["true"],
+          options: {},
+          vm: "stopped",
+        ],
+        expected: {
+          ssh: [];
+          said: [];
+          code: 1;
+          stderr: "dsl-main-root is not running; start it: desolate bootstrap\n";
+        },
+      ],
+      /** a VM that runs without Lima's ssh configuration is its own refusal */
+      [
+        args: [
+          backend: Vz,
+          call: "exec",
+          name: "dsl-main-w1",
+          argv: ["true"],
+          options: {},
+          vm: "no ssh.config",
+        ],
+        expected: {
+          ssh: [];
+          said: [];
+          code: 1;
+          stderr: "dsl-main-w1 is running, but Lima's ssh configuration for it (<home>/lima/dsl-main-w1/ssh.config) is not there: desolate doctor\n";
+        },
+      ],
+    ]
+  >;
+  /** dial refuses by throwing, which the forwarder takes as a connection that closes */
+  export type DialNotRunning = Throws<
+    Invoke<
+      typeof sessionOf,
+      [backend: Vz, call: "dial", name: "dsl-main-w1", argv: ["8080"], options: {}, vm: "stopped"]
+    >,
+    "acme/w1 is not running; start it: desolate start acme/w1"
+  >;
+  /** a name is one of this stack's VMs' before it becomes a path or ssh's host: none that
+   *  climbs out of Lima's home, names a folder in it, is an option, or is another stack's */
+  export type NotAVmName = [
+    Throws<
+      Invoke<typeof sessionOf, [backend: Vz, call: "exec", name: "dsl-main-../x", argv: ["true"]]>,
+      "refused a session in 'dsl-main-../x': not a VM of this stack"
+    >,
+    Throws<
+      Invoke<typeof sessionOf, [backend: Vz, call: "spawn", name: "dsl-main-a/b", argv: ["true"]]>,
+      "refused a session in 'dsl-main-a/b': not a VM of this stack"
+    >,
+    Throws<
+      Invoke<
+        typeof sessionOf,
+        [backend: Vz, call: "dial", name: "-oProxyCommand=x", argv: ["8080"]]
+      >,
+      "refused a session in '-oProxyCommand=x': not a VM of this stack"
+    >,
+    Throws<
+      Invoke<typeof sessionOf, [backend: Vz, call: "attach", name: "dsl-other-w1", argv: ["true"]]>,
+      "refused a session in 'dsl-other-w1': not a VM of this stack"
+    >,
+  ];
 
   /** a VM is started only if desolate made it (its record is beside Lima's) */
   export type StartsOnlyItsOwn = Throws<
