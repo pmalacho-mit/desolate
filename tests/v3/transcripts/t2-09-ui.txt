@@ -169,3 +169,5 @@ to push exactly this: desolate push web acme/app long --expect <commit>
 [exit 0]
 
 ## delete from the dashboard
+
+## an offered issue's preview
