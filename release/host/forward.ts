@@ -1659,7 +1659,7 @@ const notesOf = (
     : []),
   ...(refused.count > 0
     ? [
-        `${refused.count} connection${refused.count === 1 ? "" : "s"} out ${refused.count === 1 ? "was" : "were"} refused, the last at ${refused.at}: ${refused.most} are carried to its proxy at once and as many more may wait their turn (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`,
+        `${refused.count} connection${refused.count === 1 ? "" : "s"} out ${refused.count === 1 ? "was" : "were"} refused, the last at ${refused.at}: ${refused.most} are carried to its proxy at once (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`,
       ]
     : []),
 ];
@@ -1681,7 +1681,7 @@ declare namespace notesOf {
     [
       "44 more listeners are not forwarded: a compose service's past the first 256 (workspace/bridge.ts)",
       "1 more listener is not forwarded: past the first 256 of a workspace",
-      "3 connections out were refused, the last at 2026-11-21T06:00:00.000Z: 48 are carried to its proxy at once and as many more may wait their turn (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+      "3 connections out were refused, the last at 2026-11-21T06:00:00.000Z: 48 are carried to its proxy at once (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
     ]
   >;
 }
