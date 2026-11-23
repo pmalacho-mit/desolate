@@ -1494,6 +1494,74 @@ describe("T2 section 4.8: the root UI", () => {
     );
   });
 
+  it("an offered issue's preview fits the page: a long code line scrolls in its box, a long word wraps whole (control: the code block does scroll)", async () => {
+    stack.step("an offered issue's preview");
+    // A code block's line made the whole page as wide as itself (4,687 px in a 1,180 px
+    // window, found 2026-11-23), its buttons out of sight.
+    const codeLine = "c".repeat(600);
+    const word = "w".repeat(300);
+    const body = `A paragraph:\n\n${word}\n\n\`\`\`\n${codeLine}\n\`\`\`\n`;
+    const offered = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      `echo ${Buffer.from(body).toString("base64")} | base64 -d > /tmp/wide.md && desolate issue offer --title 'A wide preview' --body-file /tmp/wide.md`,
+    );
+    assert.equal(offered.code, 0, offered.stderr);
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")), {
+      width: 1180,
+      height: 1500,
+    });
+    try {
+      const page = await browser.tab(`http://${HOST}:${port}/?tkn=${token}`);
+      await page.until("document.querySelector('[data-issue-offer]')", "the offered issue");
+      await page.click("[data-issue-offer] button", "Read and edit");
+      await page.click("[data-issue] [data-preview-toggle]", "Preview");
+      await page.until("document.querySelector('[data-issue] [data-preview] pre')", "the preview");
+      const seen = await page.evaluate<{
+        sideways: number;
+        buttons: string[];
+        outside: string[];
+        word: boolean;
+        code: boolean;
+        codeScrolls: number;
+      }>(`(() => {
+        const page = document.documentElement;
+        const card = document.querySelector("[data-issue]");
+        const preview = card.querySelector("[data-preview]");
+        const pre = preview.querySelector("pre");
+        const buttons = [...card.querySelectorAll("button")];
+        return { sideways: page.scrollWidth - page.clientWidth, buttons: buttons.map((b) => b.textContent),
+          outside: buttons.filter((b) => b.getBoundingClientRect().right > page.clientWidth + 1).map((b) => b.textContent),
+          word: [...preview.querySelectorAll("p")].some((p) => p.textContent === ${JSON.stringify(word)}),
+          code: pre.textContent.includes(${JSON.stringify(codeLine)}), codeScrolls: pre.scrollWidth - pre.clientWidth };
+      })()`);
+      assert.ok(seen.sideways <= 1, `the page scrolls sideways by ${seen.sideways} px`);
+      assert.deepEqual(seen.buttons, [
+        "Close",
+        "Write",
+        "Save",
+        "Publish...",
+        "Back to draft",
+        "Reject",
+      ]);
+      assert.deepEqual(seen.outside, [], "past the window's right edge");
+      assert.ok(seen.word, "the paragraph's word, whole");
+      assert.ok(seen.code, "the code's line, whole");
+      assert.ok(seen.codeScrolls > 0, "control: the code block scrolls in its own box");
+      // A picture of it, for a person to look at, beside the suite's own files.
+      await page.shot(
+        path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), "issue-wide-preview.png"),
+      );
+    } finally {
+      await browser.close();
+    }
+  });
+
   it("the transcript reads as reviewed", () => {
     stack.checkTranscript("t2-09-ui");
   });
