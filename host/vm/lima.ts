@@ -53,6 +53,7 @@ import type {
   confinement,
   madeWithoutLinkToken,
   sessionOf,
+  sharesWaited,
   statusOf,
   stepsSaid,
 } from "../../.harness/host-lima.ts";
@@ -245,6 +246,108 @@ declare namespace unmounted {
     >,
     "=",
     { missing: []; wrong: [] }
+  >;
+}
+
+/** The one command that waits in a VM for its shares: until each of `guests` is mounted by
+ *  `fsType` (either way round: unmounted says whether it is the right one), or for
+ *  `seconds` by the VM's clock, whichever comes first; then it prints the mounts (`mounts`:
+ *  /proc/mounts, but in a test). A look is bash's own `read`, no program started, a quarter
+ *  second apart. A path is compared as /proc/mounts writes it. */
+export const sharesWait = (
+  guests: string[],
+  fsType: string,
+  seconds: number,
+  mounts = "/proc/mounts",
+): string[] => [
+  "bash",
+  "-c",
+  'm=$1 limit=$2 type=$3; shift 3\nuntil [ "$SECONDS" -ge "$limit" ]; do\n  seen=1\n  for want in "$@"; do\n    seen=\n    while read -r _ at fs _; do [ "$at" = "$want" ] && [ "$fs" = "$type" ] && seen=1; done <"$m"\n    [ -n "$seen" ] || break\n  done\n  [ -n "$seen" ] && break\n  sleep 0.25\ndone\ncat "$m"',
+  "_",
+  mounts,
+  String(seconds),
+  fsType,
+  ...guests.map((guest) =>
+    guest.replace(/[\\ \t\n]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, "0")}`),
+  ),
+];
+
+declare namespace sharesWait {
+  /** the command: its script, then the file, the bound, the file system and each share as
+   *  /proc/mounts writes it (a space as \040, a backslash as \134) */
+  export type Command = Expect<
+    Invoke<
+      typeof sharesWait,
+      [guests: ["/workspaces", "/git/acme/my app", "/a\\b"], fsType: "virtiofs", seconds: 60]
+    >,
+    "=",
+    [
+      "bash",
+      "-c",
+      'm=$1 limit=$2 type=$3; shift 3\nuntil [ "$SECONDS" -ge "$limit" ]; do\n  seen=1\n  for want in "$@"; do\n    seen=\n    while read -r _ at fs _; do [ "$at" = "$want" ] && [ "$fs" = "$type" ] && seen=1; done <"$m"\n    [ -n "$seen" ] || break\n  done\n  [ -n "$seen" ] && break\n  sleep 0.25\ndone\ncat "$m"',
+      "_",
+      "/proc/mounts",
+      "60",
+      "virtiofs",
+      "/workspaces",
+      "/git/acme/my\\040app",
+      "/a\\134b",
+    ]
+  >;
+  /** run by bash here, on a file in place of /proc/mounts, with a bound of 2 s: it answers at
+   *  once when every share is there; when the last one comes (written 300 ms on); at its
+   *  bound when one never comes, or comes as another file system's. Each answer is the
+   *  mounts as they were then */
+  export type Waits = Table<
+    typeof sharesWaited,
+    [
+      [
+        args: [
+          wait: typeof sharesWait,
+          guests: ["/workspaces", "/git/acme/my app"],
+          now: "m /workspaces virtiofs rw 0 0\nm /git/acme/my\\040app virtiofs rw 0 0\n",
+          later: "",
+        ],
+        expected: {
+          printed: "m /workspaces virtiofs rw 0 0\nm /git/acme/my\\040app virtiofs rw 0 0\n";
+          answered: "at once";
+        },
+      ],
+      [
+        args: [
+          wait: typeof sharesWait,
+          guests: ["/workspaces", "/git/acme/my app"],
+          now: "m /workspaces virtiofs rw 0 0\n",
+          later: "m /git/acme/my\\040app virtiofs rw 0 0\n",
+        ],
+        expected: {
+          printed: "m /workspaces virtiofs rw 0 0\nm /git/acme/my\\040app virtiofs rw 0 0\n";
+          answered: "when mounted";
+        },
+      ],
+      [
+        args: [
+          wait: typeof sharesWait,
+          guests: ["/workspaces", "/git/acme/my app"],
+          now: "m /workspaces virtiofs rw 0 0\n",
+          later: "",
+        ],
+        expected: { printed: "m /workspaces virtiofs rw 0 0\n"; answered: "at its bound" },
+      ],
+      [
+        args: [
+          wait: typeof sharesWait,
+          guests: ["/workspaces"],
+          now: "m /workspaces ext4 rw 0 0\n",
+          later: "",
+        ],
+        expected: { printed: "m /workspaces ext4 rw 0 0\n"; answered: "at its bound" },
+      ],
+      [
+        args: [wait: typeof sharesWait, guests: [], now: "", later: ""],
+        expected: { printed: ""; answered: "at once" },
+      ],
+    ]
   >;
 }
 
@@ -1047,25 +1150,30 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   };
 
   /** Wait for every share to be mounted as the spec says; stop the VM and refuse if one
-   *  is mounted the wrong way, or is still missing after a minute. A minute of the clock
-   *  that runs while this process does (so a Mac that slept through the wait did not use it
-   *  up), looks included: counted in sleeps alone, with each look allowed thirty seconds,
-   *  "a minute" could be far more. Mounting is the guest's own first step after ssh answers
-   *  (measured on the M1: under a second), so a share missing after a minute is not late. */
+   *  is mounted the wrong way, or is still missing after a minute. One session, which waits
+   *  in the VM (sharesWait: a minute of the VM's clock, which does not run while the Mac
+   *  sleeps) and answers once they are there; it was a session every 250 ms. Mounting is the
+   *  guest's own first step after ssh answers (measured on the M1: under a second), so a
+   *  share missing after a minute is not late. A session that fails is tried again within
+   *  the minute. */
   const sharesReady = async (name: string, m: Meta) => {
     const fsType = kind === "qemu" ? "9p" : "virtiofs";
-    let last = { missing: m.spec.shares.map((share) => share.guest), wrong: [] as string[] };
+    const guests = m.spec.shares.map((share) => share.guest);
+    let last = { missing: guests, wrong: [] as string[] };
     for (const began = performance.now(); performance.now() - began <= 60_000;) {
-      const mounts = await run("ssh", sessionArgs(name, ["cat", "/proc/mounts"]), {
-        env: env(),
-        timeoutMs: 30_000,
-      });
+      const left = Math.max(1, Math.ceil((60_000 - (performance.now() - began)) / 1000));
+      const totalMs = (left + 10) * 1000;
+      const mounts = await run(
+        "ssh",
+        sessionArgs(name, sharesWait(guests, fsType, left), {}, { totalMs }),
+        { env: env(), timeoutMs: totalMs },
+      );
       if (mounts.code === 0) {
         last = unmounted(mounts.stdout, m.spec.shares, fsType, kind === "vz");
-        if (last.wrong.length > 0) break;
-        if (last.missing.length === 0) return;
+        if (last.wrong.length + last.missing.length === 0) return;
+        break;
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
     }
     await lima(["stop", "-f", name], { timeoutMs: 120_000 });
     throw new Error(
