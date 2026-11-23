@@ -28,6 +28,7 @@ import type { Check } from "./vm/types.ts";
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 import { remakeForPageKeys } from "./retired.ts";
+import { sharedFolderRefusal } from "./install-folder.ts";
 
 type Out = (line: string) => void;
 
@@ -207,6 +208,8 @@ export const bootstrap = async (
   options: { forge?: string; forgeKnownHosts?: string },
   out: Out,
 ) => {
+  const shared = sharedFolderRefusal();
+  if (shared) refuse(shared.why, shared.fix);
   const changed: string[] = [];
   const step = (did: boolean, text: string) => {
     out(`${did ? "  + " : "  = "}${text}`);
@@ -428,6 +431,13 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
     ok: fs.existsSync(paths.state),
     detail: paths.home,
     fix: "desolate bootstrap",
+  });
+  const shared = sharedFolderRefusal();
+  checks.push({
+    name: "the install folder holds no credential",
+    ok: shared === null,
+    detail: shared?.why ?? `${RELEASE_DIR}, shared read-only into every VM`,
+    fix: shared?.fix,
   });
   checks.push({
     name: "backend gives isolation",

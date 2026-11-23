@@ -35,6 +35,7 @@ import { terminalFilter } from "../shared/terminal-filter.ts";
 import { BEAT_MS, elapsed } from "../shared/step.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";
+import { sharedFolderRefusal } from "./install-folder.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
 import type {
@@ -664,6 +665,8 @@ export const up = async (
   json: boolean,
 ) => {
   if (!domain) refuse("which domain?", "desolate up <domain> [--name <workspace>]", EXIT.usage);
+  const shared = sharedFolderRefusal();
+  if (shared) refuse(shared.why, shared.fix);
   // --started-by <workspace>: the workspace of this domain that asked for this one (`desolate
   // spawn` in it, run by the host's daemon once it checked the request: host/spawn.ts).
   // (`keep`: a workspace made again on its own checkouts keeps who started it.)
@@ -1275,6 +1278,8 @@ export const stop = async (target: string | undefined, out: Out) => {
 };
 
 export const start = async (target: string | undefined, out: Out) => {
+  const shared = sharedFolderRefusal();
+  if (shared) refuse(shared.why, shared.fix);
   const w = await find(target);
   forget(w.vm);
   const b = backend();

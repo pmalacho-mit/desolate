@@ -734,5 +734,8 @@ docs/              getting started, the reference, agents, suede, developing des
 ```
 
 The code runs straight from this tree: every VM mounts it read-only at `/desolate/release`.
+That is the whole install folder, its `.git` included, so every workspace can read it: nothing
+private belongs in it, and `bootstrap`, `up`, `start` and `doctor` refuse a remote address,
+header or credential setting in its git config that holds a token or password.
 What desolate keeps on the Mac, in `~/.desolate`, and which VM sees each folder of it, is in
 [home.md](home.md).
