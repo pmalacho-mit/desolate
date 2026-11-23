@@ -143,7 +143,9 @@ a control showing the test would have noticed.
   result of a person's action in the root, naming the repository, the branch and the exact
   commit they reviewed. No agent, workspace or automation can push.
 - **P3. No credential enters a workspace.** Deploy keys live only in the root VM, behind an
-  agent that signs but never exports. API secrets are placeholders inside workspaces.
+  agent that signs but never exports. API secrets are placeholders inside workspaces: one set
+  with its headers is put in place only in those, so a workspace can use it at its hosts but
+  not read it.
 - **P4. Every `.git` has exactly one owner, and git runs only under its owner.** The root
   never runs git in a domain's repository. Work crosses between owners only as data: a bundle
   file, LFS objects checked against their ids, or a read-only mirror.

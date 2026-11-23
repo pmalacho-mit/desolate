@@ -166,9 +166,9 @@ If your task needs an API key, the person has stored it for this domain under a 
 `MYAPP-OPENAI-KEY`. `/desolate/inbox/secrets.json` lists the names, the hosts each may be
 sent to, and the headers it is substituted in. Use the name wherever the key would go
 (`export OPENAI_API_KEY=MYAPP-OPENAI-KEY`): on the way out, over HTTPS, toward those hosts
-only, the name is replaced by the value. You never see the value, responses that echo it
-are scrubbed back to the name, and looking for it is wasted effort. A name sent anywhere
-else arrives as a name. If the name you need is not in the list, set `orange` and ask.
+only, the name is replaced by the value. You never see the value: a response that holds it
+exactly has it scrubbed back to the name, and looking for it is not your task. A name sent
+anywhere else arrives as a name. If the name you need is not in the list, set `orange` and ask.
 
 ## Where you are running
 

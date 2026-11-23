@@ -148,7 +148,14 @@ export type PlanRow = {
   warnings: string[];
 };
 
-type Provider = { hosts: string[]; headers: string[] | null; what: string };
+/** What a secret with no headers costs, said wherever one is set (the CLI, the import plan,
+ *  the secrets page): the secrets proxy puts its value wherever its name is in a request to
+ *  its hosts, and scrubs a response only of the exact value. */
+export const ANYWHERE_COST =
+  "its value is put anywhere in a request to those hosts, the body included, so a service there that sends back what it is sent, changed in any way, can hand the value to a workspace";
+
+/** `writes`: what its holder can do as the person (beyond reading), said when it is asked. */
+type Provider = { hosts: string[]; headers: string[] | null; what: string; writes?: string };
 const header = (hosts: string[], headers: string[] | null, what: string): Provider => ({
   hosts,
   headers,
@@ -157,8 +164,9 @@ const header = (hosts: string[], headers: string[] | null, what: string): Provid
 const OPENAI = header(["api.openai.com"], ["authorization"], "OpenAI");
 const ANTHROPIC = header(["api.anthropic.com"], ["x-api-key", "authorization"], "Anthropic");
 const OPENROUTER = header(["openrouter.ai"], ["authorization"], "OpenRouter");
-// Google's keys: the SDKs send x-goog-api-key, the REST examples ?key=: anywhere.
-const GEMINI = header(["generativelanguage.googleapis.com"], null, "Gemini");
+// Google's keys: the SDKs send x-goog-api-key, the REST examples ?key=. Only the header: in
+// the URL it would be put in place anywhere (ANYWHERE_COST).
+const GEMINI = header(["generativelanguage.googleapis.com"], ["x-goog-api-key"], "Gemini");
 const SLACK = header(["slack.com", "*.slack.com"], ["authorization"], "Slack");
 const LLAMA = header(
   ["api.cloud.llamaindex.ai", "api.cloud.eu.llamaindex.ai"],
@@ -167,7 +175,17 @@ const LLAMA = header(
 );
 const LIVEBLOCKS = header(["api.liveblocks.io"], ["authorization"], "Liveblocks");
 const STRIPE = header(["api.stripe.com"], ["authorization"], "Stripe");
-const GITHUB_API = header(["api.github.com"], ["authorization"], "GitHub's API");
+// Tokens that let their holder write as the person: as a secret, any workspace of the domain
+// could, with no approval (README.md, P2). They are asked, never made secrets by the table.
+const STRIPE_LIVE = { ...STRIPE, writes: "including charges and refunds" };
+const GITHUB_API = {
+  ...header(["api.github.com"], ["authorization"], "GitHub's API"),
+  writes: "including creating commits and reading your other repositories",
+};
+const NPM = {
+  ...header(["registry.npmjs.org"], ["authorization"], "npm"),
+  writes: "including publishing your packages",
+};
 const HUGGINGFACE = header(
   ["huggingface.co", "*.huggingface.co"],
   ["authorization"],
@@ -180,7 +198,8 @@ const SHAPES: [RegExp, Provider | "value", string][] = [
   [/^sk-ant-/, ANTHROPIC, "an Anthropic key (sk-ant-)"],
   [/^sk-or-/, OPENROUTER, "an OpenRouter key (sk-or-)"],
   [/^sk-(proj-|svcacct-|admin-)?[A-Za-z0-9_-]{20,}$/, OPENAI, "an OpenAI key (sk-)"],
-  [/^(sk|rk)_(live|test)_/, STRIPE, "a Stripe secret key"],
+  [/^(sk|rk)_live_/, STRIPE_LIVE, "a Stripe live key"],
+  [/^(sk|rk)_test_/, STRIPE, "a Stripe test key"],
   [/^sk_(dev|prod)_/, LIVEBLOCKS, "a Liveblocks secret key (sk_)"],
   [/^pk_(dev|prod|live|test)_/, "value", "a publishable key (pk_): meant for the browser"],
   [/^xox[abpe]-/, SLACK, "a Slack token (xox)"],
@@ -205,7 +224,7 @@ const SHAPES: [RegExp, Provider | "value", string][] = [
     header(["api.resend.com"], ["authorization"], "Resend"),
     "a Resend key (re_)",
   ],
-  [/^npm_/, header(["registry.npmjs.org"], ["authorization"], "npm"), "an npm token (npm_)"],
+  [/^npm_/, NPM, "an npm token (npm_)"],
   [/^tvly-/, header(["api.tavily.com"], null, "Tavily"), "a Tavily key (tvly-)"],
   [
     /^fc-[0-9a-f]{20,}/,
@@ -255,7 +274,11 @@ const NAMES: [RegExp, Provider | "value" | "local", string][] = [
   [/OPENROUTER/, OPENROUTER, "OpenRouter"],
   [/OPENAI/, OPENAI, "OpenAI"],
   [/ANTHROPIC|CLAUDE/, ANTHROPIC, "Anthropic"],
-  [/GEMINI|GOOGLE_(AI|GENAI|GENERATIVE)/, GEMINI, "Gemini"],
+  [
+    /GEMINI|GOOGLE_(AI|GENAI|GENERATIVE)/,
+    GEMINI,
+    "Gemini, in x-goog-api-key (a ?key= in the URL is not put in place)",
+  ],
   [/LIVEBLOCKS_SECRET/, LIVEBLOCKS, "Liveblocks"],
   [/LLAMA_?(CLOUD|PARSE|INDEX)/, LLAMA, "LlamaCloud"],
   [/^SLACK_(BOT_|USER_|APP_)?TOKEN$/, SLACK, "Slack"],
@@ -287,7 +310,7 @@ const NAMES: [RegExp, Provider | "value" | "local", string][] = [
   [/TAVILY/, header(["api.tavily.com"], null, "Tavily"), "Tavily"],
   [/FIRECRAWL/, header(["api.firecrawl.dev"], ["authorization"], "Firecrawl"), "Firecrawl"],
   [/SERPAPI/, header(["serpapi.com"], null, "SerpApi"), "SerpApi"],
-  [/^NPM_TOKEN$/, header(["registry.npmjs.org"], ["authorization"], "npm"), "npm"],
+  [/^NPM_TOKEN$/, NPM, "npm"],
 ];
 
 /** OAuth providers whose token endpoint is well known, for a client secret with no token URL
@@ -370,19 +393,33 @@ const hostOf = (value: string): string | null => {
 
 const secretRow = (
   key: string,
-  p: { hosts: string[]; headers: string[] | null },
+  p: { hosts: string[]; headers: string[] | null; writes?: string },
   by: PlanRow["by"],
   why: string,
-): PlanRow => ({
-  key,
-  kind: "secret",
-  name: secretName(key),
-  hosts: p.hosts,
-  headers: p.headers,
-  by,
-  why,
-  warnings: [],
-});
+): PlanRow =>
+  p.writes
+    ? // Asked, with where it would go filled in: the person says whether the project needs it.
+      {
+        key,
+        kind: "ask",
+        hosts: p.hosts,
+        headers: p.headers,
+        by,
+        why: `${why}, which lets its holder write as you`,
+        warnings: [
+          `as a secret, every workspace of this domain can use it at ${p.hosts.join(", ")} as you, without your approval (${p.writes}); leave it out unless the project needs it`,
+        ],
+      }
+    : {
+        key,
+        kind: "secret",
+        name: secretName(key),
+        hosts: p.hosts,
+        headers: p.headers,
+        by,
+        why,
+        warnings: [],
+      };
 
 /** What becomes of each entry of a .env (its last value, where a key is set twice), judged
  *  as the top of this file says. `remembered`: the person's earlier choices for this domain. */
@@ -676,6 +713,158 @@ declare namespace planEnv {
         kind: "ask";
         by: "name";
         why: "looks like a secret, but where it goes is not known";
+        warnings: [];
+      },
+    ]
+  >;
+  /** a token that lets its holder write as the person is asked, with a warning, never made a
+   *  secret by the table; a Stripe test key beside a live one is the control. Gemini goes in
+   *  its header; SerpApi has no header form, and stays anywhere */
+  export type Writers = Expect<
+    Invoke<
+      typeof planEnv,
+      [
+        lines: [
+          {
+            kind: "entry";
+            key: "GITHUB_TOKEN";
+            value: "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+          {
+            kind: "entry";
+            key: "GH_TOKEN";
+            value: "abc123";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+          {
+            kind: "entry";
+            key: "NPM_TOKEN";
+            value: "npm_abcdefghijklmnopqrstuvwxyz0123456789";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+          {
+            kind: "entry";
+            key: "STRIPE_SECRET_KEY";
+            value: "sk_live_abc123";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+          {
+            kind: "entry";
+            key: "STRIPE_TEST_KEY";
+            value: "sk_test_abc123";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+          {
+            kind: "entry";
+            key: "GEMINI_API_KEY";
+            value: "AIzaSyabc123";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+          {
+            kind: "entry";
+            key: "SERPAPI_API_KEY";
+            value: "abc123";
+            exported: false;
+            quote: "";
+            spaced: false;
+            raw: "";
+          },
+        ],
+      ]
+    >,
+    "=",
+    [
+      {
+        key: "GITHUB_TOKEN";
+        kind: "ask";
+        hosts: ["api.github.com"];
+        headers: ["authorization"];
+        by: "value";
+        why: "a GitHub token, which lets its holder write as you";
+        warnings: [
+          "as a secret, every workspace of this domain can use it at api.github.com as you, without your approval (including creating commits and reading your other repositories); leave it out unless the project needs it",
+        ];
+      },
+      {
+        key: "GH_TOKEN";
+        kind: "ask";
+        hosts: ["api.github.com"];
+        headers: ["authorization"];
+        by: "table";
+        why: "GitHub's API, by its name, which lets its holder write as you";
+        warnings: [
+          "as a secret, every workspace of this domain can use it at api.github.com as you, without your approval (including creating commits and reading your other repositories); leave it out unless the project needs it",
+        ];
+      },
+      {
+        key: "NPM_TOKEN";
+        kind: "ask";
+        hosts: ["registry.npmjs.org"];
+        headers: ["authorization"];
+        by: "value";
+        why: "an npm token (npm_), which lets its holder write as you";
+        warnings: [
+          "as a secret, every workspace of this domain can use it at registry.npmjs.org as you, without your approval (including publishing your packages); leave it out unless the project needs it",
+        ];
+      },
+      {
+        key: "STRIPE_SECRET_KEY";
+        kind: "ask";
+        hosts: ["api.stripe.com"];
+        headers: ["authorization"];
+        by: "value";
+        why: "a Stripe live key, which lets its holder write as you";
+        warnings: [
+          "as a secret, every workspace of this domain can use it at api.stripe.com as you, without your approval (including charges and refunds); leave it out unless the project needs it",
+        ];
+      },
+      {
+        key: "STRIPE_TEST_KEY";
+        kind: "secret";
+        name: "STRIPE-TEST-KEY";
+        hosts: ["api.stripe.com"];
+        headers: ["authorization"];
+        by: "value";
+        why: "a Stripe test key";
+        warnings: [];
+      },
+      {
+        key: "GEMINI_API_KEY";
+        kind: "secret";
+        name: "GEMINI-API-KEY";
+        hosts: ["generativelanguage.googleapis.com"];
+        headers: ["x-goog-api-key"];
+        by: "table";
+        why: "Gemini, in x-goog-api-key (a ?key= in the URL is not put in place), by its name";
+        warnings: [];
+      },
+      {
+        key: "SERPAPI_API_KEY";
+        kind: "secret";
+        name: "SERPAPI-API-KEY";
+        hosts: ["serpapi.com"];
+        headers: null;
+        by: "table";
+        why: "SerpApi, by its name";
         warnings: [];
       },
     ]

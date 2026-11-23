@@ -58,6 +58,7 @@ _desolate() {
                 elif [ "${COMP_WORDS[3]:-}" = net ] && [ "$COMP_CWORD" -eq 4 ]; then words="show open enforce allow deny allow-internal recommend hold"
                 elif [ "${COMP_WORDS[3]:-}" = net ] && [ "${COMP_WORDS[4]:-}" = recommend ]; then words="--all"
                 elif [ "${COMP_WORDS[3]:-}" = secret ] && [ "$COMP_CWORD" -eq 4 ]; then words="list set copy on off rm"
+                elif [ "${COMP_WORDS[3]:-}" = secret ] && [ "${COMP_WORDS[4]:-}" = set ] && [ "$COMP_CWORD" -gt 5 ]; then words="--hosts --headers --anywhere"
                 elif [ "${COMP_WORDS[3]:-}" = add ]; then words="--repo $(_desolate_repos)"
                 fi ;;
             up) if [ "$COMP_CWORD" -eq 2 ]; then words="$(_desolate_domains)"; else words="--name --checkout --base --fetch"; fi ;;

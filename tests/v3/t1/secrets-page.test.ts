@@ -11,7 +11,7 @@ import { describe, it } from "node:test";
 
 process.env.DESOLATE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-secrets-page-"));
 const { ENV_MAX } = await import("../../../release/host/env-import.ts");
-const { SECRET_NAME, SECRET_NAME_RULE, secretName } =
+const { ANYWHERE_COST, SECRET_NAME, SECRET_NAME_RULE, secretName } =
   await import("../../../release/shared/envfile.ts");
 
 const RELEASE = path.resolve(import.meta.dirname, "../../../release");
@@ -24,6 +24,12 @@ describe("T1 the secrets page's bounds are the TypeScript's", () => {
     assert.ok(copy, "secrets.js names its copy ENV_MAX");
     assert.equal(Number(copy[1]), ENV_MAX);
     assert.match(page, /file\.size > ENV_MAX/, "and refuses by it");
+  });
+
+  it("the anywhere box says what it costs, as the CLI's --anywhere does", () => {
+    const html = read("host/approve-ui/secrets.html");
+    assert.match(html, /<input type="checkbox" name="anywhere">/);
+    assert.ok(html.includes(`<span class="hint">${ANYWHERE_COST}</span>`), "the cost beside it");
   });
 
   it("the name it takes is the root's rule, and its hint says the same numbers", async () => {
