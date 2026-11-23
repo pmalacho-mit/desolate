@@ -350,7 +350,7 @@ type Carrying = (
     client: Duplex,
     open: () => Duplex,
     head: Buffer,
-    refused: (why: string) => void,
+    http: boolean,
   ) => void;
   all: () => number;
 };
@@ -395,21 +395,56 @@ export const opened = async (
     for (let i = 0; i < count; i++) {
       const client = new PassThrough();
       let piped = false;
-      carry(
-        entries.get(vm)!,
-        way,
-        client,
-        () => ((piped = true), new PassThrough()),
-        Buffer.alloc(0),
-        (why) => (refused.add(why), client.destroy()),
-      );
+      const entry = entries.get(vm)!;
+      const before = entry.refused[way].count;
+      carry(entry, way, client, () => ((piped = true), new PassThrough()), Buffer.alloc(0), false);
       if (piped) (carried++, mine.push(client));
+      if (entry.refused[way].count > before) refused.add(entry.refused[way].why);
     }
     await settled();
     results.push({ carried, refused: [...refused] });
   }
   for (const clients of held.values()) for (const client of clients) client.destroy();
   return results;
+};
+
+let connections = 0;
+/** A connection over a unix socket in the test file's home: the daemon's end (`client`), and
+ *  the far end, a stand-in browser. */
+const connection = async () => {
+  const file = path.join(
+    process.env.DESOLATE_HOME!,
+    `carried-${process.pid}-${connections++}.sock`,
+  );
+  const server = createServer();
+  const accepted = new Promise<Socket>((resolve) => server.once("connection", resolve));
+  await new Promise<void>((resolve) => server.listen(file, resolve));
+  const browser = connect(file);
+  browser.on("error", () => {});
+  const client = await accepted;
+  onTestFinished(() => {
+    browser.destroy();
+    client.destroy();
+    server.close();
+    fs.rmSync(file, { force: true });
+  });
+  return { browser, client };
+};
+
+/** What the far end of a connection refused (daemon.ts, carrying: its workspace already
+ *  carries the one it may) reads before it is closed, `http` or not. */
+export const refusedAs = async (carrying: Carrying, http: boolean) => {
+  const { carry } = carrying(1, () => {});
+  const entry = counted("w1");
+  carry(entry, "in", new PassThrough(), () => new PassThrough(), Buffer.alloc(0), false);
+  const { browser, client } = await connection();
+  let read = "";
+  browser.on("data", (chunk: Buffer) => (read += chunk.toString()));
+  const closed = new Promise((resolve) => browser.once("close", resolve));
+  carry(entry, "in", client, () => new PassThrough(), Buffer.alloc(0), http);
+  browser.end();
+  await closed;
+  return read;
 };
 
 /** One connection carried (daemon.ts, carrying) over a real socket, its client's far end a
@@ -423,33 +458,14 @@ export const pipeEnds = async (
   end: "client" | "upstream" | "error" | "unstarted" | "gone" | "none",
 ) => {
   const { carry, all } = carrying(2, () => {});
-  const file = path.join(process.env.DESOLATE_HOME!, `carried-${process.pid}-${end}.sock`);
-  const server = createServer();
-  const accepted = new Promise<Socket>((resolve) => server.once("connection", resolve));
-  await new Promise<void>((resolve) => server.listen(file, resolve));
-  const browser = connect(file);
-  browser.on("error", () => {});
-  const client = await accepted;
-  onTestFinished(() => {
-    browser.destroy();
-    client.destroy();
-    server.close();
-    fs.rmSync(file, { force: true });
-  });
+  const { browser, client } = await connection();
   if (end === "gone") {
     client.destroy();
     await settled();
   }
   const upstream = new PassThrough();
   if (end === "unstarted") upstream.destroy();
-  carry(
-    counted("w1"),
-    "in",
-    client,
-    () => upstream,
-    Buffer.alloc(0),
-    () => {},
-  );
+  carry(counted("w1"), "in", client, () => upstream, Buffer.alloc(0), false);
   const held = all();
   if (end === "client") browser.end();
   if (end === "upstream") upstream.destroy();

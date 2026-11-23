@@ -251,12 +251,9 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
 - **A listener below 1024, or past a workspace's 256th,** is not forwarded: below 1024 a
   port is the Mac's system's, and a workspace may not have the Mac listen on every port.
   `desolate ports` says which ports, or how many, were left out.
-- **Connections in at once.** A workspace has 256 connections in (to its dev servers and
-  its editor) carried at once, counted apart from its connections out, so that a flood one
-  way does not starve the other; the Mac carries 1,024 in and out of all its workspaces
-  together. Past either, a request is answered 503 with the reason (another protocol is
-  closed), the host's log says so, and `desolate ports` counts them. The setting is the same
-  one, `link.connections`.
+- **Connections in at once,** to a workspace's dev servers and editor, are bounded as those
+  out are (`link.connections`, counted apart), and the Mac carries 1,024 in and out of all
+  its workspaces together. Past either, a request is answered 503 with the reason.
 - **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
   clicked) is sent on to the workspace serving that port, at its own name, the path kept;
   with several serving it, the page lists them. Nothing is ever served at bare `localhost`.
@@ -329,9 +326,8 @@ work with no credential, private repositories included. Only the `.git` spelling
   outside: none of it can be reached from a workspace. Fetch what needs those on the Mac or
   in the root, or serve it on 443.
 - **Connections out at once.** A workspace has 256 connections through its proxy carried at
-  once (each a plain ssh session into the root VM, about 1.5 MB of the Mac's memory). Past
-  those, a connection is refused at once with the reason (a plain-HTTP program reads it; TLS
-  is closed), the host's log says so, and `desolate ports` counts them. More:
+  once. Past those, a connection is refused at once with the reason (a plain-HTTP program
+  reads it; TLS is closed), the host's log says so, and `desolate ports` counts them. More:
   `DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap` (the setting `link.connections`).
 - **TLS stays end to end,** with the real certificates, for every host but the hosts of the
   domain's own secrets: image pulls and `apt`, `npm` or `pip` in a build need nothing of

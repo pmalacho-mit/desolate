@@ -104,6 +104,7 @@ import type {
   numbered,
   opened,
   pipeEnds,
+  refusedAs,
   readInPieces,
   setOf,
   shown,
@@ -356,9 +357,10 @@ type Entry = Registered & {
   low: number[];
   more: number;
   past: number;
-  /** Its connections carried each way, and those refused (carrying). */
-  carried: Counted["carried"];
-  refused: Counted["refused"];
+  /** Its connections carried each way, and of those refused how many, the last when and why,
+   *  and when the daemon's log last said so (carrying). */
+  carried: Record<Way, number>;
+  refused: Record<Way, { count: number; at: string; why: string; logged: number }>;
 };
 
 /** A page's request that throws is that request's 500, logged: never the daemon's end (it
@@ -483,8 +485,8 @@ declare namespace heard {
     >,
   ];
 }
-/** How long a refused connection out is given to read its answer and close (openLink): a
- *  workspace's relay reads it at once. */
+/** How long a refused connection is given to read its answer and close (carrying): a
+ *  workspace's relay reads it at once, and so does a browser. */
 const REFUSED_MS = 5000;
 /** The most connections at once in their handshake on one vz link's loopback port
  *  (openLink). Each costs a socket of this daemon's, not a session into the root, and any
@@ -560,13 +562,15 @@ declare namespace connectionRefusal {
   >;
 }
 
+/** An answer of the forwarder's own, as text, with `heads` before its own. */
+const httpAnswer = (status: string, text: string, heads = "") =>
+  `HTTP/1.1 ${status}\r\n${heads}Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`;
+
 /** What a refused connection is answered, out (as its proxy refuses: the workspace's relay,
  *  workspace/net/egress.ts, shows a plain-HTTP program the reason) or in (to a browser, which
  *  shows the text). */
-const busyAnswer = (why: string) => {
-  const text = `desolate: ${why}\n`;
-  return `HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: ${why}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`;
-};
+const busyAnswer = (why: string) =>
+  httpAnswer("503 Service Unavailable", `desolate: ${why}\n`, `X-Desolate-Reason: ${why}\r\n`);
 
 declare namespace busyAnswer {
   export type Answer = Expect<
@@ -575,14 +579,6 @@ declare namespace busyAnswer {
     "HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: this workspace has 2 connections in carried at once\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 62\r\n\r\ndesolate: this workspace has 2 connections in carried at once\n"
   >;
 }
-
-/** What is kept of a workspace's connections: how many it carries each way, and of those
- *  refused, how many, the last when and why, and when the daemon's log last said so. */
-type Counted = {
-  vm: string;
-  carried: Record<Way, number>;
-  refused: Record<Way, { count: number; at: string; why: string; logged: number }>;
-};
 
 /** `client` piped to `upstream`, what the client already said (`head`) first: either side's
  *  close or error ends both. */
@@ -601,17 +597,19 @@ const pipe = (client: Duplex, upstream: Duplex, head: Buffer) => {
   client.resume();
 };
 
-/** The connections piped into and out of workspaces' VMs, counted. `carry` pipes a client to
- *  `open()` (a dial into a workspace's VM, or into the root's for its proxy) while its
- *  workspace carries fewer than `most` that way and this Mac fewer than CONNECTIONS_MOST in
- *  all; past either, nothing is dialed and `refused` is told why. A connection counts from
- *  its carrying to its client's close, which every end of a pipe comes to (either side's
- *  close, an error, a dial that could not start: pipe ends both sides). A refusal is kept for
- *  `desolate ports` and logged at most once a minute a way: the workspace is not trusted with
- *  this Mac's disk. `take` is the counting alone, for a connection piped otherwise. */
+/** The pipes into and out of workspaces' VMs, counted. `carry` pipes a client to `open()`
+ *  while its workspace carries fewer than `most` that way and this Mac fewer than
+ *  CONNECTIONS_MOST; past either nothing is dialed, and the client is answered why (`http`)
+ *  or closed. A connection counts until its client closes, which every end of a pipe comes
+ *  to. A refusal is kept for `desolate ports` and logged at most once a minute a way (the
+ *  workspace is not trusted with this Mac's disk). A refused client is let go: what it sends
+ *  is dropped, and it is destroyed after REFUSED_MS, or at once past CONNECTIONS_MOST being
+ *  answered: one held open would hold a descriptor of this daemon's. `take` is the count
+ *  alone, for a connection piped otherwise. */
 export const carrying = (most: number, log: (line: string) => void) => {
   let all = 0;
-  const take = (entry: Counted, way: Way, client: Duplex) => {
+  let answering = 0;
+  const take = (entry: Pick<Entry, "vm" | "carried" | "refused">, way: Way, client: Duplex) => {
     const why = connectionRefusal(way, entry.carried[way], all, most);
     if (why === null) {
       entry.carried[way] += 1;
@@ -620,9 +618,7 @@ export const carrying = (most: number, log: (line: string) => void) => {
       return null;
     }
     const refused = entry.refused[way];
-    refused.count += 1;
-    refused.at = new Date().toISOString();
-    refused.why = why;
+    Object.assign(refused, { count: refused.count + 1, at: new Date().toISOString(), why });
     if (Date.now() - refused.logged > 60_000) {
       refused.logged = Date.now();
       log(`${entry.vm}: refused a connection ${way} (${refused.count} so far): ${why}`);
@@ -630,18 +626,23 @@ export const carrying = (most: number, log: (line: string) => void) => {
     return why;
   };
   const carry = (
-    entry: Counted,
+    entry: Pick<Entry, "vm" | "carried" | "refused">,
     way: Way,
     client: Duplex,
     open: () => Duplex,
     head: Buffer,
-    refused: (why: string) => void,
+    http: boolean,
   ) => {
     // A client already gone is neither counted nor carried: its close has been and gone.
     if (client.destroyed) return;
     const why = take(entry, way, client);
-    if (why !== null) return refused(why);
-    pipe(client, open(), head);
+    if (why === null) return pipe(client, open(), head);
+    if (!http || answering >= CONNECTIONS_MOST) return void client.destroy();
+    answering += 1;
+    const timer = setTimeout(() => client.destroy(), REFUSED_MS);
+    client.once("close", () => ((answering -= 1), clearTimeout(timer)));
+    client.resume();
+    client.end(busyAnswer(why));
   };
   return { take, carry, all: () => all };
 };
@@ -726,6 +727,23 @@ declare namespace carrying {
       },
       { ended: 1; all: 1023 },
       { carried: 1; refused: [] },
+    ]
+  >;
+  /** refused, a request is answered why (busyAnswer) and closed; anything else is closed
+   *  with no word, since it named nothing that could be answered */
+  export type Refused = Table<
+    typeof refusedAs,
+    [
+      [
+        args: [carrying: typeof carrying, http: true],
+        expected: Invoke<
+          typeof busyAnswer,
+          [
+            why: "this workspace has 1 connections in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+          ]
+        >,
+      ],
+      [args: [carrying: typeof carrying, http: false], expected: ""],
     ]
   >;
   /** the count goes back down however a pipe ends: its client hanging up, the dial's end
@@ -1724,17 +1742,10 @@ const serve = async () => {
   // Every pipe into or out of a workspace's VM goes through this, counted (carrying).
   const { take, carry } = carrying(linkMost, log);
 
-  const redirectHttp = (client: Socket, location: string) => {
-    const text = `desolate: served at ${location}\n`;
+  const redirectHttp = (client: Socket, to: string) =>
     client.end(
-      `HTTP/1.1 307 Temporary Redirect\r\nLocation: ${location}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
+      httpAnswer("307 Temporary Redirect", `desolate: served at ${to}\n`, `Location: ${to}\r\n`),
     );
-  };
-  const refuseHttp = (client: Socket, status: string, text: string) => {
-    client.end(
-      `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
-    );
-  };
 
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
@@ -1759,18 +1770,11 @@ const serve = async () => {
     );
     if (route.to === "close") return void client.destroy();
     if (route.to === "redirect") return redirectHttp(client, route.location);
-    if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
+    if (route.to === "refuse") return void client.end(httpAnswer(route.status, route.text));
     if (route.to === "pipe") {
-      // Refused past its bound as it spoke: a request is told why, anything else closed.
+      // Past its bound, a request is told why, anything else closed.
       const http = sniffedHead.sniffed.kind === "http" && sniffedHead.sniffed.name !== null;
-      return carry(
-        route.entry,
-        "in",
-        client,
-        () => dial(route.entry.vm, port),
-        head,
-        (why) => (http ? client.end(busyAnswer(why)) : client.destroy()),
-      );
+      return carry(route.entry, "in", client, () => dial(route.entry.vm, port), head, http);
     }
     const entry = route.entry;
     // A client that already went gets no connection to the owner (final review: each one
@@ -1879,17 +1883,9 @@ const serve = async () => {
         return;
       }
       if (route.to === "dashboard") return pipe(client, toStateService(), head);
-      if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
+      if (route.to === "refuse") return void client.end(httpAnswer(route.status, route.text));
       if (route.to === "close") return void client.destroy();
-      const { entry } = route;
-      carry(
-        entry,
-        "in",
-        client,
-        () => dial(entry.vm, EDITOR.gate),
-        head,
-        (why) => client.end(busyAnswer(why)),
-      );
+      carry(route.entry, "in", client, () => dial(route.entry.vm, EDITOR.gate), head, true);
     });
   };
   // On 127.0.0.1 and on ::1, or not at all: browsers try ::1 first for *.localhost (measured
@@ -2078,37 +2074,13 @@ const serve = async () => {
     fs.mkdirSync(dir, { recursive: true });
     const socket = path.join(dir, "proxy.sock");
     fs.rmSync(socket, { force: true });
-    // linkMost are carried at once (carrying), and past those one is refused at once, saying
-    // so to the program, to the daemon's log and to `desolate ports`. (It was refused at 64
-    // with no word anywhere, and a parallel install saw resets.)
-    // A refused connection is answered and let go: what it sends is read and dropped, and it
-    // is destroyed if it has not closed in REFUSED_MS. At most linkMost are being answered at
-    // once, and past that one is destroyed: a workspace that held its refused connections
-    // open would otherwise hold a descriptor and a buffer of this daemon's for each.
-    let answering = 0;
-    const refuse = (client: Socket, why: string) => {
-      if (answering >= linkMost) return void client.destroy();
-      answering += 1;
-      const timer = setTimeout(() => client.destroy(), REFUSED_MS);
-      client.once("close", () => {
-        answering -= 1;
-        clearTimeout(timer);
-      });
-      client.resume();
-      client.end(busyAnswer(why));
-    };
-    // To this workspace's proxy in the root, and nowhere else.
+    // To this workspace's proxy in the root, and nowhere else; past linkMost refused at once,
+    // saying so (carrying). (It was refused at 64 with no word anywhere, and a parallel
+    // install saw resets.)
     const toProxy = (client: Socket, head: Buffer) =>
       entry.proxy === null
         ? void client.destroy()
-        : carry(
-            entry,
-            "out",
-            client,
-            () => dial(ROOT_VM, entry.proxy!),
-            head,
-            (why) => refuse(client, why),
-          );
+        : carry(entry, "out", client, () => dial(ROOT_VM, entry.proxy!), head, true);
     // Every connection the link took, so that its workspace's going ends them: closing a
     // server only stops it taking more, and a stopped workspace's downloads went on. One
     // taken after (a listener not yet closed) is ended at once.
