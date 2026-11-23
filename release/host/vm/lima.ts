@@ -42,6 +42,7 @@ import type {
   Expect,
   Given,
   Invoke,
+  Table,
   Throws,
 } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type {
@@ -49,6 +50,7 @@ import type {
   cloneCall,
   confinement,
   madeWithoutLinkToken,
+  statusOf,
   stepsSaid,
 } from "../../.harness/host-lima.ts";
 
@@ -275,6 +277,193 @@ declare namespace provisionStep {
   >;
 }
 
+/** Whether a pid file of Lima's names a process that is alive now, read as Lima's own
+ *  `ReadPIDFile` reads it (pkg/store/instance.go, v2.3.0): a file that is not there, or
+ *  holds no number, names nothing; a number whose process is gone names nothing (Lima
+ *  then removes the file; this only reads). A process that exists but is another user's
+ *  answers EPERM, and is alive: Lima says so too ("if we get a permissions error, it means
+ *  the process is still running"). A file written before this boot of the Mac names
+ *  nothing either, whatever its number: its process died with that boot, and the number may
+ *  be anyone's now. Lima tells by a marker holding the boot's id (pkg/store/pidfile.go),
+ *  which macOS gives only to `sysctl`; the file's own time, against when this boot began,
+ *  says the same without a process. Found on the M1, 2026-11-23: 4 of 28 VM folders still
+ *  held pid files from earlier boots, their numbers then dead. Ten seconds of slack, for
+ *  the boot's time in whole seconds and a clock set right just after boot. Bounded: Lima
+ *  writes the number and a newline, so a longer file is not one of its pid files. */
+const pidAlive = (file: string): boolean => {
+  let text: string;
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const { mtimeMs, size } = fs.fstatSync(fd);
+      if (size > 16 || mtimeMs < Date.now() - os.uptime() * 1000 - 10_000) return false;
+      const buffer = Buffer.alloc(16);
+      text = buffer.toString("latin1", 0, fs.readSync(fd, buffer, 0, buffer.length, 0)).trim();
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  // Positive: kill(2) given 0 or -1 asks about a group, or every process. (Past what a pid can
+  // be, node's kill refuses the number: not EPERM, so not alive.)
+  if (!/^[1-9][0-9]{0,9}$/.test(text)) return false;
+  try {
+    process.kill(Number(text), 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/** A VM's state from the files Lima keeps in its folder (`dir`), with no process started:
+ *  `missing` with no lima.yaml; `running` when the host agent's pid file (ha.pid) and the
+ *  driver's (`<vmType>.pid`: vz.pid, qemu.pid) both name a live process; `stopped` otherwise.
+ *  The rule is Lima's own `inspectStatusWithPIDFiles` (pkg/store/instance.go, v2.3.0), which
+ *  `limactl list` applies to both drivers (neither has an `InspectStatus` of its own): both
+ *  alive Running, neither Stopped, one alone Broken, which is "stopped" here as it was when
+ *  `limactl list` was asked. It was asked once a VM folder each pass of the daemon's loop:
+ *  about 20 a second with 28 folders, each 50 ms of CPU and 87 MB at its peak (measured on
+ *  the M1, 2026-11-23).
+ *
+ *  Lima also calls Broken a live host agent whose socket does not answer within 3 s; that is
+ *  not asked here. The host agent's pid is written before its socket is bound, and the
+ *  driver's only once the VM runs, after that (cmd/limactl/hostagent.go,
+ *  pkg/driver/vz/vm_darwin.go), so a start in progress shows no difference; only a host agent
+ *  that hangs, or one killed whose pid another process has taken since in the same boot,
+ *  would. Like Lima's Running, `running` means the VM's process is up, not that its ssh
+ *  answers: `start` waits for that itself. */
+export const vmStatus = (dir: string, driver: "qemu" | "vz"): VmStatus => {
+  if (!fs.existsSync(path.join(dir, "lima.yaml"))) return "missing";
+  return pidAlive(path.join(dir, "ha.pid")) && pidAlive(path.join(dir, `${driver}.pid`))
+    ? "running"
+    : "stopped";
+};
+
+declare namespace vmStatus {
+  type Vz = Invoke<typeof limaBackend, [kind: "vz"]>;
+  type Qemu = Invoke<typeof limaBackend, [kind: "qemu"]>;
+
+  /** What `info` says of a VM folder, from Lima's files alone. `<self>` is this test's own
+   *  process, alive; `<gone>` a child that has exited. Every row fails if limactl was started
+   *  to answer it. */
+  export type FromLimasFiles = Table<
+    typeof statusOf,
+    [
+      /** both processes alive: running */
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<self>\n"; "vz.pid": "<self>\n" }],
+        expected: "running",
+      ],
+      /** made, and never started: stopped */
+      [args: [backend: Vz, files: { "lima.yaml": "" }], expected: "stopped"],
+      /** no lima.yaml is no VM, whatever else the folder holds */
+      [args: [backend: Vz, files: { "ha.pid": "<self>"; "vz.pid": "<self>" }], expected: "missing"],
+      /** one alive and the other gone (Lima's Broken), either way round: stopped */
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<self>"; "vz.pid": "<gone>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<gone>"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<self>" }], expected: "stopped"],
+      /** the driver's file is the backend's own: qemu.pid on qemu, and vz.pid there is not it */
+      [
+        args: [backend: Qemu, files: { "lima.yaml": ""; "ha.pid": "<self>"; "qemu.pid": "<self>" }],
+        expected: "running",
+      ],
+      [
+        args: [backend: Qemu, files: { "lima.yaml": ""; "ha.pid": "<self>"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      /** another user's process exists (pid 1, the system's first): kill says EPERM, and it is
+       *  alive (run as root, kill succeeds: alive too) */
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "1"; "vz.pid": "1" }],
+        expected: "running",
+      ],
+    ]
+  >;
+  /** a pid file that holds no pid names nothing, and never throws: beside the control above,
+   *  each of these is the host agent's file, the driver's naming this live process */
+  export type NotAPid = Table<
+    typeof statusOf,
+    [
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "abc"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "-1"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "0"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": ""; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<self>abc"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<self> 1"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "2147483648"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "99999999999999999999"; "vz.pid": "<self>" },
+        ],
+        expected: "stopped",
+      ],
+      /** (a pid, and more past what a pid file holds) */
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>                        \n1";
+            "vz.pid": "<self>";
+          },
+        ],
+        expected: "stopped",
+      ],
+    ]
+  >;
+  /** pid files from before this boot of the Mac name nothing, though their number is alive
+   *  now: the control is the first row above, the same files written now */
+  export type BeforeThisBoot = Expect<
+    Invoke<
+      typeof statusOf,
+      [
+        backend: Vz,
+        files: { "lima.yaml": ""; "ha.pid": "<self>\n"; "vz.pid": "<self>\n" },
+        written: "before this boot",
+      ]
+    >,
+    "=",
+    "stopped"
+  >;
+  /** the control for "starts nothing": the same watch sees a limactl the backend does start */
+  export type WatchSeesLimactl = Throws<
+    Invoke<
+      typeof statusOf,
+      [backend: Vz, files: { "lima.yaml": "" }, written: undefined, first: "stop"]
+    >,
+    "limactl was started: --tty=false stop dsl-main-status"
+  >;
+}
+
 export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
   const imageDir = process.env.DESOLATE_IMAGE_DIR ?? path.join(paths.images, arch);
@@ -407,13 +596,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         .filter((line) => line !== "mounts: []")
         .join("\n") + "\n"
     );
-  };
-
-  const status = async (name: string): Promise<VmStatus> => {
-    if (!fs.existsSync(path.join(LIMA_HOME, name, "lima.yaml"))) return "missing";
-    const listed = await lima(["list", "--format", "{{.Status}}", name], { timeoutMs: 30_000 });
-    const text = listed.stdout.trim();
-    return text === "Running" ? "running" : text === "" ? "missing" : "stopped";
   };
 
   /** Where each share of a VM must be, read-only or read-write, as Apple's VM process will be
@@ -995,7 +1177,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const m = meta(name);
       return {
         name,
-        status: await status(name),
+        status: vmStatus(path.join(LIMA_HOME, name), kind),
         labels: m ? { ...m.spec.labels, role: m.spec.role } : {},
       };
     },

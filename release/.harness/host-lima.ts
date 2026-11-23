@@ -8,6 +8,7 @@
 // each share's directory on the host); in what comes back, the home, the release folder,
 // the architecture and the ports the backend picked are written as `<home>`, `<release>`,
 // `<arch>`, `<ssh port>` and `<link port>`, which differ from machine to machine.
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -135,6 +136,50 @@ export const madeWithoutLinkToken = (name: string) => {
       linkPort: 60023,
     }),
   );
+};
+
+/** A pid that names no process: a child's, once it has exited (checked, in case another
+ *  process took the number at once). */
+const gonePid = (): number => {
+  for (let tries = 0; tries < 5; tries++) {
+    const { pid } = spawnSync(process.execPath, ["-e", ""]);
+    try {
+      process.kill(pid!, 0);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return pid!;
+    }
+  }
+  throw new Error("no pid could be found that names no process");
+};
+
+/** What `info` says of a VM whose folder in Lima's home holds exactly `files` (`<self>` in
+ *  one stands for this process's pid, `<gone>` for an exited child's), with each file dated
+ *  2000 if `written` says so. limactl is the stand-in throughout, and if anything started it
+ *  (`first: "stop"` does, as a control) this throws, naming the call. */
+export const statusOf = async (
+  backend: Backend,
+  files: Record<string, string>,
+  written?: "before this boot",
+  first?: "stop",
+): Promise<string> => {
+  const name = `dsl-main-status`;
+  const dir = path.join(limaHome(), name);
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const gone = String(gonePid());
+  for (const [file, text] of Object.entries(files)) {
+    fs.writeFileSync(
+      path.join(dir, file),
+      text.split("<self>").join(String(process.pid)).split("<gone>").join(gone),
+    );
+    if (written) fs.utimesSync(path.join(dir, file), new Date(2000, 0, 1), new Date(2000, 0, 1));
+  }
+  fakeLimactl();
+  if (first) await backend[first](name);
+  const { status } = await backend.info(name);
+  const started = calls();
+  if (started.length > 0) throw new Error(`limactl was started: ${started[0]!.join(" ")}`);
+  return status;
 };
 
 /** What a person waiting on a provisioning is told, of the lines provision.sh printed. */
