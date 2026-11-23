@@ -8,13 +8,79 @@ import { EXIT, refuse } from "../shared/exit.ts";
 import { domainNameFor, isSlug, parseRepo, repoId } from "../shared/names.ts";
 import { run } from "../shared/run.ts";
 import { INSTANCE } from "./paths.ts";
-import { config, ensureProxyUser, rootctl } from "./stack.ts";
-import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import { backend, config, ensureProxyUser, ROOT_VM, rootctl } from "./stack.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Mock,
+  Table,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
+import type { forgeAdmin, forgeGot, keyringHolds, standInStack } from "../.harness/host-repos.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
-type Key = { role: "read" | "write"; pubkey: string };
+type Role = "read" | "write";
+type Key = { role: Role; pubkey: string };
+
+/** An ed25519 public key as ssh-keygen writes one: one line, its type, its base64, and at most
+ *  a comment of visible characters. */
+const PUBKEY = /^ssh-ed25519 [A-Za-z0-9+/]+={0,2}( [\x21-\x7e]{1,200})?$/;
+
+/** A key file's text, if it is one public key (one line, its newline optional): the whole
+ *  line, and the key alone (its type and base64, what a forge is given), else null. */
+export const publicKey = (text: string): { line: string; key: string } | null => {
+  const line = text.endsWith("\n") ? text.slice(0, -1) : text;
+  if (!PUBKEY.test(line)) return null;
+  return { line, key: line.split(" ").slice(0, 2).join(" ") };
+};
+
+declare namespace publicKey {
+  /** one key, with or without its comment, is taken; anything else in the file is refused */
+  export type Lines = Table<
+    typeof publicKey,
+    [
+      [
+        args: [text: "ssh-ed25519 AAAAC3Nz+/9= desolate-read:acme/web\n"],
+        expected: {
+          line: "ssh-ed25519 AAAAC3Nz+/9= desolate-read:acme/web";
+          key: "ssh-ed25519 AAAAC3Nz+/9=";
+        },
+      ],
+      [
+        args: [text: "ssh-ed25519 AAAAC3Nz"],
+        expected: { line: "ssh-ed25519 AAAAC3Nz"; key: "ssh-ed25519 AAAAC3Nz" },
+      ],
+      [args: [text: "ssh-ed25519 AAAAone a\nssh-ed25519 AAAAtwo b\n"], expected: null],
+      [args: [text: "ssh-ed25519 AAAAone a\n\n"], expected: null],
+      [args: [text: "ssh-ed25519 AAAAone a b"], expected: null],
+      [args: [text: "ssh-ed25519 AAAAone \u001b[2Jcleared"], expected: null],
+      [args: [text: "ssh-rsa AAAAone"], expected: null],
+      [args: [text: ""], expected: null],
+    ]
+  >;
+}
+
+/** A key's public half, read by the Mac itself, as root in the root VM, from the keyring's own
+ *  file (root/keyring.ts's keyFile, under root/layout.ts's KEYRING.keys). The root's ordinary
+ *  user, which parses what domains send, answers rootctl: what it says a key is, is never what
+ *  a forge is given or a person is shown. */
+const keyringKey = async (repo: string, role: Role) => {
+  const file = `/var/lib/desolate-root/keyring/${repo}/${role}.pub`;
+  const read = await backend().exec(ROOT_VM, ["cat", "--", file], {
+    root: true,
+    maxBytes: 4096,
+    timeoutMs: 20_000,
+  });
+  const key = read.code === 0 ? publicKey(read.stdout) : null;
+  if (!key)
+    refuse(
+      `the root VM's keyring gave something that is not a public key for ${repo}'s ${role} key`,
+      "desolate doctor",
+    );
+  return key!;
+};
 
 const repoArg = (value: string | undefined) =>
   parseRepo(value) ?? refuse(`'${value ?? ""}' is not a repository`, "name it as <owner>/<repo>");
@@ -35,8 +101,9 @@ const register = async (repo: string, key: Key) => {
       throw new Error(`the stand-in forge refused the ${key.role} key: ${result.stderr.trim()}`);
     return "registered";
   }
-  const file = path.join(os.tmpdir(), `desolate-${process.pid}-${key.role}.pub`);
-  fs.writeFileSync(file, key.pubkey + "\n");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-key-"));
+  const file = path.join(dir, "key.pub");
+  fs.writeFileSync(file, key.pubkey + "\n", { mode: 0o600 });
   try {
     // The title is seen by everyone who administers the repository. A Mac's hostname is
     // often its owner's name ("Someones-MacBook-Pro"), so the host is named by a hash of it:
@@ -67,7 +134,7 @@ const register = async (repo: string, key: Key) => {
       `if someone else administers ${repo}, they can add the keys: desolate clone ${repo} --keys-by-hand prints them. Otherwise: ${key.role === "write" ? "--no-push (no write key), or " : ""}--anonymous (no key, a public repository)`,
     );
   } finally {
-    fs.rmSync(file, { force: true });
+    fs.rmSync(dir, { recursive: true, force: true });
   }
   return "registered";
 };
@@ -114,10 +181,25 @@ export const clone = async (
       "a domain name is a slug: lowercase letters, digits and single dashes, at most 40",
       EXIT.usage,
     );
+  // The keys are the ones asked for, as root/repos.ts's prepare makes them: a read key unless
+  // anonymous, a write key only to push.
+  const roles: Role[] = [
+    ...(options.anonymous ? [] : (["read"] as const)),
+    ...(options.push ? (["write"] as const) : []),
+  ];
+  // It makes the keys; what it says they are is not used (keyringKey).
   const prepared = await rootctl<{ pushable: boolean; anonymous: boolean; keys: Key[] }>(
     "repo.prepare",
     { repo, push: options.push, anonymous: options.anonymous },
   );
+  const answered = Array.isArray(prepared?.keys) ? prepared.keys.map((k) => k?.role) : null;
+  if (!answered || answered.length !== roles.length || roles.some((r) => !answered.includes(r)))
+    refuse(
+      `the root answered for other keys than the ones asked for ${repo}, so none was registered`,
+      "desolate doctor",
+    );
+  const made: Key[] = [];
+  for (const role of roles) made.push({ role, pubkey: (await keyringKey(repo, role)).key });
   if (options.byHand) {
     // Keys added by whoever administers the repository (GitHub: Settings, Deploy keys). The
     // root made them and keeps them; only their public halves are shown. The fetch says
@@ -129,9 +211,9 @@ export const clone = async (
     ).catch(() => null);
     if (!tried) {
       out(
-        `Add ${prepared.keys.length === 1 ? "this deploy key" : "these deploy keys"} to ${repo}${config()?.forge.kind === "github" ? ` (https://github.com/${repo}/settings/keys/new)` : ""}, then run this command again:`,
+        `Add ${made.length === 1 ? "this deploy key" : "these deploy keys"} to ${repo}${config()?.forge.kind === "github" ? ` (https://github.com/${repo}/settings/keys/new)` : ""}, then run this command again:`,
       );
-      for (const key of prepared.keys)
+      for (const key of made)
         out(
           `\n  ${key.role === "write" ? 'desolate write: tick "Allow write access"' : "desolate read: read-only"}\n  ${key.pubkey}`,
         );
@@ -144,7 +226,7 @@ export const clone = async (
         `  keys: added by hand; the read key works${prepared.pushable ? " (the write key is first used by a push you approve)" : ""}`,
       );
   } else
-    for (const key of prepared.keys) {
+    for (const key of made) {
       const how = await register(repo, key);
       if (!json)
         out(
@@ -158,7 +240,7 @@ export const clone = async (
     return out(
       JSON.stringify({
         ...prepared,
-        keys: prepared.keys.map((k) => k.role),
+        keys: roles,
         ...fetched,
         domain: domain?.slug ?? null,
       }),
@@ -284,10 +366,11 @@ declare namespace clone {
       ]
     >
   >;
-  /** keys someone else adds: their public halves, until the root can fetch with the read key */
+  /** keys someone else adds: their public halves as the keyring holds them, until the root can
+   *  fetch with the read key */
   export type KeysByHand = Given<
     [
-      Mock<"./stack.ts", typeof fakeStack>,
+      Mock<"./stack.ts", typeof standInStack>,
       Invoke<
         typeof rootAnswers,
         [
@@ -296,13 +379,14 @@ declare namespace clone {
               pushable: true;
               anonymous: false;
               keys: [
-                { role: "read"; pubkey: "ssh-ed25519 AAAAread desolate-read" },
-                { role: "write"; pubkey: "ssh-ed25519 AAAAwrite desolate-write" },
+                { role: "read"; pubkey: "ssh-ed25519 AAAAroots" },
+                { role: "write"; pubkey: "ssh-ed25519 AAAAroots" },
               ];
             };
           },
         ]
       >,
+      Invoke<typeof keyringHolds, [files: Keyring]>,
       Invoke<
         typeof clone,
         [
@@ -320,14 +404,140 @@ declare namespace clone {
         "Add these deploy keys to acme/web, then run this command again:",
         "",
         "  desolate read: read-only",
-        "  ssh-ed25519 AAAAread desolate-read",
+        "  ssh-ed25519 AAAAread",
         "",
         '  desolate write: tick "Allow write access"',
-        "  ssh-ed25519 AAAAwrite desolate-write",
+        "  ssh-ed25519 AAAAwrite",
         "",
         "Only public halves are shown: the private ones never leave the root's keyring.",
       ]
     >
+  >;
+  type Keyring = {
+    "/var/lib/desolate-root/keyring/acme/web/read.pub": "ssh-ed25519 AAAAread desolate-read:acme/web\n";
+    "/var/lib/desolate-root/keyring/acme/web/write.pub": "ssh-ed25519 AAAAwrite desolate-write:acme/web\n";
+  };
+  type ReadOnly = { push: false; anonymous: false; domain: false };
+  type Prepared<K> = {
+    "repo.prepare": { pushable: false; anonymous: false; keys: K };
+    "repo.fetch": Fetched;
+  };
+  /** the forge is given the keyring's read key, without its comment, and nothing else */
+  export type Registers = Given<
+    [
+      Mock<"./stack.ts", typeof standInStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: Prepared<
+            [{ role: "read"; pubkey: "ssh-ed25519 AAAAread desolate-read:acme/web" }]
+          >,
+        ]
+      >,
+      Invoke<typeof keyringHolds, [files: Keyring]>,
+      Invoke<typeof forgeAdmin>,
+      Invoke<typeof clone, [name: "acme/web", options: ReadOnly, out: typeof collect, json: false]>,
+    ],
+    [
+      Expect<Invoke<typeof forgeGot>, "=", ["add-key acme/web read ssh-ed25519 AAAAread"]>,
+      Expect<
+        Invoke<typeof said>,
+        "=",
+        [
+          "  read key: registered",
+          "cloned acme/web: 3 branch(es), default main, 0 LFS object(s); read-only (no write key).",
+          "next: desolate domain create <slug> --repo acme/web   (or, to a domain you have: desolate domain <slug> add --repo acme/web; or clone again with --domain <slug>)",
+        ]
+      >,
+    ]
+  >;
+  /** a key the root's answer makes up is not what the forge is given: the keyring's is */
+  export type NotTheAnswersKey = Given<
+    [
+      Mock<"./stack.ts", typeof standInStack>,
+      Invoke<
+        typeof rootAnswers,
+        [answers: Prepared<[{ role: "read"; pubkey: "ssh-ed25519 AAAAroots" }]>]
+      >,
+      Invoke<typeof keyringHolds, [files: Keyring]>,
+      Invoke<typeof forgeAdmin>,
+      Invoke<typeof clone, [name: "acme/web", options: ReadOnly, out: typeof collect, json: false]>,
+    ],
+    Expect<Invoke<typeof forgeGot>, "=", ["add-key acme/web read ssh-ed25519 AAAAread"]>
+  >;
+  /** a write key the --no-push clone did not ask for is refused, and the forge is given nothing */
+  export type WriteNotAsked = Given<
+    [
+      Mock<"./stack.ts", typeof standInStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: Prepared<
+            [
+              { role: "read"; pubkey: "ssh-ed25519 AAAAroots" },
+              { role: "write"; pubkey: "ssh-ed25519 AAAAroots" },
+            ]
+          >,
+        ]
+      >,
+      Invoke<typeof keyringHolds, [files: Keyring]>,
+      Invoke<typeof forgeAdmin>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof clone,
+            args: [name: "acme/web", options: ReadOnly, out: typeof collect, json: false],
+          ]
+        >,
+        "=",
+        {
+          message: "the root answered for other keys than the ones asked for acme/web, so none was registered";
+          fix: "desolate doctor";
+          code: 1;
+        }
+      >,
+      Expect<Invoke<typeof forgeGot>, "=", []>,
+    ]
+  >;
+  /** a keyring file of two lines is not a key: refused, and the forge is given nothing */
+  export type NotAKey = Given<
+    [
+      Mock<"./stack.ts", typeof standInStack>,
+      Invoke<
+        typeof rootAnswers,
+        [answers: Prepared<[{ role: "read"; pubkey: "ssh-ed25519 AAAAread" }]>]
+      >,
+      Invoke<
+        typeof keyringHolds,
+        [
+          files: {
+            "/var/lib/desolate-root/keyring/acme/web/read.pub": "ssh-ed25519 AAAAread a\nssh-ed25519 AAAAother b\n";
+          },
+        ]
+      >,
+      Invoke<typeof forgeAdmin>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof clone,
+            args: [name: "acme/web", options: ReadOnly, out: typeof collect, json: false],
+          ]
+        >,
+        "=",
+        {
+          message: "the root VM's keyring gave something that is not a public key for acme/web's read key";
+          fix: "desolate doctor";
+          code: 1;
+        }
+      >,
+      Expect<Invoke<typeof forgeGot>, "=", []>,
+    ]
   >;
 }
 
@@ -379,13 +589,13 @@ export const keys = async (name: string | undefined, out: Out, json: boolean) =>
   const mine = held.filter((key) => key.repo === repo);
   if (mine.length === 0) refuse(`the root holds no key for ${repo}`, `desolate clone ${repo}`);
   const shown: { role: string; pubkey: string }[] = [];
-  for (const key of mine)
-    shown.push({
-      role: key.role,
-      pubkey: (
-        await rootctl<{ pubkey: string }>("keys.pubkey", { repo, role: key.role }, { quiet: true })
-      ).pubkey,
-    });
+  for (const key of mine) {
+    if (key.role !== "read" && key.role !== "write")
+      refuse(`the root listed a key for ${repo} that is neither read nor write`, "desolate doctor");
+    // Read from the keyring itself, as clone's are; shown whole, comment and all, which names
+    // the repository it is for.
+    shown.push({ role: key.role, pubkey: (await keyringKey(repo, key.role)).line });
+  }
   if (json) return out(JSON.stringify(shown));
   for (const key of shown)
     out(
@@ -408,6 +618,57 @@ declare namespace keys {
       >,
       "=",
       { message: "the root holds no key for acme/web"; fix: "desolate clone acme/web"; code: 1 }
+    >
+  >;
+  /** a key's public half is the keyring's own, whatever else the root's user would say */
+  export type Shows = Given<
+    [
+      Mock<"./stack.ts", typeof standInStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "keys.list": [{ repo: "acme/web"; role: "read" }];
+            "keys.pubkey": { pubkey: "ssh-ed25519 AAAAroots" };
+          },
+        ]
+      >,
+      Invoke<
+        typeof keyringHolds,
+        [
+          files: {
+            "/var/lib/desolate-root/keyring/acme/web/read.pub": "ssh-ed25519 AAAAread desolate-read:acme/web\n";
+          },
+        ]
+      >,
+      Invoke<typeof keys, [name: "acme/web", out: typeof collect, json: false]>,
+    ],
+    Expect<
+      Invoke<typeof said>,
+      "=",
+      [
+        "acme/web  read key (a deploy key, read-only):",
+        "  ssh-ed25519 AAAAread desolate-read:acme/web",
+        "Only public halves are ever shown: the private halves do not leave the root's keyring.",
+      ]
+    >
+  >;
+  /** a role that is neither read nor write names no file of the keyring's: refused */
+  export type OtherRole = Given<
+    [
+      Mock<"./stack.ts", typeof standInStack>,
+      Invoke<
+        typeof rootAnswers,
+        [answers: { "keys.list": [{ repo: "acme/web"; role: "../read" }] }]
+      >,
+    ],
+    Expect<
+      Invoke<
+        typeof refusalOf,
+        [run: typeof keys, args: [name: "acme/web", out: typeof collect, json: false]]
+      >,
+      "matches",
+      { message: "the root listed a key for acme/web that is neither read nor write" }
     >
   >;
   /** which keys the root holds; a write key asks before every push */
