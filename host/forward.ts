@@ -1642,11 +1642,12 @@ declare namespace unforwardedOf {
 
 /** What `desolate ports` says of a workspace beside its ports: how many of its listeners
  *  were not forwarded for a bound's sake (each bound by its number), and how many of its
- *  connections out were refused (link.connections, in daemon.ts). */
-const notesOf = (
-  left: { more: number; past: number },
-  refused: { count: number; at: string; most: number },
-) => [
+ *  connections in or out were refused, with the last one's reason (daemon.ts, carrying). */
+const notesOf = (left: {
+  more: number;
+  past: number;
+  refused: Record<"in" | "out", { count: number; at: string; why: string }>;
+}) => [
   ...(left.more > 0
     ? [
         `${left.more} more listener${left.more === 1 ? " is" : "s are"} not forwarded: a compose service's past the first 256 (workspace/bridge.ts)`,
@@ -1657,31 +1658,61 @@ const notesOf = (
         `${left.past} more listener${left.past === 1 ? " is" : "s are"} not forwarded: past the first ${FORWARDS_MOST} of a workspace`,
       ]
     : []),
-  ...(refused.count > 0
-    ? [
-        `${refused.count} connection${refused.count === 1 ? "" : "s"} out ${refused.count === 1 ? "was" : "were"} refused, the last at ${refused.at}: ${refused.most} are carried to its proxy at once and as many more may wait their turn (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`,
-      ]
-    : []),
+  ...(["in", "out"] as const).flatMap((way) => {
+    const { count, at, why } = left.refused[way];
+    return count > 0
+      ? [
+          `${count} connection${count === 1 ? "" : "s"} ${way} ${count === 1 ? "was" : "were"} refused, the last at ${at}: ${why}`,
+        ]
+      : [];
+  }),
 ];
 
 declare namespace notesOf {
   /** nothing left out and nothing refused: nothing said */
   export type None = Expect<
-    Invoke<typeof notesOf, [left: { more: 0; past: 0 }, refused: { count: 0; at: ""; most: 48 }]>,
+    Invoke<
+      typeof notesOf,
+      [
+        left: {
+          more: 0;
+          past: 0;
+          refused: { in: { count: 0; at: ""; why: "" }; out: { count: 0; at: ""; why: "" } };
+        },
+      ]
+    >,
     "=",
     []
   >;
-  /** each bound by its number, and the setting to change, as a person would type it */
+  /** each bound by its number, and each way's refusals with the last one's reason */
   export type Said = Expect<
     Invoke<
       typeof notesOf,
-      [left: { more: 44; past: 1 }, refused: { count: 3; at: "2026-11-21T06:00:00.000Z"; most: 48 }]
+      [
+        left: {
+          more: 44;
+          past: 1;
+          refused: {
+            in: {
+              count: 1;
+              at: "2026-11-23T06:00:00.000Z";
+              why: "this workspace has 2 connections in carried at once";
+            };
+            out: {
+              count: 3;
+              at: "2026-11-21T06:00:00.000Z";
+              why: "this workspace has 48 connections out carried at once";
+            };
+          };
+        },
+      ]
     >,
     "=",
     [
       "44 more listeners are not forwarded: a compose service's past the first 256 (workspace/bridge.ts)",
       "1 more listener is not forwarded: past the first 256 of a workspace",
-      "3 connections out were refused, the last at 2026-11-21T06:00:00.000Z: 48 are carried to its proxy at once and as many more may wait their turn (the setting link.connections: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+      "1 connection in was refused, the last at 2026-11-23T06:00:00.000Z: this workspace has 2 connections in carried at once",
+      "3 connections out were refused, the last at 2026-11-21T06:00:00.000Z: this workspace has 48 connections out carried at once",
     ]
   >;
 }

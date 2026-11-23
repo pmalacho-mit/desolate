@@ -1,10 +1,10 @@
 // Harness for the in-source tests of release/host/daemon.ts.
 import * as fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createServer } from "node:net";
+import { connect, createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
-import { Duplex } from "node:stream";
+import { Duplex, PassThrough } from "node:stream";
 import { onTestFinished } from "./vitest.ts";
 import type { backend } from "../host/stack.ts";
 import { INSTANCE } from "../host/paths.ts";
@@ -333,4 +333,145 @@ export const silentClients = async (
   }
   await new Promise((resolve) => setImmediate(resolve));
   return clients.map((client) => client.destroyed);
+};
+
+// ------------------------------------------------------------------ connections carried
+type Carrying = (
+  most: number,
+  log: (line: string) => void,
+) => {
+  carry: (
+    entry: {
+      vm: string;
+      carried: Record<"in" | "out", number>;
+      refused: Record<"in" | "out", Refused>;
+    },
+    way: "in" | "out",
+    client: Duplex,
+    open: () => Duplex,
+    head: Buffer,
+    http: boolean,
+  ) => void;
+  all: () => number;
+};
+type Refused = { count: number; at: string; why: string; logged: number };
+const counted = (vm: string) => ({
+  vm,
+  carried: { in: 0, out: 0 },
+  refused: {
+    in: { count: 0, at: "", why: "", logged: 0 },
+    out: { count: 0, at: "", why: "", logged: 0 },
+  },
+});
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+/** Connections carried (daemon.ts, carrying) at `most` a workspace a way, a step at a time:
+ *  `count` more of `vm`'s `way`, each a stand-in client piped to a stand-in dial and held; or,
+ *  a negative `count`, that many of those held ended by their client. Per step: how many were
+ *  carried and the reasons the rest were refused, or how many ended and how many this Mac
+ *  then carries in all. */
+export const opened = async (
+  carrying: Carrying,
+  most: number,
+  steps: [vm: string, way: "in" | "out", count: number][],
+) => {
+  const { carry, all } = carrying(most, () => {});
+  const entries = new Map<string, ReturnType<typeof counted>>();
+  const held = new Map<string, Duplex[]>();
+  const results: ({ carried: number; refused: string[] } | { ended: number; all: number })[] = [];
+  for (const [vm, way, count] of steps) {
+    if (!entries.has(vm)) entries.set(vm, counted(vm));
+    const key = `${vm} ${way}`;
+    const mine = held.get(key) ?? [];
+    held.set(key, mine);
+    if (count < 0) {
+      for (const client of mine.splice(0, -count)) client.destroy();
+      await settled();
+      results.push({ ended: -count, all: all() });
+      continue;
+    }
+    let carried = 0;
+    const refused = new Set<string>();
+    for (let i = 0; i < count; i++) {
+      const client = new PassThrough();
+      let piped = false;
+      const entry = entries.get(vm)!;
+      const before = entry.refused[way].count;
+      carry(entry, way, client, () => ((piped = true), new PassThrough()), Buffer.alloc(0), false);
+      if (piped) (carried++, mine.push(client));
+      if (entry.refused[way].count > before) refused.add(entry.refused[way].why);
+    }
+    await settled();
+    results.push({ carried, refused: [...refused] });
+  }
+  for (const clients of held.values()) for (const client of clients) client.destroy();
+  return results;
+};
+
+let connections = 0;
+/** A connection over a unix socket in the test file's home: the daemon's end (`client`), and
+ *  the far end, a stand-in browser. */
+const connection = async () => {
+  const file = path.join(
+    process.env.DESOLATE_HOME!,
+    `carried-${process.pid}-${connections++}.sock`,
+  );
+  const server = createServer();
+  const accepted = new Promise<Socket>((resolve) => server.once("connection", resolve));
+  await new Promise<void>((resolve) => server.listen(file, resolve));
+  const browser = connect(file);
+  browser.on("error", () => {});
+  const client = await accepted;
+  onTestFinished(() => {
+    browser.destroy();
+    client.destroy();
+    server.close();
+    fs.rmSync(file, { force: true });
+  });
+  return { browser, client };
+};
+
+/** What the far end of a connection refused (daemon.ts, carrying: its workspace already
+ *  carries the one it may) reads before it is closed, `http` or not. */
+export const refusedAs = async (carrying: Carrying, http: boolean) => {
+  const { carry } = carrying(1, () => {});
+  const entry = counted("w1");
+  carry(entry, "in", new PassThrough(), () => new PassThrough(), Buffer.alloc(0), false);
+  const { browser, client } = await connection();
+  let read = "";
+  browser.on("data", (chunk: Buffer) => (read += chunk.toString()));
+  const closed = new Promise((resolve) => browser.once("close", resolve));
+  carry(entry, "in", client, () => new PassThrough(), Buffer.alloc(0), http);
+  browser.end();
+  await closed;
+  return read;
+};
+
+/** One connection carried (daemon.ts, carrying) over a real socket, its client's far end a
+ *  stand-in browser and its dial a stand-in for one into a VM, then ended so: `client` (the
+ *  browser hangs up), `upstream` (the dial's end closes), `error` (the dial fails),
+ *  `unstarted` (a dial that could not start: daemon.ts's dial() gives one already destroyed
+ *  when the VM layer throws), `gone` (the client went before it was carried), `none`. How
+ *  many this Mac carried just after it was carried, and once its ends had settled. */
+export const pipeEnds = async (
+  carrying: Carrying,
+  end: "client" | "upstream" | "error" | "unstarted" | "gone" | "none",
+) => {
+  const { carry, all } = carrying(2, () => {});
+  const { browser, client } = await connection();
+  if (end === "gone") {
+    client.destroy();
+    await settled();
+  }
+  const upstream = new PassThrough();
+  if (end === "unstarted") upstream.destroy();
+  carry(counted("w1"), "in", client, () => upstream, Buffer.alloc(0), false);
+  const held = all();
+  if (end === "client") browser.end();
+  if (end === "upstream") upstream.destroy();
+  if (end === "error") upstream.destroy(new Error("the dial's ssh went away"));
+  for (let i = 0; i < 20 && all() > 0 && end !== "none"; i++)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  await settled();
+  return { held, after: all() };
 };
