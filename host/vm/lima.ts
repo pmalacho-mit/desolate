@@ -42,6 +42,7 @@ import type {
   Expect,
   Given,
   Invoke,
+  Table,
   Throws,
 } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type {
@@ -49,6 +50,7 @@ import type {
   cloneCall,
   confinement,
   madeWithoutLinkToken,
+  statusOf,
   stepsSaid,
 } from "../../.harness/host-lima.ts";
 
@@ -275,6 +277,365 @@ declare namespace provisionStep {
   >;
 }
 
+/** Whether a pid file of Lima's names a process that is alive now, read as Lima's own
+ *  `ReadPIDFile` reads it (pkg/store/instance.go, v2.3.0): a file that is not there, or
+ *  holds no number, names nothing; a number whose process is gone names nothing (Lima
+ *  then removes the file; this only reads). A process that exists but is another user's
+ *  answers EPERM, and is alive: Lima says so too ("if we get a permissions error, it means
+ *  the process is still running"). A file written before this boot of the Mac names
+ *  nothing either, whatever its number: its process died with that boot, and the number may
+ *  be anyone's now. Lima tells by a marker holding the boot's id (pkg/store/pidfile.go),
+ *  which macOS gives only to `sysctl`; the file's own time, against when this boot began,
+ *  says the same without a process. Found on the M1, 2026-11-23: 4 of 28 VM folders still
+ *  held pid files from earlier boots, their numbers then dead. Ten seconds of slack, for
+ *  the boot's time in whole seconds and a clock set right just after boot. Bounded: Lima
+ *  writes the number and a newline, so a longer file is not one of its pid files. */
+const pidAlive = (file: string): boolean => {
+  let text: string;
+  try {
+    const fd = fs.openSync(file, "r");
+    try {
+      const { mtimeMs, size } = fs.fstatSync(fd);
+      if (size > 16 || mtimeMs < Date.now() - os.uptime() * 1000 - 10_000) return false;
+      const buffer = Buffer.alloc(16);
+      text = buffer.toString("latin1", 0, fs.readSync(fd, buffer, 0, buffer.length, 0)).trim();
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+  // Positive: kill(2) given 0 or -1 asks about a group, or every process. (Past what a pid can
+  // be, node's kill refuses the number: not EPERM, so not alive.)
+  if (!/^[1-9][0-9]{0,9}$/.test(text)) return false;
+  try {
+    process.kill(Number(text), 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+/** The longest path a unix socket may have here (sockaddr_un's sun_path, less its NUL). */
+const SOCKET_PATH_MAX = process.platform === "darwin" ? 103 : 107;
+
+/** Whether something accepts a connection on the unix socket at `socket`: connected, then
+ *  closed at once, nothing sent. A refusal (a socket file left by a listener that is gone),
+ *  no file, any other error, or no answer within a second is no. A second, against Lima's
+ *  3 s for a whole Info round trip: the kernel completes a connect to a local listener with
+ *  room in its backlog at once (to a running host agent's socket on the M1, 2026-11-23:
+ *  0.05 ms in the middle of 20, 4 ms the slowest). The verdict waits a turn of the loop after
+ *  the timer, so a connect that completed while this process was busy is counted first. A
+ *  path longer than a socket's may be is no: nothing could have bound it (Lima binds the real
+ *  one, and doctor's "socket paths fit" keeps every path under a home within the limit), and
+ *  libuv cuts such a path short rather than refuse it (on the M1: a connect to a 108-byte
+ *  path reached the socket named by its first 104). */
+const accepts = (socket: string): Promise<boolean> =>
+  new Promise((resolve) => {
+    if (Buffer.byteLength(socket) > SOCKET_PATH_MAX) return resolve(false);
+    const connection = net.connect(socket);
+    const answer = (yes: boolean) => {
+      clearTimeout(timer);
+      connection.destroy();
+      resolve(yes);
+    };
+    const timer = setTimeout(() => setImmediate(() => answer(false)), 1000);
+    connection.once("connect", () => answer(true));
+    connection.once("error", () => answer(false));
+  });
+
+/** A VM's state from the files Lima keeps in its folder (`dir`), with no process started:
+ *  `missing` with no lima.yaml; `running` when the host agent's pid file (ha.pid) and the
+ *  driver's (`<vmType>.pid`: vz.pid, qemu.pid) both name a live process and the host agent's
+ *  socket (ha.sock) accepts a connection; `stopped` otherwise. The rule is Lima's own
+ *  (pkg/store/instance.go, v2.3.0), which `limactl list` applies to both drivers (neither has
+ *  an `InspectStatus` of its own): `Inspect` asks the host agent's socket for Info whenever
+ *  ha.pid names a live process, and calls it Broken if that fails;
+ *  `inspectStatusWithPIDFiles` then says Running for both pids alive, Stopped for neither,
+ *  Broken for one alone. Broken is "stopped" here, as it was when `limactl list` was asked.
+ *  It was asked once a VM folder each pass of the daemon's loop: about 20 a second with 28
+ *  folders, each 50 ms of CPU and 87 MB at its peak (measured on the M1, 2026-11-23).
+ *
+ *  The socket is asked because pids alone can lie for as long as another process lives: under
+ *  vz the driver runs in the host agent, so ha.pid and vz.pid hold one number (the root VM's,
+ *  14904, in both on the M1), and a host agent killed without cleaning up leaves both files
+ *  naming whatever later takes that number, while its socket file refuses (one such stopped
+ *  VM's, on the M1). Callers start a VM that is not running, and would never start that one.
+ *  Only a VM whose pids are alive is asked: a stopped one costs a few file reads.
+ *
+ *  A start in progress reads stopped until the VM runs: the host agent writes ha.pid, then
+ *  binds ha.sock, then runs the driver, which writes its pid file once the VM runs
+ *  (cmd/limactl/hostagent.go, pkg/driver/vz/vm_darwin.go). A stop reads running while the
+ *  guest shuts down, as Lima's Running did, then stopped: the driver's pid file goes when the
+ *  VM has stopped, then the socket, then ha.pid. Like Lima's Running, `running` means the VM's
+ *  process is up, not that its ssh answers: `start` waits for that itself. */
+export const vmStatus = async (dir: string, driver: "qemu" | "vz"): Promise<VmStatus> => {
+  if (!fs.existsSync(path.join(dir, "lima.yaml"))) return "missing";
+  return pidAlive(path.join(dir, "ha.pid")) &&
+    pidAlive(path.join(dir, `${driver}.pid`)) &&
+    (await accepts(path.join(dir, "ha.sock")))
+    ? "running"
+    : "stopped";
+};
+
+declare namespace vmStatus {
+  type Vz = Invoke<typeof limaBackend, [kind: "vz"]>;
+  type Qemu = Invoke<typeof limaBackend, [kind: "qemu"]>;
+
+  /** What `info` says of a VM folder, from Lima's files and its host agent's socket alone.
+   *  `<self>` is this test's own process, alive; `<gone>` a child that has exited;
+   *  `<listening>` a socket this test accepts on. Every row fails if limactl was started to
+   *  answer it. */
+  export type FromLimasFiles = Table<
+    typeof statusOf,
+    [
+      /** both processes alive: running */
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>\n";
+            "vz.pid": "<self>\n";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "running",
+      ],
+      /** made, and never started: stopped */
+      [args: [backend: Vz, files: { "lima.yaml": "" }], expected: "stopped"],
+      /** no lima.yaml is no VM, whatever else the folder holds */
+      [args: [backend: Vz, files: { "ha.pid": "<self>"; "vz.pid": "<self>" }], expected: "missing"],
+      /** one alive and the other gone (Lima's Broken), either way round: stopped */
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>";
+            "vz.pid": "<gone>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<gone>";
+            "vz.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "<self>"; "ha.sock": "<listening>" },
+        ],
+        expected: "stopped",
+      ],
+      /** the driver's file is the backend's own: qemu.pid on qemu, and vz.pid there is not it */
+      [
+        args: [
+          backend: Qemu,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>";
+            "qemu.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "running",
+      ],
+      [
+        args: [
+          backend: Qemu,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>";
+            "vz.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      /** another user's process exists (pid 1, the system's first): kill says EPERM, and it is
+       *  alive (run as root, kill succeeds: alive too) */
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "1"; "vz.pid": "1"; "ha.sock": "<listening>" },
+        ],
+        expected: "running",
+      ],
+    ]
+  >;
+  /** both pids alive is not enough: the host agent's socket must take a connection, which
+   *  one left behind by a host agent that is gone does not (under vz both files hold the host
+   *  agent's one pid, which another process may have now). The control is the first row
+   *  above. */
+  export type HostAgentSocket = Table<
+    typeof statusOf,
+    [
+      /** no socket */
+      [
+        args: [backend: Vz, files: { "lima.yaml": ""; "ha.pid": "<self>"; "vz.pid": "<self>" }],
+        expected: "stopped",
+      ],
+      /** its file, and nobody listening on it */
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "<self>"; "vz.pid": "<self>"; "ha.sock": "<closed>" },
+        ],
+        expected: "stopped",
+      ],
+      /** a listener that never reads is still there: a connect is all that is asked */
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "<self>"; "vz.pid": "<self>"; "ha.sock": "<unread>" },
+        ],
+        expected: "running",
+      ],
+      /** a plain file by its name is no socket */
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "<self>"; "vz.pid": "<self>"; "ha.sock": "" },
+        ],
+        expected: "stopped",
+      ],
+    ]
+  >;
+  /** a pid file that holds no pid names nothing, and never throws: beside the control above,
+   *  each of these is the host agent's file, the driver's naming this live process */
+  export type NotAPid = Table<
+    typeof statusOf,
+    [
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "abc"; "vz.pid": "<self>"; "ha.sock": "<listening>" },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "-1"; "vz.pid": "<self>"; "ha.sock": "<listening>" },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": "0"; "vz.pid": "<self>"; "ha.sock": "<listening>" },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: { "lima.yaml": ""; "ha.pid": ""; "vz.pid": "<self>"; "ha.sock": "<listening>" },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>abc";
+            "vz.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self> 1";
+            "vz.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "2147483648";
+            "vz.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "99999999999999999999";
+            "vz.pid": "<self>";
+            "ha.sock": "<listening>";
+          },
+        ],
+        expected: "stopped",
+      ],
+      /** (a pid, and more past what a pid file holds) */
+      [
+        args: [
+          backend: Vz,
+          files: {
+            "lima.yaml": "";
+            "ha.pid": "<self>                        \n1";
+            "vz.pid": "<self>";
+          },
+        ],
+        expected: "stopped",
+      ],
+    ]
+  >;
+  /** pid files from before this boot of the Mac name nothing, though their number is alive
+   *  now: the control is the first row above, the same files written now */
+  export type BeforeThisBoot = Expect<
+    Invoke<
+      typeof statusOf,
+      [
+        backend: Vz,
+        files: {
+          "lima.yaml": "";
+          "ha.pid": "<self>\n";
+          "vz.pid": "<self>\n";
+          "ha.sock": "<listening>";
+        },
+        written: "before this boot",
+      ]
+    >,
+    "=",
+    "stopped"
+  >;
+  /** the control for "starts nothing": the same watch sees a limactl the backend does start */
+  export type WatchSeesLimactl = Throws<
+    Invoke<
+      typeof statusOf,
+      [backend: Vz, files: { "lima.yaml": "" }, written: undefined, first: "stop"]
+    >,
+    "limactl was started: --tty=false stop dsl-main-status"
+  >;
+}
+
 export const limaBackend = (kind: "qemu" | "vz"): Backend => {
   const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
   const imageDir = process.env.DESOLATE_IMAGE_DIR ?? path.join(paths.images, arch);
@@ -407,13 +768,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         .filter((line) => line !== "mounts: []")
         .join("\n") + "\n"
     );
-  };
-
-  const status = async (name: string): Promise<VmStatus> => {
-    if (!fs.existsSync(path.join(LIMA_HOME, name, "lima.yaml"))) return "missing";
-    const listed = await lima(["list", "--format", "{{.Status}}", name], { timeoutMs: 30_000 });
-    const text = listed.stdout.trim();
-    return text === "Running" ? "running" : text === "" ? "missing" : "stopped";
   };
 
   /** Where each share of a VM must be, read-only or read-write, as Apple's VM process will be
@@ -715,14 +1069,13 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       // desolate's own, for root in the root VM) is under each VM's directory. The longest
       // is a workspace VM's (found on the M1, where a long home made Lima refuse to start).
       const longest = path.join(LIMA_HOME, `${PREFIX}0123456789`, "ssh-root.sock.0123456789012345");
-      const limit = process.platform === "darwin" ? 103 : 107;
       checks.push({
         name: "socket paths fit",
-        ok: Buffer.byteLength(longest) <= limit,
+        ok: Buffer.byteLength(longest) <= SOCKET_PATH_MAX,
         detail:
-          Buffer.byteLength(longest) <= limit
-            ? `the longest fits in ${limit} bytes`
-            : `the longest is ${Buffer.byteLength(longest)} bytes, over ${limit}: ${LIMA_HOME}`,
+          Buffer.byteLength(longest) <= SOCKET_PATH_MAX
+            ? `the longest fits in ${SOCKET_PATH_MAX} bytes`
+            : `the longest is ${Buffer.byteLength(longest)} bytes, over ${SOCKET_PATH_MAX}: ${LIMA_HOME}`,
         fix: "set DESOLATE_HOME to a shorter path (the default, ~/.desolate, fits unless your home's path is very long)",
       });
       // Every running VM refuses Lima's own forwarding (NO_FORWARDS): one made before the
@@ -995,7 +1348,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const m = meta(name);
       return {
         name,
-        status: await status(name),
+        status: await vmStatus(path.join(LIMA_HOME, name), kind),
         labels: m ? { ...m.spec.labels, role: m.spec.role } : {},
       };
     },
