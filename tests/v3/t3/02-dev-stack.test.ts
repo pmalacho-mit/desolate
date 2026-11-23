@@ -209,14 +209,15 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
       );
     });
 
-    it("T3 resize: a stopped workspace's VM gets its new CPUs, memory and disk, and keeps what is on its disk", () => {
+    it("T3 resize: a stopped workspace's VM gets its new CPUs, memory and disk, and keeps what is on its disk", async () => {
       stack.step("resize, in a real VM");
       const running = stack.desolate("resize", "dev/w1", "--cpus", "2");
       assert.notEqual(running.code, 0, "control: refused while it runs");
       assert.match(running.stderr, /a VM's size changes only while it is stopped/);
       assert.equal(stack.quiet("stop", "dev/w1").code, 0);
-      // A VM's status as desolate reads it from Lima's pid files (lima.ts, vmStatus) is what
-      // `limactl list` says, for this one, stopped, and the root VM, running.
+      // A VM's status as desolate reads it from Lima's pid files and its host agent's socket
+      // (lima.ts, vmStatus) is what `limactl list` says, for this one, stopped, and the root
+      // VM, running.
       for (const [name, expected] of [
         [vm, "stopped"],
         [`dsl-${stack.instance}-root`, "running"],
@@ -233,7 +234,7 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
           expected,
         );
         assert.equal(
-          vmStatus(path.join(stack.home, "lima", name), stack.backend as "qemu" | "vz"),
+          await vmStatus(path.join(stack.home, "lima", name), stack.backend as "qemu" | "vz"),
           expected,
           `${name}: limactl list said ${said}`,
         );
