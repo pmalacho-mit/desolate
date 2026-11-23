@@ -281,6 +281,12 @@ $ desolate approve --web
 approvals    http://desolate-approve.localhost:31591/?tkn=<token>
 [exit 0]
 
+## the approval page, a push of long names
+
+$ desolate approve --web
+approvals    http://desolate-approve.localhost:31591/?tkn=<token>
+[exit 0]
+
 ## a repository the root cannot push
 
 $ desolate push dev acme/consumer tweak --expect <commit>    # at a terminal; the person types: tweak
