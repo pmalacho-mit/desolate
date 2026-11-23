@@ -835,6 +835,7 @@ const changed = () => {
   if (scheduled) return;
   scheduled = setTimeout(() => {
     scheduled = null;
+    takeQueue();
     publish();
   }, 40);
 };
@@ -1763,6 +1764,10 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // sent work, on real VMs only, where the timing allows it (found by tier T3). So: no
   // recursion, and every watcher has a listener. One that fails is dropped; the look
   // every second remains.
+  //
+  // A workspace's request (rootd queues it here) is taken on its event, and every 10 s
+  // besides, which also sweeps what was taken long ago. It was read every 500 ms.
+  fs.mkdirSync(HOST_QUEUE, { recursive: true });
   for (const dir of [
     ROOT.state,
     APPROVALS,
@@ -1770,6 +1775,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     path.join(ROOT.state, "secrets"),
     path.join(ROOT.state, "issues"),
     ROOT.domains,
+    HOST_QUEUE,
   ])
     try {
       if (!fs.existsSync(dir)) continue;
@@ -1782,7 +1788,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
       console.error(`stated: cannot watch ${dir}: ${String(error)}`);
     }
   setInterval(publish, 1000);
-  setInterval(takeQueue, 500);
+  setInterval(takeQueue, 10_000);
   setInterval(() => void checkPushed(), 10_000);
   void checkPushed();
   publish();

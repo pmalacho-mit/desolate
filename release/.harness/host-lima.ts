@@ -8,7 +8,7 @@
 // each share's directory on the host); in what comes back, the home, the release folder,
 // the architecture and the ports the backend picked are written as `<home>`, `<release>`,
 // `<arch>`, `<ssh port>` and `<link port>`, which differ from machine to machine.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -375,4 +375,33 @@ export const stepsSaid = async (lines: string[]): Promise<string[]> => {
   const said: string[] = [];
   for (const line of lines) provisionStep(line, (text) => void said.push(text));
   return said;
+};
+
+/** What lima.ts's sharesWait (`wait`) printed, run by bash here on a file in place of /proc/mounts
+ *  (`now` in it, `later` added 300 ms on) with a bound of 2 s, and when it answered: at once
+ *  (under 200 ms), when mounted (under 900 ms), or at its bound (bash counts its 2 s in whole seconds of the clock: from 1 s on). */
+export const sharesWaited = async (
+  wait: (guests: string[], fsType: string, seconds: number, mounts?: string) => string[],
+  guests: string[],
+  now: string,
+  later: string,
+) => {
+  const file = path.join(home(), `mounts-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  fs.writeFileSync(file, now);
+  const [command, ...args] = wait(guests, "virtiofs", 2, file);
+  const began = performance.now();
+  const added = later ? setTimeout(() => fs.appendFileSync(file, later), 300) : undefined;
+  const printed = await new Promise<string>((resolve) => {
+    let out = "";
+    const child = spawn(command!, args);
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.on("close", () => resolve(out));
+  });
+  const took = performance.now() - began;
+  clearTimeout(added);
+  fs.rmSync(file, { force: true });
+  return {
+    printed,
+    answered: took < 200 ? "at once" : took < 900 ? "when mounted" : "at its bound",
+  };
 };
