@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
+import { Duplex } from "node:stream";
 import { onTestFinished } from "./vitest.ts";
 import type { backend } from "../host/stack.ts";
 import { INSTANCE } from "../host/paths.ts";
@@ -169,6 +170,59 @@ export const readInPieces = (
     if (got !== null) return shown(got);
   }
   return null;
+};
+
+/** What a line reader (daemon.ts, lineReader) gave of `chunks`, handed it one at a time: the
+ *  lines, and the error it stopped at, if it did. */
+export const linesInPieces = (
+  reader: (most?: number) => (chunk: Buffer) => string[] | Error,
+  chunks: string[],
+  most?: number,
+) => {
+  const take = reader(most);
+  const lines: string[] = [];
+  for (const chunk of chunks) {
+    const got = take(Buffer.from(chunk));
+    if (got instanceof Error) return { lines, error: got.message };
+    lines.push(...got);
+  }
+  return { lines };
+};
+
+/** One ask (daemon.ts, askOver) over a stand-in for a dial to a workspace's daemon: once the
+ *  request has come, it sends `chunks`, then ends if `end`. What was sent to it, the answer
+ *  or the error, and whether the stream was let go. */
+export const askedOver = async (
+  ask: (
+    stream: Duplex,
+    request: Record<string, unknown>,
+    timeoutMs?: number,
+    most?: number,
+  ) => Promise<Record<string, unknown>>,
+  request: Record<string, unknown>,
+  chunks: string[],
+  end: boolean,
+  most?: number,
+  timeoutMs?: number,
+) => {
+  const sent: string[] = [];
+  const stream: Duplex = new Duplex({
+    read() {},
+    write(chunk, _encoding, done) {
+      sent.push(String(chunk));
+      if (sent.length === 1) {
+        for (const piece of chunks) stream.push(Buffer.from(piece));
+        if (end) stream.push(null);
+      }
+      done();
+    },
+  });
+  try {
+    const reply = await ask(stream, request, timeoutMs, most);
+    return { sent, reply, destroyed: stream.destroyed };
+  } catch (error) {
+    return { sent, error: (error as Error).message, destroyed: stream.destroyed };
+  }
 };
 
 /** `count` ports from `from` on, which a type would take a long time to write. */

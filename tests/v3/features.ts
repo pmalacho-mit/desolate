@@ -180,7 +180,6 @@ export const FEATURES: Feature[] = [
       "release/shared/step.ts",
       "release/workspace/start.sh",
       "release/workspace/wsd.ts",
-      "release/workspace/wsctl.ts",
       "release/workspace/status",
       "release/workspace/desolate",
       "release/workspace/desolate.ts",

@@ -93,10 +93,12 @@ import type {
 import type {
   answerOf,
   answers,
+  askedOver,
   daemonAnswering,
   failsAtOnce,
   failsHalfway,
   keepLog,
+  linesInPieces,
   endsOf,
   numbered,
   readInPieces,
@@ -118,43 +120,200 @@ const PIDFILE = path.join(paths.state, "daemon.pid");
 const LOG = path.join(paths.logs, "daemon.log");
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
-/** The most of a workspace's wsctl answer kept. The VM is not trusted, and an honest answer is
- *  a line of ports and a token; the service there caps a request at 64 KiB too (wsd.ts). */
-const WSCTL_MOST = 64 * 1024;
+/** The workspace daemon's socket in its VM (workspace/wsd.ts). wsd runs as the VM's login
+ *  user (workspace/start.sh: runuser with the Mac user's uid, which is the login user's, as
+ *  Lima makes it), and a dial's socat runs as that user (the fake backend's as root): the
+ *  socket's 0600 lets in all that must connect. */
+const WSD_SOCKET = "/run/desolate/wsd.sock";
+/** The longest line of a workspace daemon's that is read. The VM is not trusted, and an honest
+ *  answer is a line of ports and a token; the daemon there caps a request at 64 KiB too. */
+const WSD_MOST = 64 * 1024;
 
-/** wsctl's answer: the last line of its stdout, as JSON. One that was stopped at WSCTL_MOST
- *  (shared/run.ts kills the program and says so) is not read at all, though the part kept may
- *  end in a whole line: the workspace is then one that could not be asked. */
-export const wsctlReply = (result: { stdout: string; stderr: string }): Record<string, unknown> => {
-  if (result.stderr.endsWith(`(more than ${WSCTL_MOST} bytes of output: stopped)`))
-    throw new Error(`the workspace answered more than ${WSCTL_MOST} bytes`);
-  return JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}");
+/** Lines as they come, in chunks cut anywhere: hand it each chunk, and it gives the whole
+ *  lines that chunk ended, or an Error once a line is longer than `most` bytes. Never more
+ *  than `most` bytes of an unfinished line are kept: what the VM sends past that is not read. */
+export const lineReader = (most = WSD_MOST) => {
+  let kept: Buffer[] = [];
+  let size = 0;
+  const tooLong = () => new Error(`the workspace's daemon sent a line of more than ${most} bytes`);
+  return (chunk: Buffer): string[] | Error => {
+    const lines: string[] = [];
+    let from = 0;
+    for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10, from)) {
+      if (size + end - from > most) return tooLong();
+      lines.push(Buffer.concat([...kept, chunk.subarray(from, end)]).toString("utf8"));
+      kept = [];
+      size = 0;
+      from = end + 1;
+    }
+    if (size + chunk.length - from > most) return tooLong();
+    if (from < chunk.length) {
+      kept.push(Buffer.from(chunk.subarray(from)));
+      size += chunk.length - from;
+    }
+    return lines;
+  };
 };
 
-declare namespace wsctlReply {
-  /** an answer is its last line */
-  export type Reads = Expect<
-    Invoke<
-      typeof wsctlReply,
-      [result: { stdout: 'starting\n{"ok":true,"listeners":[3000]}\n'; stderr: "" }]
+declare namespace lineReader {
+  /** two lines in one chunk, and a line split across chunks: each whole, in order */
+  export type Lines = [
+    Expect<
+      Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ['{"a":1}\n{"b":2}\n']]>,
+      "=",
+      { lines: ['{"a":1}', '{"b":2}'] }
     >,
+    Expect<
+      Invoke<
+        typeof linesInPieces,
+        [reader: typeof lineReader, chunks: ['{"lis', 'teners":[3000]}\n{"b"', ":2}\n"]]
+      >,
+      "=",
+      { lines: ['{"listeners":[3000]}', '{"b":2}'] }
+    >,
+  ];
+  /** what has not ended in a newline is not a line yet: a stream that ends there gave none */
+  export type Unfinished = Expect<
+    Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ['{"ok":true}']]>,
     "=",
-    { ok: true; listeners: [3000] }
+    { lines: [] }
   >;
-  /** past the bound it is not read, even when what was kept ends in a whole answer */
-  export type Cut = Throws<
+  /** a line of `most` bytes is read; one byte more is refused, whether it came in one chunk
+   *  or in several, and whether or not its newline had come */
+  export type Bound = [
+    Expect<
+      Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ["12345678\n"], most: 8]>,
+      "=",
+      { lines: ["12345678"] }
+    >,
+    Expect<
+      Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ["123456789\n"], most: 8]>,
+      "=",
+      { lines: []; error: "the workspace's daemon sent a line of more than 8 bytes" }
+    >,
+    Expect<
+      Invoke<
+        typeof linesInPieces,
+        [reader: typeof lineReader, chunks: ["1\n12345", "6789"], most: 8]
+      >,
+      "=",
+      { lines: ["1"]; error: "the workspace's daemon sent a line of more than 8 bytes" }
+    >,
+  ];
+}
+
+/** One request to a workspace's daemon over `stream` (a dial to its socket): the request as a
+ *  line, and the first line back, as a JSON object. Bounded as lineReader is, given up on
+ *  after `timeoutMs`, and the stream destroyed however it ends. A stream that ends or fails
+ *  before a whole line, or a line that is not an object, is a workspace that could not be
+ *  asked. (Not ended after the request: socat would stop reading half a second later.) */
+export const askOver = (
+  stream: Duplex,
+  request: Record<string, unknown>,
+  timeoutMs = 15_000,
+  most = WSD_MOST,
+): Promise<Record<string, unknown>> =>
+  new Promise((resolve, reject) => {
+    const read = lineReader(most);
+    let done = false;
+    const settle = (result: Record<string, unknown> | Error) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      stream.destroy();
+      if (result instanceof Error) reject(result);
+      else resolve(result);
+    };
+    const timer = setTimeout(
+      () => settle(new Error(`the workspace's daemon did not answer in ${timeoutMs} ms`)),
+      timeoutMs,
+    );
+    stream.on("data", (chunk: Buffer) => {
+      const lines = read(chunk);
+      if (lines instanceof Error) settle(lines);
+      else if (lines.length > 0) settle(wsdReply(lines[0]!));
+    });
+    const gone = () => settle(new Error("the workspace's daemon closed without answering"));
+    stream.on("error", (error) => settle(error));
+    stream.on("end", gone);
+    stream.on("close", gone);
+    stream.write(`${JSON.stringify(request)}\n`);
+  });
+
+declare namespace askOver {
+  /** the request goes as one line, and the first line back is the answer */
+  export type Asks = Expect<
     Invoke<
-      typeof wsctlReply,
+      typeof askedOver,
       [
-        result: {
-          stdout: '{"ok":true,"listeners":[3000]}\n';
-          stderr: "\n(more than 65536 bytes of output: stopped)";
-        },
+        ask: typeof askOver,
+        request: { op: "ports"; reserve: [5173] },
+        chunks: ['{"ok":true,"listeners":[3000]}\n{"ignored":1}\n'],
+        end: false,
       ]
     >,
-    "the workspace answered more than 65536 bytes"
+    "=",
+    {
+      sent: ['{"op":"ports","reserve":[5173]}\n'];
+      reply: { ok: true; listeners: [3000] };
+      destroyed: true;
+    }
   >;
+  /** not answered, and the stream let go each way: past the bound, an end with no whole
+   *  line, a line that is not an answer, and a daemon that says nothing */
+  export type NotAnswered = [
+    Expect<
+      Invoke<
+        typeof askedOver,
+        [
+          ask: typeof askOver,
+          request: {},
+          chunks: ['{"ok":true,"x":"aaaa', 'aaaaaaa"}\n'],
+          end: false,
+          most: 16,
+        ]
+      >,
+      "matches",
+      { error: "the workspace's daemon sent a line of more than 16 bytes"; destroyed: true }
+    >,
+    Expect<
+      Invoke<
+        typeof askedOver,
+        [ask: typeof askOver, request: {}, chunks: ['{"ok":true}'], end: true]
+      >,
+      "matches",
+      { error: "the workspace's daemon closed without answering"; destroyed: true }
+    >,
+    Expect<
+      Invoke<
+        typeof askedOver,
+        [ask: typeof askOver, request: {}, chunks: ["[3000]\n"], end: false]
+      >,
+      "matches",
+      { error: "the workspace's daemon answered something that is not an answer"; destroyed: true }
+    >,
+    Expect<
+      Invoke<
+        typeof askedOver,
+        [ask: typeof askOver, request: {}, chunks: [], end: false, most: 16, timeoutMs: 20]
+      >,
+      "matches",
+      { error: "the workspace's daemon did not answer in 20 ms"; destroyed: true }
+    >,
+  ];
 }
+
+/** A line of a workspace daemon's, as JSON: an object, or an Error saying it was none. */
+const wsdReply = (line: string): Record<string, unknown> | Error => {
+  try {
+    const value: unknown = JSON.parse(line);
+    if (value !== null && typeof value === "object" && !Array.isArray(value))
+      return value as Record<string, unknown>;
+  } catch {
+    /* said below */
+  }
+  return new Error("the workspace's daemon answered something that is not an answer");
+};
 
 type Registered = { vm: string; domain: string; workspace: string; proxy: string | null };
 type Entry = Registered & {
@@ -1604,13 +1763,12 @@ const serve = async () => {
 
   const sync = async (entry: Entry) => {
     try {
-      const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], {
-        input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }),
-        timeoutMs: 15_000,
-        // Not RUN_MAX: what the VM says is not trusted, and is held here every few seconds.
-        maxBytes: WSCTL_MOST,
-      });
-      const reply = wsctlReply(result) as {
+      // Over a dial to its socket: no program is started in the VM for it (a node there was
+      // 50 ms of CPU and 64 MB at its peak, every second; ticket #250).
+      const reply = (await askOver(dial(entry.vm, WSD_SOCKET), {
+        op: "ports",
+        reserve: [...entry.reserved],
+      })) as {
         ok?: boolean;
         listeners?: number[];
         error?: string;
@@ -1634,7 +1792,7 @@ const serve = async () => {
         typeof reply.devcontainer === "string" ? printable(reply.devcontainer) : "";
       entry.folder = folderFrom(entry.folder, reply.folder);
       if (!reply.ok || !Array.isArray(reply.listeners))
-        throw new Error(reply.error ?? `exit ${result.code}`);
+        throw new Error(reply.error ?? "the workspace's daemon did not say what listens");
       // Fail closed on what the VM says (listenersFrom).
       const ours = b.hostPorts?.() ?? new Set<number>();
       const taken = listenersFrom(reply.listeners, ours);

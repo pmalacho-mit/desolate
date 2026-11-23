@@ -11,8 +11,8 @@
 //   compose   a compose devcontainer's listeners, and its `service:port` forwards, mirrored
 //             onto this VM's loopback (bridge.ts), so they are listeners here like any other.
 //
-// The host speaks to it through `wsctl.ts`, over the VM layer's exec: port numbers in, taken
-// ports out, nothing else.
+// The host speaks to it over a dial to its socket (the VM layer's socat): port numbers in,
+// taken ports out, nothing else.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { createServer } from "node:net";
