@@ -34,7 +34,7 @@ export type VmSpec = {
   labels: Record<string, string>;
 };
 
-export type VmStatus = "running" | "stopped" | "suspended" | "missing";
+export type VmStatus = "running" | "stopped" | "missing";
 export type VmInfo = { name: string; status: VmStatus; labels: Record<string, string> };
 
 export type ExecOptions = {
@@ -65,8 +65,6 @@ export type ExecOptions = {
   stdinFrom?: string;
 };
 
-export type Listener = { port: number; address: string };
-
 export type Check = { name: string; ok: boolean; detail: string; fix?: string };
 
 export interface Backend {
@@ -88,8 +86,6 @@ export interface Backend {
   /** A stopped VM's size, changed (`desolate resize`): its CPUs and memory, and its disk,
    *  which only grows. */
   resize(name: string, size: { cpus: number; memoryMiB: number; diskGiB: number }): Promise<void>;
-  suspend(name: string): Promise<void>;
-  resume(name: string): Promise<void>;
   destroy(name: string): Promise<void>;
   info(name: string): Promise<VmInfo>;
   /** Every VM of this instance. */
@@ -108,8 +104,6 @@ export interface Backend {
    *  backend carries it over a loopback port on the host, that port (the host daemon then
    *  listens there as well as on the socket). */
   link(name: string): { guest: string; hostPort?: number; token?: string };
-  /** TCP listeners inside the VM right now. */
-  listeners(name: string): Promise<Listener[]>;
   /** After root in the VM changed the ordinary user's groups (docker in a workspace, the
    *  proxies' group in the root): make the next commands run with them. Lima's sessions
    *  share one ssh connection, and a session keeps the groups that connection logged in

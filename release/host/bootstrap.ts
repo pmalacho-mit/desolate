@@ -263,13 +263,10 @@ export const bootstrap = async (
   if (info.status === "missing") await b.create(rootSpec());
   step(info.status === "missing", `root VM ${ROOT_VM} created`);
   if (info.status !== "running") {
-    if (info.status === "suspended") await b.resume(ROOT_VM);
-    else {
-      // Its size, as its settings say now (`desolate settings set root.memoryMiB`).
-      const { sizeBeforeStart } = await import("./settings.ts");
-      await sizeBeforeStart(ROOT_VM, "root");
-      await b.start(ROOT_VM);
-    }
+    // Its size, as its settings say now (`desolate settings set root.memoryMiB`).
+    const { sizeBeforeStart } = await import("./settings.ts");
+    await sizeBeforeStart(ROOT_VM, "root");
+    await b.start(ROOT_VM);
   }
   step(info.status !== "running", "root VM running");
 

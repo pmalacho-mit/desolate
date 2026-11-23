@@ -16,7 +16,6 @@ export const rootVm = (status: string, code: number, stdout: string, stderr = ""
   ({
     info: async () => ({ status }),
     start: async () => {},
-    resume: async () => {},
     exec: async (_name: string, _argv: string[], options: ExecOptions = {}) => {
       if (!options.stdoutTo) return { code, stdout, stderr };
       fs.writeFileSync(options.stdoutTo, stdout, "latin1");

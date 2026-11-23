@@ -73,8 +73,7 @@ export const keepRootState = async (out: Out): Promise<boolean> => {
   const b = backend();
   const info = await b.info(ROOT_VM);
   if (info.status === "missing") return false;
-  if (info.status === "suspended") await b.resume(ROOT_VM);
-  else if (info.status !== "running") await b.start(ROOT_VM);
+  if (info.status !== "running") await b.start(ROOT_VM);
   const script = `cd / && tar ${EXCLUDE.map((e) => `--exclude='${e}'`).join(" ")} -czf - $(for d in ${DIRS.join(" ")}; do [ -d "/$d" ] && echo "$d"; done)`;
   fs.mkdirSync(KEPT_DIR, { recursive: true, mode: 0o700 });
   fs.chmodSync(KEPT_DIR, 0o700);

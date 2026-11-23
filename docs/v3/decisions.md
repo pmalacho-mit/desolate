@@ -150,13 +150,45 @@ resolver that answers every name with a placeholder address and a redirect of po
 443 to a small relay that reads the name from the TLS SNI or the HTTP Host and asks the proxy
 for it. None of that is a boundary: with all of it removed, the VM still has no way out.
 
-## The forwarder's way into a VM: a session, not ssh's stdio forwarding (measured)
+## The forwarder's way into a VM: a session running socat, over plain ssh (measured)
 
-`ssh -W host:port` through Lima's ssh config fails on the Mac with "Stdio forwarding request
-failed: Session open refused by peer": Lima's control master refuses that kind of channel.
-Ordinary sessions through the same master work (that is what `limactl shell` is, 0.1 s a
-round trip). So a backend's `dial` runs `socat STDIO TCP:127.0.0.1:<port>` in the guest over
-a session, as the fake backend does over `docker exec`. The base image carries socat.
+When first tried, `ssh -W host:port` through Lima's ssh config failed on the Mac with "Stdio
+forwarding request failed: Session open refused by peer". On Lima 2.3.0 it worked in a
+workspace VM (2026-11-23): that note was stale for this Lima, or was about the root VM. A
+backend's `dial` still runs `socat STDIO <address>` in the guest over a session, as the fake
+backend does over `docker exec`, because a target may be a unix socket in the VM (a
+workspace's proxy), which `-W` does not reach. The base image carries socat.
+
+**The session is plain ssh, not `limactl shell`** (2026-11-23, `host/vm/lima.ts`,
+`sessionArgs`): `ssh -F <LIMA_HOME>/<vm>/ssh.config -o LogLevel=ERROR -T lima-<vm> -- <line>`,
+on Lima's own control connection, which its ssh.config names. `limactl shell` was a Go
+program that built the same ssh and waited on it. Measured on the M1 Max, Lima 2.3.0:
+
+| What | `limactl shell` | plain `ssh` |
+|---|---|---|
+| one `<vm> true` | 77 ms, 0.05 s of CPU, 87 MB peak | 8 ms, under 0.01 s, 1.5 MB peak |
+| a held session | 83 MB for limactl, 1.5 MB for its ssh | 1.5 MB (3.3 MB resident) |
+
+300 plain ssh sessions held at once in one workspace VM all answered (982 MB resident
+together); sshd allows 1,000 a connection there and in the root VM (`MaxSessions`). A session
+over ssh ran `socat STDIO TCP:...` and returned the guest sshd's banner. Killing the local
+client leaves the remote program running in both forms, so that did not change.
+
+What the line is, and why: every argument, the working directory and every `KEY=value` go
+through one quoting function, since ssh hands the VM one string where `limactl shell` took
+words (in-source table: spaces, quotes, `$(...)`, backticks, `;`, `&&`, a newline, a tab, a
+leading dash, an empty string, a glob, `~`, a non-ASCII name, 100 KiB, each run by a real
+`sh`). It runs in a login shell, `"$SHELL" -l -c`, as limactl ran it, because the VMs'
+profiles hold what their commands rely on (the git VM's `GIT_NO_LAZY_FETCH`; the root's git
+config for its login user). Root in a workspace VM is `sudo`, root in the root VM is ssh as
+root on its own control socket (`rootSshArgs`), both as before. A terminal (`-t`) is asked for
+only by `attach`, when a person is at one both ways; limactl 2.3.0 asked for one only when its
+own stdout was a terminal, which attach never gave it, so until then an attached program had
+none. ssh sends a variable only where `SendEnv` names it, and neither the line nor Lima's
+ssh.config does (with `-F`, no other ssh configuration is read), so the Mac's proxy variables
+reach no VM. A VM that is not running is refused before ssh starts, in desolate's words with
+its fix (`vmStatus`, which reads Lima's files and starts no process). `limactl` stays for what
+changes a VM: create, clone, start, stop, edit, delete.
 
 The egress path's throughput, guest to a listener on the Mac's loopback: 366 MB/s for one
 download, about 50 to 70 MB/s each for six at once (two of eight failed to connect in that
@@ -1636,9 +1668,11 @@ beat. The review found the first three as holes.
 setting's name (the 65th used to be destroyed in silence). The pages' port held a silent
 client 400 ms, which failed a browser's preconnected socket; it is now 60 s, among the 512
 silent sockets. A pusher log line over 1 MiB no longer stops every later push's event.
-**Measured** on the M1: one carried connection is a `limactl shell` of its own, 83 MB and
+**Measured** on the M1: one carried connection was a `limactl shell` of its own, 83 MB and
 2 MB for its ssh; so the default is an eighth of the Mac's memory at 85 MiB each (16 to 256),
-and the top is the root's sshd `MaxSessions`, 1000. Left: multiplexing a link into one
+and the top is the root's sshd `MaxSessions`, 1000. (Since 2026-11-23 a connection is a plain
+ssh session, 1.5 MB: "The forwarder's way into a VM", above. The setting and its default are
+unchanged until the rationing goes.) Left: multiplexing a link into one
 session, which would remove the setting, needs a demultiplexer beside the root's proxy.
 
 **The egress proxy** (#182). `net recommend` showed 60 hosts and printed a `net allow` for
