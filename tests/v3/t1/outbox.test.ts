@@ -354,7 +354,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       const started = Date.now();
       assert.deepEqual(outbox.refsOf("t1-dom", "acme/late", true), {
         refused:
-          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there, at each of 5 looks over a second)",
+          "acme/late's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there, at each of 5 looks over a second; lstat saw a directory)",
       });
       const took = Date.now() - started;
       assert.ok(
@@ -419,7 +419,10 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
       const started = Date.now();
       assert.deepEqual(
         outbox.refsOf("t1-dom", "acme/flip", true),
-        refused("acme/flip", "a link, or not a directory, at each of 5 looks over a second"),
+        refused(
+          "acme/flip",
+          "a link, or not a directory, at each of 5 looks over a second; lstat saw a link",
+        ),
       );
       const took = Date.now() - started;
       assert.ok(took >= 600 && took < 2000, `waited about a second, not more: ${took} ms`);

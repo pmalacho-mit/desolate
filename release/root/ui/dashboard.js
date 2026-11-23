@@ -578,7 +578,8 @@ const needsYou = () => {
   for (const r of state.refused || []) items.push(el("li", { "data-refused": `${r.domain}/${r.repo}` }, el("span", { class: "dot red" }), el("div", { class: "what" },
     el("div", { class: "name" }, `Refused from ${r.domain}: a bundle of ${r.repo}`),
     el("div", { class: "line mono" }, r.why),
-    el("div", { class: "line" }, `Nothing new from ${r.domain} is taken while one of its branches holds what git refused. Delete that branch in the workspace, then run `, el("code", {}, "desolate sync"), " there.")), el("div", {})));
+    // What to do is the root's, as the workspace and `desolate offers` say it (outbox.ts, refusalFix): text.
+    el("div", { class: "line" }, r.fix)), el("div", {})));
   for (const o of state.offers) {
     const key = `push:${o.domain}:${o.repo}:${o.branch}`;
     // Two lines, their names in one column: what is offered, and where from.
