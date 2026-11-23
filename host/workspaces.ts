@@ -982,12 +982,19 @@ export const reconnectRunning = async (): Promise<number> => {
         { quiet: true },
       );
       await connectWorkspace({ ...w, proxy: proxy.socket });
-      // And its end of the link, which restarts its relay if desolate's code changed (the
-      // link's handshake is in it).
-      await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/up.sh`, b.link(w.vm).guest], {
-        root: true,
-        timeoutMs: 120_000,
-      });
+      // And its services (start.sh, idempotent), which restart its relay and its daemon if
+      // desolate's code changed: the link's handshake is in one, the host's requests in the
+      // other.
+      await b.exec(
+        w.vm,
+        [
+          "bash",
+          `${guest.release}/workspace/start.sh`,
+          String(process.getuid!()),
+          b.link(w.vm).guest,
+        ],
+        { root: true, timeoutMs: 120_000 },
+      );
       // Its key too: a workspace made before keys were given gets one here, without a restart.
       await (await import("./spawn.ts")).giveIdentity(b, w.vm);
       // And its editor's token, made again if the host retired the tokens since it was made.
