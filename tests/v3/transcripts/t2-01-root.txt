@@ -16,6 +16,7 @@ desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; 
   workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
 bootstrap: 7 step(s) done.
   ok   home: <home>
+  ok   the install folder holds no credential: <repo>/release, shared read-only into every VM
   ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
   ok   docker daemon: docker <version>
   ok   base image: desolate/base:latest <id>
@@ -56,6 +57,7 @@ desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; 
   workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
 bootstrap: nothing changed; the stack was already up.
   ok   home: <home>
+  ok   the install folder holds no credential: <repo>/release, shared read-only into every VM
   ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
   ok   docker daemon: docker <version>
   ok   base image: desolate/base:latest <id>
@@ -83,6 +85,7 @@ doctor: all checks passed.
 
 $ desolate doctor
   ok   home: <home>
+  ok   the install folder holds no credential: <repo>/release, shared read-only into every VM
   FAIL backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated
          fix: use a real backend: `desolate destroy --all`, then `desolate bootstrap --backend qemu` (Linux) or `--backend vz` (macOS)
   ok   docker daemon: docker <version>
@@ -104,7 +107,7 @@ $ desolate doctor
   ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
   ok   root: runs this desolate's code: its share of the release is <repo>/release
   ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
-doctor: 1 of 21 checks FAILED.
+doctor: 1 of 22 checks FAILED.
 [exit 1]
 
 ## the fake backend is never a default
@@ -164,6 +167,7 @@ desolate bootstrap: backend fake (NOT ISOLATED: containers standing in for VMs; 
   workspaces   <size> each by default (this Mac: <cores> cores, <memory> GB); per domain: desolate domain <d> size, per workspace: desolate up --cpus --memory --disk
 bootstrap: nothing changed; the stack was already up.
   ok   home: <home>
+  ok   the install folder holds no credential: <repo>/release, shared read-only into every VM
   ok   backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated (allowed: DESOLATE_TEST_RUN=1)
   ok   docker daemon: docker <version>
   ok   base image: desolate/base:latest <id>
