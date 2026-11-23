@@ -850,7 +850,17 @@ attempt(60);`,
       // A secret, so the domain's secrets proxy runs (the previous test removed its own).
       const set = spawnSync(
         path.join(REPO_ROOT, "release", "cli.sh"),
-        ["domain", "a", "secret", "set", "T3-HANDOFF-NAME", "--hosts", "api.example.test"],
+        [
+          "domain",
+          "a",
+          "secret",
+          "set",
+          "T3-HANDOFF-NAME",
+          "--hosts",
+          "api.example.test",
+          "--headers",
+          "authorization",
+        ],
         { env: stack.env, input: "t3-handoff-value-77\n", encoding: "utf8" },
       );
       assert.equal(set.status, 0, set.stderr);

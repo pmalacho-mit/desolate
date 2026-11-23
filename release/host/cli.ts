@@ -69,7 +69,7 @@ Your repositories and domains:
                                                                  the domain's network rules, at its proxies
   desolate net log [<domain>] [--last <n>] [--json]              what each workspace asked to reach, and the verdict
   desolate domain <domain> net recommend [--all]                 what it reached that is not on its list
-  desolate domain <domain> secret set <NAME> --hosts <h>[,...] [--headers <h>[,...]] | copy <NAME> --from <d> | list | off | on [--ttl 30m] | rm | show
+  desolate domain <domain> secret set <NAME> --hosts <h>[,...] --headers <h>[,...] (or --anywhere) | copy <NAME> --from <d> | list | off | on [--ttl 30m] | rm | show
                                                                  a secret: the value on stdin, the name in workspaces
   desolate domain <domain> secret import <.env> [--dry-run] [--print-env | --in-place] [--choose KEY=secret:<host>[@<header>] | KEY=value]
                                                                  a project's .env: its API keys become secrets, and the .env their names
@@ -350,6 +350,7 @@ const main = async (argv: string[]): Promise<number> => {
       clear: { type: "boolean" },
       hosts: { type: "string" },
       headers: { type: "string" },
+      anywhere: { type: "boolean" },
       ttl: { type: "string" },
       secret: { type: "string" },
       from: { type: "string" },

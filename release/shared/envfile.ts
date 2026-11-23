@@ -148,6 +148,12 @@ export type PlanRow = {
   warnings: string[];
 };
 
+/** What a secret with no headers costs, said wherever one is set (the CLI, the import plan,
+ *  the secrets page): the secrets proxy puts its value wherever its name is in a request to
+ *  its hosts, and scrubs a response only of the exact value. */
+export const ANYWHERE_COST =
+  "its value is put anywhere in a request to those hosts, the body included, so a service there that sends back what it is sent, changed in any way, can hand the value to a workspace";
+
 type Provider = { hosts: string[]; headers: string[] | null; what: string };
 const header = (hosts: string[], headers: string[] | null, what: string): Provider => ({
   hosts,
