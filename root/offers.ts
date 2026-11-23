@@ -289,7 +289,7 @@ export const take = async (
       return {
         ok: false,
         error: `the root refused this domain's bundle of ${id}: ${refusal.why}`,
-        fix: "a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new is taken until that branch is deleted here; then offer again",
+        fix: refusal.fix,
       };
     return {
       ok: false,

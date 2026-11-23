@@ -68,15 +68,13 @@ const plain = (text: string) => printable(text, Infinity);
 export const offers = async (domain: string | undefined, out: Out, json: boolean) => {
   const list = await rootctl<Offer[]>("offers.list", { domain }, { quiet: true });
   if (json) return out(JSON.stringify(list));
-  const refused = await rootctl<{ domain: string; repo: string; at: string; why: string }[]>(
-    "offers.refused",
-    { domain },
-    { quiet: true },
-  ).catch(() => []);
+  // What to do about each is the root's (outbox.ts, refusalFix), as the workspace and the
+  // dashboard are told it.
+  const refused = await rootctl<
+    { domain: string; repo: string; at: string; why: string; fix: string }[]
+  >("offers.refused", { domain }, { quiet: true }).catch(() => []);
   for (const r of refused)
-    out(
-      `Refused from ${r.domain} (${r.repo}, ${r.at}): ${plain(r.why)}\n  Nothing new from ${r.domain} is taken while one of its branches holds what git refused. Delete that branch in the workspace, then \`desolate sync\` there.`,
-    );
+    out(`Refused from ${r.domain} (${r.repo}, ${r.at}): ${plain(r.why)}\n  ${plain(r.fix)}`);
   // Issues a workspace offered need you too (the dashboard puts them under "Needs you").
   const issues = (
     await rootctl<Issue[]>("issue.list", { waiting: true }, { quiet: true }).catch(
@@ -126,6 +124,7 @@ declare namespace offers {
                 repo: "beta/api";
                 at: "2026-11-16T09:00:00Z";
                 why: "a .git directory inside a tree";
+                fix: "a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new from the domain is taken until that branch is deleted in the workspace; then offer again from it (desolate offer)";
               },
             ];
             "issue.list": [
@@ -151,7 +150,7 @@ declare namespace offers {
       "=",
       [
         "Refused from beta (beta/api, 2026-11-16T09:00:00Z): a .git directory inside a tree",
-        "  Nothing new from beta is taken while one of its branches holds what git refused. Delete that branch in the workspace, then `desolate sync` there.",
+        "  a branch in this domain holds an object git calls dangerous (a .git inside a tree, a .gitmodules that is a symlink or names an option, a malformed object). Nothing new from the domain is taken until that branch is deleted in the workspace; then offer again from it (desolate offer)",
         "Needs you:",
         "  acme  acme/web  fix/login  0123456789ab  from w1  for v3",
         "    review: desolate review acme acme/web fix/login",
