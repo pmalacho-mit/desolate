@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { andMore, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
+import { ANYWHERE_COST } from "../shared/envfile.ts";
 import { over } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
 import { guest, paths } from "./paths.ts";
@@ -17,7 +18,17 @@ import type {
   Table,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome } from "../.harness/home.ts";
-import type { collect, fakeStack, rootAnswers, rootAsked, said } from "../.harness/host-stack.ts";
+import type {
+  collect,
+  fakeStack,
+  rootAnswers,
+  repliesAre,
+  reply,
+  rootAsked,
+  said,
+  stdinGives,
+  vmAnswers,
+} from "../.harness/host-stack.ts";
 import type { reachedHosts, reportOf } from "../.harness/host-net.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
@@ -52,6 +63,37 @@ const readSecretLine = (): Promise<string> =>
     process.stdin.on("end", done);
     process.stdin.resume();
   });
+
+/** The headers a secret goes in, asked of the person until they say: header names, or the
+ *  word `anywhere` for none (ANYWHERE_COST). An empty answer is not taken for anywhere. */
+export const askHeaders = async (ask: (question: string) => Promise<string>) => {
+  for (;;) {
+    const answer = (
+      await ask(
+        "  Only in these headers (comma-separated; usually authorization), or the word anywhere: ",
+      )
+    ).trim();
+    if (answer.toLowerCase() === "anywhere") return [];
+    const headers = answer
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean);
+    if (headers.length) return headers;
+  }
+};
+
+declare namespace askHeaders {
+  /** Enter asks again; the headers named are the answer */
+  export type Headers = Given<
+    Invoke<typeof repliesAre, [answers: ["", " authorization , x-api-key"]]>,
+    Expect<Invoke<typeof askHeaders, [ask: typeof reply]>, "=", ["authorization", "x-api-key"]>
+  >;
+  /** the word anywhere, and only it, is no headers */
+  export type Anywhere = Given<
+    Invoke<typeof repliesAre, [answers: ["", "Anywhere"]]>,
+    Expect<Invoke<typeof askHeaders, [ask: typeof reply]>, "=", []>
+  >;
+}
 
 /** A domain that has secrets has a CA its workspaces must trust: the running ones take it
  *  now, the others when they start. */
@@ -392,12 +434,12 @@ export const domainCommand = async (
         json ? JSON.stringify(all.length === 1 ? all[0] : all) : `next: desolate up ${first}`,
       );
     }
-    // The spec's spelling for a secret (section 8): `add --secret NAME --hosts ... [--headers ...]`.
+    // The spec's spelling for a secret (section 8): `add --secret NAME --hosts ... (--headers ... | --anywhere)`.
     if (typeof values.secret === "string")
       return domainCommand([first, "secret", "set", values.secret], values, out);
     refuse(
       "add what?",
-      `desolate domain ${first} add --repo <owner>/<repo> | add --secret <NAME> --hosts <host>[,...] [--headers <header>[,...]]`,
+      `desolate domain ${first} add --repo <owner>/<repo> | add --secret <NAME> --hosts <host>[,...] --headers <header>[,...] (or --anywhere)`,
       EXIT.usage,
     );
   }
@@ -528,7 +570,7 @@ export const domainCommand = async (
   }
   if (second === "secret") {
     await ensureProxyUser(first);
-    // desolate domain <d> secret [list] | set <NAME> --hosts a,b [--headers h,...] | rm <NAME>
+    // desolate domain <d> secret [list] | set <NAME> --hosts a,b (--headers h,... | --anywhere) | rm <NAME>
     const [, , action, name] = args;
     type Listed = {
       name: string;
@@ -537,7 +579,7 @@ export const domainCommand = async (
       on: boolean;
       secondsLeft?: number;
     };
-    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] [--headers <header>[,...]] | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME> | show <NAME> | import <.env> [--dry-run] [--print-env | --in-place]`;
+    const usage = `desolate domain ${first} secret list | set <NAME> --hosts <host>[,...] --headers <header>[,...] (or --anywhere) | copy <NAME> --from <domain> | off <NAME> | on <NAME> [--ttl 30m] | rm <NAME> | show <NAME> | import <.env> [--dry-run] [--print-env | --in-place]`;
     const left = (seconds: number) =>
       seconds >= 7200
         ? `${Math.round(seconds / 3600)} h`
@@ -595,18 +637,14 @@ export const domainCommand = async (
             for (const r of unknown) {
               const hosts = csv(
                 await asker.question(
-                  `${r.key} looks like a secret, but where it goes is not known.\n  The hosts it may be sent to (comma-separated), or Enter to keep it a value: `,
+                  `${[`${r.key}: ${r.why}.`, ...r.warnings.map((w) => `  ! ${w}`)].join("\n")}\n  The hosts it may be sent to (comma-separated), or Enter to keep it a value: `,
                 ),
               );
               if (!hosts.length) {
                 choices.push({ key: r.key, kind: "value" });
                 continue;
               }
-              const headers = csv(
-                await asker.question(
-                  "  Only in these headers (comma-separated), or Enter for anywhere in the request: ",
-                ),
-              );
+              const headers = await askHeaders((q) => asker.question(q));
               choices.push({ key: r.key, kind: "secret", hosts, headers });
             }
           } finally {
@@ -721,6 +759,18 @@ export const domainCommand = async (
     if (action === "set" || action === "rm") {
       if (!name) refuse("which secret?", usage, EXIT.usage);
       if (action === "set") {
+        // Where in a request it goes is said, never assumed: with no headers the proxy puts the
+        // value anywhere it finds the name, the body included (ANYWHERE_COST).
+        const headers = csv(values.headers);
+        const where = `desolate domain ${first} secret set ${name} --hosts ${csv(values.hosts).join(",") || "<host>"} --headers authorization   (the usual one; or --anywhere)`;
+        if (headers.length && values.anywhere === true)
+          refuse("--headers or --anywhere, not both", where, EXIT.usage);
+        if (!headers.length && values.anywhere !== true)
+          refuse(
+            `where in a request may ${name} go? Name its headers, or say --anywhere`,
+            where,
+            EXIT.usage,
+          );
         // The value comes on stdin, never as an argument: arguments are visible to every
         // process on the machine and are kept in shell history.
         if (process.stdin.isTTY)
@@ -731,7 +781,7 @@ export const domainCommand = async (
             name,
             value,
             hosts: csv(values.hosts),
-            headers: csv(values.headers),
+            headers,
           })
         ).find((s) => s.name === name)!;
         await trustCa(first);
@@ -739,6 +789,7 @@ export const domainCommand = async (
         out(
           `${set.name} is held in the root for the domain ${first}. Its workspaces send the name; the value is put in its place on the way to: ${set.hosts.join(", ")}${set.headers ? ` (in the header${set.headers.length > 1 ? "s" : ""} ${set.headers.join(", ")} only)` : ""}.`,
         );
+        if (!set.headers) out(`note: with --anywhere, ${ANYWHERE_COST}. Prefer --headers.`);
         return out(`in a workspace: export SOME_API_KEY=${set.name}   (the name is not a secret)`);
       }
       const existed = (
@@ -994,6 +1045,121 @@ declare namespace domainCommand {
         "ACME-NPM-TOKEN  ->  registry.npmjs.org  [on for 30 min more]",
       ]
     >
+  >;
+  /** a secret says where in a request it goes: in the headers named, or --anywhere, which
+   *  costs what it says; neither, or both, is refused before its value is read */
+  export type SetWhere = Given<
+    [
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "domain.show": { workspaces: [] };
+            "secret.set": [
+              { name: "ACME-KEY"; hosts: ["api.example.com"]; on: true },
+              {
+                name: "ACME-OPENAI-KEY";
+                hosts: ["api.openai.com"];
+                headers: ["authorization"];
+                on: true;
+              },
+            ];
+          },
+        ]
+      >,
+      Invoke<typeof vmAnswers, [answers: { list: [] }]>,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof domainCommand,
+            args: [
+              args: ["acme", "secret", "set", "ACME-KEY"],
+              values: { hosts: "api.example.com" },
+              out: typeof collect,
+            ],
+          ]
+        >,
+        "=",
+        {
+          message: "where in a request may ACME-KEY go? Name its headers, or say --anywhere";
+          fix: "desolate domain acme secret set ACME-KEY --hosts api.example.com --headers authorization   (the usual one; or --anywhere)";
+          code: 64;
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [
+            run: typeof domainCommand,
+            args: [
+              args: ["acme", "secret", "set", "ACME-KEY"],
+              values: { hosts: "api.example.com"; headers: "authorization"; anywhere: true },
+              out: typeof collect,
+            ],
+          ]
+        >,
+        "matches",
+        { message: "--headers or --anywhere, not both"; code: 64 }
+      >,
+      Expect<Invoke<typeof rootAsked>, "=", []>,
+      Given<
+        [
+          Invoke<typeof stdinGives, [text: "sk-1"]>,
+          Invoke<
+            typeof domainCommand,
+            [
+              args: ["acme", "secret", "set", "ACME-KEY"],
+              values: { hosts: "api.example.com"; anywhere: true },
+              out: typeof collect,
+            ]
+          >,
+        ],
+        [
+          Expect<
+            Invoke<typeof rootAsked>,
+            "matches",
+            [
+              { op: "secret.set"; args: { name: "ACME-KEY"; value: "sk-1"; headers: [] } },
+              { op: "domain.show" },
+            ]
+          >,
+          Expect<
+            Invoke<typeof said>,
+            "=",
+            [
+              "ACME-KEY is held in the root for the domain acme. Its workspaces send the name; the value is put in its place on the way to: api.example.com.",
+              "note: with --anywhere, its value is put anywhere in a request to those hosts, the body included, so a service there that sends back what it is sent, changed in any way, can hand the value to a workspace. Prefer --headers.",
+              "in a workspace: export SOME_API_KEY=ACME-KEY   (the name is not a secret)",
+            ]
+          >,
+        ]
+      >,
+      Given<
+        [
+          Invoke<typeof stdinGives, [text: "sk-2"]>,
+          Invoke<
+            typeof domainCommand,
+            [
+              args: ["acme", "secret", "set", "ACME-OPENAI-KEY"],
+              values: { hosts: "api.openai.com"; headers: "authorization" },
+              out: typeof collect,
+            ]
+          >,
+        ],
+        Expect<
+          Invoke<typeof said>,
+          "=",
+          [
+            "ACME-OPENAI-KEY is held in the root for the domain acme. Its workspaces send the name; the value is put in its place on the way to: api.openai.com (in the header authorization only).",
+            "in a workspace: export SOME_API_KEY=ACME-OPENAI-KEY   (the name is not a secret)",
+          ]
+        >
+      >,
+    ]
   >;
   /** a time to live is a number and a unit, and only for switching one on */
   export type Ttl = Given<

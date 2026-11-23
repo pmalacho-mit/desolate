@@ -831,11 +831,19 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           // One line, as the terminal takes it (readSecretLine): no line breaks inside.
           if (!value || /[\r\n]/.test(value) || Buffer.byteLength(value) > SECRET_BYTES)
             return json(res, 400, { error: "a value is one line, of at most 64 KiB" });
+          // Where in a request it goes is said, as `secret set` asks for --headers or
+          // --anywhere: with no headers its value is put anywhere, the body included.
+          const headers = list(asked.headers);
+          if (!headers.length && asked.anywhere !== true)
+            return json(res, 400, {
+              error:
+                "name the headers it goes in (usually authorization), or tick 'anywhere in the request'",
+            });
           const listed = await ops.set(asked.domain, {
             name,
             value,
             hosts: list(asked.hosts),
-            headers: list(asked.headers),
+            headers,
           });
           log(`secrets page: set ${name} for the domain ${asked.domain}`);
           return json(res, 200, { secrets: listed });
@@ -1318,7 +1326,7 @@ declare namespace handler {
           name: "API";
           value: "s3cret";
           hosts: ["api.example.com"];
-          headers: [];
+          headers: ["authorization"];
         };
       },
     ]
@@ -1338,7 +1346,76 @@ declare namespace handler {
     Expect<
       Invoke<typeof secretsSet>,
       "=",
-      [{ domain: "acme"; name: "API"; value: "s3cret"; hosts: ["api.example.com"]; headers: [] }]
+      [
+        {
+          domain: "acme";
+          name: "API";
+          value: "s3cret";
+          hosts: ["api.example.com"];
+          headers: ["authorization"];
+        },
+      ]
+    >
+  >;
+  type SetNoHeaders = Invoke<
+    typeof ask,
+    [
+      handler: Secrets,
+      request: {
+        method: "POST";
+        url: "/secrets/set";
+        headers: Script;
+        body: {
+          domain: "acme";
+          name: "API";
+          value: "s3cret";
+          hosts: ["api.example.com"];
+          headers: [];
+          anywhere: false;
+        };
+      },
+    ]
+  >;
+  type SetAnywhere = Invoke<
+    typeof ask,
+    [
+      handler: Secrets,
+      request: {
+        method: "POST";
+        url: "/secrets/set";
+        headers: Script;
+        body: {
+          domain: "acme";
+          name: "API";
+          value: "s3cret";
+          hosts: ["api.example.com"];
+          headers: [];
+          anywhere: true;
+        };
+      },
+    ]
+  >;
+  /** no headers is refused unless the request says anywhere */
+  export type NoHeaders = Given<
+    HasToken,
+    Expect<
+      SetNoHeaders,
+      "matches",
+      {
+        status: 400;
+        json: {
+          error: "name the headers it goes in (usually authorization), or tick 'anywhere in the request'";
+        };
+      }
+    >
+  >;
+  /** said, it is stored with none; the one refused before it went nowhere */
+  export type Anywhere = Given<
+    [HasToken, SetNoHeaders, SetAnywhere],
+    Expect<
+      Invoke<typeof secretsSet>,
+      "matches",
+      [{ name: "API"; hosts: ["api.example.com"]; headers: [] }]
     >
   >;
 
