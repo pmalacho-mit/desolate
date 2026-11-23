@@ -200,7 +200,9 @@ ol.steps li.done { color: var(--soft); }
 .field { display: flex; flex-direction: column; gap: var(--s1); margin: 0; font-size: 13px; color: var(--soft); }
 .wide { width: 100%; height: auto; min-height: var(--btn); font: inherit; padding: 6px var(--s2); border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: inherit; }
 textarea.wide { font: 13px/1.45 var(--mono); resize: vertical; }
-.markdown { border: 1px solid var(--line); border-radius: 8px; padding: var(--s2) 14px; overflow-wrap: anywhere; }
+/* (min-width 0: a long line in a code block scrolls in its box; it made the page scroll
+   sideways by 3,515 px in a 1,180 px window.) */
+.markdown { min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: var(--s2) 14px; overflow-wrap: anywhere; }
 .markdown pre { overflow: auto; padding: var(--s2); border-radius: 6px; background: var(--raise); }
 .markdown code { font-family: var(--mono); font-size: 12.5px; }
 .markdown table { border-collapse: collapse; } .markdown th, .markdown td { border: 1px solid var(--line); padding: var(--s1) var(--s2); }
@@ -213,7 +215,11 @@ textarea.wide { font: 13px/1.45 var(--mono); resize: vertical; }
 #review .resizer { flex: none; width: 7px; cursor: col-resize; background: transparent; border-right: 1px solid var(--line); }
 #review .resizer:hover, #review .resizer.dragging { background: color-mix(in srgb, var(--link) 25%, transparent); }
 #review-body { flex: 1; min-width: 0; overflow: auto; }
-#review-body > .card { border: 0; border-radius: 0; box-shadow: none; padding: 0 var(--s5); min-height: 100%; gap: var(--s3); }
+/* One column, the panel's width, and text that wraps anywhere: a card's column is otherwise as
+   wide as its widest part, and one long diff line (a pre in the diff's box) made the whole panel
+   4,569 px wide in a 692 px panel, every button and count out of sight (owner, 2026-11-23). Only
+   the diff scrolls sideways, in its own box. */
+#review-body > .card { border: 0; border-radius: 0; box-shadow: none; padding: 0 var(--s5); min-height: 100%; gap: var(--s3); grid-template-columns: minmax(0, 1fr); overflow-wrap: anywhere; }
 #review-body .review-head { position: sticky; top: 0; z-index: 2; background: var(--card); padding: var(--s4) 0 var(--s3); border-bottom: 1px solid var(--line); }
 #review-body .title-row { display: flex; align-items: center; gap: var(--s3); }
 #review-body .title { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: var(--s1) var(--s2); align-items: center; }
@@ -247,19 +253,21 @@ button.commit-pick.on { background: color-mix(in srgb, var(--link) 12%, var(--ca
 .files-changed li { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; column-gap: var(--s3); align-items: center; min-height: 28px; }
 .files-changed li > .pill { justify-self: start; }
 .files-changed li > .looks { grid-column: 2 / -1; font-size: 12px; }
-.files-changed button.link { overflow-wrap: anywhere; text-align: left; font-family: var(--mono); font-size: 12.5px; }
+.files-changed button.link { white-space: normal; overflow-wrap: anywhere; text-align: left; font-family: var(--mono); font-size: 12.5px; }
 .files-changed .counts { display: inline-grid; grid-template-columns: 5ch 5ch; column-gap: var(--s2); justify-items: end; font: 12px var(--mono); font-variant-numeric: tabular-nums; }
 .files-changed .plus { color: var(--green); }
 .files-changed .minus { color: var(--red); }
 
 /* ---- the diff: unified, or side by side with each side's line numbers */
-pre.diff { margin: 0; max-height: 60vh; white-space: pre; overflow: auto; line-height: 1.35; border: 1px solid var(--line); border-radius: 10px; padding: var(--s2) 0; }
-pre.diff span { display: block; min-width: max-content; padding: 0 var(--s3); }
+/* Its lines as git has them, never wrapped, scrolled sideways in this box. A grid: its one
+   column as wide as the longest line, so every line's colour reaches the scrolled width. */
+pre.diff { display: grid; margin: 0; max-height: 60vh; white-space: pre; overflow: auto; line-height: 1.35; border: 1px solid var(--line); border-radius: 10px; padding: var(--s2) 0; }
+pre.diff span { display: block; padding: 0 var(--s3); }
 pre.diff .add { background: color-mix(in srgb, var(--green) 14%, transparent); }
 pre.diff .del { background: color-mix(in srgb, var(--red) 14%, transparent); }
 pre.diff .hunk { color: var(--link); }
 pre.diff .file { font-weight: 700; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
-pre.diff span.hl { display: inline; min-width: 0; padding: 0; }
+pre.diff span.hl { display: inline; padding: 0; }
 .sbs { font: 12.5px/1.4 var(--mono); max-height: 60vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
 .sbs-row { display: grid; grid-template-columns: 3.5em minmax(0, 1fr) 3.5em minmax(0, 1fr); }
 .sbs-row .no { color: var(--soft); text-align: right; padding: 0 var(--s2) 0 var(--s1); user-select: none; border-right: 1px solid var(--line); font-variant-numeric: tabular-nums; }

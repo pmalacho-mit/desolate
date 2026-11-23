@@ -1170,6 +1170,163 @@ describe("T2 section 4.8: the root UI", () => {
     }
   });
 
+  it("the review fits its panel whatever the diff's width: only the diff scrolls sideways, and a long name wraps whole (control: the diff does scroll)", async () => {
+    stack.step("a review of a wide diff");
+    // The owner's review of 17 files was wider than its panel: a long diff line set the width
+    // of everything, Close and the counts out of sight to the right (2026-11-23). Here: a line
+    // of 600 characters with no space, in a file whose path is 180 long, and a workflow, which
+    // the review warns of.
+    const longPath = `long/${"a".repeat(85)}/${"b".repeat(85)}.txt`;
+    const longLine = "x".repeat(600);
+    assert.equal(longPath.length, 180);
+    const work = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      [
+        "git switch -q -c wide main",
+        `mkdir -p "$(dirname ${longPath})" .github/workflows`,
+        `printf '%s\\nshort\\n' ${longLine} > ${longPath}`,
+        "echo short > short.txt",
+        "echo 'on: push' > .github/workflows/wide.yml",
+        "git add -A",
+        "git -c user.name=t -c user.email=t@example.test commit -qm 'a wide diff'",
+        "desolate offer",
+        "git rev-parse HEAD",
+      ].join(" && "),
+    );
+    assert.equal(work.code, 0, work.stderr);
+    const tip = work.stdout.trim().split("\n").pop()!;
+    assert.ok(
+      await until(async () =>
+        (await state()).offers.some((o) => o.branch === "wide" && o.commit === tip),
+      ),
+    );
+    // What the panel shows, measured in the page: how far its body scrolls sideways; which of
+    // Close, the commit's Message, a file's counts, the warning and the push line end past the
+    // panel's visible right edge; the long name and its height beside a short one's; and the
+    // diff's own box, which should scroll.
+    const measure = `(() => {
+      const body = document.getElementById("review-body");
+      const right = body.getBoundingClientRect().left + body.clientLeft + body.clientWidth;
+      const parts = { close: "#review .review-head .title-row > button", message: "[data-message]", counts: "[data-files-changed] .counts", warning: "#review .warnbox", push: "#review-card > .buttons" };
+      const found = {}, outside = [];
+      for (const [name, at] of Object.entries(parts)) {
+        const all = [...document.querySelectorAll(at)];
+        found[name] = all.length;
+        for (const e of all) if (e.getBoundingClientRect().right > right + 1) outside.push(name);
+      }
+      const named = (path) => document.querySelector('[data-change="' + path + '"] button.link');
+      const name = named(${JSON.stringify(longPath)});
+      const diff = document.querySelector("#review [data-diff]");
+      return { sideways: body.scrollWidth - body.clientWidth, found, outside,
+        name: name.textContent, nameHeight: name.getBoundingClientRect().height, rowHeight: named("short.txt").getBoundingClientRect().height,
+        diff: diff.tagName + "." + diff.className, diffScrolls: diff.scrollWidth - diff.clientWidth };
+    })()`;
+    type Measured = {
+      sideways: number;
+      found: Record<string, number>;
+      outside: string[];
+      name: string;
+      nameHeight: number;
+      rowHeight: number;
+      diff: string;
+      diffScrolls: number;
+    };
+    const fits = (m: Measured, where: string) => {
+      assert.ok(m.sideways <= 1, `${where}: the panel scrolls sideways by ${m.sideways} px`);
+      assert.deepEqual(
+        m.found,
+        { close: 1, message: 1, counts: 3, warning: 1, push: 1 },
+        `${where}: what is measured is there`,
+      );
+      assert.deepEqual(m.outside, [], `${where}: past the panel's right edge`);
+      assert.equal(m.name, longPath, `${where}: the name whole`);
+      assert.ok(
+        m.nameHeight > 1.5 * m.rowHeight,
+        `${where}: the name wraps (${m.nameHeight} px, a line ${m.rowHeight})`,
+      );
+    };
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")), {
+      width: 1180,
+      height: 1500,
+    });
+    try {
+      const page = await browser.tab(
+        `http://${HOST}:${port}/?tkn=${token}&review&domain=web&repo=acme%2Fapp&branch=wide`,
+      );
+      await page.until("document.querySelector('#review .sbs')", "the diff, side by side");
+      await page.click("[data-layout]", "Unified");
+      await page.until("document.querySelector('#review pre.diff')", "the diff, unified");
+      // Unified: git's lines as they are, scrolled sideways in their box, every line's colour
+      // as wide as the longest; the panel fits, at the window's width and in a panel of 700.
+      for (const panel of ["", "700px"]) {
+        await page.evaluate(
+          `document.documentElement.style.setProperty("--review-w", ${JSON.stringify(panel)})`,
+        );
+        const where = `unified, panel ${panel || "as it opens"}`;
+        const m = await page.evaluate<Measured>(measure);
+        fits(m, where);
+        assert.equal(m.diff, "PRE.mono diff");
+        assert.ok(m.diffScrolls > 0, `${where}: control: the diff scrolls in its box`);
+      }
+      const lines = await page.evaluate<number[]>(
+        "[...document.querySelectorAll('#review pre.diff > span')].map((s) => s.getBoundingClientRect().width)",
+      );
+      assert.ok(
+        Math.max(...lines) - Math.min(...lines) < 1,
+        `each line as wide as the longest: ${Math.min(...lines)} to ${Math.max(...lines)} px`,
+      );
+      // Scrolled sideways, the diff moves and the panel's head does not. (In one turn of the
+      // page: the diff is drawn again when its colours come, at its first place.)
+      const [before, after, scrolled, panelScrolled] = await page.evaluate<
+        [number, number, number, number]
+      >(`(() => {
+        const close = () => document.querySelector("#review .review-head .title-row > button").getBoundingClientRect().left;
+        const before = close();
+        const diff = document.querySelector("#review pre.diff");
+        diff.scrollLeft = 3000;
+        return [before, close(), diff.scrollLeft, document.getElementById("review-body").scrollLeft];
+      })()`);
+      assert.ok(scrolled > 0, `the diff scrolled sideways (${scrolled} px)`);
+      assert.equal(after, before, "Close stays put");
+      assert.equal(panelScrolled, 0);
+      // A picture of it, for a person to look at, beside the suite's own files.
+      await page.evaluate(
+        "document.documentElement.style.removeProperty('--review-w'); document.querySelector('#review pre.diff').scrollLeft = 0",
+      );
+      await page.shot(
+        path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), "review-wide-diff.png"),
+      );
+      // Side by side wraps each side's lines (each keeps its number), so its box does not
+      // scroll sideways either; the long line is there whole.
+      await page.click("[data-layout]", "Side by side");
+      await page.until("document.querySelector('#review .sbs')", "the diff, side by side");
+      for (const panel of ["", "700px"]) {
+        await page.evaluate(
+          `document.documentElement.style.setProperty("--review-w", ${JSON.stringify(panel)})`,
+        );
+        const where = `side by side, panel ${panel || "as it opens"}`;
+        const m = await page.evaluate<Measured>(measure);
+        fits(m, where);
+        assert.equal(m.diff, "DIV.sbs");
+        assert.ok(m.diffScrolls <= 1, `${where}: its lines wrap in its box`);
+        assert.ok(
+          await page.evaluate<boolean>(
+            `[...document.querySelectorAll('#review .sbs-row .code')].some((c) => c.textContent === ${JSON.stringify(longLine)})`,
+          ),
+          `${where}: the long line whole`,
+        );
+      }
+    } finally {
+      await browser.close();
+    }
+  });
+
   it("a branch of 250 commits: the review counts every one, pages them, and the 41st is pickable", async () => {
     stack.step("a long branch, counted and paged");
     // (Before, the root listed 200 and every count said 200; the page let a person pick from
@@ -1335,6 +1492,74 @@ describe("T2 section 4.8: the root UI", () => {
       await until(async () => (await spare()) === undefined, 30_000),
       "gone from the state",
     );
+  });
+
+  it("an offered issue's preview fits the page: a long code line scrolls in its box, a long word wraps whole (control: the code block does scroll)", async () => {
+    stack.step("an offered issue's preview");
+    // A code block's line made the whole page as wide as itself (4,687 px in a 1,180 px
+    // window, found 2026-11-23), its buttons out of sight.
+    const codeLine = "c".repeat(600);
+    const word = "w".repeat(300);
+    const body = `A paragraph:\n\n${word}\n\n\`\`\`\n${codeLine}\n\`\`\`\n`;
+    const offered = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      `echo ${Buffer.from(body).toString("base64")} | base64 -d > /tmp/wide.md && desolate issue offer --title 'A wide preview' --body-file /tmp/wide.md`,
+    );
+    assert.equal(offered.code, 0, offered.stderr);
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")), {
+      width: 1180,
+      height: 1500,
+    });
+    try {
+      const page = await browser.tab(`http://${HOST}:${port}/?tkn=${token}`);
+      await page.until("document.querySelector('[data-issue-offer]')", "the offered issue");
+      await page.click("[data-issue-offer] button", "Read and edit");
+      await page.click("[data-issue] [data-preview-toggle]", "Preview");
+      await page.until("document.querySelector('[data-issue] [data-preview] pre')", "the preview");
+      const seen = await page.evaluate<{
+        sideways: number;
+        buttons: string[];
+        outside: string[];
+        word: boolean;
+        code: boolean;
+        codeScrolls: number;
+      }>(`(() => {
+        const page = document.documentElement;
+        const card = document.querySelector("[data-issue]");
+        const preview = card.querySelector("[data-preview]");
+        const pre = preview.querySelector("pre");
+        const buttons = [...card.querySelectorAll("button")];
+        return { sideways: page.scrollWidth - page.clientWidth, buttons: buttons.map((b) => b.textContent),
+          outside: buttons.filter((b) => b.getBoundingClientRect().right > page.clientWidth + 1).map((b) => b.textContent),
+          word: [...preview.querySelectorAll("p")].some((p) => p.textContent === ${JSON.stringify(word)}),
+          code: pre.textContent.includes(${JSON.stringify(codeLine)}), codeScrolls: pre.scrollWidth - pre.clientWidth };
+      })()`);
+      assert.ok(seen.sideways <= 1, `the page scrolls sideways by ${seen.sideways} px`);
+      assert.deepEqual(seen.buttons, [
+        "Close",
+        "Write",
+        "Save",
+        "Publish...",
+        "Back to draft",
+        "Reject",
+      ]);
+      assert.deepEqual(seen.outside, [], "past the window's right edge");
+      assert.ok(seen.word, "the paragraph's word, whole");
+      assert.ok(seen.code, "the code's line, whole");
+      assert.ok(seen.codeScrolls > 0, "control: the code block scrolls in its own box");
+      // A picture of it, for a person to look at, beside the suite's own files.
+      await page.shot(
+        path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), "issue-wide-preview.png"),
+      );
+    } finally {
+      await browser.close();
+    }
   });
 
   it("the transcript reads as reviewed", () => {

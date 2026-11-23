@@ -83,6 +83,8 @@ to sign this browser in to every page at once: desolate ui --open (or --link, to
 
 ## the review of names that read as others
 
+## a review of a wide diff
+
 ## a long branch, counted and paged
 
 $ desolate review web acme/app long
@@ -167,3 +169,5 @@ to push exactly this: desolate push web acme/app long --expect <commit>
 [exit 0]
 
 ## delete from the dashboard
+
+## an offered issue's preview
