@@ -8,7 +8,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { readJson } from "../shared/json.ts";
-import { keepApart, parseEnv, planEnv, rewriteEnv, secretName } from "../shared/envfile.ts";
+import {
+  ANYWHERE_COST,
+  keepApart,
+  parseEnv,
+  planEnv,
+  rewriteEnv,
+  secretName,
+} from "../shared/envfile.ts";
 import type { Decision, PlanRow } from "../shared/envfile.ts";
 import { paths } from "./paths.ts";
 import type { SecretListed, SecretOps } from "./domains.ts";
@@ -318,16 +325,66 @@ export const describePlan = (rows: PlanRow[]): string[] => {
   const of = (kind: PlanRow["kind"]) => rows.filter((r) => r.kind === kind);
   for (const r of of("secret"))
     lines.push(
-      `  secret  ${r.key} -> ${r.name}  to ${r.hosts!.join(", ")}${r.headers ? ` (in ${r.headers.join(", ")} only)` : " (anywhere in the request)"}: ${r.why}`,
+      `  secret  ${r.key} -> ${r.name}  to ${r.hosts!.join(", ")}${r.headers ? ` (in ${r.headers.join(", ")} only)` : " (anywhere in the request)"}: ${r.why}${r.headers ? "" : `; ${ANYWHERE_COST}`}`,
     );
   for (const r of of("local"))
     lines.push(`  stays   ${r.key}: ${r.why}. It stays readable in the workspace.`);
   for (const r of of("ask"))
     lines.push(
-      `  value?  ${r.key}: ${r.why}. Left a value: --choose ${r.key}=secret:<host>[@<header>] makes it a secret`,
+      `  value?  ${r.key}: ${r.why}. Left a value: --choose ${r.key}=secret:${r.hosts ? `${r.hosts.join(",")}${r.headers ? `@${r.headers.join(",")}` : ""}` : "<host>[@<header>]"} makes it a secret`,
     );
   const plain = of("value").map((r) => r.key);
   if (plain.length) lines.push(`  values  ${plain.join(", ")}`);
   for (const r of rows) for (const w of r.warnings) lines.push(`  ! ${r.key}: ${w}`);
   return lines;
 };
+
+declare namespace describePlan {
+  /** a secret with no headers says what that costs, beside one in a header that does not; a
+   *  token that writes as the person is left a value, with the command that would set it */
+  export type Lines = Expect<
+    Invoke<
+      typeof describePlan,
+      [
+        rows: [
+          {
+            key: "OPENAI_API_KEY";
+            kind: "secret";
+            name: "OPENAI-API-KEY";
+            hosts: ["api.openai.com"];
+            headers: ["authorization"];
+            by: "value";
+            why: "an OpenAI key (sk-)";
+            warnings: [];
+          },
+          {
+            key: "SERPAPI_API_KEY";
+            kind: "secret";
+            name: "SERPAPI-API-KEY";
+            hosts: ["serpapi.com"];
+            headers: null;
+            by: "table";
+            why: "SerpApi, by its name";
+            warnings: [];
+          },
+          {
+            key: "GH_TOKEN";
+            kind: "ask";
+            hosts: ["api.github.com"];
+            headers: ["authorization"];
+            by: "table";
+            why: "GitHub's API, by its name, which lets its holder write as you";
+            warnings: ["leave it out unless the project needs it"];
+          },
+        ],
+      ]
+    >,
+    "=",
+    [
+      "  secret  OPENAI_API_KEY -> OPENAI-API-KEY  to api.openai.com (in authorization only): an OpenAI key (sk-)",
+      "  secret  SERPAPI_API_KEY -> SERPAPI-API-KEY  to serpapi.com (anywhere in the request): SerpApi, by its name; its value is put anywhere in a request to those hosts, the body included, so a service there that sends back what it is sent, changed in any way, can hand the value to a workspace",
+      "  value?  GH_TOKEN: GitHub's API, by its name, which lets its holder write as you. Left a value: --choose GH_TOKEN=secret:api.github.com@authorization makes it a secret",
+      "  ! GH_TOKEN: leave it out unless the project needs it",
+    ]
+  >;
+}

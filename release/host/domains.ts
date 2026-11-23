@@ -637,7 +637,7 @@ export const domainCommand = async (
             for (const r of unknown) {
               const hosts = csv(
                 await asker.question(
-                  `${r.key} looks like a secret, but where it goes is not known.\n  The hosts it may be sent to (comma-separated), or Enter to keep it a value: `,
+                  `${[`${r.key}: ${r.why}.`, ...r.warnings.map((w) => `  ! ${w}`)].join("\n")}\n  The hosts it may be sent to (comma-separated), or Enter to keep it a value: `,
                 ),
               );
               if (!hosts.length) {
