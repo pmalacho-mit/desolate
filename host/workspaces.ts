@@ -1326,6 +1326,18 @@ export const start = async (target: string | undefined, out: Out) => {
   else if (editorStarting) out(`  editor${STILL_STARTING}`);
 };
 
+/** The look at each checkout (its paths are the script's arguments). The host runs it by
+ *  itself every workspace.lookSeconds, beside whatever a person or an agent is doing in the
+ *  same repository, so it must take no lock there: a plain \`git status\` refreshes the index
+ *  under .git/index.lock, and a \`git checkout\` or \`git commit\` that began in that moment
+ *  failed with "Unable to create .git/index.lock: File exists" (seen on the M1, 2026-11-23:
+ *  a test run's checkout, as its workspace started). */
+export const LOOK_EACH = `for p in "$@"; do
+  s=$(git --no-optional-locks -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
+  [ -z "$s" ] || echo "UNCOMMITTED $p"
+  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
+done`;
+
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
  *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
  *  its branches are written out for the root. What the VM says is its word about itself. */
@@ -1336,11 +1348,7 @@ const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
       "it is not running, so what it holds cannot be looked at (a person removes it: desolate rm)",
     ];
   const script = `${sync ? `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"` : ""}
-for p in "$@"; do
-  s=$(git -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
-  [ -z "$s" ] || echo "UNCOMMITTED $p"
-  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
-done`;
+${LOOK_EACH}`;
   const looked = await b.exec(
     w.vm,
     ["bash", "-c", script, "_", ...w.checkouts.map((c) => c.path)],
