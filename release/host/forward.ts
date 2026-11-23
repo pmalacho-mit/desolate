@@ -34,6 +34,7 @@ import type {
   helloTo,
   nameOf,
   portRange,
+  rawOwnerAmong,
   rawOwners,
   said,
   setOf,
@@ -1416,7 +1417,108 @@ declare namespace rawOwnerFor {
       [args: [current: "vm-c", holders: [{ vm: "vm-a" }, { vm: "vm-b" }]], expected: "vm-a"],
     ]
   >;
+  /** the one that had it could not be asked (unasked) and another workspace claims the port
+   *  meanwhile: while its VM runs it keeps it. The controls: once its VM has stopped, or two
+   *  minutes after its last answer, the port passes on */
+  export type Unasked = [
+    Expect<
+      Invoke<
+        typeof rawOwnerAmong,
+        [
+          rawOwnerFor: typeof rawOwnerFor,
+          port: 5432,
+          owner: "dev/w1",
+          entries: [
+            Invoke<
+              typeof unasked,
+              [
+                entry: Invoke<
+                  typeof ws,
+                  [at: "dev/w1", listening: [5432], more: { answeredAt: 1000 }]
+                >,
+                now: 31000,
+                running: true,
+              ]
+            >,
+            Invoke<typeof ws, [at: "dev/w2", listening: [5432]]>,
+          ],
+        ]
+      >,
+      "=",
+      "dev/w1"
+    >,
+    Expect<
+      Invoke<
+        typeof rawOwnerAmong,
+        [
+          rawOwnerFor: typeof rawOwnerFor,
+          port: 5432,
+          owner: "dev/w1",
+          entries: [
+            Invoke<
+              typeof unasked,
+              [
+                entry: Invoke<
+                  typeof ws,
+                  [at: "dev/w1", listening: [5432], more: { answeredAt: 1000 }]
+                >,
+                now: 31000,
+                running: false,
+              ]
+            >,
+            Invoke<typeof ws, [at: "dev/w2", listening: [5432]]>,
+          ],
+        ]
+      >,
+      "=",
+      "dev/w2"
+    >,
+    Expect<
+      Invoke<
+        typeof rawOwnerAmong,
+        [
+          rawOwnerFor: typeof rawOwnerFor,
+          port: 5432,
+          owner: "dev/w1",
+          entries: [
+            Invoke<
+              typeof unasked,
+              [
+                entry: Invoke<
+                  typeof ws,
+                  [at: "dev/w1", listening: [5432], more: { answeredAt: 1000 }]
+                >,
+                now: 121000,
+                running: true,
+              ]
+            >,
+            Invoke<typeof ws, [at: "dev/w2", listening: [5432]]>,
+          ],
+        ]
+      >,
+      "=",
+      "dev/w2"
+    >,
+  ];
 }
+
+/** How long a workspace that could not be asked keeps what it said last, while its VM runs:
+ *  past a daemon started again and its watch reopened (that waits up to 30 s, and the check
+ *  asks every 30 s: this is four of either), and short enough that what a daemon gone for
+ *  good held passes on within minutes. */
+const KEPT_MS = 120_000;
+
+/** A workspace that could not be asked (its watch ended, its ask was not answered), as the
+ *  host then takes it: as it last said, while its VM runs and for KEPT_MS after that answer;
+ *  else listening on nothing. Not being asked is not having stopped listening. */
+const unasked = <E extends { listeners: ReadonlySet<number>; answeredAt: number }>(
+  entry: E,
+  now: number,
+  running: boolean,
+): E =>
+  running && now - entry.answeredAt < KEPT_MS
+    ? entry
+    : { ...entry, listeners: new Set<number>(), low: [], more: 0, past: 0 };
 
 /** The ports a workspace is asked to keep taken, so its servers move on: a raw port another
  *  workspace had first and the host forwards. (Not a port the Mac holds: kept taken in the VM,
@@ -1460,8 +1562,8 @@ declare namespace reservedFor {
   >;
 }
 
-// What a workspace's own daemon says, checked (sync). Shown as text and built into an
-// address: a token is 48 hex, the rest is cut to a line.
+// What a workspace's own daemon says, checked (daemon.ts, apply). Shown as text and built
+// into an address: a token is 48 hex, the rest is cut to a line.
 const editorTokenOf = (value: unknown) =>
   typeof value === "string" && /^[0-9a-f]{48}$/.test(value) ? value : "";
 const tokenEpochOf = (value: unknown) =>
@@ -1506,8 +1608,8 @@ const listenersFrom = (ports: number[], ours: ReadonlySet<number>) => {
 
 /** What the VM says it did not offer for a bound's sake (wsd's `unforwarded`, ticket 8): its
  *  listeners below PORTS.min, and how many of a compose service's came after its mirrors.
- *  Its word, so only whole ports below PORTS.min and a whole count are taken; a VM that
- *  says nothing of it (an older wsd) has none. */
+ *  Its word, so only whole ports below PORTS.min and a whole count are taken, and a VM that
+ *  says nothing of it has none. */
 const unforwardedOf = (value: unknown): { low: number[]; more: number } => {
   const said = (value ?? {}) as { low?: unknown; more?: unknown };
   const low = Array.isArray(said.low)
@@ -1983,6 +2085,7 @@ export {
   rawOwnerFor,
   rawPortsOf,
   reservedFor,
+  unasked,
   spokeAsBrowser,
   tokenEpochOf,
   unforwardedOf,
