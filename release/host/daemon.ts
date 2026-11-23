@@ -102,6 +102,9 @@ import type {
   linesInPieces,
   endsOf,
   numbered,
+  opened,
+  pipeEnds,
+  refusedAs,
   readInPieces,
   setOf,
   shown,
@@ -354,9 +357,10 @@ type Entry = Registered & {
   low: number[];
   more: number;
   past: number;
-  /** Its connections out that its link refused (LINK_CONNECTIONS): how many, the last when,
-   *  and when the daemon's log last said so. */
-  refused: { count: number; at: string; logged: number };
+  /** Its connections carried each way, and of those refused how many, the last when and why,
+   *  and when the daemon's log last said so (carrying). */
+  carried: Record<Way, number>;
+  refused: Record<Way, { count: number; at: string; why: string; logged: number }>;
 };
 
 /** A page's request that throws is that request's 500, logged: never the daemon's end (it
@@ -481,8 +485,8 @@ declare namespace heard {
     >,
   ];
 }
-/** How long a refused connection out is given to read its answer and close (openLink): a
- *  workspace's relay reads it at once. */
+/** How long a refused connection is given to read its answer and close (carrying): a
+ *  workspace's relay reads it at once, and so does a browser. */
 const REFUSED_MS = 5000;
 /** The most connections at once in their handshake on one vz link's loopback port
  *  (openLink). Each costs a socket of this daemon's, not a session into the root, and any
@@ -497,59 +501,276 @@ const PROVING_MOST = 1024;
  *  stateRoom): a state past it stops `desolate events` and the dashboard's actions. */
 const STATE_ANSWER_BYTES = 16 * 1024 * 1024;
 
-/** What one connection a link carries costs this Mac: a session into the root VM, which on
- *  Lima is a `limactl shell` of its own (83 MB, and 2 MB for its ssh: measured on the M1,
- *  2026-11-21, `footprint`). */
-const LINK_CONNECTION_MIB = 85;
-
-/** How many connections out one workspace has carried to its proxy at once. Past it, as many
- *  more wait their turn, and past those a connection is refused, saying so (linkVerdict). */
+/** How many connections out of one workspace are carried to its proxy at once; past it, one
+ *  is refused at once, saying so. */
 export const LINK_CONNECTIONS = define({
   name: "link.connections",
   env: "DESOLATE_LINK_CONNECTIONS",
   side: "host",
-  default: () =>
-    Math.min(256, Math.max(16, Math.floor(os.totalmem() / 1048576 / 8 / LINK_CONNECTION_MIB))),
+  default: () => 256,
   // Every session into the root VM is one of its sshd's, which allows 1000 on a connection
   // (root/start.sh, MaxSessions): no workspace may have more than that.
   parse: whole(1, 1000),
-  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; as many more wait their turn, and past those one is refused. Each carried one is a session into the root VM, about 85 MB of this Mac's memory: by default an eighth of this Mac's memory's worth, from 16 to 256.",
+  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; past it, one is refused at once. Each is a plain ssh session: about 1.5 MB of this Mac's memory and 1.2 MB of the VM's.",
 });
 
-/** What a workspace's link does with a connection out that has proved it is the workspace's:
- *  carry it, while fewer than `most` are carried; else have it wait its turn, while fewer
- *  than `most` wait; else refuse it. A connection waits for as long as its program does:
- *  the program's own patience, not a timer here (R4). */
-const linkVerdict = (carried: number, waiting: number, most: number) =>
-  carried < most ? "carry" : waiting < most ? "wait" : "refuse";
+/** The most connections this Mac carries at once into and out of all its workspaces
+ *  together. Each is a socket of this daemon's, which carries every workspace, and an ssh
+ *  session: about 1.5 MB here, and 1.2 MB in the VM it reaches (200 held at once in the
+ *  root VM, which has 3.9 GiB: measured on the M1, 2026-11-23). Every connection out is a
+ *  session on the one control connection to the root VM as its login user, and so are the
+ *  dashboard's pipes to the state service; sshd takes 1,000 sessions a connection, in the
+ *  root VM and every workspace VM (root/start.sh, workspace/start.sh: MaxSessions). So this
+ *  stays under 1,000, with room for the host's own sessions on that connection. */
+const CONNECTIONS_MOST = 800;
 
-declare namespace linkVerdict {
-  /** carried while there is room, then waiting as many again, then refused */
+/** `n` connections, the word agreeing with the count. */
+const connections = (n: number) => `${n} connection${n === 1 ? "" : "s"}`;
+
+/** A connection into a workspace (to its dev servers, its editor) or out of it (its link). */
+type Way = "in" | "out";
+
+/** Why a connection `way` is refused, its workspace carrying `theirs` that way and this Mac
+ *  `all` (both ways, every workspace); or null: it is carried. Each way has its own `most`
+ *  (link.connections), so that a flood one way does not starve the other. */
+const connectionRefusal = (way: Way, theirs: number, all: number, most: number) =>
+  all >= CONNECTIONS_MOST
+    ? `this Mac has ${connections(CONNECTIONS_MOST)} into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)`
+    : theirs >= most
+      ? `this workspace has ${connections(most)} ${way} carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`
+      : null;
+
+declare namespace connectionRefusal {
+  /** carried below the workspace's bound each way and below this Mac's; refused at either,
+   *  saying which. The controls: one below each bound, carried */
   export type Verdicts = Table<
-    typeof linkVerdict,
+    typeof connectionRefusal,
     [
-      [args: [carried: 0, waiting: 0, most: 48], expected: "carry"],
-      [args: [carried: 47, waiting: 0, most: 48], expected: "carry"],
-      [args: [carried: 48, waiting: 0, most: 48], expected: "wait"],
-      [args: [carried: 48, waiting: 47, most: 48], expected: "wait"],
-      [args: [carried: 48, waiting: 48, most: 48], expected: "refuse"],
+      [args: [way: "in", theirs: 0, all: 0, most: 256], expected: null],
+      [args: [way: "in", theirs: 255, all: 799, most: 256], expected: null],
+      [args: [way: "out", theirs: 255, all: 799, most: 256], expected: null],
+      [
+        args: [way: "in", theirs: 256, all: 256, most: 256],
+        expected: "this workspace has 256 connections in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+      ],
+      [
+        args: [way: "in", theirs: 1, all: 1, most: 1],
+        expected: "this workspace has 1 connection in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+      ],
+      [
+        args: [way: "out", theirs: 2, all: 2, most: 2],
+        expected: "this workspace has 2 connections out carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+      ],
+      [
+        args: [way: "in", theirs: 0, all: 800, most: 256],
+        expected: "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+      ],
+      [
+        args: [way: "out", theirs: 0, all: 800, most: 256],
+        expected: "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+      ],
     ]
   >;
 }
 
-/** What a refused connection out is answered: as its proxy refuses (an HTTP status and
- *  `X-Desolate-Reason`), which the workspace's relay (workspace/net/egress.ts) shows a
- *  plain-HTTP program as text. */
-const linkRefusal = (most: number) => {
-  const reason = `this workspace has ${most} connections out carried at once and ${most} more waiting their turn, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)`;
-  return `HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: ${reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`;
+/** An answer of the forwarder's own, as text, with `heads` before its own. */
+const httpAnswer = (status: string, text: string, heads = "") =>
+  `HTTP/1.1 ${status}\r\n${heads}Content-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`;
+
+/** What a refused connection is answered, out (as its proxy refuses: the workspace's relay,
+ *  workspace/net/egress.ts, shows a plain-HTTP program the reason) or in (to a browser, which
+ *  shows the text). */
+const busyAnswer = (why: string) =>
+  httpAnswer("503 Service Unavailable", `desolate: ${why}\n`, `X-Desolate-Reason: ${why}\r\n`);
+
+declare namespace busyAnswer {
+  export type Answer = Expect<
+    Invoke<typeof busyAnswer, [why: "this workspace has 2 connections in carried at once"]>,
+    "=",
+    "HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: this workspace has 2 connections in carried at once\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: 62\r\n\r\ndesolate: this workspace has 2 connections in carried at once\n"
+  >;
+}
+
+/** `client` piped to `upstream`, what the client already said (`head`) first: either side's
+ *  close or error ends both. */
+const pipe = (client: Duplex, upstream: Duplex, head: Buffer) => {
+  const close = () => {
+    client.destroy();
+    upstream.destroy();
+  };
+  client.on("error", close);
+  upstream.on("error", close);
+  client.on("close", close);
+  upstream.on("close", close);
+  if (head.length > 0) upstream.write(head);
+  client.pipe(upstream);
+  upstream.pipe(client);
+  client.resume();
 };
 
-declare namespace linkRefusal {
-  export type Refusal = Expect<
-    Invoke<typeof linkRefusal, [most: 2]>,
+/** The pipes into and out of workspaces' VMs, counted. `carry` pipes a client to `open()`
+ *  while its workspace carries fewer than `most` that way and this Mac fewer than
+ *  CONNECTIONS_MOST; past either nothing is dialed, and the client is answered why (`http`)
+ *  or closed. A connection counts until its client closes, which every end of a pipe comes
+ *  to. A refusal is kept for `desolate ports` and logged at most once a minute a way (the
+ *  workspace is not trusted with this Mac's disk). A refused client is let go: what it sends
+ *  is dropped, and it is destroyed after REFUSED_MS, or at once past CONNECTIONS_MOST being
+ *  answered: one held open would hold a descriptor of this daemon's. `take` is the count
+ *  alone, for a connection piped otherwise. */
+export const carrying = (most: number, log: (line: string) => void) => {
+  let all = 0;
+  let answering = 0;
+  const take = (entry: Pick<Entry, "vm" | "carried" | "refused">, way: Way, client: Duplex) => {
+    const why = connectionRefusal(way, entry.carried[way], all, most);
+    if (why === null) {
+      entry.carried[way] += 1;
+      all += 1;
+      client.once("close", () => ((entry.carried[way] -= 1), (all -= 1)));
+      return null;
+    }
+    const refused = entry.refused[way];
+    Object.assign(refused, { count: refused.count + 1, at: new Date().toISOString(), why });
+    if (Date.now() - refused.logged > 60_000) {
+      refused.logged = Date.now();
+      log(`${entry.vm}: refused a connection ${way} (${refused.count} so far): ${why}`);
+    }
+    return why;
+  };
+  const carry = (
+    entry: Pick<Entry, "vm" | "carried" | "refused">,
+    way: Way,
+    client: Duplex,
+    open: () => Duplex,
+    head: Buffer,
+    http: boolean,
+  ) => {
+    // A client already gone is neither counted nor carried: its close has been and gone.
+    if (client.destroyed) return;
+    const why = take(entry, way, client);
+    if (why === null) return pipe(client, open(), head);
+    if (!http || answering >= CONNECTIONS_MOST) return void client.destroy();
+    answering += 1;
+    const timer = setTimeout(() => client.destroy(), REFUSED_MS);
+    client.once("close", () => ((answering -= 1), clearTimeout(timer)));
+    client.resume();
+    client.end(busyAnswer(why));
+  };
+  return { take, carry, all: () => all };
+};
+
+declare namespace carrying {
+  /** each workspace's bound is its own, and each way's: three in to one workspace and the
+   *  third is refused, while its connections out and another workspace's in are carried
+   *  meanwhile (the controls); when one in ends, the next is carried */
+  export type EachWay = Expect<
+    Invoke<
+      typeof opened,
+      [
+        carrying: typeof carrying,
+        most: 2,
+        steps: [
+          [vm: "w1", way: "in", count: 3],
+          [vm: "w1", way: "out", count: 2],
+          [vm: "w2", way: "in", count: 2],
+          [vm: "w1", way: "out", count: 1],
+          [vm: "w1", way: "in", count: -1],
+          [vm: "w1", way: "in", count: 1],
+        ],
+      ]
+    >,
     "=",
-    "HTTP/1.1 503 Service Unavailable\r\nX-Desolate-Reason: this workspace has 2 connections out carried at once and 2 more waiting their turn, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    [
+      {
+        carried: 2;
+        refused: [
+          "this workspace has 2 connections in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+        ];
+      },
+      { carried: 2; refused: [] },
+      { carried: 2; refused: [] },
+      {
+        carried: 0;
+        refused: [
+          "this workspace has 2 connections out carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+        ];
+      },
+      { ended: 1; all: 5 },
+      { carried: 1; refused: [] },
+    ]
+  >;
+  /** this Mac's bound is in and out of every workspace together: 800 carried (the control),
+   *  and the next is refused either way, in any workspace, until one ends */
+  export type InAll = Expect<
+    Invoke<
+      typeof opened,
+      [
+        carrying: typeof carrying,
+        most: 300,
+        steps: [
+          [vm: "w1", way: "in", count: 300],
+          [vm: "w2", way: "out", count: 300],
+          [vm: "w3", way: "in", count: 100],
+          [vm: "w4", way: "out", count: 100],
+          [vm: "w4", way: "in", count: 1],
+          [vm: "w1", way: "out", count: 1],
+          [vm: "w2", way: "out", count: -1],
+          [vm: "w4", way: "in", count: 1],
+        ],
+      ]
+    >,
+    "=",
+    [
+      { carried: 300; refused: [] },
+      { carried: 300; refused: [] },
+      { carried: 100; refused: [] },
+      { carried: 100; refused: [] },
+      {
+        carried: 0;
+        refused: [
+          "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+        ];
+      },
+      {
+        carried: 0;
+        refused: [
+          "this Mac has 800 connections into and out of its workspaces carried at once, the most it may (a bound of desolate's own: one must end, or a workspace be stopped: desolate stop <domain>/<workspace>)",
+        ];
+      },
+      { ended: 1; all: 799 },
+      { carried: 1; refused: [] },
+    ]
+  >;
+  /** refused, a request is answered why (busyAnswer) and closed; anything else is closed
+   *  with no word, since it named nothing that could be answered */
+  export type Refused = Table<
+    typeof refusedAs,
+    [
+      [
+        args: [carrying: typeof carrying, http: true],
+        expected: Invoke<
+          typeof busyAnswer,
+          [
+            why: "this workspace has 1 connection in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)",
+          ]
+        >,
+      ],
+      [args: [carrying: typeof carrying, http: false], expected: ""],
+    ]
+  >;
+  /** the count goes back down however a pipe ends: its client hanging up, the dial's end
+   *  closing, an error, a dial that could not start (what dial() gives when the VM layer
+   *  throws); and a client gone before it is carried is not counted. The control: a pipe
+   *  that has not ended is still counted */
+  export type Ends = Table<
+    typeof pipeEnds,
+    [
+      [args: [carrying: typeof carrying, end: "client"], expected: { held: 1; after: 0 }],
+      [args: [carrying: typeof carrying, end: "upstream"], expected: { held: 1; after: 0 }],
+      [args: [carrying: typeof carrying, end: "error"], expected: { held: 1; after: 0 }],
+      [args: [carrying: typeof carrying, end: "unstarted"], expected: { held: 1; after: 0 }],
+      [args: [carrying: typeof carrying, end: "gone"], expected: { held: 0; after: 0 }],
+      [args: [carrying: typeof carrying, end: "none"], expected: { held: 1; after: 1 }],
+    ]
   >;
 }
 
@@ -1529,32 +1750,13 @@ const serve = async () => {
     }
   };
 
-  const pipe = (client: Socket, upstream: Duplex, head: Buffer) => {
-    const close = () => {
-      client.destroy();
-      upstream.destroy();
-    };
-    client.on("error", close);
-    upstream.on("error", close);
-    client.on("close", close);
-    upstream.on("close", close);
-    if (head.length > 0) upstream.write(head);
-    client.pipe(upstream);
-    upstream.pipe(client);
-    client.resume();
-  };
+  // Every pipe into or out of a workspace's VM goes through this, counted (carrying).
+  const { take, carry } = carrying(linkMost, log);
 
-  const redirectHttp = (client: Socket, location: string) => {
-    const text = `desolate: served at ${location}\n`;
+  const redirectHttp = (client: Socket, to: string) =>
     client.end(
-      `HTTP/1.1 307 Temporary Redirect\r\nLocation: ${location}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
+      httpAnswer("307 Temporary Redirect", `desolate: served at ${to}\n`, `Location: ${to}\r\n`),
     );
-  };
-  const refuseHttp = (client: Socket, status: string, text: string) => {
-    client.end(
-      `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(text)}\r\n\r\n${text}`,
-    );
-  };
 
   const onInbound = async (port: number, client: Socket) => {
     client.on("error", () => client.destroy());
@@ -1579,12 +1781,18 @@ const serve = async () => {
     );
     if (route.to === "close") return void client.destroy();
     if (route.to === "redirect") return redirectHttp(client, route.location);
-    if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
-    if (route.to === "pipe") return pipe(client, dial(route.entry.vm, port), head);
+    if (route.to === "refuse") return void client.end(httpAnswer(route.status, route.text));
+    if (route.to === "pipe") {
+      // Past its bound, a request is told why, anything else closed.
+      const http = sniffedHead.sniffed.kind === "http" && sniffedHead.sniffed.name !== null;
+      return carry(route.entry, "in", client, () => dial(route.entry.vm, port), head, http);
+    }
     const entry = route.entry;
     // A client that already went gets no connection to the owner (final review: each one
     // held the owner's server until it hung up).
     if (client.destroyed) return;
+    // Counted as any other: past its workspace's bound, closed (it named nothing to answer).
+    if (take(entry, "in", client) !== null) return void client.destroy();
     // Silent so far, on a raw port: a server that speaks first gets its client, and its
     // greeting goes out now; but what the client says first is read before any of it goes on.
     // If it is HTTP or TLS (a browser's preconnected socket, used later for a request naming
@@ -1685,13 +1893,10 @@ const serve = async () => {
         client.resume();
         return;
       }
-      if (route.to === "dashboard") {
-        dashboardUsed = Date.now();
-        return pipe(client, toStateService(), head);
-      }
-      if (route.to === "refuse") return refuseHttp(client, route.status, route.text);
+      if (route.to === "dashboard") return pipe(client, toStateService(), head);
+      if (route.to === "refuse") return void client.end(httpAnswer(route.status, route.text));
       if (route.to === "close") return void client.destroy();
-      pipe(client, dial(route.entry.vm, EDITOR.gate), head);
+      carry(route.entry, "in", client, () => dial(route.entry.vm, EDITOR.gate), head, true);
     });
   };
   // On 127.0.0.1 and on ::1, or not at all: browsers try ::1 first for *.localhost (measured
@@ -1880,65 +2085,13 @@ const serve = async () => {
     fs.mkdirSync(dir, { recursive: true });
     const socket = path.join(dir, "proxy.sock");
     fs.rmSync(socket, { force: true });
-    // Each connection carried costs a session into the root VM and processes here: linkMost
-    // are carried at once, as many more wait their turn (first come, first carried), and
-    // past those one is refused, saying so to the program, to the daemon's log (at most a
-    // line a minute: the workspace is not trusted with this Mac's disk) and to `desolate
-    // ports`. (It was refused at 64 with no word anywhere, and a parallel install saw resets.)
-    let carried = 0;
-    const queue = new Set<() => void>();
-    // A refused connection is answered and let go: what it sends is read and dropped, and it
-    // is destroyed if it has not closed in REFUSED_MS. At most linkMost are being answered at
-    // once, and past that one is destroyed: a workspace that held its refused connections
-    // open would otherwise hold a descriptor and a buffer of this daemon's for each.
-    let answering = 0;
-    const refuse = (client: Socket) => {
-      if (answering >= linkMost) return void client.destroy();
-      answering += 1;
-      const timer = setTimeout(() => client.destroy(), REFUSED_MS);
-      client.once("close", () => {
-        answering -= 1;
-        clearTimeout(timer);
-      });
-      client.resume();
-      client.end(linkRefusal(linkMost));
-    };
-    const turn = () => {
-      for (const next of queue) {
-        if (carried >= linkMost) return;
-        queue.delete(next);
-        next();
-      }
-    };
-    const toProxy = (client: Socket, head: Buffer) => {
-      const verdict = linkVerdict(carried, queue.size, linkMost);
-      if (verdict === "refuse") {
-        const refused = entry.refused;
-        refused.count += 1;
-        refused.at = new Date().toISOString();
-        if (Date.now() - refused.logged > 60_000) {
-          refused.logged = Date.now();
-          log(
-            `link ${entry.vm}: refused a connection out (${refused.count} so far): ${linkMost} were carried and ${linkMost} waiting (link.connections)`,
-          );
-        }
-        return refuse(client);
-      }
-      const go = () => {
-        if (client.destroyed || entry.proxy === null) return void client.destroy();
-        carried += 1;
-        client.once("close", () => {
-          carried -= 1;
-          turn();
-        });
-        // To this workspace's proxy in the root, and nowhere else.
-        pipe(client, dial(ROOT_VM, entry.proxy), head);
-      };
-      if (verdict === "carry") return go();
-      // What it sends meanwhile waits in its socket, read when it is carried.
-      queue.add(go);
-      client.once("close", () => queue.delete(go));
-    };
+    // To this workspace's proxy in the root, and nowhere else; past linkMost refused at once,
+    // saying so (carrying). (It was refused at 64 with no word anywhere, and a parallel
+    // install saw resets.)
+    const toProxy = (client: Socket, head: Buffer) =>
+      entry.proxy === null
+        ? void client.destroy()
+        : carry(entry, "out", client, () => dial(ROOT_VM, entry.proxy!), head, true);
     // Every connection the link took, so that its workspace's going ends them: closing a
     // server only stops it taking more, and a stopped workspace's downloads went on. One
     // taken after (a listener not yet closed) is ended at once.
@@ -1951,11 +2104,10 @@ const serve = async () => {
       client.once("close", () => clients.delete(client));
       return true;
     };
-    const carry = (client: Socket) => {
+    const server = createServer((client) => {
       if (!took(client) || entry.proxy === null) return client.destroy();
       toProxy(client, Buffer.alloc(0));
-    };
-    const server = createServer(carry);
+    });
     server.on("error", (error) => log(`link ${entry.vm}: ${error.message}`));
     server.listen(socket, () => fs.chmodSync(socket, 0o666));
     entry.link = () => {
@@ -2043,7 +2195,11 @@ const serve = async () => {
       low: [],
       more: 0,
       past: 0,
-      refused: { count: 0, at: "", logged: 0 },
+      carried: { in: 0, out: 0 },
+      refused: {
+        in: { count: 0, at: "", why: "", logged: 0 },
+        out: { count: 0, at: "", why: "", logged: 0 },
+      },
     };
     entries.set(r.vm, entry);
     // A status set in the workspace is a file changing in a share. A VM gets no events for
@@ -2117,10 +2273,9 @@ const serve = async () => {
     reconcile();
   };
 
-  const notes = (entry: Entry) => notesOf(entry, { ...entry.refused, most: linkMost });
   const view = (): PortView[] =>
     portsView(
-      [...entries.values()].map((entry) => ({ ...entry, notes: notes(entry) })),
+      [...entries.values()].map((entry) => ({ ...entry, notes: notesOf(entry) })),
       hostHeld,
       rawOwner,
       holderOf,
@@ -2135,40 +2290,11 @@ const serve = async () => {
   /** The largest answer the state service has given (the whole state, for /host/state), in
    *  bytes: for doctor, to say how near STATE_ANSWER_BYTES it is. */
   let stateLargest = 0;
-  // Connections to the state service, opened ahead of need. Opening one costs what the VM
-  // layer's exec costs (an ssh session; tens to hundreds of milliseconds), and the
-  // dashboard's budget for showing state is 300 ms: so a few are kept ready, each used
-  // once. An idle one is replaced before the service would close it for sending nothing.
-  const ready: { stream: Duplex; at: number; dead: boolean }[] = [];
-  // Only while a dashboard is in use: each one kept ready is an exec into the root VM,
-  // made again every lifetime, and an unwatched stack should be idle.
-  const READY = { count: 5, lifeMs: 40_000, afterUseMs: 180_000 } as const;
-  let dashboardUsed = 0;
-  const stock = () => {
-    for (let i = ready.length - 1; i >= 0; i--)
-      if (ready[i]!.dead || Date.now() - ready[i]!.at > READY.lifeMs) {
-        ready[i]!.stream.destroy();
-        ready.splice(i, 1);
-      }
-    while (rootUp && Date.now() - dashboardUsed < READY.afterUseMs && ready.length < READY.count) {
-      const item = { stream: dial(ROOT_VM, ROOT_UI.port), at: Date.now(), dead: false };
-      const die = () => (item.dead = true);
-      item.stream.on("error", die);
-      item.stream.on("close", die);
-      ready.push(item);
-    }
-  };
   let rootUp = false;
-  const toStateService = (): Duplex => {
-    stock();
-    const item = ready.shift();
-    setImmediate(stock);
-    if (!item || item.dead) return dial(ROOT_VM, ROOT_UI.port);
-    item.stream.removeAllListeners("error");
-    item.stream.removeAllListeners("close");
-    return item.stream;
-  };
-  setInterval(stock, 5000).unref();
+  // Dialed when asked: a session into the root VM opens in 8 ms (measured on the M1,
+  // 2026-11-23), against the dashboard's 300 ms for showing state. (A few were kept open
+  // ahead of need while one was a `limactl shell`, tens to hundreds of milliseconds.)
+  const toStateService = () => dial(ROOT_VM, ROOT_UI.port);
   const rootHttp = (
     method: string,
     pathname: string,
@@ -2275,19 +2401,12 @@ const serve = async () => {
                 .sort((x, y) => x - y)
                 .filter((p) => hostHeld.has(p))
                 .map((p) => ({ port: p, by: holderOf(p) })),
-              // What only the host knows of it, in sentences: listeners cut here, connections
-              // its link refused. (What the VM left out is in its devcontainer line already.)
               ...(vm.status === "running" && agentsOf.has(vm.name)
                 ? { agents: shownAgents(agentsOf.get(vm.name)!) }
                 : {}),
-              ...(entry.past > 0 || entry.refused.count > 0
-                ? {
-                    notes: notesOf(
-                      { more: 0, past: entry.past },
-                      { ...entry.refused, most: linkMost },
-                    ),
-                  }
-                : {}),
+              // What only the host knows of it, in sentences: listeners cut here, connections
+              // refused. (What the VM left out is in its devcontainer line already.)
+              ...((notes) => (notes.length > 0 ? { notes } : {}))(notesOf({ ...entry, more: 0 })),
             }
           : {}),
       };

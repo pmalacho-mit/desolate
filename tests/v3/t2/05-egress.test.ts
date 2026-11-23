@@ -50,8 +50,8 @@ describe("T2 section 4.3: egress through the workspace's own proxy", () => {
       git(dir, "commit", "--quiet", "-m", "seed");
     });
     forge = stack.env.DESOLATE_FORGE_SPEC!.replace(/^.*@/, "").replace(/:\d+$/, "");
-    // Two connections out carried at once (and two waiting), so that the test of the link's
-    // bound can reach it with a few connections. Nothing else here holds more than one.
+    // Two connections out carried at once, so that the test of the link's bound can reach it
+    // with a few connections. Nothing else here holds more than one.
     stack.env.DESOLATE_LINK_CONNECTIONS = "2";
     assert.equal(bootstrap(stack).code, 0);
     assert.equal(stack.quiet("clone", "acme/app", "--no-domain").code, 0);
@@ -140,43 +140,38 @@ describe("T2 section 4.3: egress through the workspace's own proxy", () => {
     );
   });
 
-  it("past what a link carries at once, a connection out waits its turn; past those it is refused, and said", () => {
+  it("past what a link carries at once, a connection out is refused at once, and said; after one ends, the next is carried", () => {
     stack.step("the link's bound");
-    // Four connections straight to the link, each held open: the first two are carried (the
-    // proxy answers 200), the next two wait. A fifth, a program's request through the relay,
-    // is refused with the reason, as busy (503: a program may try again), not forbidden.
-    // When the first two end, the waiting two are carried.
+    // Two connections straight to the link, each held open: both are carried (the proxy
+    // answers 200). A third, a program's request through the relay, is refused at once with
+    // the reason, as busy (503: a program may try again), not forbidden. When the first ends,
+    // the next is carried while the second is still held.
     const held = inWs(
       "dev/w1",
-      `for i in 1 2 3 4; do
-  t=$([ $i -le 2 ] && echo 6 || echo 12)
-  (printf 'CONNECT api.example.test:80 HTTP/1.1\\r\\nHost: api.example.test:80\\r\\n\\r\\n'; sleep $t) | socat - UNIX-CONNECT:/desolate/link/proxy.sock >/tmp/held$i 2>&1 &
+      `for i in 1 2; do
+  (printf 'CONNECT api.example.test:80 HTTP/1.1\\r\\nHost: api.example.test:80\\r\\n\\r\\n'; sleep $([ $i -eq 1 ] && echo 3 || echo 9)) | socat - UNIX-CONNECT:/desolate/link/proxy.sock >/tmp/held$i 2>&1 &
   sleep 0.5
 done
 sleep 1
 echo "carried: $(head -c 12 /tmp/held1) / $(head -c 12 /tmp/held2)"
-echo "waiting: [$(cat /tmp/held3)] [$(cat /tmp/held4)]"
-echo "fifth: $(curl -sS -m 5 -o /tmp/fifth -w '%{http_code}' http://api.example.test/fifth 2>&1) $(cat /tmp/fifth)"
+echo "third: $(curl -sS -m 5 -o /tmp/third -w '%{http_code} %{time_total}' http://api.example.test/third 2>&1) $(cat /tmp/third)"
+sleep 3
+echo "after one: $(curl -sS -m 5 http://api.example.test/after-one 2>&1)"
 wait
-echo "in turn: $(head -c 12 /tmp/held3) / $(head -c 12 /tmp/held4)"
 echo "after: $(curl -sS -m 5 http://api.example.test/after-the-bound 2>&1)"`,
     );
     const said = held.stdout + held.stderr;
     assert.match(said, /^carried: HTTP\/1\.1 200 \/ HTTP\/1\.1 200$/m, said);
+    const third =
+      /^third: 503 ([\d.]+) desolate: this workspace has 2 connections out carried at once, the most it may \(the setting link\.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap\)$/m.exec(
+        said,
+      );
+    assert.ok(third, said);
+    assert.ok(Number(third[1]) < 2, `refused at once, not held waiting (${third[1]} s)`);
     assert.match(
       said,
-      /^waiting: \[\] \[\]$/m,
-      "the third and fourth waited: nothing answered them yet",
-    );
-    assert.match(
-      said,
-      /^fifth: 503 desolate: this workspace has 2 connections out carried at once and 2 more waiting their turn, the most it may \(the setting link\.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap\)$/m,
-      said,
-    );
-    assert.match(
-      said,
-      /^in turn: HTTP\/1\.1 200 \/ HTTP\/1\.1 200$/m,
-      "the waiting two were carried when the first two ended: a connection past the bound works, later",
+      /^after one: upstream http host=api\.example\.test path=\/after-one$/m,
+      "the first ended and the second is still held: the next is carried",
     );
     assert.match(
       said,
@@ -190,7 +185,7 @@ echo "after: $(curl -sS -m 5 http://api.example.test/after-the-bound 2>&1)"`,
     }[];
     assert.match(
       ports.find((w) => w.workspace === "dev/w1")?.notes.join("\n") ?? "",
-      /^1 connection out was refused, the last at \S+: 2 are carried to its proxy at once and as many more may wait their turn/m,
+      /^1 connection out was refused, the last at \S+: this workspace has 2 connections out carried at once, the most it may/m,
     );
     assert.deepEqual(
       ports.find((w) => w.workspace === "two/w1")?.notes,
@@ -199,7 +194,7 @@ echo "after: $(curl -sS -m 5 http://api.example.test/after-the-bound 2>&1)"`,
     );
     assert.match(
       fs.readFileSync(path.join(stack.home, "logs", "daemon.log"), "utf8"),
-      /link \S+: refused a connection out \(1 so far\): 2 were carried and 2 waiting \(link\.connections\)/,
+      /\S+: refused a connection out \(1 so far\): this workspace has 2 connections out carried at once, the most it may \(the setting link\.connections/,
     );
   });
 

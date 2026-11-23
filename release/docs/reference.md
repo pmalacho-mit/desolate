@@ -251,6 +251,9 @@ another workspace's, or with the editor's. Two workspaces can both serve 3000.
 - **A listener below 1024, or past a workspace's 256th,** is not forwarded: below 1024 a
   port is the Mac's system's, and a workspace may not have the Mac listen on every port.
   `desolate ports` says which ports, or how many, were left out.
+- **Connections in at once,** to a workspace's dev servers and editor, are bounded as those
+  out are (`link.connections`, counted apart), and the Mac carries 800 in and out of all
+  its workspaces together. Past either, a request is answered 503 with the reason.
 - **A bare `localhost:<port>`** (the "Local: http://localhost:5173" a dev server prints,
   clicked) is sent on to the workspace serving that port, at its own name, the path kept;
   with several serving it, the page lists them. Nothing is ever served at bare `localhost`.
@@ -322,12 +325,10 @@ work with no credential, private repositories included. Only the `.git` spelling
   else leaves at all: a registry on another port (`:5000`), ssh to a forge, a database
   outside: none of it can be reached from a workspace. Fetch what needs those on the Mac or
   in the root, or serve it on 443.
-- **Connections out at once.** Each connection a workspace has open through its proxy is
-  a session into the root VM, about 85 MB of the Mac's memory, so a workspace has a number
-  carried at once (by default an eighth of the Mac's memory's worth, from 16 to 256), and as
-  many more wait their turn. Past those, a connection is refused with the reason (a plain-HTTP
-  program reads it; TLS is closed), the host's log says so, and `desolate ports` counts them.
-  More: `DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap` (the setting `link.connections`).
+- **Connections out at once.** A workspace has 256 connections through its proxy carried at
+  once. Past those, a connection is refused at once with the reason (a plain-HTTP program
+  reads it; TLS is closed), the host's log says so, and `desolate ports` counts them. More:
+  `DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap` (the setting `link.connections`).
 - **TLS stays end to end,** with the real certificates, for every host but the hosts of the
   domain's own secrets: image pulls and `apt`, `npm` or `pip` in a build need nothing of
   desolate's. Only a secret's host is answered by the domain's secrets proxy, with a
@@ -660,7 +661,7 @@ Every setting there is (T1 checks that this table names exactly those):
 | `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly (QEMU without KVM) |
 | `root.silentSeconds` | `DESOLATE_ROOT_SILENT_SECONDS` | on the Mac | 900 | how long a call to the root VM may hear nothing from it (no progress, no answer) before it is given up |
 | `workspace.silentSeconds` | `DESOLATE_WORKSPACE_SILENT_SECONDS` | on the Mac | 120 | how long a step of a workspace's start may hear nothing from the workspace's VM before it is stopped |
-| `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | an eighth of this Mac's memory at about 85 MB each, 16 to 256 | connections out of one workspace carried to its proxy at once; as many more wait, and past those one is refused |
+| `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | 256 | connections one workspace has carried at once each way, out (to its proxy) and, counted apart, in (to its dev servers and its editor); past it one is refused at once. Each is a plain ssh session, about 1.5 MB of this Mac's memory |
 | `forward.rawPorts` | `DESOLATE_RAW_PORTS` | on the Mac | none | your own ports where a workspace's server speaks first, as a database does: a connection there goes to the workspace that listened on the port first, where on another port a client that waits for the server is disconnected (the databases' and queues' ports are listed already) |
 | `workspace.lookSeconds` | `DESOLATE_WORKSPACE_LOOK_SECONDS` | on the Mac | 30 | how often the host looks in each running workspace for what a remove would lose, which the dashboard's Delete shows |
 | `spawn.memoryPercent` | `DESOLATE_SPAWN_MEMORY_PERCENT` | on the Mac | 85 | how much of this Mac's memory the running workspaces may be given before a workspace's own request for another is refused |

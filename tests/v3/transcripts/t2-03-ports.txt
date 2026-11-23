@@ -47,6 +47,19 @@ web/two
   nothing is listening yet: start a dev server in it and its URL appears here
 [exit 0]
 
+## the bound on connections in
+
+$ desolate ports web/one
+web/one
+  http://web-one-<hex>.localhost:5173
+  note: 1 connection in was refused, the last at <time>: this workspace has 2 connections in carried at once, the most it may (the setting link.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap)
+[exit 0]
+
+$ desolate ports web/two
+web/two
+  http://web-two-<hex>.localhost:5173
+[exit 0]
+
 ## names that are not a workspace's
 
 ## a raw TCP port

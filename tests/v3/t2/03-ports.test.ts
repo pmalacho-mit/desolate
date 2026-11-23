@@ -96,6 +96,9 @@ describe("T2 section 4.4: ports, forwarded by name", () => {
       git(dir, "add", "-A");
       git(dir, "commit", "--quiet", "-m", "seed");
     });
+    // Two connections in carried at once a workspace (and two out), so that the test of the
+    // bound can reach it with a few. Nothing else here holds more than one at a time.
+    stack.env.DESOLATE_LINK_CONNECTIONS = "2";
     assert.equal(bootstrap(stack).code, 0);
     assert.equal(stack.quiet("clone", "acme/app", "--no-domain").code, 0);
     assert.equal(stack.quiet("domain", "create", "web").code, 0);
@@ -184,6 +187,62 @@ else {
     assert.match(upgrade, /101 Switching Protocols/);
     assert.match(upgrade, /hmr:two/);
     assert.match(upgrade, /ping/, "bytes flow both ways after the upgrade");
+  });
+
+  it("past what a workspace carries in at once, a connection in is refused, and said; another workspace's still answer", async () => {
+    stack.step("the bound on connections in");
+    const one = hostOf(urlOf("web/one", 5173)!);
+    const two = hostOf(urlOf("web/two", 5173)!);
+    // A connection in held open: an HMR upgrade, which the stand-in server keeps.
+    const hold = () =>
+      new Promise<{ socket: net.Socket; said: string }>((resolve) => {
+        const socket = net.connect(5173, "127.0.0.1");
+        let said = "";
+        socket.on("connect", () =>
+          socket.write(
+            `GET /hmr HTTP/1.1\r\nHost: ${one}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`,
+          ),
+        );
+        socket.on("data", (chunk) => {
+          said += chunk;
+          if (said.includes("hmr:one")) resolve({ socket, said });
+        });
+        socket.on("close", () => resolve({ socket, said }));
+        setTimeout(() => resolve({ socket, said }), 5000);
+      });
+    const held = [await hold(), await hold()];
+    for (const { said } of held) assert.match(said, /101 Switching Protocols/, "two are carried");
+    const third = await request(5173, one);
+    assert.match(third, /^HTTP\/1\.1 503 Service Unavailable\r\n/, third);
+    assert.match(
+      third,
+      /\r\nX-Desolate-Reason: this workspace has 2 connections in carried at once, the most it may \(the setting link\.connections; on the Mac: DESOLATE_LINK_CONNECTIONS=<n> desolate bootstrap\)\r\n/,
+    );
+    assert.doesNotMatch(third, /workspace:one/, "the third did not reach the server");
+    assert.match(
+      await request(5173, two),
+      /workspace:two/,
+      "control: another workspace's server answers meanwhile, on the same port",
+    );
+    held[0]!.socket.destroy();
+    await sleep(1000);
+    assert.match(
+      await request(5173, one),
+      /workspace:one/,
+      "after one is closed, a new one is carried",
+    );
+    held[1]!.socket.destroy();
+    const shown = stack.desolate("ports", "web/one");
+    assert.match(
+      shown.stdout,
+      /1 connection in was refused, the last at \S+: this workspace has 2 connections in carried at once, the most it may/,
+      shown.stdout,
+    );
+    assert.doesNotMatch(
+      stack.desolate("ports", "web/two").stdout,
+      /refused/,
+      "control: nothing of the other workspace's was refused",
+    );
   });
 
   it("a request that names no workspace gets 421 and reaches nothing", async () => {
