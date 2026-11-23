@@ -23,7 +23,7 @@ import type { gitAnswers, scriptedGit } from "../.harness/workspace-git.ts";
 
 export const OUTBOX = "/desolate/outbox";
 export const INBOX = "/desolate/inbox";
-const clone = (repo: string) => `/workspaces/${repo}`;
+export const clone = (repo: string) => `/workspaces/${repo}`;
 const syncDir = (repo: string) => path.join(OUTBOX, "sync", repo);
 
 // No timer (R4): this is git on the domain's own clone, in its own VM, with no remote peer to
@@ -107,6 +107,54 @@ declare namespace branches {
     Expect<Invoke<typeof branches, [repo: "acme/app"]>, "=", {}>
   >;
 }
+
+/** `changed` on each event in the branches of the repository at `dir`: under refs/heads,
+ *  each directory below too (a branch feature/x is a file in one), and packed-refs, in its
+ *  common git directory (a checkout whose `.git` is a file, a worktree, has its branches
+ *  there). Index and HEAD changes (a status, a checkout) move no branch. Answers what stops
+ *  it. Throws when it cannot start (no repository, ENOSPC: inotify's limit); `failed`, once,
+ *  when it stops later. Measured in a workspace VM (2026-11-23, the share, git in the
+ *  devcontainer): git there gives these events; a change made on the Mac does not. */
+export const watchRefs = async (
+  dir: string,
+  changed: () => void,
+  failed: (error: Error) => void,
+): Promise<() => void> => {
+  const named = await run("git", [
+    "-C",
+    dir,
+    "rev-parse",
+    "--path-format=absolute",
+    "--git-common-dir",
+  ]);
+  if (named.code !== 0) throw new Error(failure(named.stderr, 3, () => null));
+  const common = named.stdout.trim();
+  const heads = path.join(common, "refs", "heads");
+  // A link there would have node's recursive watch (on Linux, a watch on each directory and
+  // file below: node 20 and later, the image's is 24) walk wherever it points.
+  if (!fs.lstatSync(heads).isDirectory()) throw new Error(`${heads} is not a directory`);
+  const watchers: fs.FSWatcher[] = [];
+  const stop = () => watchers.splice(0).forEach((watcher) => watcher.close());
+  try {
+    watchers.push(fs.watch(heads, { recursive: true }, changed));
+    watchers.push(
+      fs.watch(common, (_, file) => (!file || file.startsWith("packed-refs")) && changed()),
+    );
+  } catch (error) {
+    stop();
+    throw error;
+  }
+  for (const watcher of watchers)
+    watcher.on("error", (error: NodeJS.ErrnoException) => {
+      // A directory gone before node's recursive watch read it (refs/heads/feature/, made
+      // and removed by git): the rest is still watched, and it was a change.
+      if (error.code === "ENOENT") return changed();
+      if (watchers.length === 0) return;
+      stop();
+      failed(error);
+    });
+  return stop;
+};
 
 /** Write the domain's branches of one repository to the outbox: an incremental bundle, less
  *  what the mirror has, and the list of refs. */
