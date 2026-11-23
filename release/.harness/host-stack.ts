@@ -115,3 +115,15 @@ export const said = (): string[] => {
   lines = [];
   return all;
 };
+
+let replies: string[] = [];
+/** What a person answers from now on, one question at a time (`reply` asks). */
+export const repliesAre = (answers: string[]) => {
+  replies = [...answers];
+};
+/** A question put to the person: the next of `repliesAre`'s answers. With none left the test
+ *  fails, rather than asking for ever. */
+export const reply = async (question: string): Promise<string> => {
+  if (!replies.length) throw new Error(`no answer left for: ${question}`);
+  return replies.shift()!;
+};

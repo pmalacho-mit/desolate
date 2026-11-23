@@ -22,6 +22,8 @@ import type {
   collect,
   fakeStack,
   rootAnswers,
+  repliesAre,
+  reply,
   rootAsked,
   said,
   stdinGives,
@@ -61,6 +63,37 @@ const readSecretLine = (): Promise<string> =>
     process.stdin.on("end", done);
     process.stdin.resume();
   });
+
+/** The headers a secret goes in, asked of the person until they say: header names, or the
+ *  word `anywhere` for none (ANYWHERE_COST). An empty answer is not taken for anywhere. */
+export const askHeaders = async (ask: (question: string) => Promise<string>) => {
+  for (;;) {
+    const answer = (
+      await ask(
+        "  Only in these headers (comma-separated; usually authorization), or the word anywhere: ",
+      )
+    ).trim();
+    if (answer.toLowerCase() === "anywhere") return [];
+    const headers = answer
+      .split(",")
+      .map((h) => h.trim())
+      .filter(Boolean);
+    if (headers.length) return headers;
+  }
+};
+
+declare namespace askHeaders {
+  /** Enter asks again; the headers named are the answer */
+  export type Headers = Given<
+    Invoke<typeof repliesAre, [answers: ["", " authorization , x-api-key"]]>,
+    Expect<Invoke<typeof askHeaders, [ask: typeof reply]>, "=", ["authorization", "x-api-key"]>
+  >;
+  /** the word anywhere, and only it, is no headers */
+  export type Anywhere = Given<
+    Invoke<typeof repliesAre, [answers: ["", "Anywhere"]]>,
+    Expect<Invoke<typeof askHeaders, [ask: typeof reply]>, "=", []>
+  >;
+}
 
 /** A domain that has secrets has a CA its workspaces must trust: the running ones take it
  *  now, the others when they start. */
@@ -611,11 +644,7 @@ export const domainCommand = async (
                 choices.push({ key: r.key, kind: "value" });
                 continue;
               }
-              const headers = csv(
-                await asker.question(
-                  "  Only in these headers (comma-separated), or Enter for anywhere in the request: ",
-                ),
-              );
+              const headers = await askHeaders((q) => asker.question(q));
               choices.push({ key: r.key, kind: "secret", hosts, headers });
             }
           } finally {
