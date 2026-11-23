@@ -57,9 +57,24 @@ ln -sf "$HERE/git-remote-desolate-mirror" /usr/local/bin/git-remote-desolate-mir
 ln -sf "$HERE/status" /desolate/status
 alive() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
 chown "$USER_NAME" /run/desolate
-if ! alive /run/desolate/wsd.pid; then
+# Started again when its code has changed: a running workspace keeps it otherwise, and the
+# host speaks only this desolate's requests to it (the host runs this at every bootstrap,
+# workspaces.ts reconnectRunning). Its code is what it imports, all of it in this folder and
+# shared/. What a restart drops comes back by itself: the ports it held for the host with
+# the host's next watch, a compose service's mirrors at its next second (a connection in
+# flight through one is cut; one to the VM's own listeners is not, it never passes wsd), and
+# the branch watch with one more look at every branch.
+WSD=$(cat "$HERE"/*.ts "$HERE"/../shared/*.ts | sha256sum | cut -c1-16)
+if ! alive /run/desolate/wsd.pid || [ "$(cat /run/desolate/wsd.version 2>/dev/null)" != "$WSD" ]; then
+  if alive /run/desolate/wsd.pid; then
+    old=$(cat /run/desolate/wsd.pid)
+    kill "$old" 2>/dev/null || true
+    for _ in $(seq 50); do kill -0 "$old" 2>/dev/null || break; sleep 0.1; done
+  fi
+  rm -f /run/desolate/wsd.sock
   setsid runuser -u "$USER_NAME" -- node --disable-warning=ExperimentalWarning "$HERE/wsd.ts" >>/var/lib/desolate/wsd.log 2>&1 </dev/null &
   echo $! >/run/desolate/wsd.pid
+  echo "$WSD" >/run/desolate/wsd.version
 fi
 # Its socket, for as long as it is starting: it is this VM's own program, so it is waited for
 # while it lives, and not past its end (the host bounds the whole of start.sh).

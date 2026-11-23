@@ -239,6 +239,14 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
           `${name}: limactl list said ${said}`,
         );
       }
+      // Sessions are ssh with Lima's ssh.config for the VM (lima.ts, sessionArgs), which sends
+      // a variable of this Mac's only where SendEnv names one: Lima's names none.
+      const config = fs.readFileSync(
+        path.join(stack.home, "lima", `dsl-${stack.instance}-root`, "ssh.config"),
+        "utf8",
+      );
+      assert.match(config, /^\s*Host lima-/m, "control: Lima's ssh.config, read");
+      assert.doesNotMatch(config, /SendEnv|SetEnv/i, config);
       const resized = stack.desolate(
         "resize",
         "dev/w1",

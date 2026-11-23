@@ -76,6 +76,7 @@ import {
   reservedFor,
   spokeAsBrowser,
   tokenEpochOf,
+  unasked,
   unforwardedOf,
 } from "./forward.ts";
 import type { Checkouts, PortView } from "./forward.ts";
@@ -96,7 +97,9 @@ import type {
   daemonAnswering,
   failsAtOnce,
   failsHalfway,
+  heldWatch,
   keepLog,
+  linesInPieces,
   endsOf,
   numbered,
   readInPieces,
@@ -118,41 +121,211 @@ const PIDFILE = path.join(paths.state, "daemon.pid");
 const LOG = path.join(paths.logs, "daemon.log");
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
-/** The most of a workspace's wsctl answer kept. The VM is not trusted, and an honest answer is
- *  a line of ports and a token; the service there caps a request at 64 KiB too (wsd.ts). */
-const WSCTL_MOST = 64 * 1024;
+/** The workspace daemon's socket in its VM (workspace/wsd.ts). wsd runs as the VM's login
+ *  user (workspace/start.sh: runuser with the Mac user's uid, which is the login user's, as
+ *  Lima makes it), and a dial's socat runs as that user (the fake backend's as root): the
+ *  socket's 0600 lets in all that must connect. */
+const WSD_SOCKET = "/run/desolate/wsd.sock";
+/** The longest line of a workspace daemon's that is read. The VM is not trusted, and an honest
+ *  answer is a line of ports and a token; the daemon there caps a request at 64 KiB too. */
+const WSD_MOST = 64 * 1024;
 
-/** wsctl's answer: the last line of its stdout, as JSON. One that was stopped at WSCTL_MOST
- *  (shared/run.ts kills the program and says so) is not read at all, though the part kept may
- *  end in a whole line: the workspace is then one that could not be asked. */
-export const wsctlReply = (result: { stdout: string; stderr: string }): Record<string, unknown> => {
-  if (result.stderr.endsWith(`(more than ${WSCTL_MOST} bytes of output: stopped)`))
-    throw new Error(`the workspace answered more than ${WSCTL_MOST} bytes`);
-  return JSON.parse(result.stdout.trim().split("\n").pop() ?? "{}");
+/** Lines as they come, in chunks cut anywhere: hand it each chunk, and it gives the whole
+ *  lines that chunk ended, or an Error once a line is longer than `most` bytes. Never more
+ *  than `most` bytes of an unfinished line are kept: what the VM sends past that is not read. */
+export const lineReader = (most = WSD_MOST) => {
+  let kept = Buffer.alloc(0);
+  const tooLong = () => new Error(`the workspace's daemon sent a line of more than ${most} bytes`);
+  return (chunk: Buffer): string[] | Error => {
+    const lines: string[] = [];
+    let data = Buffer.concat([kept, chunk]);
+    for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10)) {
+      if (end > most) return tooLong();
+      lines.push(data.subarray(0, end).toString("utf8"));
+      data = data.subarray(end + 1);
+    }
+    if (data.length > most) return tooLong();
+    kept = Buffer.from(data);
+    return lines;
+  };
 };
 
-declare namespace wsctlReply {
-  /** an answer is its last line */
-  export type Reads = Expect<
-    Invoke<
-      typeof wsctlReply,
-      [result: { stdout: 'starting\n{"ok":true,"listeners":[3000]}\n'; stderr: "" }]
+declare namespace lineReader {
+  /** two lines in one chunk, and a line split across chunks: each whole, in order */
+  export type Lines = [
+    Expect<
+      Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ['{"a":1}\n{"b":2}\n']]>,
+      "=",
+      { lines: ['{"a":1}', '{"b":2}'] }
     >,
+    Expect<
+      Invoke<
+        typeof linesInPieces,
+        [reader: typeof lineReader, chunks: ['{"lis', 'teners":[3000]}\n{"b"', ":2}\n"]]
+      >,
+      "=",
+      { lines: ['{"listeners":[3000]}', '{"b":2}'] }
+    >,
+  ];
+  /** what has not ended in a newline is not a line yet: a stream that ends there gave none */
+  export type Unfinished = Expect<
+    Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ['{"ok":true}']]>,
     "=",
-    { ok: true; listeners: [3000] }
+    { lines: [] }
   >;
-  /** past the bound it is not read, even when what was kept ends in a whole answer */
-  export type Cut = Throws<
+  /** a line of `most` bytes is read; one byte more is refused, whether it came in one chunk
+   *  or in several, and whether or not its newline had come */
+  export type Bound = [
+    Expect<
+      Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ["12345678\n"], most: 8]>,
+      "=",
+      { lines: ["12345678"] }
+    >,
+    Expect<
+      Invoke<typeof linesInPieces, [reader: typeof lineReader, chunks: ["123456789\n"], most: 8]>,
+      "=",
+      { lines: []; error: "the workspace's daemon sent a line of more than 8 bytes" }
+    >,
+    Expect<
+      Invoke<
+        typeof linesInPieces,
+        [reader: typeof lineReader, chunks: ["1\n12345", "6789"], most: 8]
+      >,
+      "=",
+      { lines: ["1"]; error: "the workspace's daemon sent a line of more than 8 bytes" }
+    >,
+  ];
+}
+
+/** A line of a workspace daemon's, as JSON: an object, or an Error saying it was none. */
+const wsdReply = (line: string): Record<string, unknown> | Error => {
+  try {
+    const value: unknown = JSON.parse(line);
+    if (value !== null && typeof value === "object" && !Array.isArray(value))
+      return value as Record<string, unknown>;
+  } catch {
+    /* said below */
+  }
+  return new Error("the workspace's daemon answered something that is not an answer");
+};
+
+/** How long to wait before a workspace's watch that ended is opened again: a second, doubling
+ *  to 30 s while each lasts less than 30 s, and a second again after one that lasted. Each
+ *  open is one ssh session into the VM (with commands over plain ssh, ticket #250 step 2:
+ *  1.5 MB and 8 ms), so a daemon there that is gone costs one every 30 s, and a daemon that
+ *  comes back is watched within 30 s. In the first minute after the workspace was
+ *  registered, a second: it is registered before its services start (workspaces.ts,
+ *  startServices), and what its daemon says then (its editor's token, its dev servers) is
+ *  wanted at once. */
+export const reopenAfter = (previous: number, livedMs: number, registeredMs: number) =>
+  livedMs >= 30_000 || registeredMs < 60_000
+    ? 1000
+    : Math.min(30_000, Math.max(1000, previous * 2));
+
+declare namespace reopenAfter {
+  export type Backoff = Table<
+    typeof reopenAfter,
+    [
+      [args: [previous: 0, livedMs: 0, registeredMs: 600000], expected: 1000],
+      [args: [previous: 1000, livedMs: 40, registeredMs: 600000], expected: 2000],
+      [args: [previous: 16000, livedMs: 40, registeredMs: 600000], expected: 30000],
+      [args: [previous: 30000, livedMs: 40, registeredMs: 600000], expected: 30000],
+      /** one that had lasted: from a second again */
+      [args: [previous: 30000, livedMs: 60000, registeredMs: 600000], expected: 1000],
+      /** a workspace still starting: every second, for its first minute */
+      [args: [previous: 16000, livedMs: 40, registeredMs: 5000], expected: 1000],
+    ]
+  >;
+}
+
+/** A watch held open: `open` makes its stream, which is sent `first()`; each line on it, as
+ *  JSON, goes to `line`, one after another. A stream that ends or fails, sends a line past the
+ *  bound, or whose line `line` refuses, goes to `missed`, and another is opened after
+ *  `delay(previous, livedMs)` ms. So until `close`, there is always a stream, or one about to
+ *  be opened: no path out of a stream's end leaves none. `write` sends on the open one, if any (the next one is sent `first()` again). */
+export const holdWatch = (watch: {
+  open: () => Duplex;
+  first: () => string;
+  line: (reply: Record<string, unknown>) => Promise<void>;
+  missed: (error: unknown) => void;
+  delay: (previous: number, livedMs: number) => number;
+}) => {
+  let stream: Duplex | null = null;
+  let timer: NodeJS.Timeout | null = null;
+  let closed = false;
+  let previous = 0;
+  const start = () => {
+    timer = null;
+    if (closed) return;
+    const held = watch.open();
+    const opened = Date.now();
+    const read = lineReader();
+    let applying = Promise.resolve();
+    stream = held;
+    const end = (error: unknown) => {
+      if (stream !== held) return;
+      stream = null;
+      held.destroy();
+      if (closed) return;
+      watch.missed(error);
+      previous = watch.delay(previous, Date.now() - opened);
+      timer = setTimeout(start, previous);
+    };
+    held.on("data", (chunk: Buffer) => {
+      const lines = read(chunk);
+      if (lines instanceof Error) return end(lines);
+      for (const line of lines) {
+        const reply = wsdReply(line);
+        if (reply instanceof Error) return end(reply);
+        // Kept though its stream ends just after (what it said, it said), not once closed.
+        applying = applying.then(() => (closed ? undefined : watch.line(reply))).catch(end);
+      }
+    });
+    held.on("error", end);
+    held.on("end", () => end(new Error("its watch closed")));
+    held.on("close", () => end(new Error("its watch closed")));
+    held.write(watch.first());
+  };
+  start();
+  return {
+    write: (text: string) => void stream?.write(text),
+    close: () => {
+      closed = true;
+      if (timer) clearTimeout(timer);
+      const held = stream;
+      stream = null;
+      held?.destroy();
+    },
+  };
+};
+
+declare namespace holdWatch {
+  /** each line is handed on; a stream that ends, one that sends a line past the bound, one
+   *  whose line is refused: each a miss, and another stream is opened every time */
+  export type Reopens = Expect<
     Invoke<
-      typeof wsctlReply,
+      typeof heldWatch,
       [
-        result: {
-          stdout: '{"ok":true,"listeners":[3000]}\n';
-          stderr: "\n(more than 65536 bytes of output: stopped)";
-        },
+        hold: typeof holdWatch,
+        streams: [
+          { chunks: ['{"ok":true,"listeners":[3000]}\n']; end: true },
+          { chunks: [Invoke<typeof repeated, [text: "x", count: 70000]>]; end: false },
+          { chunks: ['{"ok":false,"error":"busy"}\n']; end: false },
+          { chunks: ['{"ok":true,"listeners":[5173]}\n']; end: false },
+        ],
       ]
     >,
-    "the workspace answered more than 65536 bytes"
+    "=",
+    {
+      sent: ['{"op":"watch"}\n', '{"op":"watch"}\n', '{"op":"watch"}\n', '{"op":"watch"}\n'];
+      lines: ['{"ok":true,"listeners":[3000]}', '{"ok":true,"listeners":[5173]}'];
+      missed: [
+        "its watch closed",
+        "the workspace's daemon sent a line of more than 65536 bytes",
+        "busy",
+      ];
+      openAfterClose: 0;
+    }
   >;
 }
 
@@ -162,7 +335,15 @@ type Entry = Registered & {
   reserved: Set<number>;
   /** Closes its link: its servers, and every connection they took. */
   link: (() => void) | null;
-  lastError: string;
+  /** When its daemon last answered (Date.now()): what it said is kept a while past a miss. */
+  answeredAt: number;
+  /** When it was registered (Date.now()), for its watch's first minute (reopenAfter). */
+  registeredAt: number;
+  /** Its watch (a dial to its daemon, held: holdWatch), and the reserve last sent on it. */
+  watch: ReturnType<typeof holdWatch> | null;
+  watchSent: string;
+  /** What was last logged of it not answering, so a daemon that is gone is said once. */
+  missSaid: string;
   editorToken: string;
   editorTokenEpoch: number;
   devcontainer: string;
@@ -1598,62 +1779,101 @@ const serve = async () => {
       // 127.0.0.1 only, never a wildcard: nothing on the LAN reaches a workspace.
       server.listen({ port, host: "127.0.0.1", exclusive: true });
     }
-    for (const entry of entries.values())
+    for (const entry of entries.values()) {
       entry.reserved = reservedFor(entry, forwards.keys(), knownRaw, rawOwner);
-  };
-
-  const sync = async (entry: Entry) => {
-    try {
-      const result = await b.exec(entry.vm, [...NODE, `${guest.release}/workspace/wsctl.ts`], {
-        input: JSON.stringify({ op: "ports", reserve: [...entry.reserved] }),
-        timeoutMs: 15_000,
-        // Not RUN_MAX: what the VM says is not trusted, and is held here every few seconds.
-        maxBytes: WSCTL_MOST,
-      });
-      const reply = wsctlReply(result) as {
-        ok?: boolean;
-        listeners?: number[];
-        error?: string;
-        editorToken?: unknown;
-        editorTokenEpoch?: unknown;
-        devcontainer?: unknown;
-        folder?: unknown;
-        unforwarded?: unknown;
-      };
-      // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
-      // rest is cut to a line.
-      entry.editorToken = editorTokenOf(reply.editorToken);
-      entry.editorTokenEpoch = tokenEpochOf(reply.editorTokenEpoch);
-      // A VM still running an older wsd says nothing of it (it is restarted only with the VM):
-      // asked directly, and only once tokens have been retired (review of the final fixes).
-      if (reply.editorTokenEpoch === undefined && retiredAt() > 0)
-        entry.editorTokenEpoch = await (await import("./workspaces.ts")).editorTokenEpoch(entry.vm);
-      // Whole from the VM (it once cut it, and this cut it again): made safe here, bounded
-      // against a flood only, and fitted to a line by what shows it (R1).
-      entry.devcontainer =
-        typeof reply.devcontainer === "string" ? printable(reply.devcontainer) : "";
-      entry.folder = folderFrom(entry.folder, reply.folder);
-      if (!reply.ok || !Array.isArray(reply.listeners))
-        throw new Error(reply.error ?? `exit ${result.code}`);
-      // Fail closed on what the VM says (listenersFrom).
-      const ours = b.hostPorts?.() ?? new Set<number>();
-      const taken = listenersFrom(reply.listeners, ours);
-      // What the VM itself left out (an older wsd says nothing of it), and what was cut here.
-      const left = unforwardedOf(reply.unforwarded);
-      entry.listeners = taken.listeners;
-      entry.low = [...new Set([...left.low, ...taken.low])].sort((x, y) => x - y);
-      entry.more = left.more;
-      entry.past = taken.past;
-      entry.lastError = "";
-    } catch (error) {
-      // A workspace that cannot be asked forwards nothing new, and what it had is dropped.
-      entry.listeners = new Set();
-      entry.low = [];
-      entry.more = 0;
-      entry.past = 0;
-      entry.lastError = String(error);
+      // On its watch, when it changed: the VM holds them within the second.
+      const sent = reserveLine(entry);
+      if (sent !== entry.watchSent) {
+        entry.watchSent = sent;
+        entry.watch?.write(sent);
+      }
     }
   };
+  const reserveLine = (entry: Entry) =>
+    `${JSON.stringify({ op: "reserve", reserve: [...entry.reserved].sort((x, y) => x - y) })}\n`;
+
+  type WsdSaid = {
+    ok?: boolean;
+    listeners?: number[];
+    error?: unknown;
+    editorToken?: unknown;
+    editorTokenEpoch?: unknown;
+    devcontainer?: unknown;
+    folder?: unknown;
+    unforwarded?: unknown;
+  };
+  /** What a workspace's daemon said on its watch, checked and kept; throws for an answer that
+   *  does not say what listens. */
+  const apply = (entry: Entry, reply: WsdSaid) => {
+    // For the dashboard. Shown as text and built into an address: a token is 48 hex, the
+    // rest is cut to a line.
+    entry.editorToken = editorTokenOf(reply.editorToken);
+    entry.editorTokenEpoch = tokenEpochOf(reply.editorTokenEpoch);
+    // Whole from the VM (it once cut it, and this cut it again): made safe here, bounded
+    // against a flood only, and fitted to a line by what shows it (R1).
+    entry.devcontainer =
+      typeof reply.devcontainer === "string" ? printable(reply.devcontainer) : "";
+    entry.folder = folderFrom(entry.folder, reply.folder);
+    if (!reply.ok || !Array.isArray(reply.listeners))
+      throw new Error(
+        typeof reply.error === "string"
+          ? printable(reply.error, 200)
+          : "the workspace's daemon did not say what listens",
+      );
+    // Fail closed on what the VM says (listenersFrom).
+    const ours = b.hostPorts?.() ?? new Set<number>();
+    const taken = listenersFrom(reply.listeners, ours);
+    // What the VM itself left out, and what was cut here.
+    const left = unforwardedOf(reply.unforwarded);
+    entry.listeners = taken.listeners;
+    entry.low = [...new Set([...left.low, ...taken.low])].sort((x, y) => x - y);
+    entry.more = left.more;
+    entry.past = taken.past;
+    entry.answeredAt = Date.now();
+    entry.missSaid = "";
+  };
+
+  /** A workspace that could not be asked: its stream ended or failed, its ask was not
+   *  answered. That is not "stopped listening": what it said last is kept while its VM runs,
+   *  for a while (forward.ts, unasked). (Dropped at once, a port with no name in its protocol
+   *  passed for good to another workspace that claimed it meanwhile.) Said once in the log. */
+  const missed = async (entry: Entry, error: unknown) => {
+    const why = printable(error instanceof Error ? error.message : String(error), 200);
+    if (why !== entry.missSaid) {
+      entry.missSaid = why;
+      log(`${entry.vm}: its workspace daemon could not be asked: ${why}`);
+    }
+    const running = await b.info(entry.vm).then(
+      (info) => info.status === "running",
+      () => false,
+    );
+    if (entries.get(entry.vm) === entry) Object.assign(entry, unasked(entry, Date.now(), running));
+  };
+
+  /** A workspace's watch: one dial to its daemon's socket, held (no program started in the VM
+   *  for it: a node there was 50 ms of CPU and 64 MB at its peak, every second; ticket #250),
+   *  on which the daemon says what `ports` would each time that changes (workspace/wsd.ts,
+   *  portsService). Each line is checked and kept, then the forwards and the root are brought
+   *  up to date. One that ends or fails is a miss, and is opened again (reopenAfter). */
+  const watchOf = (entry: Entry) =>
+    holdWatch({
+      open: () => dial(entry.vm, WSD_SOCKET),
+      first: () => {
+        entry.watchSent = reserveLine(entry);
+        return `${JSON.stringify({ op: "watch", reserve: [...entry.reserved].sort((x, y) => x - y) })}\n`;
+      },
+      line: async (reply) => {
+        apply(entry, reply);
+        reconcile();
+        tellRoot().catch(() => {});
+      },
+      missed: (error) =>
+        void missed(entry, error).then(() => {
+          reconcile();
+          tellRoot().catch(() => {});
+        }),
+      delay: (previous, livedMs) => reopenAfter(previous, livedMs, Date.now() - entry.registeredAt),
+    });
 
   const openLink = (entry: Entry) => {
     const dir = paths.link(entry.vm);
@@ -1797,6 +2017,9 @@ const serve = async () => {
     const existing = entries.get(r.vm);
     if (existing) {
       existing.proxy = r.proxy;
+      // Registered again (started again, or a bootstrap, which may start its daemon again):
+      // its watch is opened again every second for a minute.
+      existing.registeredAt = Date.now();
       return;
     }
     const entry: Entry = {
@@ -1807,7 +2030,11 @@ const serve = async () => {
       listeners: new Set(),
       reserved: new Set(),
       link: null,
-      lastError: "",
+      answeredAt: 0,
+      registeredAt: Date.now(),
+      watch: null,
+      watchSent: "",
+      missSaid: "",
       editorToken: "",
       editorTokenEpoch: 0,
       devcontainer: "",
@@ -1872,6 +2099,7 @@ const serve = async () => {
         watch(common, false, (file) => file === null || file === "packed-refs");
       }
     openLink(entry);
+    entry.watch = watchOf(entry);
     events.publish(
       events.host("workspace-up", { domain: r.domain, workspace: r.workspace, vm: r.vm }),
     );
@@ -1883,6 +2111,7 @@ const serve = async () => {
       events.host("workspace-down", { domain: entry.domain, workspace: entry.workspace, vm }),
     );
     entry.link?.();
+    entry.watch?.close();
     for (const watcher of entry.watchers) watcher.close();
     entries.delete(vm);
     reconcile();
@@ -2392,7 +2621,6 @@ const serve = async () => {
           // Started (again): its agents as they are now, not as before it stopped (they were
           // shown running for a look's while after a restart: dogfooding, 2026-11-22).
           agentsOf.delete(entry.vm);
-          await sync(entry);
           reconcile();
           tellRoot().catch(() => {});
           void listAgents(entry).then(() => tellRoot().catch(() => {}));
@@ -2410,13 +2638,11 @@ const serve = async () => {
             state: { largest: stateLargest, most: STATE_ANSWER_BYTES },
           };
         } else if (request.op === "ports") {
-          await Promise.all([...entries.values()].map(sync));
+          // As the watches last said. A listen that fails says so a moment later: one more
+          // round, and the reservations decided are on their way to the VMs.
           reconcile();
-          // A listen that fails says so a moment later; then one more round, so that the
-          // reservations decided just now are in place inside the VMs before the answer.
           await sleep(50);
           reconcile();
-          await Promise.all([...entries.values()].map(sync));
           reply = {
             ok: true,
             ports: view(),
@@ -2529,13 +2755,13 @@ const serve = async () => {
   } catch (error) {
     log(`could not list workspaces at start: ${String(error)}`);
   }
+  // Each workspace says what changes on its watch: the loop asks none of them.
   for (;;) {
     const started = Date.now();
-    await Promise.all([...entries.values()].map(sync));
     reconcile();
     await tellRoot().catch(() => {});
-    // Asking a VM costs what its exec costs: little on a Mac, seconds under emulation. The
-    // pause is never shorter than a second, and never so short that asking is all the VMs do.
+    // The pause is never shorter than a second, and never so short that the loop is all the
+    // Mac does (the root's facts are a VM listing each pass).
     await sleep(Math.max(1000, 3 * (Date.now() - started)));
   }
 };

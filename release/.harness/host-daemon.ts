@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createServer } from "node:net";
 import type { Socket } from "node:net";
 import * as path from "node:path";
+import { Duplex } from "node:stream";
 import { onTestFinished } from "./vitest.ts";
 import type { backend } from "../host/stack.ts";
 import { INSTANCE } from "../host/paths.ts";
@@ -120,7 +121,13 @@ const unnamed = (text: string) =>
 export const ws = (
   at: string,
   listening: number[],
-  more: { reserved?: number[]; editorTokenEpoch?: number; low?: number[]; notes?: string[] } = {},
+  more: {
+    reserved?: number[];
+    editorTokenEpoch?: number;
+    low?: number[];
+    notes?: string[];
+    answeredAt?: number;
+  } = {},
 ) => {
   const [domain = "", workspace = ""] = at.split("/");
   return {
@@ -130,6 +137,7 @@ export const ws = (
     listeners: new Set(listening),
     reserved: new Set(more.reserved ?? []),
     editorTokenEpoch: more.editorTokenEpoch ?? 0,
+    answeredAt: more.answeredAt ?? 0,
     ...(more.low ? { low: more.low } : {}),
     ...(more.notes ? { notes: more.notes } : {}),
   };
@@ -171,6 +179,79 @@ export const readInPieces = (
   return null;
 };
 
+/** What a line reader (daemon.ts, lineReader) gave of `chunks`, handed it one at a time: the
+ *  lines, and the error it stopped at, if it did. */
+export const linesInPieces = (
+  reader: (most?: number) => (chunk: Buffer) => string[] | Error,
+  chunks: string[],
+  most?: number,
+) => {
+  const take = reader(most);
+  const lines: string[] = [];
+  for (const chunk of chunks) {
+    const got = take(Buffer.from(chunk));
+    if (got instanceof Error) return { lines, error: got.message };
+    lines.push(...got);
+  }
+  return { lines };
+};
+
+/** A watch (daemon.ts, holdWatch) over stand-ins for dials to a workspace's daemon, one per
+ *  open, in turn: each sends its `chunks` once it has been written to, then ends if `end`.
+ *  Reopened at once. Once the last has been opened and has answered, the watch is closed.
+ *  What each was sent, the lines handed on (one with ok other than true refused, as the
+ *  daemon refuses one that does not say what listens), the misses, and how many streams were
+ *  opened after the close. */
+export const heldWatch = async (
+  hold: (watch: {
+    open: () => Duplex;
+    first: () => string;
+    line: (reply: Record<string, unknown>) => Promise<void>;
+    missed: (error: unknown) => void;
+    delay: (previous: number, livedMs: number) => number;
+  }) => { close: () => void },
+  streams: { chunks: (string | Buffer)[]; end: boolean }[],
+) => {
+  const sent: string[] = [];
+  const lines: string[] = [];
+  const missed: string[] = [];
+  let opened = 0;
+  const watch = hold({
+    open: () => {
+      const script = streams[opened++] ?? { chunks: [], end: false };
+      let written = false;
+      const stream: Duplex = new Duplex({
+        read() {},
+        write(chunk, _encoding, done) {
+          sent.push(String(chunk));
+          if (!written) {
+            written = true;
+            for (const piece of script.chunks)
+              stream.push(typeof piece === "string" ? Buffer.from(piece) : piece);
+            if (script.end) stream.push(null);
+          }
+          done();
+        },
+      });
+      return stream;
+    },
+    first: () => '{"op":"watch"}\n',
+    line: async (reply) => {
+      if (reply.ok !== true) throw new Error(String(reply.error));
+      lines.push(JSON.stringify(reply));
+    },
+    missed: (error) => void missed.push((error as Error).message),
+    delay: () => 1,
+  });
+  for (let waited = 0; opened < streams.length && waited < 2000; waited += 10)
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const before = opened;
+  watch.close();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  return { sent, lines, missed, openAfterClose: opened - before };
+};
+
 /** `count` ports from `from` on, which a type would take a long time to write. */
 export const portRange = (from: number, count: number) =>
   Array.from({ length: count }, (_, i) => from + i);
@@ -189,6 +270,22 @@ export const setOf = (items: any[]): Set<any> => new Set(items);
 /** Which workspace (`at`) had each raw port first, as the daemon keeps it: by VM. */
 export const rawOwners = (owners: Record<string, string>) =>
   new Map(Object.entries(owners).map(([port, at]) => [Number(port), ws(at, []).vm]));
+/** Which workspace ("domain/workspace") a port with no name reaches once `owner` had it and
+ *  the workspaces are now `entries`: rawOwnerFor over those that listen there, in order, as
+ *  the daemon's reconcile asks it. */
+export const rawOwnerAmong = (
+  rawOwnerFor: (current: string | undefined, holders: { vm: string }[]) => string,
+  port: number,
+  owner: string,
+  entries: { listeners: ReadonlySet<number> }[],
+): string => {
+  const kept = entries as { vm: string; listeners: ReadonlySet<number> }[];
+  const vm = rawOwnerFor(
+    ws(owner, []).vm,
+    kept.filter((entry) => entry.listeners.has(port)),
+  );
+  return shown(kept.find((entry) => entry.vm === vm));
+};
 /** What lsof would say holds a port. */
 export const heldByColima = () => "colima, pid 812";
 /** The stack's default memory for a workspace, in MiB. */
