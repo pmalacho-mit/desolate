@@ -92,7 +92,7 @@ button.approve { background: var(--fg); border-color: var(--fg); color: var(--ca
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 .arm { display: inline-block; }
 .onto { color: var(--muted); }
-button.approve:disabled { pointer-events: none; }
+.arm > button:disabled { pointer-events: none; }
 /* The other choice, beside Approve: the same push as one commit. */
 button.approve.squash { background: var(--card); color: var(--fg); border-color: var(--fg); }
 .summary pre.message { margin: 0; padding: var(--s2) var(--s3); background: var(--raise); border-radius: 10px; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; max-height: 11em; overflow: auto; }
@@ -164,7 +164,7 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 .card.asked { border-color: var(--k-branch); }
 .asked-note { color: var(--k-branch); font-weight: 600; }
 /* A card decided before a new one came: its names and what was decided, on one short card. */
-.card.folded > :not(.names):not(.actions), .card.folded .actions > :not(.hint):not(.dismiss) { display: none; }
+.card.folded > :not(.names):not(.actions):not(.reported), .card.folded .actions > :not(.hint):not(.dismiss) { display: none; }
 .card.folded .actions { position: static; border-top: 0; padding: 0; }
 .summary > p.working { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* After Approve (approve.js, showApproved): being pushed, not pushed or perhaps not (kept until
@@ -175,6 +175,17 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 .card.failed .hint, .card.uncertain .hint { color: var(--danger); }
 .card.unheard { border-color: var(--caution); }
 .card.unheard .hint { color: var(--caution); }
+/* Dismiss at the far end of the bar: where no Approve ever was. */
+.arm.dismiss { margin-left: auto; }
+/* The pusher's words, set apart from the page's own: quoted, and said to be its. */
+.reported { margin: 0; padding: var(--s2) var(--s3); border-left: 3px solid var(--danger); background: var(--raise); border-radius: 0 8px 8px 0; display: grid; gap: var(--s1); }
+.reported figcaption { color: var(--muted); font-size: 12.5px; }
+.reported blockquote { margin: 0; font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.reported blockquote::before { content: "\201C"; } .reported blockquote::after { content: "\201D"; }
+.reported .all { justify-self: start; }
+/* A card that ended, holding its place until the pointer is off the list (approve.js, keep). */
+.card.kept { display: block; overflow: hidden; }
+.kept-note { margin: 0; color: var(--muted); }
 .card:focus-visible, .pushed li:focus-visible, h1:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
 .pushed h2 { font-size: 15px; font-weight: 650; margin: var(--s5) 0 var(--s2); }
 .pushed ul { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s2); color: var(--muted); }

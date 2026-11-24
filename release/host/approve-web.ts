@@ -421,26 +421,33 @@ const HEARD_MS = 30 * 60_000;
 const pullRequestPage = (repo: string, branch: string) =>
   `https://github.com/${[repo, "compare", branch].join("/").split("/").map(encodeURIComponent).join("/")}?expand=1`;
 
-/** Which approval signed here a word of the pusher's ends, or -1: the oldest still listened
- *  for (`HEARD_MS` after its click, by `now`) and not ended, that names the very move the Mac
- *  signed (repository, branch, commit, and the commit the branch moves from). The word names
- *  no approval of its own (the pusher's event carries none: root/pusher.ts, `emit`), so
- *  nothing it says picks another approval, and one already ended keeps its first word. */
+/** Which approvals signed here a word of the pusher's ends: of those still listened for
+ *  (`HEARD_MS` after the click, by `now`) and not ended, that name the very move the Mac signed
+ *  (repository, branch, commit, and the commit the branch moves from). The word names no
+ *  approval of its own (the pusher's event carries none: root/pusher.ts, `emit`), so nothing it
+ *  says picks another approval. "pushed" ends every one of them: it says the remote's branch
+ *  is that commit, which is so for each (an approval whose word was missed, pushed again, is
+ *  answered "pushed" by the pusher, which finds the remote there already). Any other word ends
+ *  the oldest: pushes to a repository go one at a time (root/push.ts, its lock), so their words
+ *  come in the order they were approved. One already ended keeps its first word. */
 export const endedBy = (
   approvals: readonly Approved[],
-  said: Pick<PusherSaid, "repo" | "branch" | "commit" | "onto">,
+  said: Pick<PusherSaid, "type" | "repo" | "branch" | "commit" | "onto">,
   now: number,
-): number =>
-  approvals.findIndex(
-    (a) =>
-      !a.pushed &&
-      a.error === undefined &&
-      now - a.at < HEARD_MS &&
-      a.repo === said.repo &&
-      a.branch === said.branch &&
-      a.commit === said.commit &&
-      a.onto === (said.onto ?? null),
+): number[] => {
+  const open = approvals.flatMap((a, at) =>
+    !a.pushed &&
+    a.error === undefined &&
+    now - a.at < HEARD_MS &&
+    a.repo === said.repo &&
+    a.branch === said.branch &&
+    a.commit === said.commit &&
+    a.onto === (said.onto ?? null)
+      ? [at]
+      : [],
   );
+  return said.type === "pushed" ? open : open.slice(0, 1);
+};
 
 declare namespace endedBy {
   type A = "0123456789abcdef0123456789abcdef01234567";
@@ -453,6 +460,16 @@ declare namespace endedBy {
     onto: B;
     squashes: null;
     at: 1000;
+    pushed: false;
+  };
+  type Again = {
+    token: "t2";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    squashes: null;
+    at: 1500;
     pushed: false;
   };
   type Failed = {
@@ -476,55 +493,65 @@ declare namespace endedBy {
     at: 1000;
     pushed: true;
   };
-  type Word = { repo: "acme/widgets"; branch: "main"; commit: A; onto: B };
+  type Word = { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: B };
+  type Refused = { type: "push-failed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: B };
   /** the word on the move signed ends it; on any other move (another commit, branch,
    *  repository, or what the branch moves from), nothing */
   export type Moves = Table<
     typeof endedBy,
     [
-      [args: [approvals: [Signed], said: Word, now: 2000], expected: 0],
+      [args: [approvals: [Signed], said: Word, now: 2000], expected: [0]],
       [
         args: [
           approvals: [Signed],
-          said: { repo: "acme/widgets"; branch: "main"; commit: B; onto: B },
+          said: { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: B; onto: B },
           now: 2000,
         ],
-        expected: -1,
+        expected: [],
       ],
       [
         args: [
           approvals: [Signed],
-          said: { repo: "acme/widgets"; branch: "other"; commit: A; onto: B },
+          said: { type: "pushed"; repo: "acme/widgets"; branch: "other"; commit: A; onto: B },
           now: 2000,
         ],
-        expected: -1,
+        expected: [],
       ],
       [
         args: [
           approvals: [Signed],
-          said: { repo: "acme/other"; branch: "main"; commit: A; onto: B },
+          said: { type: "pushed"; repo: "acme/other"; branch: "main"; commit: A; onto: B },
           now: 2000,
         ],
-        expected: -1,
+        expected: [],
       ],
       [
         args: [
           approvals: [Signed],
-          said: { repo: "acme/widgets"; branch: "main"; commit: A; onto: null },
+          said: { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: null },
           now: 2000,
         ],
-        expected: -1,
+        expected: [],
       ],
     ]
   >;
-  /** one already ended keeps its first word (the next word of the same move ends the next
-   *  approval of it, if there is one); one no longer listened for is not ended now */
+  /** the same move approved twice (the first one's word missed, or still to come): "pushed"
+   *  ends both, in either order of the words; a refusal ends the oldest alone */
+  export type Twice = Table<
+    typeof endedBy,
+    [
+      [args: [approvals: [Signed, Again], said: Word, now: 2000], expected: [0, 1]],
+      [args: [approvals: [Pushed, Again], said: Word, now: 2000], expected: [1]],
+      [args: [approvals: [Signed, Again], said: Refused, now: 2000], expected: [0]],
+    ]
+  >;
+  /** one already ended keeps its first word; one no longer listened for is not ended now */
   export type Once = Table<
     typeof endedBy,
     [
-      [args: [approvals: [Failed, Signed], said: Word, now: 2000], expected: 1],
-      [args: [approvals: [Pushed], said: Word, now: 2000], expected: -1],
-      [args: [approvals: [Signed], said: Word, now: 1801000], expected: -1],
+      [args: [approvals: [Failed, Signed], said: Refused, now: 2000], expected: [1]],
+      [args: [approvals: [Pushed], said: Word, now: 2000], expected: []],
+      [args: [approvals: [Signed], said: Word, now: 1801000], expected: []],
     ]
   >;
 }
@@ -637,6 +664,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   // between two of its asks no page is open: an approval's word that came then was missed,
   // and its card said "pushing" for good (T2 04, under load).
   const approvals: Approved[] = [];
+  // Those whose signature the keyring has not yet taken: listened for (the push can land
+  // before the keyring's answer does), never told to a page (a page that drew one as approved
+  // showed a push still waiting as approved when the keyring refused: the review of #283).
+  const signing = new Set<Approved>();
+  const told = () => approvals.filter((a) => !signing.has(a));
   const unsaid = (a: Approved) =>
     !a.pushed && a.error === undefined && Date.now() - a.at < HEARD_MS;
   let pages = 0;
@@ -645,9 +677,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     const want = (pages > 0 && reviews.size > 0) || approvals.some(unsaid);
     if (want && !unhear)
       unhear = backend.pushes((said) => {
-        const at = endedBy(approvals, said, Date.now());
-        if (at < 0) return;
-        Object.assign(approvals[at]!, endOf(said, backend.github()));
+        const ended = endedBy(approvals, said, Date.now());
+        if (ended.length === 0) return;
+        for (const at of ended) Object.assign(approvals[at]!, endOf(said, backend.github()));
         tell();
         hearPusher();
       });
@@ -1088,9 +1120,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           const out = answerFor(root.pending, root.look, token);
           hearPusher();
           // (Each approval whole: its time is the click's, so the tag moves only with news.)
-          const tag = digestOf(tagOfAnswer(out) + JSON.stringify(approvals));
+          const approved = told();
+          const tag = digestOf(tagOfAnswer(out) + JSON.stringify(approved));
           if (since === null || tag !== since)
-            return json(res, 200, { pending: out, approved: approvals, tag });
+            return json(res, 200, { pending: out, approved, tag });
           fromRoot ??= rootListAfter(root.tag, gone.signal);
           const round = new AbortController();
           const next = await Promise.race([
@@ -1309,20 +1342,25 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
             pushed: false,
           };
           approvals.push(approval);
-          if (approvals.length > OUTCOMES_KEPT) approvals.shift();
+          signing.add(approval);
           hearPusher();
           // Not heard of by then: no longer listened for (the dashboard's activity says).
           setTimeout(hearPusher, HEARD_MS + 1000).unref();
           try {
             await backend.approve(signed);
           } catch (error) {
-            const at = approvals.indexOf(approval);
-            if (at >= 0) approvals.splice(at, 1);
+            // Never told, and it takes no other's place.
+            signing.delete(approval);
+            approvals.splice(approvals.indexOf(approval), 1);
             hearPusher();
-            // (And the pages told: a word heard for it meanwhile is not theirs to keep.)
-            tell();
             throw error;
+          } finally {
+            signing.delete(approval);
           }
+          // Taken: the oldest taken one makes room for it (one being signed is never dropped
+          // for another's click, and a click the keyring refused drops nothing).
+          const taken = told();
+          if (taken.length > OUTCOMES_KEPT) approvals.splice(approvals.indexOf(taken[0]!), 1);
           // Every page is told: another tab, too, shows it as being pushed.
           tell();
           log(

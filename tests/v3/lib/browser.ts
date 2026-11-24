@@ -352,6 +352,59 @@ export const openBrowser = async (
         );
         await sleep(300);
       },
+      /** The pointer moved, in eight steps, to `selector`'s middle (holding `text`, if given),
+       *  shifted by `dx` and `dy`: nothing pressed. Where it went. */
+      move: async (selector: string, text = "", dx = 0, dy = 0) => {
+        // (Drawn ones only: a hidden element's innerText is its text.)
+        const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.offsetParent && n.innerText.includes(${JSON.stringify(text)}))`;
+        await send("Page.bringToFront", {}, sessionId);
+        const at = await evaluate<{ x: number; y: number } | null>(`(() => {
+          const e = ${find};
+          if (!e) return null;
+          const r = e.getBoundingClientRect();
+          return { x: r.x + r.width / 2 + ${dx}, y: r.y + r.height / 2 + ${dy} };
+        })()`);
+        if (!at) throw new Error(`nothing to move to: ${selector} ${text}`);
+        for (let i = 1; i <= 8; i++)
+          await send(
+            "Input.dispatchMouseEvent",
+            {
+              type: "mouseMoved",
+              x: pointer.x + ((at.x - pointer.x) * i) / 8,
+              y: pointer.y + ((at.y - pointer.y) * i) / 8,
+            },
+            sessionId,
+          );
+        pointer = at;
+        return at;
+      },
+      /** The pointer moved to a point of the window, in eight steps: nothing pressed. */
+      moveTo: async (x: number, y: number) => {
+        for (let i = 1; i <= 8; i++)
+          await send(
+            "Input.dispatchMouseEvent",
+            {
+              type: "mouseMoved",
+              x: pointer.x + ((x - pointer.x) * i) / 8,
+              y: pointer.y + ((y - pointer.y) * i) / 8,
+            },
+            sessionId,
+          );
+        pointer = { x, y };
+      },
+      /** A press and release where the pointer is, without moving it: a person clicking again
+       *  with a hand that stayed still. */
+      pressHere: async () => {
+        for (const type of ["mousePressed", "mouseReleased"])
+          await send(
+            "Input.dispatchMouseEvent",
+            { type, ...pointer, button: "left", clickCount: 1 },
+            sessionId,
+          );
+        await sleep(300);
+      },
+      /** Where the pointer is. */
+      pointer: () => ({ ...pointer }),
       /** Text typed where the focus is. */
       type: async (text: string) => {
         await send("Input.insertText", { text }, sessionId);

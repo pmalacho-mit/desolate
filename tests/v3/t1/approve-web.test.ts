@@ -72,6 +72,8 @@ type Said = {
 };
 let pusherHeard: ((said: Said) => void) | null = null;
 const pusherSays = (said: Said) => pusherHeard!(said);
+/** The keyring's answer to the next approvals, when a test holds it: an error, or "" to take it. */
+let keyringSays: Promise<string> | null = null;
 /** Every approval signed, across the tests (`approved` is emptied by each). */
 const everSigned: string[] = [];
 let server: Server;
@@ -198,7 +200,15 @@ before(async () => {
           }
         },
         summary: (asked, signal) => reviewer(asked, signal),
-        approve: async (m) => void (approved.push(m), everSigned.push(m)),
+        approve: async (m) => {
+          // A keyring slow to answer, then refusing (`keyringSays`): what a page sees meanwhile.
+          if (keyringSays) {
+            const said = await keyringSays;
+            if (said) throw new Error(said);
+          }
+          approved.push(m);
+          everSigned.push(m);
+        },
         refuse: async (m) => void refused.push(m),
         issues: async () => issuesListed,
         publishIssue: async (issue) => {
@@ -1042,6 +1052,121 @@ describe("T1 the approval page", () => {
     assert.ok(told.length <= 16, `${told.length} approvals told`);
     assert.equal(told.at(-1)!.error!.length, 4000);
     assert.ok(body.length < size + 4100, `${body.length} bytes, from ${size}`);
+  });
+
+  it("a click the keyring refuses is never told to a page as approved, and takes no other approval's place", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    await listedNow();
+    type Told = { token: string; pushed: boolean; error?: string };
+    const toldNow = async () =>
+      (JSON.parse((await call("GET", "/pending", asPage())).body) as { approved: Told[] }).approved;
+    // Sixteen approvals taken (the most kept), each ended, so the oldest is the one a new one
+    // would push out.
+    for (let i = 0; i < 16; i++) {
+      assert.equal((await approve(good())).status, 200);
+      pusherSays({
+        type: "push-failed",
+        repo: push.repo,
+        branch: push.branch,
+        commit: push.commit,
+        onto: null,
+        error: `ended ${i}`,
+      });
+    }
+    const before = await toldNow();
+    assert.equal(before.length, 16);
+    // The keyring holds its answer: a page that asks meanwhile (a reload, another tab) is not
+    // told of the click.
+    let answer = (_: string) => {};
+    keyringSays = new Promise((resolve) => (answer = resolve));
+    const clicked = approve(good());
+    await moment();
+    assert.deepEqual(await toldNow(), before, "not told while the keyring has not taken it");
+    answer("the challenge is no longer outstanding");
+    const refused = await clicked;
+    keyringSays = null;
+    assert.equal(refused.status, 502, refused.body);
+    assert.deepEqual(await toldNow(), before, "after its refusal: nothing told, nothing dropped");
+    assert.ok(
+      (JSON.parse((await call("GET", "/pending", asPage())).body) as { pending: unknown[] }).pending
+        .length === 1,
+      "and the push is listed as waiting",
+    );
+    // CONTROL: the same click, taken: told, and the oldest goes to make room.
+    keyringSays = Promise.resolve("");
+    assert.equal((await approve(good())).status, 200);
+    keyringSays = null;
+    const after = await toldNow();
+    assert.equal(after.length, 16);
+    assert.deepEqual(after.slice(0, 15), before.slice(1));
+    assert.equal(after[15]!.pushed, false);
+    assert.equal(after[15]!.error, undefined);
+    pusherHeard?.({
+      type: "push-failed",
+      repo: push.repo,
+      branch: push.branch,
+      commit: push.commit,
+      onto: null,
+      error: "ended",
+    });
+  });
+
+  it('the same move approved twice: the pusher\'s "pushed" ends both, whichever word comes first; a refusal ends the older alone', async () => {
+    // Two texts of the same move (another nonce): pushed again after the first one's word.
+    const again = { ...push, nonce: "6".repeat(32) };
+    const againMessage = formatApproval(again);
+    const move = { repo: push.repo, branch: push.branch, commit: push.commit, onto: null };
+    type Told = { token: string; pushed: boolean; error?: string };
+    const states = async () =>
+      Object.fromEntries(
+        (
+          JSON.parse((await call("GET", "/pending", asPage())).body) as { approved: Told[] }
+        ).approved
+          .filter((t) =>
+            [pushToken(approveToken(), message), pushToken(approveToken(), againMessage)].includes(
+              t.token,
+            ),
+          )
+          .map((t) => [t.token === pushToken(approveToken(), message) ? "first" : "again", t]),
+      ) as Record<string, Told>;
+    const both = async () => {
+      listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      assert.equal((await approve(good())).status, 200);
+      listed = [{ message: againMessage, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      assert.equal(
+        (
+          await approve({
+            nonce: again.nonce,
+            token: pushToken(approveToken(), againMessage),
+            commit: again.commit,
+          })
+        ).status,
+        200,
+      );
+    };
+    // The first one's word missed; the second finds the remote there already: "pushed".
+    await both();
+    pusherSays({ type: "pushed", ...move });
+    await moment();
+    let now = await states();
+    assert.deepEqual([now.first?.pushed, now.again?.pushed], [true, true]);
+    // A refusal: the older one alone, and the next word ends the next.
+    await both();
+    pusherSays({ type: "push-failed", ...move, error: "the forge refused" });
+    await moment();
+    now = await states();
+    assert.deepEqual(
+      [now.first?.error, now.again?.pushed, now.again?.error],
+      ["the forge refused", false, undefined],
+    );
+    pusherSays({ type: "pushed", ...move });
+    await moment();
+    now = await states();
+    assert.deepEqual([now.first?.error, now.again?.pushed], ["the forge refused", true]);
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
   });
 
   it("a push the reviewer could not describe is not signed, though the page listed it", async () => {

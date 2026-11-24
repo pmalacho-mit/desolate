@@ -42,11 +42,12 @@
     <p class="onto"></p>
     <div class="summary"></div>
     <p class="confirm-replace" hidden><label>To replace the remote's <code class="branch-name"></code>, type its name: <input class="replace-name" type="text" autocomplete="off" autocapitalize="off" spellcheck="false"></label></p>
+    <figure class="reported" hidden><figcaption>The root's pusher, in its own words:</figcaption><blockquote></blockquote><button type="button" class="quiet all" hidden></button></figure>
     <div class="actions">
       <span class="arm"><button type="button" class="approve" disabled>Approve push</button></span>
       <span class="arm squash" hidden><button type="button" class="approve squash" disabled>Approve, squashed into one commit</button></span>
-      <button type="button" class="refuse">Refuse</button>
-      <button type="button" class="dismiss" hidden>Dismiss</button>
+      <span class="arm refuse"><button type="button" class="refuse" disabled>Refuse</button></span>
+      <span class="arm dismiss" hidden title="Rest the pointer here a second: it arms"><button type="button" class="dismiss" disabled>Dismiss</button></span>
       <span class="hint"></span>
     </div>
   </section>
@@ -62,7 +63,7 @@
     <pre class="body"></pre>
     <div class="actions">
       <span class="arm"><button type="button" class="approve" disabled>Publish issue</button></span>
-      <button type="button" class="refuse">Not now</button>
+      <span class="arm refuse"><button type="button" class="refuse" disabled>Not now</button></span>
       <span class="hint"></span>
     </div>
   </section>

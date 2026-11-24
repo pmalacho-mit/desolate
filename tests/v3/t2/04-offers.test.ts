@@ -88,9 +88,26 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  *  given: a branch pushed twice has two lines), as an expression. */
 const pushedLine = (branch: string, commit = "") =>
   `[...document.querySelectorAll('#pushed li')].find((li) => li.textContent.startsWith(${JSON.stringify(`acme/widgets ${branch} ${commit.slice(0, 12)}`)}))`;
-/** The tab's card is still there to approve: the first click came as the pointer arrived (too
- *  soon, said), not approved, and the card not gone (pushed). */
-const undecided = `(() => { const c = document.querySelector('.card.asked'); return !!c && !/^(approving|Approved|Not pushed)/.test(c.querySelector('.hint').textContent); })()`;
+/** A button pressed as a person does on the approval page: the pointer comes to it, rests until
+ *  it arms (or `card`, an expression, has already decided: approving, approved, not pushed),
+ *  and presses where it is. */
+const armedPress = async (
+  page: {
+    move: (s: string, t?: string) => Promise<unknown>;
+    until: (e: string, w: string, ms?: number) => Promise<unknown>;
+    evaluate: <T>(e: string) => Promise<T>;
+    pressHere: () => Promise<void>;
+  },
+  selector: string,
+  label: string,
+  card = "document.querySelector('.card.asked')",
+) => {
+  await page.move(selector, label);
+  const decided = `/^(approving|Approved|Not pushed)/.test(${card}?.querySelector('.hint')?.textContent ?? '')`;
+  const button = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((b) => b.offsetParent && b.innerText.includes(${JSON.stringify(label)}))`;
+  await page.until(`${button}?.disabled === false || ${decided}`, `${label} armed`, 10_000);
+  if (!(await page.evaluate<boolean>(decided))) await page.pressHere();
+};
 /** Where a picture of the approval page goes, for a person to look at. */
 const shot = (name: string) =>
   path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), `approve-283-${name}.png`);
@@ -1565,6 +1582,18 @@ echo "=====waits"; cat /tmp/waits.lines`,
       if (!landed) await sleep(250);
     }
     assert.ok(landed, inRootClone("cat /tmp/web-push.log").stdout);
+    // And the host heard the pusher say so, though no page was open between these asks (the
+    // daemon read the pusher's log from where it left it: it once started at the log's end
+    // and lost this word, under load).
+    let heard = false;
+    for (let i = 0; i < 80 && !heard; i++) {
+      const told = JSON.parse((await call("GET", "/pending", asPage)).body) as {
+        approved: { token: string; pushed: boolean }[];
+      };
+      heard = told.approved.some((a) => a.token === push!.token && a.pushed);
+      if (!heard) await sleep(250);
+    }
+    assert.ok(heard, "the pusher's word on it, heard");
 
     // Refused on the page: the push that asked gives up, and nothing reaches the remote.
     inRootClone(
@@ -1638,8 +1667,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       const bar = () => page.evaluate<number>(`${card}.querySelector('.actions').offsetHeight`);
       const before = await bar();
       // A click as the pointer arrives is said, not taken: it has not been over Approve a second.
-      // (From elsewhere on the card first: resting on Approve since the page loaded, it would
-      // have armed, as it should.)
+      // (From elsewhere on the card first: only a pointer that came to Approve arms it.)
       // (Timed by the page: from the pointer's arrival over Approve to its press.)
       await page.click(".card.asked .onto");
       await page.evaluate(
@@ -1667,29 +1695,36 @@ echo "=====waits"; cat /tmp/waits.lines`,
         "arming kept the bar's height: Approve stayed under the pointer",
       );
       // A change to the page (a scroll moves Approve under a still pointer) disarms it at once,
-      // and it arms again only once the page has stood still a second under the pointer.
-      const changedAt = await page.evaluate<number>(
-        "(() => { window.dispatchEvent(new Event('scroll')); return performance.now(); })()",
-      );
+      // and a still pointer never arms it again: only one that moves onto it, a second later.
+      await page.evaluate("window.dispatchEvent(new Event('scroll')); true");
       assert.equal(await page.evaluate(armed), false, "a change disarms at once");
-      await page.until(armed, "Approve armed again", 10_000);
+      await sleep(3000);
+      assert.equal(await page.evaluate(armed), false, "a still pointer does not arm it again");
+      const movedAt = await page.evaluate<number>("performance.now()");
+      await page.moveTo(page.pointer().x + 2, page.pointer().y);
+      await page.until(armed, "Approve armed once the pointer moved onto it", 10_000);
       assert.ok(
-        (await page.evaluate<number>("performance.now()")) - changedAt >= 1000,
-        "not before the page stood still a second",
+        (await page.evaluate<number>("performance.now()")) - movedAt >= 1000,
+        "not before it rested on it a second",
       );
       await page.shot(shot("waiting"));
       // The click is the approval. What the card says from then on is recorded as it changes.
       await page.evaluate(
         `(() => { window.theCard = ${card}; window.hints = []; const h = theCard.querySelector('.hint'); new MutationObserver(() => hints.push(h.textContent)).observe(h, { childList: true, characterData: true, subtree: true }); window.clickedAt = Date.now(); return true; })()`,
       );
-      await page.click(".card.asked button.approve", "Approve push");
+      await page.pressHere();
       const line = pushedLine("web-pointer");
+      // Its place is kept while the pointer is on the list of cards, then goes.
       await page.until(
-        `${line} && !theCard.isConnected`,
-        "the card gone, and its line under Pushed",
+        `${line} && theCard.classList.contains('kept')`,
+        "its place kept, and its line under Pushed",
         60_000,
       );
       assert.equal(forgeRefs("acme/widgets")["web-pointer"], commit);
+      await sleep(1500);
+      assert.equal(await page.evaluate("theCard.isConnected"), true, "kept under a still pointer");
+      await page.moveTo(4, 4);
+      await page.until("!theCard.isConnected", "its place gone, the pointer off the list");
       const after = await page.evaluate<{ hints: string[]; line: string; focused: boolean }>(
         `({ hints, line: ${line}.textContent, focused: document.activeElement === ${line} })`,
       );
@@ -1713,7 +1748,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     }
   });
 
-  it("after Approve: being pushed while the forge takes its time, through a reload; word of other pushes and a flood touch nothing; a report in hostile text is text; a forge's refusal stays until dismissed", async () => {
+  it("after Approve: being pushed while the forge takes its time, through a reload; no word, dismissed, back when word comes; word of other pushes and a flood touch nothing; a report in hostile text is quoted text; a forge's refusal stays until dismissed", async () => {
     stack.step("the approval page after Approve: being pushed, not pushed, no word");
     const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
     const origin = new URL(address).origin;
@@ -1724,6 +1759,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
     const cardOf = (branch: string) =>
       `[...document.querySelectorAll('.card')].find((c) => c.querySelector('.branch')?.textContent === ${JSON.stringify(branch)})`;
     const hintOf = (branch: string) => `${cardOf(branch)}?.querySelector('.hint').textContent`;
+    const quoteOf = (branch: string) =>
+      `${cardOf(branch)}?.querySelector('blockquote').textContent`;
     type Page = Awaited<ReturnType<typeof browser.tab>>;
     /** The tab opened for a raw push of `branch`, its card drawn with its account. */
     const opened = async (page: Page, branch: string) => {
@@ -1733,21 +1770,18 @@ echo "=====waits"; cat /tmp/waits.lines`,
         `${cardOf(branch)} && ${cardOf(branch)}.querySelector('button.approve') && !${cardOf(branch)}.innerText.includes('working out')`,
         "the push's card, its account shown",
       );
+      await page.evaluate("Element.prototype.scrollIntoView = function () {}; true");
     };
-    /** Approve clicked, as a person does: the pointer arrives (too soon: said), rests until
-     *  Approve arms, and clicks. */
-    const approvedOn = async (page: Page, branch: string) => {
-      await page.evaluate("Element.prototype.scrollIntoView = function () {}");
-      await sleep(1500);
-      await page.click(".card.asked button.approve", "Approve push");
-      const decided = `/^(approving|Approved|Not pushed)/.test(${hintOf(branch)})`;
+    /** Dismissed as a person does (it arms as Approve does), and its place gone once the
+     *  pointer is off the list. */
+    const dismissed = async (page: Page, branch: string) => {
+      await armedPress(page, `.card .dismiss button`, "Dismiss", cardOf(branch));
       await page.until(
-        `${cardOf(branch)}.querySelector('button.approve').disabled === false || ${decided}`,
-        "Approve armed",
-        10_000,
+        `!${cardOf(branch)} && document.querySelector('.card.kept')`,
+        "its place kept",
       );
-      if (!(await page.evaluate(decided)))
-        await page.click(".card.asked button.approve", "Approve push");
+      await page.moveTo(4, 4);
+      await page.until("!document.querySelector('.card.kept')", "its place gone");
     };
     const forged = (lines: Record<string, unknown>[]) =>
       stack.inRoot(["bash", "-c", "cat >> /var/lib/desolate-root/pusher.log && echo written"], {
@@ -1759,12 +1793,12 @@ echo "=====waits"; cat /tmp/waits.lines`,
     try {
       const page = await browser.tab(address);
       // A forge slow to take it, as a large push is: the card says it is being pushed.
-      stack.forge("hold", "acme/widgets", "60");
+      stack.forge("hold", "acme/widgets", "90");
       inRootClone(
         `setsid nohup git push origin ${commit}:refs/heads/web-held >/tmp/web-held.log 2>&1 </dev/null & sleep 0.2`,
       );
       await opened(page, "web-held");
-      await approvedOn(page, "web-held");
+      await armedPress(page, ".card.asked button.approve", "Approve push");
       const pushing =
         "Approved: the root is pushing it to the remote now. This card goes when the root's pusher reports the remote has it.";
       await page.until(`${hintOf("web-held")} === ${JSON.stringify(pushing)}`, "being pushed");
@@ -1792,24 +1826,19 @@ echo "=====waits"; cat /tmp/waits.lines`,
         ),
         [],
       );
-      // No word for a while (the page's clock moved on four minutes): said, with what to look at.
+      // No word for a while (the page's clock moved on four minutes): said, with what to look
+      // at, in a line that stays the same while it stands.
       await page.evaluate(
         "window.realNow = Date.now; Date.now = () => realNow() + 4 * 60_000; true",
       );
-      await page.until(
-        `${hintOf("web-held")}?.startsWith("No word from the root's pusher 4 minutes after you approved this. A large push can take longer, and this changes when word comes. If none does, desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended; to try again, push it again.")`,
-        "no word",
-      );
+      const noWord =
+        "No word from the root's pusher in the 3 minutes since you approved this. A large push can take longer, and this changes when word comes. If none does, desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended; to try again, push it again.";
+      await page.until(`${hintOf("web-held")} === ${JSON.stringify(noWord)}`, "no word");
       await page.shot(shot("no-word"));
+      // Put away; it comes back when its word does (below), as its line said.
+      await page.evaluate("Element.prototype.scrollIntoView = function () {}; true");
+      await dismissed(page, "web-held");
       await page.evaluate("Date.now = realNow; true");
-      await page.until(
-        `${hintOf("web-held")} === ${JSON.stringify(pushing)}`,
-        "being pushed again",
-      );
-      // What the card says from here on, as it changes.
-      await page.evaluate(
-        `(() => { window.hints = []; const h = ${cardOf("web-held")}.querySelector('.hint'); new MutationObserver(() => hints.push(h.textContent)).observe(h, { childList: true, characterData: true, subtree: true }); return true; })()`,
-      );
       // The pusher's log is root's alone: the root's ordinary user cannot add a word to it.
       // (Control: root can, below.)
       const ordinary = stack.inRoot([
@@ -1821,6 +1850,10 @@ echo "=====waits"; cat /tmp/waits.lines`,
         ordinary.stdout,
         /written/,
         "the root's ordinary user wrote the pusher's log",
+      );
+      // What the page shows of web-held from here on, sampled as it changes.
+      await page.evaluate(
+        `(() => { window.held = []; setInterval(() => { const s = JSON.stringify([${hintOf("web-held")} ?? null, !!${pushedLine("web-held")}]); if (held.at(-1) !== s) held.push(s); }, 50); return true; })()`,
       );
       // As a root that is taken over could: a flood of words on other pushes (another commit of
       // the branch, another repository, the same commit from elsewhere), then a word on this
@@ -1841,45 +1874,48 @@ echo "=====waits"; cat /tmp/waits.lines`,
         /written/,
       );
       const failed =
-        "Not pushed. The root's pusher reports: refused ?[31mred?[0m <b>bold</b> <img src=x onerror=alert(1)> &amp; ?evil. To try again, push it again (the dashboard's Push, desolate push, or git push in the git VM) and approve it here.";
+        "Not pushed: the root's pusher reports it failed, in its words above. To try again, push it again (the dashboard's Push, desolate push, or git push in the git VM) and approve it here.";
       await page.until(
         `${hintOf("web-held")} === ${JSON.stringify(failed)}`,
-        "the word on this push",
+        "the word on this push, back",
         60_000,
       );
       const seen = await page.evaluate<{
-        hints: string[];
+        held: string[];
+        quote: string;
+        caption: string;
         markup: number;
-        pushed: boolean;
         records: number;
       }>(
-        `({ hints, markup: ${cardOf("web-held")}.querySelectorAll('b, img').length, pushed: !!${pushedLine("web-held")}, records: records.length })`,
+        `({ held, quote: ${quoteOf("web-held")}, caption: ${cardOf("web-held")}.querySelector('figcaption').textContent, markup: ${cardOf("web-held")}.querySelectorAll('b, img').length, records: records.length })`,
       );
-      // The flood was read before it (the log is read in order): it changed nothing.
-      assert.deepEqual(seen.hints, [failed], "nothing came between being pushed and this word");
-      assert.equal(seen.markup, 0, "its text is text");
-      assert.equal(seen.pushed, false);
+      // The flood was read before it (the log is read in order): it showed nothing.
+      assert.deepEqual(
+        seen.held,
+        [JSON.stringify([null, false]), JSON.stringify([failed, false])],
+        "nothing came between the card dismissed and this word",
+      );
+      assert.equal(
+        seen.quote,
+        "refused ?[31mred?[0m <b>bold</b> <img src=x onerror=alert(1)> &amp; ?evil",
+      );
+      assert.equal(seen.caption, "The root's pusher, in its own words:");
+      assert.equal(seen.markup, 0, "its words are text");
       assert.ok(seen.records <= 16, `${seen.records} approvals told to the page`);
+      await page.shot(shot("failed-quoted"));
       // The forge then takes the push: the pusher's own word comes second, and the first stands.
       // A forged report is a wrong line on this card at worst, never more (it signs nothing).
-      for (let i = 0; i < 120 && forgeRefs("acme/widgets")["web-held"] !== commit; i++)
+      stack.forge("hold", "acme/widgets", "0");
+      for (let i = 0; i < 240 && forgeRefs("acme/widgets")["web-held"] !== commit; i++)
         await sleep(500);
       assert.equal(forgeRefs("acme/widgets")["web-held"], commit, "the real push landed");
       await sleep(3000);
       assert.equal(await page.evaluate(hintOf("web-held")), failed);
       // Until dismissed; and dismissed, a reload does not bring it back.
-      // (Its own Dismiss: another card's, hidden while it is pushed, has the same text.)
-      await page.click(".card.failed button.dismiss", "Dismiss");
-      await page.until(`!${cardOf("web-held")}`, "the card dismissed");
-      assert.notEqual(
-        await page.evaluate("document.activeElement === document.body"),
-        true,
-        "the focus did not fall to nothing",
-      );
+      await dismissed(page, "web-held");
       await page.reload();
       await sleep(3000);
       assert.equal(await page.evaluate(`!!${cardOf("web-held")}`), false);
-      stack.forge("hold", "acme/widgets", "0");
 
       // The forge refuses it, its branch moved after the card was drawn: the card says so in
       // the pusher's words, and stays.
@@ -1888,15 +1924,18 @@ echo "=====waits"; cat /tmp/waits.lines`,
       );
       await opened(page, "web-moved");
       const moved = stack.forge("commit", "acme/widgets", "web-moved", "moved.txt", "moved").trim();
-      await approvedOn(page, "web-moved");
-      const refusal = `Not pushed. The root's pusher reports: the remote's web-moved is at ${moved.slice(0, 12)}, not absent, as the approval names: nothing was pushed. To try again, push it again (the dashboard's Push, desolate push, or git push in the git VM) and approve it here.`;
+      await armedPress(page, ".card.asked button.approve", "Approve push");
       await page.until(
-        `${hintOf("web-moved")} === ${JSON.stringify(refusal)}`,
+        `${hintOf("web-moved")} === ${JSON.stringify(failed)}`,
         "the forge's refusal",
         60_000,
       );
+      assert.equal(
+        await page.evaluate(quoteOf("web-moved")),
+        `the remote's web-moved is at ${moved.slice(0, 12)}, not absent, as the approval names: nothing was pushed`,
+      );
       await sleep(5000);
-      assert.equal(await page.evaluate(hintOf("web-moved")), refusal, "it stays");
+      assert.equal(await page.evaluate(hintOf("web-moved")), failed, "it stays");
       assert.deepEqual(
         await page.evaluate(
           `[...${cardOf("web-moved")}.querySelectorAll('.actions button')].filter((b) => b.offsetParent).map((b) => b.textContent)`,
@@ -1907,6 +1946,131 @@ echo "=====waits"; cat /tmp/waits.lines`,
       await page.shot(shot("failed"));
     } finally {
       stack.forge("hold", "acme/widgets", "0");
+      await browser.close();
+    }
+  });
+
+  it("nothing comes under a still pointer: a card that ended keeps its place until the pointer is off the list, a press where Approve was signs and refuses nothing, and a button that came under the pointer arms only once it moves onto it (control: moving onto the next card's Approve arms it)", async () => {
+    stack.step("the approval page: nothing comes under a still pointer");
+    const address = /approvals {4}(http:\S+)/.exec(stack.desolate("approve", "--web").stdout)![1]!;
+    const origin = new URL(address).origin;
+    const chrome = findChrome();
+    assert.ok(chrome, "this check needs Chrome or Chromium");
+    const browser = await openBrowser(chrome, fs.mkdtempSync(path.join(stack.work, "chrome-")));
+    const cardOf = (branch: string) =>
+      `[...document.querySelectorAll('.card')].find((c) => c.querySelector('.branch')?.textContent === ${JSON.stringify(branch)})`;
+    const hintOf = (branch: string) => `${cardOf(branch)}?.querySelector('.hint').textContent`;
+    const rect = (expression: string) =>
+      `(() => { const r = ${expression}.getBoundingClientRect(); return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]; })()`;
+    try {
+      for (const branch of ["web-a", "web-b"])
+        inRootClone(
+          `setsid nohup git push origin ${commit}:refs/heads/${branch} >/tmp/${branch}.log 2>&1 </dev/null & sleep 0.5`,
+        );
+      const page = await browser.tab(
+        `${origin}/#repo=acme%2Fwidgets&branch=web-a&commit=${commit}`,
+      );
+      await page.until(
+        ["web-a", "web-b"]
+          .map((b) => `${cardOf(b)} && !${cardOf(b)}.innerText.includes('working out')`)
+          .join(" && "),
+        "both cards, their accounts shown",
+      );
+      assert.equal(
+        await page.evaluate(
+          `${cardOf("web-a")}.compareDocumentPosition(${cardOf("web-b")}) & Node.DOCUMENT_POSITION_FOLLOWING`,
+        ),
+        4, // Node.DOCUMENT_POSITION_FOLLOWING
+        "A above B",
+      );
+      await page.evaluate(
+        "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') posted.push(u); return f(u, o); }; Element.prototype.scrollIntoView = function () {}; true",
+      );
+      // A approved, the hand left where it pressed.
+      await armedPress(page, ".card.asked button.approve", "Approve push");
+      await page.until(`/^Approved/.test(${hintOf("web-a")})`, "A being pushed");
+      const bApprove = `${cardOf("web-b")}.querySelector('button.approve')`;
+      const bRefuse = `${cardOf("web-b")}.querySelector('button.refuse')`;
+      const before = await page.evaluate<number[][]>(`[${rect(bApprove)}, ${rect(bRefuse)}]`);
+      // A's word arrives (the forge takes it): its place is kept, B does not move.
+      await page.until(
+        `[...document.querySelectorAll('.card.kept .kept-note')].some((n) => n.textContent.startsWith('acme/widgets web-a '))`,
+        "A's place kept, saying it was pushed",
+        60_000,
+      );
+      await sleep(2000);
+      assert.deepEqual(
+        await page.evaluate(`[${rect(bApprove)}, ${rect(bRefuse)}]`),
+        before,
+        "B did not move",
+      );
+      assert.ok(
+        await page.evaluate("!!document.querySelector('.card.kept')"),
+        "kept under a still pointer",
+      );
+      await page.shot(shot("kept"));
+      // A press where A's Approve was: nothing.
+      await page.pressHere();
+      assert.deepEqual(await page.evaluate("posted"), ["/approve"], "nothing signed or refused");
+      assert.doesNotMatch(
+        await page.evaluate<string>(hintOf("web-b")),
+        /^(approving|Approved|refused)/,
+      );
+      // CONTROL: moving onto B's Approve and resting arms it.
+      const armedB = `${bApprove}.disabled === false`;
+      await page.move(".card button.approve", "Approve push");
+      await page.until(armedB, "B's Approve armed once the pointer came to it", 10_000);
+      // Anything the page does under it disarms it, and a still pointer does not arm it again.
+      await page.evaluate("window.dispatchEvent(new Event('scroll')); true");
+      await sleep(2500);
+      assert.equal(await page.evaluate(armedB), false, "a still pointer arms nothing");
+      // B is refused by the forge (its branch moves), and its Dismiss is not where Approve was.
+      const moved = stack.forge("commit", "acme/widgets", "web-b", "moved.txt", "moved").trim();
+      await page.moveTo(page.pointer().x + 2, page.pointer().y);
+      await page.until(armedB, "B armed after the pointer moved", 10_000);
+      await page.pressHere();
+      await page.until(`/^Not pushed/.test(${hintOf("web-b")})`, "B refused by the forge", 60_000);
+      const at = page.pointer();
+      const dismissAt = await page.evaluate<number[]>(
+        rect(`${cardOf("web-b")}.querySelector('button.dismiss')`),
+      );
+      assert.ok(
+        !(
+          at.x >= dismissAt[0]! &&
+          at.x <= dismissAt[0]! + dismissAt[2]! &&
+          at.y >= dismissAt[1]! &&
+          at.y <= dismissAt[1]! + dismissAt[3]!
+        ),
+        "Dismiss is not under the pointer that approved",
+      );
+      await page.pressHere();
+      assert.match(
+        await page.evaluate<string>(hintOf("web-b")),
+        /^Not pushed/,
+        "a press there dismissed nothing",
+      );
+      // Dismiss arms as Approve does: a press as the pointer arrives is not taken.
+      await page.move(".card .dismiss button", "Dismiss");
+      await page.pressHere();
+      assert.match(await page.evaluate<string>(hintOf("web-b")), /^Not pushed/, "not at once");
+      await page.until(
+        `${cardOf("web-b")}.querySelector('button.dismiss').disabled === false`,
+        "Dismiss armed",
+        10_000,
+      );
+      await page.pressHere();
+      await page.until(
+        `!${cardOf("web-b")} && [...document.querySelectorAll('.kept-note')].some((n) => n.textContent === 'Dismissed.')`,
+        "B dismissed, its place kept",
+      );
+      await page.moveTo(4, 4);
+      await page.until(
+        "!document.querySelector('.card.kept')",
+        "the places gone, the pointer off the list",
+      );
+      assert.deepEqual(await page.evaluate("posted"), ["/approve", "/approve"]);
+      assert.equal(forgeRefs("acme/widgets")["web-b"], moved);
+    } finally {
       await browser.close();
     }
   });
@@ -2094,10 +2258,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') window.posted.push(JSON.parse(o.body)); return f(u, o); }; Element.prototype.scrollIntoView = function () {}",
       );
       await sleep(1500);
-      await page.click(".card.asked button.approve", "Approve push");
-      await sleep(500);
-      if (await page.evaluate(undecided))
-        await page.click(".card.asked button.approve", "Approve push");
+      await armedPress(page, ".card.asked button.approve", "Approve push");
       await page.until(pushedLine("web-adversarial"), "its line under Pushed", 60_000);
       const posted = await page.evaluate<{ commit: string; squash: boolean }[]>("window.posted");
       assert.deepEqual(
@@ -2194,9 +2355,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
           "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') window.posted.push(JSON.parse(o.body)); return f(u, o); }; Element.prototype.scrollIntoView = function () {}",
         );
         await sleep(1500);
-        await page.click(".card.asked button.approve", label);
-        await sleep(500);
-        if (await page.evaluate(undecided)) await page.click(".card.asked button.approve", label);
+        await armedPress(page, ".card.asked button.approve", label);
         await page.until(pushedLine(branch, id), "its line under Pushed", 60_000);
         assert.equal(forgeRefs("acme/widgets")[branch], id);
         return page.evaluate<{ commit: string; squash: boolean; replace: boolean }[]>(
