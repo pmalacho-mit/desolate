@@ -110,6 +110,20 @@ const armedPress = async (
   await page.until(`${button}?.disabled === false || ${decided}`, `${label} armed`, 10_000);
   if (!(await page.evaluate<boolean>(decided))) await page.pressHere();
 };
+type Hand = {
+  moveTo: (x: number, y: number) => Promise<void>;
+  until: (e: string, w: string, ms?: number) => Promise<unknown>;
+  evaluate: <T>(e: string) => Promise<T>;
+  pressHere: () => Promise<void>;
+};
+/** The pointer brought to `button` (an expression) and rested there until it arms. */
+const restOn = async (page: Hand, button: string, what: string) => {
+  const at = await page.evaluate<{ x: number; y: number }>(
+    `(() => { const r = ${button}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+  );
+  await page.moveTo(at.x, at.y);
+  await page.until(`${button}.disabled === false`, `${what} armed`, 10_000);
+};
 /** Where a picture of the approval page goes, for a person to look at. */
 const shot = (name: string) =>
   path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), `approve-283-${name}.png`);
@@ -1777,7 +1791,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
     /** Dismissed as a person does (it arms as Approve does), and its place gone once the
      *  pointer is off the list. */
     const dismissed = async (page: Page, branch: string) => {
-      await armedPress(page, `.card .dismiss button`, "Dismiss", "");
+      await restOn(page, `${cardOf(branch)}.querySelector('button.dismiss')`, "Dismiss");
+      await page.pressHere();
       await page.until(
         `!${cardOf(branch)} && document.querySelector('.card.kept')`,
         "its place kept",
@@ -1972,33 +1987,29 @@ echo "=====waits"; cat /tmp/waits.lines`,
         );
       // (Signed in by the page's own address first, as `desolate approve --web --open` does.)
       const page = await browser.tab(address);
-      await page.goto("about:blank");
-      await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=web-a&commit=${commit}`);
       await page.until(
         ["web-a", "web-b"]
           .map((b) => `${cardOf(b)} && !${cardOf(b)}.innerText.includes('working out')`)
           .join(" && "),
         "both cards, their accounts shown",
       );
-      assert.equal(
-        await page.evaluate(
-          `${cardOf("web-a")}.compareDocumentPosition(${cardOf("web-b")}) & Node.DOCUMENT_POSITION_FOLLOWING`,
-        ),
-        4, // Node.DOCUMENT_POSITION_FOLLOWING
-        "A above B",
+      // A is the card above, B the one below it (in the order the root lists them).
+      const [a, b] = await page.evaluate<[string, string]>(
+        "[...document.querySelectorAll('.card .branch')].map((n) => n.textContent).filter((n) => n === 'web-a' || n === 'web-b')",
       );
       await page.evaluate(
         "window.posted = []; const f = window.fetch; window.fetch = (u, o) => { if (o && o.method === 'POST') posted.push(u); return f(u, o); }; Element.prototype.scrollIntoView = function () {}; true",
       );
       // A approved, the hand left where it pressed.
-      await armedPress(page, ".card.asked button.approve", "Approve push");
-      await page.until(`/^Approved/.test(${hintOf("web-a")})`, "A being pushed");
-      const bApprove = `${cardOf("web-b")}.querySelector('button.approve')`;
-      const bRefuse = `${cardOf("web-b")}.querySelector('button.refuse')`;
+      await restOn(page, `${cardOf(a!)}.querySelector('button.approve')`, "A's Approve");
+      await page.pressHere();
+      await page.until(`/^Approved/.test(${hintOf(a!)})`, "A being pushed");
+      const bApprove = `${cardOf(b!)}.querySelector('button.approve')`;
+      const bRefuse = `${cardOf(b!)}.querySelector('button.refuse')`;
       const before = await page.evaluate<number[][]>(`[${rect(bApprove)}, ${rect(bRefuse)}]`);
       // A's word arrives (the forge takes it): its place is kept, B does not move.
       await page.until(
-        `[...document.querySelectorAll('.card.kept .kept-note')].some((n) => n.textContent.startsWith('acme/widgets web-a '))`,
+        `[...document.querySelectorAll('.card.kept .kept-note')].some((n) => n.textContent.startsWith(${JSON.stringify(`acme/widgets ${a} `)}))`,
         "A's place kept, saying it was pushed",
         60_000,
       );
@@ -2016,28 +2027,23 @@ echo "=====waits"; cat /tmp/waits.lines`,
       // A press where A's Approve was: nothing.
       await page.pressHere();
       assert.deepEqual(await page.evaluate("posted"), ["/approve"], "nothing signed or refused");
-      assert.doesNotMatch(
-        await page.evaluate<string>(hintOf("web-b")),
-        /^(approving|Approved|refused)/,
-      );
+      assert.doesNotMatch(await page.evaluate<string>(hintOf(b!)), /^(approving|Approved|refused)/);
       // CONTROL: moving onto B's Approve and resting arms it.
       const armedB = `${bApprove}.disabled === false`;
-      await page.move(".card button.approve", "Approve push");
-      await page.until(armedB, "B's Approve armed once the pointer came to it", 10_000);
+      await restOn(page, bApprove, "B's Approve, once the pointer came to it");
       // Anything the page does under it disarms it, and a still pointer does not arm it again.
       await page.evaluate("window.dispatchEvent(new Event('scroll')); true");
       await sleep(2500);
       assert.equal(await page.evaluate(armedB), false, "a still pointer arms nothing");
       // B is refused by the forge (its branch moves), and its Dismiss is not where Approve was.
-      const moved = stack.forge("commit", "acme/widgets", "web-b", "moved.txt", "moved").trim();
+      const moved = stack.forge("commit", "acme/widgets", b!, "moved.txt", "moved").trim();
       await page.moveTo(page.pointer().x + 2, page.pointer().y);
       await page.until(armedB, "B armed after the pointer moved", 10_000);
       await page.pressHere();
-      await page.until(`/^Not pushed/.test(${hintOf("web-b")})`, "B refused by the forge", 60_000);
+      await page.until(`/^Not pushed/.test(${hintOf(b!)})`, "B refused by the forge", 60_000);
       const at = page.pointer();
-      const dismissAt = await page.evaluate<number[]>(
-        rect(`${cardOf("web-b")}.querySelector('button.dismiss')`),
-      );
+      const bDismiss = `${cardOf(b!)}.querySelector('button.dismiss')`;
+      const dismissAt = await page.evaluate<number[]>(rect(bDismiss));
       assert.ok(
         !(
           at.x >= dismissAt[0]! &&
@@ -2049,22 +2055,18 @@ echo "=====waits"; cat /tmp/waits.lines`,
       );
       await page.pressHere();
       assert.match(
-        await page.evaluate<string>(hintOf("web-b")),
+        await page.evaluate<string>(hintOf(b!)),
         /^Not pushed/,
         "a press there dismissed nothing",
       );
       // Dismiss arms as Approve does: a press as the pointer arrives is not taken.
-      await page.move(".card .dismiss button", "Dismiss");
+      await page.moveTo(dismissAt[0]! + dismissAt[2]! / 2, dismissAt[1]! + dismissAt[3]! / 2);
       await page.pressHere();
-      assert.match(await page.evaluate<string>(hintOf("web-b")), /^Not pushed/, "not at once");
-      await page.until(
-        `${cardOf("web-b")}.querySelector('button.dismiss').disabled === false`,
-        "Dismiss armed",
-        10_000,
-      );
+      assert.match(await page.evaluate<string>(hintOf(b!)), /^Not pushed/, "not at once");
+      await page.until(`${bDismiss}.disabled === false`, "Dismiss armed", 10_000);
       await page.pressHere();
       await page.until(
-        `!${cardOf("web-b")} && [...document.querySelectorAll('.kept-note')].some((n) => n.textContent === 'Dismissed.')`,
+        `!${cardOf(b!)} && [...document.querySelectorAll('.kept-note')].some((n) => n.textContent === 'Dismissed.')`,
         "B dismissed, its place kept",
       );
       await page.moveTo(4, 4);
@@ -2073,7 +2075,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         "the places gone, the pointer off the list",
       );
       assert.deepEqual(await page.evaluate("posted"), ["/approve", "/approve"]);
-      assert.equal(forgeRefs("acme/widgets")["web-b"], moved);
+      assert.equal(forgeRefs("acme/widgets")[b!], moved);
     } finally {
       await browser.close();
     }

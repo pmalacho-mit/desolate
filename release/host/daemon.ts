@@ -2728,26 +2728,24 @@ const serve = async () => {
   const followPusher = async () => {
     const file = "/var/lib/desolate-root/pusher.log";
     let where: { inode: string; offset: number } | null = null;
-    // Asked only while someone listens. When nobody has listened for PUSHER_KEPT_MS, the log is
-    // read where it stands when someone starts; before that, from where it was left, so a word
-    // written while nobody listened for a moment is heard all the same. The approval page
-    // listens from when it shows a push, but between two of a page's asks nobody does: a look
-    // that fell there started at the log's end, and a push's word written just before was
-    // lost (T2 04, 2026-11-24: an approval whose card then said "no word").
-    let idleSince = 0;
-    // Far longer than the moment between two of a page's asks; short enough that a
-    // `desolate events` started later hears little from before it started.
-    const PUSHER_KEPT_MS = 60_000;
-    for (let first = true; ; first = false) {
-      if (!first && !idleSince) await sleep(2000);
-      if (!rootUp || !events.listening()) {
-        idleSince ||= Date.now();
-        if (Date.now() - idleSince > PUSHER_KEPT_MS) where = null;
-        // (In this process alone: the root is asked nothing while nobody listens.)
+    // Asked only while someone listens; its place in the log is kept while nobody does, so a
+    // word written after someone starts listening is heard however late the first look comes
+    // (a look starting at the log's end lost the word of a push approved just before it: T2 04,
+    // 2026-11-24, twice under load). What was written while nobody listened is not news: a
+    // line older than when listening began (by its own time, less PUSHER_SKEW_MS for the root's
+    // clock) is passed over.
+    let since: number | null = null;
+    const PUSHER_SKEW_MS = 5_000;
+    for (;;) {
+      if (since !== null) await sleep(2000);
+      // (In this process alone: the root is asked nothing while nobody listens, but once, as
+      // it comes up, where the log ends.)
+      if (!rootUp || (!events.listening() && where !== null)) {
+        since = null;
         await sleep(500);
         continue;
       }
-      idleSince = 0;
+      if (events.listening()) since ??= Date.now() - 500 - PUSHER_SKEW_MS;
       try {
         // One look: the file's identity and size, and up to PUSHER_LOOK_BYTES of what is
         // new, as base64 (bytes, so an offset is never miscounted).
@@ -2773,11 +2771,13 @@ const serve = async () => {
           );
         for (const line of step.lines) {
           const e = pusherEvent(line);
-          if (e) events.publish(e);
+          if (e && since !== null && !(Date.parse(e.at) < since)) events.publish(e);
         }
       } catch {
         /* the root is not answering: next time */
       }
+      // (A look that was not a listener's: the next, if this one failed, in a while.)
+      if (since === null) await sleep(2000);
     }
   };
   void followPusher();
