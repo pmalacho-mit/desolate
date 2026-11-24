@@ -400,3 +400,32 @@ export const sharesWaited = async (
     answered: took < 200 ? "at once" : took < 900 ? "when mounted" : "at its bound",
   };
 };
+
+/** A session's line (lima.ts sessionLine) for `argv`, in its login form or plain, run as sshd
+ *  runs a command: `/bin/sh -c <line>`, with SHELL a stand-in login shell, which refuses
+ *  anything but `-l`, writes down that it was started, and is /bin/sh. What the line printed,
+ *  split at NULs, its code, and whether it started SHELL. */
+export const lineRan = async (
+  argv: string[],
+  form: "login" | "plain",
+): Promise<{ said: string[]; code: number; shell: boolean }> => {
+  const { sessionLine } = await import("../host/vm/lima.ts");
+  fs.mkdirSync(bin(), { recursive: true });
+  const login = path.join(bin(), "login-shell-noted");
+  const noted = path.join(bin(), "login-shell-started");
+  fs.rmSync(noted, { force: true });
+  fs.writeFileSync(
+    login,
+    `#!/bin/sh\n: >'${noted}'\n[ "$1" = -l ] || { echo "not a login shell" >&2; exit 99; }\nshift\nexec /bin/sh "$@"\n`,
+    { mode: 0o755 },
+  );
+  const line = sessionLine(argv, {}, { login: form === "login" });
+  const ran = spawnSync("/bin/sh", ["-c", line], {
+    env: { ...process.env, SHELL: login },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  const said = ran.stdout === "" ? [] : ran.stdout.split("\0");
+  if (said.at(-1) === "") said.pop();
+  return { said, code: ran.status ?? 128, shell: fs.existsSync(noted) };
+};
