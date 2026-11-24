@@ -709,3 +709,38 @@ export const afterState = async (
     t.done();
   }
 };
+
+/** A session's line (lima.ts sessionLine) for `argv` and `options`, run as sshd runs a
+ *  command: `/bin/sh -c <line>`, with SHELL a stand-in login shell, which refuses anything but
+ *  `-l`, writes down that it was started, and is /bin/sh. `<home>` in a `cwd` is the test's
+ *  home (the folder is made), and is written so in what comes back. What the line printed,
+ *  split at NULs, its code, and whether it started SHELL. */
+export const lineRan = async (
+  argv: string[],
+  options: { env?: Record<string, string>; cwd?: string } = {},
+): Promise<{ said: string[]; code: number; shell: boolean }> => {
+  const { sessionLine } = await import("../host/vm/lima.ts");
+  fs.mkdirSync(bin(), { recursive: true });
+  const login = path.join(bin(), "login-shell-noted");
+  const noted = path.join(bin(), "login-shell-started");
+  fs.rmSync(noted, { force: true });
+  fs.writeFileSync(
+    login,
+    `#!/bin/sh\n: >'${noted}'\n[ "$1" = -l ] || { echo "not a login shell" >&2; exit 99; }\nshift\nexec /bin/sh "$@"\n`,
+    { mode: 0o755 },
+  );
+  const cwd = options.cwd?.split("<home>").join(fs.realpathSync(home()));
+  if (cwd) fs.mkdirSync(cwd, { recursive: true });
+  const line = sessionLine(argv, { ...options, ...(cwd ? { cwd } : {}) });
+  const ran = spawnSync("/bin/sh", ["-c", line], {
+    env: { ...process.env, SHELL: login },
+    encoding: "utf8",
+    timeout: 30_000,
+  });
+  const said =
+    ran.stdout === ""
+      ? []
+      : ran.stdout.split("\0").map((word) => word.split(fs.realpathSync(home())).join("<home>"));
+  if (said.at(-1) === "") said.pop();
+  return { said, code: ran.status ?? 128, shell: fs.existsSync(noted) };
+};
