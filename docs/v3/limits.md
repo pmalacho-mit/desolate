@@ -73,8 +73,11 @@ export const failure: (
   default bound is a safety bound (`SAFE_MOST`, against a flood), not a display width, and
   text cut by it, or by a caller's own `max`, ends in `…`. Unsafe, besides controls and
   format characters: half of a surrogate pair, the invisible fillers (U+034F, U+115F,
-  U+1160, U+180B-U+180F, U+3164, U+FFA0) and the variation selectors that carry hidden bytes
-  (U+E0100 on, and the second of a run of U+FE00-U+FE0F; one after a character stays). A
+  U+1160, U+180B-U+180F, U+3164, U+FFA0), the blank Braille pattern (U+2800) and every
+  variation selector (U+FE00-U+FE0F and U+E0100 on: each can carry hidden bits, one after a
+  character as well as a run), but for the one presentation selector (U+FE0E, U+FE0F)
+  directly after a pictograph, which hides nothing ("⚠️" is shown as it is). It is the one rule (`UNSAFE`): the approval page and the
+  dashboard name the same characters (`shared/ui/shown-text.js`, which T1 compares). A
   value whose `String()` throws is `?`.
 - `tail(text, lines)` gives the last lines of a program's output (`text`) and how many lines
   came before them (`before`). A line ends in LF or CR LF; the line ends that end the
