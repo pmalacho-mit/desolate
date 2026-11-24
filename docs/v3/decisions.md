@@ -731,7 +731,8 @@ recursive FSEvents watch per repository on `refs/heads` and one on `packed-refs`
 there that is a link, or resolves outside the domain's tree, is not watched (a recursive watch
 would follow it). Measured on the M1: a `git switch` or a commit in a workspace is on the
 dashboard, and a `head` event in `desolate events`, about 200 ms later. The state service's
-look every second stayed, for a missed event (every 10 s since #258: below). The git VM's outbox is taken the same way (a
+look every second stayed, for a missed event (every 10 s since #258, when the refs/heads
+watch gave way to one on each repository's list of branches in the outbox). The git VM's outbox is taken the same way (a
 watch, with a look every 5 s behind it). The workspace's own refs watch (`wsd`, every 3 s)
 and the root's outbox look (`rootd`) still poll: those run inside VMs.
 
