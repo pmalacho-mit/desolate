@@ -440,6 +440,8 @@ export const channelsConfigured = async (call: "master" | "forward" | "cancel", 
     forwardx11: value("forwardx11"),
     permitlocalcommand: value("permitlocalcommand"),
     globalknownhostsfile: value("globalknownhostsfile"),
+    serveraliveinterval: value("serveraliveinterval"),
+    serveralivecountmax: value("serveralivecountmax"),
     tunnel: value("tunnel"),
     forwards: lines
       .filter((line) => /^(local|remote|dynamic)forward /.test(line))
@@ -479,6 +481,8 @@ if (args[0] === "--serve") {
   console.log(["hostname 127.0.0.1", "port 2222", "user desolate", "identityfile /stand-in/user", "userknownhostsfile /stand-in/known_hosts", "hostkeyalias " + host, "stricthostkeychecking true"].join("\n"));
 } else {
   const ctl = opt("ControlPath"); const at = args.indexOf("-O");
+  const config = args[args.indexOf("-F") + 1];
+  try { fs.readFileSync(config); } catch (e) { process.stderr.write("Can't open user config file " + config + ": " + ({ ENOENT: "No such file or directory", EACCES: "Permission denied" }[e.code] ?? e.message) + "\n"); process.exit(255); }
   if (at < 0 && args.includes("-f")) {
     const master = spawn(process.execPath, [process.argv[1], "--serve", ctl, process.env.STAND_IN_HOME, "-o", "ControlPath=" + ctl], { detached: true, stdio: "ignore" }); master.unref();
     const wait = () => (fs.existsSync(ctl) ? process.exit(0) : setTimeout(wait, 5)); wait();
@@ -493,7 +497,7 @@ if (args[0] === "--serve") {
     else if (mode === "no socket") { process.stderr.write("Control socket connect(" + ctl + "): No such file or directory\n"); process.exit(255); }
     else {
     const c = net.connect(ctl); let got = "";
-    c.on("error", (e) => { process.stderr.write("Control socket connect(" + ctl + "): " + ({ ENOENT: "No such file or directory", ECONNREFUSED: "Connection refused" }[e.code] ?? e.message) + "\n"); process.exit(255); });
+    c.on("error", (e) => { process.stderr.write("Control socket connect(" + ctl + "): " + ({ ENOENT: "No such file or directory", ECONNREFUSED: "Connection refused", ENOTSOCK: "Socket operation on non-socket", EACCES: "Permission denied" }[e.code] ?? e.message) + "\n"); process.exit(255); });
     c.on("connect", () => c.write(JSON.stringify({ op, local })));
     c.on("data", (d) => (got += d));
     c.on("end", () => { const r = JSON.parse(got || "{}"); if (op === "check" && r.ok) process.stderr.write("Master running (pid=" + r.pid + ")\n"); process.exit(r.ok ? 0 : 255); });
@@ -648,6 +652,88 @@ export const checkThatFails = async (
     const carriesOn = await said(8082);
     return { next, sameMaster, carriesOn };
   } finally {
+    backend.release();
+    for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
+    fs.rmSync(lima, { recursive: true, force: true });
+    process.env.PATH = before.PATH;
+    if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
+    else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
+  }
+};
+
+/** What dials to one VM got after its channel folder was left in `state` once a first
+ *  connection (to 8080) was carried: its control socket replaced by a folder, the folder
+ *  made one this user cannot enter, the connection's configuration removed, the whole folder
+ *  removed, or its master stopped (SIGSTOP: it holds its sockets and answers nothing). Each
+ *  next dial is to a target of its own (a forward to add), up to three until one is carried;
+ *  then whether the first master is the one left, and what one more connection got. */
+export const afterState = async (
+  state:
+    | "as it is"
+    | "control socket a folder"
+    | "folder unenterable"
+    | "config gone"
+    | "folder gone"
+    | "master stopped",
+): Promise<{ tries: string[]; sameMaster: boolean; carriesOn: string }> => {
+  const { channelsIn } = await import("../host/vm/lima.ts");
+  const lima = fs.mkdtempSync("/tmp/dsl-st-");
+  const backend = channelsIn(lima, () => process.env, 500);
+  const name = "dsl-main-chan";
+  const ch = path.join(lima, name, "ch");
+  fs.mkdirSync(path.join(lima, name), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(lima, name, "ssh.config"), `Host lima-${name}\n`);
+  const stands = path.join(home(), "stand-in-ssh");
+  fs.rmSync(stands, { recursive: true, force: true });
+  fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(stands, "ssh.mjs"), STAND_IN_SSH);
+  fs.writeFileSync(
+    path.join(stands, "bin", "ssh"),
+    `#!/bin/sh\nexec '${process.execPath}' '${stands}/ssh.mjs' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
+  process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
+  process.env.STAND_IN_HOME = stands;
+  const masters = () =>
+    fs.existsSync(path.join(stands, "masters"))
+      ? fs.readdirSync(path.join(stands, "masters")).filter((pid) => {
+          try {
+            process.kill(Number(pid), 0);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+      : [];
+  const said = (target: number) =>
+    new Promise<string>((resolve) => {
+      const stream = backend.dial(name, target);
+      let got = "";
+      stream.on("data", (chunk) => (got += chunk));
+      stream.on("error", () => {});
+      stream.on("close", () => resolve(got));
+      stream.end("hi\n");
+    });
+  try {
+    await said(8080);
+    const first = masters();
+    if (state === "control socket a folder")
+      (fs.rmSync(path.join(ch, "ctl")), fs.mkdirSync(path.join(ch, "ctl")));
+    if (state === "folder unenterable") fs.chmodSync(ch, 0o000);
+    if (state === "config gone") fs.rmSync(path.join(ch, "ssh.config"));
+    if (state === "folder gone") fs.rmSync(ch, { recursive: true });
+    if (state === "master stopped") process.kill(Number(first[0]), "SIGSTOP");
+    const tries: string[] = [];
+    for (let target = 8081; target <= 8083; target++) {
+      tries.push(await said(target));
+      if (tries.at(-1)) break;
+    }
+    const sameMaster = JSON.stringify(masters()) === JSON.stringify(first);
+    const carriesOn = await said(8090);
+    return { tries, sameMaster, carriesOn };
+  } finally {
+    if (fs.existsSync(ch)) fs.chmodSync(ch, 0o700);
     backend.release();
     for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
     fs.rmSync(lima, { recursive: true, force: true });

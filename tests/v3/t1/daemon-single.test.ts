@@ -82,6 +82,58 @@ const until = async (what: () => Promise<boolean> | boolean, ms: number) => {
   return false;
 };
 
+const LOCK = path.resolve(import.meta.dirname, "../../../release/shared/lock.ts");
+/** A daemon of other code, as one an older desolate left: it holds the home's lock and its
+ *  socket, says another code, and when asked to stop closes its socket at once and ends
+ *  `stopMs` later (closing its listeners, its connections). */
+const standInDaemon = async (at: string, stopMs: number) => {
+  const state = path.join(at, "state");
+  fs.mkdirSync(state, { recursive: true });
+  const script = `
+    import net from "node:net"; import fs from "node:fs";
+    const { withLock } = await import(${JSON.stringify(LOCK)});
+    await withLock(${JSON.stringify(path.join(state, "daemon.lock"))}, () => new Promise(() => {
+      const server = net.createServer((c) => c.on("data", (d) => {
+        const q = JSON.parse(String(d));
+        c.end(JSON.stringify({ ok: true, code: "other" }) + "\\n");
+        if (q.op === "stop") { server.close(); fs.rmSync(${JSON.stringify(path.join(state, "daemon.sock"))}, { force: true }); setTimeout(() => process.exit(0), ${stopMs}); }
+      }));
+      server.listen(${JSON.stringify(path.join(state, "daemon.sock"))}, () => console.log("up"));
+    }), { wait: false });`;
+  const child = spawn(
+    process.execPath,
+    ["--disable-warning=ExperimentalWarning", "--input-type=module", "-e", script],
+    {
+      stdio: ["ignore", "pipe", "inherit"],
+    },
+  );
+  started.push(child);
+  await new Promise((resolve) => child.stdout!.once("data", resolve));
+  return child;
+};
+/** `ensureDaemon`, as a command runs it: how long it took, and how it ended. */
+const ensure = (at: string, port: number) =>
+  new Promise<{ code: number; said: string; ms: number }>((resolve) => {
+    const began = Date.now();
+    const child = spawn(
+      process.execPath,
+      [
+        "--disable-warning=ExperimentalWarning",
+        "--input-type=module",
+        "-e",
+        `const { ensureDaemon } = await import(${JSON.stringify(DAEMON)}); await ensureDaemon(); console.log("ensured");`,
+      ],
+      {
+        env: { ...process.env, DESOLATE_HOME: at, DESOLATE_EDITOR_PORT: String(port) },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let said = "";
+    child.stdout!.on("data", (chunk) => (said += chunk));
+    child.stderr!.on("data", (chunk) => (said += chunk));
+    child.on("exit", (code) => resolve({ code: code ?? 1, said, ms: Date.now() - began }));
+  });
+
 describe(
   "T1 one host daemon a home",
   { skip: process.platform === "darwin" ? false : "the Lima backend is the Mac's" },
@@ -122,6 +174,27 @@ describe(
       assert.ok(await until(() => answers(at), 20_000), `it did not start: ${alone.said()}`);
       assert.ok(await until(() => !alive(master.pid!), 5_000), "the connection it found was ended");
       assert.equal(fs.existsSync(ch), false, "and its folder removed");
+    });
+
+    it("a start that finds the daemon before it still ending waits for it to let go of the home, then starts its own (12 s here, past the 10 s it used to wait before starting anyway)", async () => {
+      const { at } = home();
+      const old = await standInDaemon(at, 12_000);
+      const ended = new Promise((resolve) => old.on("exit", resolve));
+      const result = await ensure(at, await freePort());
+      assert.equal(result.code, 0, result.said);
+      assert.match(result.said, /ensured/);
+      assert.ok(result.ms >= 11_000, `it waited ${result.ms} ms`);
+      await ended;
+      assert.ok(await answers(at), "its own daemon answers");
+    });
+
+    it("control: one that ends at once is followed at once", async () => {
+      const { at } = home();
+      await standInDaemon(at, 0);
+      const result = await ensure(at, await freePort());
+      assert.equal(result.code, 0, result.said);
+      assert.ok(result.ms < 8_000, `it took ${result.ms} ms`);
+      assert.ok(await answers(at));
     });
   },
 );

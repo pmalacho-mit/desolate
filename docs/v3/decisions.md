@@ -183,8 +183,11 @@ here and 1.2 MB there); half-close and an end from either side behave as before.
   be added), the master is asked on its control socket (`-O check`) whether it still answers
   as the pid it gave; only an answer counts (no master on the socket, or another pid): a check
   that could not be started or ran out of time, this Mac short of something, fails that one
-  connection and keeps the master. If it does not answer (gone, killed, its control socket
-  removed under it), it is ended
+  connection and keeps the master, though three such checks running take it for gone (a
+  master stopped answers nothing, and each check waits its 10 s). ssh's word about the
+  connection's own socket or configuration is an answer too: the path no socket, a folder
+  it cannot enter, the configuration missing. If it does not answer (gone, killed, its
+  control socket removed under it), it is ended
   (`-O exit`, else every process whose command names that control socket: never a pid kept
   from before) and another made, once. Its pid alone decided this before, and a pid can be
   another process's by then. While it answers, a refusal is its listen queue full (ssh
@@ -200,7 +203,15 @@ here and 1.2 MB there); half-close and an end from either side behave as before.
   starts (by the control sockets their commands name, which T4 checks pgrep finds), so a
   crashed daemon's masters live until the next daemon starts or their VMs stop. There is one
   daemon a home (a lock held for its life, `daemon.lock`): a second ends at once, saying
-  which holds it, before it can end the first's connections (T1 `daemon-single`). A folder too long for the sockets is refused
+  which holds it, before it can end the first's connections (T1 `daemon-single`). A command
+  that starts one waits, on that lock, for the one before to have let go (at most a minute,
+  then a refusal naming its pid), where it waited 10 s and started anyway. The connection
+  sends ssh's keep-alive (every 15 s, four missed): a VM that stops answering for a minute
+  while the Mac is awake loses its connection and every channel on it, and the next dial
+  makes another; without it the master and its channels hung for as long as the VM did
+  (measured with a local sshd stopped: interval 2 and count 2, gone at 6 s; without, still
+  there at 12 s, its channel delivering what it held once resumed). A Mac's sleep stops ssh's
+  count with everything else, and a VM that answers on waking keeps its connection. A folder too long for the sockets is refused
   in words, and `doctor` says so ("socket paths fit").
 - **Who can connect.** The folder is 0700 (Lima's VM folder is too) and each socket 0600
   (ssh's StreamLocalBindMask), owned by the Mac's user: that user, who can already use Lima's

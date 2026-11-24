@@ -62,7 +62,7 @@ import { retire, retiredAt } from "./retired.ts";
 import { opened as statedReply } from "./replies.ts";
 import type { Answer, Stated } from "./replies.ts";
 import { backend, config, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
-import { withLock } from "../shared/lock.ts";
+import { machineHolder, withLock } from "../shared/lock.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -2897,6 +2897,9 @@ const serving = async () => {
           b.release?.();
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });
+          // Its lock (serve) stays, naming this process: once it has exited that holder is
+          // gone, and a lock whose holder is gone is nobody's (shared/lock.ts), so the next
+          // daemon takes it and stopForwarder's wait ends.
           process.exit(0);
         }
       } catch (error) {
@@ -2995,15 +2998,41 @@ declare namespace announceApproved {
   >;
 }
 
-export const ensureDaemon = async () => {
+/** How long a command waits for the host daemon it asked to end, or found ending, to have let
+ *  go of the home (its lock: state/daemon.lock) before it says so. A stop is the daemon
+ *  closing its listeners and ending its connections for channels, well under a second; a
+ *  daemon still there a minute on is stuck. */
+const STOPPING_MS = 60_000;
+
+/** Until no live process holds the daemon's lock (the one asked to end has), or, with
+ *  `orUp`, until a daemon answers (another command started one meanwhile: it holds the lock
+ *  before it answers). Its holder gone is not an event any file shows (the lock stays, its
+ *  holder dead), so it is looked at four times a second, for at most STOPPING_MS. Past
+ *  that, refused, naming the pid that holds it. */
+const letGo = async (orUp = false) => {
+  const free = () => machineHolder(DAEMON_LOCK) === null;
+  if (await waitFor(async () => free() || (orUp && (await alive())), STOPPING_MS, 250)) return;
+  const holder = machineHolder(DAEMON_LOCK);
+  if (holder)
+    throw new Error(
+      `the host daemon for ${paths.home} (pid ${holder.pid}) has not ended ${STOPPING_MS / 1000} s after it was asked to: end it (kill ${holder.pid}) and run this again`,
+    );
+};
+
+export const ensureDaemon = async (again = true): Promise<void> => {
   if (await alive()) {
     const running = await ask({ op: "code" }).catch(() => ({}) as Record<string, unknown>);
-    if (running.code === CODE) return;
+    // (Once only after a wait: the one another command started is taken as it is.)
+    if (running.code === CODE || !again) return;
     // Started from other code: stopped, and started again below (it registers every
     // running workspace again as it starts).
     await stopForwarder();
-    await waitFor(async () => !(await alive()), 10_000, 100);
   }
+  // One still ending (asked by another command), or one another command is starting: waited
+  // for, so that the one started here is not refused the home and gone (it was started
+  // after 10 s whatever, and found the lock held).
+  await letGo(true);
+  if (await alive()) return ensureDaemon(false);
   fs.mkdirSync(paths.logs, { recursive: true });
   const log = fs.openSync(LOG, "a");
   const child = spawn(
@@ -3286,8 +3315,11 @@ export const followEvents = async (
   }
 };
 
+/** Ask the host daemon to end, and wait until it has let go of the home (letGo): what comes
+ *  next (a new daemon, VMs stopped or removed, the home removed) never meets it still there. */
 export const stopForwarder = async () => {
   if (await alive()) await ask({ op: "stop" }).catch(() => {});
+  await letGo();
 };
 
 /** The daemon, one a home: a lock held for its life, taken before it does anything (two
