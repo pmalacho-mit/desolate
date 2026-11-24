@@ -212,7 +212,8 @@ export const statusOf = async (
  *  it was given (its last argument) to a shell: here, this machine's /bin/sh, so the test sees
  *  what the line runs. The login shell it names is a stand-in too, which insists on `-l` and
  *  is /bin/sh, and so is `sudo`, which runs what it is given: nothing of this machine's own is
- *  asked, and nothing runs as anyone else. `dial`'s line (socat) is written down, not run.
+ *  asked, and nothing runs as anyone else. `dial` is for its refusals, which come before any
+ *  connection: one that is not refused is destroyed at once.
  *
  *  The VM (`vm`) is `running` (its processes this one, its host agent's socket listening,
  *  Lima's ssh.config there), `no ssh.config`, or `stopped` (made, never started); desolate's
@@ -271,7 +272,7 @@ export const sessionOf = async (
     fs.writeFileSync(path.join(bin(), file), `#!/bin/sh\n${text}`, { mode: 0o755 });
   script(
     "ssh",
-    `n=$(ls '${record}' | wc -l | tr -d ' ')\nfor a in "$@"; do printf '%s\\0' "$a"; done >'${record}'/$n\nfor last in "$@"; do :; done\n${call === "dial" || apart ? "exit 0" : `SHELL='${bin()}/login-shell' exec /bin/sh -c "$last"`}\n`,
+    `n=$(ls '${record}' | wc -l | tr -d ' ')\nfor a in "$@"; do printf '%s\\0' "$a"; done >'${record}'/$n\nfor last in "$@"; do :; done\n${apart ? "exit 0" : `SHELL='${bin()}/login-shell' exec /bin/sh -c "$last"`}\n`,
   );
   script(
     "login-shell",
@@ -294,7 +295,9 @@ export const sessionOf = async (
       child.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
       child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
       code = await new Promise<number>((resolve) => child.on("close", (c) => resolve(c ?? 1)));
-    } else if (call === "attach") {
+    } else if (call === "dial") {
+      backend.dial(name, Number(argv[0])).destroy();
+    } else {
       if (terminal)
         (Object.assign(process.stdin, { isTTY: true }),
           Object.assign(process.stdout, { isTTY: true }));
@@ -303,9 +306,6 @@ export const sessionOf = async (
         true
       )) as typeof written;
       code = await backend.attach(name, argv.map(at), given);
-    } else {
-      const stream = backend.dial(name, Number(argv[0]));
-      await new Promise((resolve) => stream.once("close", resolve).resume().end());
     }
   } finally {
     process.stderr.write = written;
@@ -401,13 +401,323 @@ export const sharesWaited = async (
   };
 };
 
-/** A session's line (lima.ts sessionLine) for `argv`, in its login form or plain, run as sshd
- *  runs a command: `/bin/sh -c <line>`, with SHELL a stand-in login shell, which refuses
- *  anything but `-l`, writes down that it was started, and is /bin/sh. What the line printed,
+/** What ssh makes (`ssh -G`, which reads the configuration and connects nowhere) of one of the
+ *  invocations of desolate's connection for channels (lima.ts masterArgs, and channelArgs with
+ *  the forward and cancel of 5173), for a VM whose Lima ssh.config asks for an agent, X11, a
+ *  local command, a tunnel and a forward of each kind: with the configuration channelConfig
+ *  writes from it (`ours`), or with that Lima file itself. The options that let a server open
+ *  a channel to this side, and every forward; the channel folder is written `<dir>`. */
+export const channelsConfigured = async (call: "master" | "forward" | "cancel", ours: boolean) => {
+  const { masterArgs, channelArgs, channelConfig, forwardSpec } =
+    await import("../host/vm/lima.ts");
+  const name = "dsl-main-cfg";
+  const vm = path.join(limaHome(), name);
+  const dir = path.join(vm, "ch");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const lima = path.join(vm, "ssh.config");
+  fs.writeFileSync(
+    lima,
+    `Host lima-${name}\n  IdentityFile "${vm}/user"\n  PreferredAuthentications publickey\n  BatchMode yes\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n  UserKnownHostsFile "${vm}/ssh.known_hosts"\n  HostKeyAlias lima-${name}\n  User desolate\n  ControlMaster auto\n  ControlPath "${vm}/ssh.sock"\n  ControlPersist yes\n  Hostname 127.0.0.1\n  Port 52436\n  ForwardAgent yes\n  ForwardX11 yes\n  RemoteForward 9999 127.0.0.1:22\n  LocalForward 8888 127.0.0.1:22\n  DynamicForward 7777\n  PermitLocalCommand yes\n  LocalCommand true\n  Tunnel yes\n`,
+  );
+  const shown = (args: string[]) =>
+    spawnSync("ssh", ["-G", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      .stdout;
+  fs.writeFileSync(
+    path.join(dir, "ssh.config"),
+    channelConfig(name, shown(["-F", lima, `lima-${name}`])),
+  );
+  const local = path.join(dir, "5173.sock");
+  let args =
+    call === "master"
+      ? masterArgs(name, dir)
+      : channelArgs(name, dir, "-O", call, "-L", forwardSpec(local, 5173));
+  if (!ours) args = ["-F", lima, ...args.slice(2)];
+  const lines = shown(args).split("\n");
+  const value = (key: string) =>
+    lines.find((line) => line.startsWith(`${key} `))?.slice(key.length + 1) ?? null;
+  return {
+    forwardagent: value("forwardagent"),
+    forwardx11: value("forwardx11"),
+    permitlocalcommand: value("permitlocalcommand"),
+    globalknownhostsfile: value("globalknownhostsfile"),
+    serveraliveinterval: value("serveraliveinterval"),
+    serveralivecountmax: value("serveralivecountmax"),
+    tunnel: value("tunnel"),
+    forwards: lines
+      .filter((line) => /^(local|remote|dynamic)forward /.test(line))
+      .map((line) => line.split(dir).join("<dir>"))
+      .sort(),
+  };
+};
+
+/** ssh, for channelsAfter: a stand-in for desolate's connections for channels, with no VM.
+ *  `-G` prints the few values channelConfig takes; `-f -N` starts a "master" (this file again,
+ *  detached), which listens on the control socket and answers `check` (with its own pid, or
+ *  the one in `report-pid` in its folder), `forward` (an echo server on the local socket: what it
+ *  is sent comes back, then `EOF-SEEN` once it is ended), `cancel` and `exit`; `-O <op>` asks
+ *  it, as ssh's own client would. Each master notes its pid in `masters/`. */
+const STAND_IN_SSH = String.raw`
+import net from "node:net"; import fs from "node:fs"; import path from "node:path"; import { spawn } from "node:child_process";
+const args = process.argv.slice(2);
+// Nothing of a test outlives it: each stand-in ends once the test's process has (a run killed
+// midway never reaches its own clean-up), and a client never waits more than a minute.
+const parent = Number(process.env.STAND_IN_PARENT);
+setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(1); } }, 1000).unref();
+if (args[0] !== "--serve") setTimeout(() => process.exit(124), 60_000).unref();
+const opt = (name) => args.map((a, i) => (args[i - 1] === "-o" && a.startsWith(name + "=") ? a.slice(name.length + 1) : null)).find(Boolean);
+if (args[0] === "--serve") {
+  const ctl = args[1]; const servers = new Map();
+  fs.mkdirSync(path.join(args[2], "masters"), { recursive: true }); fs.writeFileSync(path.join(args[2], "masters", String(process.pid)), "");
+  const server = net.createServer((c) => c.once("data", (d) => {
+    const q = JSON.parse(String(d));
+    if (q.op === "check") { let pid = process.pid; try { pid = Number(fs.readFileSync(path.join(args[2], "report-pid"), "utf8")); } catch {} return c.end(JSON.stringify({ ok: true, pid })); }
+    if (q.op === "forward") {
+      if (servers.has(q.local)) return c.end(JSON.stringify({ ok: true }));
+      const s = net.createServer({ allowHalfOpen: true }, (x) => { x.on("data", (b) => x.write(b)); x.on("end", () => x.end("EOF-SEEN\n")); x.on("error", () => {}); });
+      s.on("error", () => c.end(JSON.stringify({ ok: false })));
+      return s.listen(q.local, () => (servers.set(q.local, s), c.end(JSON.stringify({ ok: true }))));
+    }
+    if (q.op === "cancel") { servers.get(q.local)?.close(); servers.delete(q.local); return c.end(JSON.stringify({ ok: true })); }
+    if (q.op === "exit") { c.end(JSON.stringify({ ok: true })); for (const s of servers.values()) s.close(); server.close(); setTimeout(() => process.exit(0), 20); }
+  }));
+  server.listen(ctl);
+} else if (args.includes("-G")) {
+  const host = args.at(-1);
+  console.log(["hostname 127.0.0.1", "port 2222", "user desolate", "identityfile /stand-in/user", "userknownhostsfile /stand-in/known_hosts", "hostkeyalias " + host, "stricthostkeychecking true"].join("\n"));
+} else {
+  const ctl = opt("ControlPath"); const at = args.indexOf("-O");
+  const config = args[args.indexOf("-F") + 1];
+  try { fs.readFileSync(config); } catch (e) { process.stderr.write("Can't open user config file " + config + ": " + ({ ENOENT: "No such file or directory", EACCES: "Permission denied" }[e.code] ?? e.message) + "\n"); process.exit(255); }
+  if (at < 0 && args.includes("-f")) {
+    const master = spawn(process.execPath, [process.argv[1], "--serve", ctl, process.env.STAND_IN_HOME, "-o", "ControlPath=" + ctl], { detached: true, stdio: "ignore" }); master.unref();
+    const wait = () => (fs.existsSync(ctl) ? process.exit(0) : setTimeout(wait, 5)); wait();
+  } else {
+    const op = args[at + 1]; const spec = args[args.indexOf("-L") + 1] ?? ""; const local = spec.slice(0, spec.indexOf(":"));
+    const once = (file) => { const at = path.join(process.env.STAND_IN_HOME, file); try { const said = fs.readFileSync(at, "utf8"); fs.rmSync(at); return said; } catch { return null; } };
+    if (op === "forward" && once("fail-forward") !== null) { process.stderr.write("mux_client_forward: forwarding request failed\n"); process.exit(255); }
+    const mode = op === "check" ? once("check-mode") : null;
+    if (mode === "hang") setInterval(() => {}, 1000);
+    else if (mode === "cannot spawn") { process.stderr.write("spawn ssh EMFILE"); process.exit(127); }
+    else if (mode === "another pid") { process.stderr.write("Master running (pid=1)\n"); process.exit(0); }
+    else if (mode === "no socket") { process.stderr.write("Control socket connect(" + ctl + "): No such file or directory\n"); process.exit(255); }
+    else {
+    const c = net.connect(ctl); let got = "";
+    c.on("error", (e) => { process.stderr.write("Control socket connect(" + ctl + "): " + ({ ENOENT: "No such file or directory", ECONNREFUSED: "Connection refused", ENOTSOCK: "Socket operation on non-socket", EACCES: "Permission denied" }[e.code] ?? e.message) + "\n"); process.exit(255); });
+    c.on("connect", () => c.write(JSON.stringify({ op, local })));
+    c.on("data", (d) => (got += d));
+    c.on("end", () => { const r = JSON.parse(got || "{}"); if (op === "check" && r.ok) process.stderr.write("Master running (pid=" + r.pid + ")\n"); process.exit(r.ok ? 0 : 255); });
+    }
+  }
+}
+`;
+
+/** What the channel rows run in: a Lima home of its own under /tmp (short enough for the
+ *  sockets; the test's own home under the system's temporary folder on a Mac is not:
+ *  channelsDontFit), with one VM's folder and Lima's file beside it (base.yaml, which
+ *  release() goes past), the stand-in ssh first on PATH, and channelsIn over it with
+ *  `controlMs` for each ssh it runs. `masters()` is every stand-in master still running;
+ *  `dial(target)` what a connection that says `hi` and ends got back; `until(fact)` waits
+ *  for a fact, for at most 30 s (far past what a step takes on a Mac whose every core is
+ *  busy: STAND_IN_MS), and says whether it came; `done()` ends all of it. */
+const standIn = async (controlMs: number) => {
+  const { channelsIn } = await import("../host/vm/lima.ts");
+  const lima = fs.mkdtempSync("/tmp/dsl-ch-");
+  const name = "dsl-main-chan";
+  const vm = path.join(lima, name);
+  fs.mkdirSync(vm, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(vm, "ssh.config"), `Host lima-${name}\n`);
+  fs.writeFileSync(path.join(lima, "base.yaml"), "");
+  const stands = path.join(home(), "stand-in-ssh");
+  fs.rmSync(stands, { recursive: true, force: true });
+  fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(stands, "ssh.mjs"), STAND_IN_SSH);
+  fs.writeFileSync(
+    path.join(stands, "bin", "ssh"),
+    `#!/bin/sh\nexec '${process.execPath}' '${stands}/ssh.mjs' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
+  process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
+  process.env.STAND_IN_HOME = stands;
+  process.env.STAND_IN_PARENT = String(process.pid);
+  const backend = channelsIn(lima, () => process.env, controlMs);
+  /** Whether `pid` runs: a pid with no process is not an error here. */
+  const running = (pid: string) => {
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** `pid` ended, if it has not ended already. */
+  const end = (pid: string, signal: NodeJS.Signals = "SIGKILL") => {
+    try {
+      process.kill(Number(pid), signal);
+    } catch {
+      // gone already
+    }
+  };
+  const masters = () =>
+    fs.existsSync(path.join(stands, "masters"))
+      ? fs.readdirSync(path.join(stands, "masters")).filter(running)
+      : [];
+  const dial = (target: number) =>
+    new Promise<string>((resolve) => {
+      const stream = backend.dial(name, target);
+      let got = "";
+      stream.on("data", (chunk) => (got += chunk));
+      stream.on("error", () => {});
+      stream.on("close", () => resolve(got));
+      stream.end("hi\n");
+    });
+  const until = async (fact: () => boolean) => {
+    for (const began = Date.now(); Date.now() - began < 30_000;) {
+      if (fact()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return fact();
+  };
+  /** The masters now are exactly `first` (none ended, none made). */
+  const same = (first: string[]) => {
+    const now = masters();
+    return now.length === first.length && now.every((pid) => first.includes(pid));
+  };
+  const done = () => {
+    const ch = path.join(vm, "ch");
+    try {
+      if (fs.existsSync(ch)) fs.chmodSync(ch, 0o700);
+      backend.release();
+    } finally {
+      for (const pid of masters()) end(pid);
+      fs.rmSync(lima, { recursive: true, force: true });
+    }
+    process.env.PATH = before.PATH;
+    if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
+    else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
+    delete process.env.STAND_IN_PARENT;
+  };
+  return { backend, name, vm, stands, masters, running, end, dial, until, same, done };
+};
+
+/** One VM's connections for channels (lima.ts channelsIn, as the backend's dial makes them),
+ *  with the stand-in ssh above, after `what` happened to its master once a first connection
+ *  (to 8080) was carried: nothing (the control); its control socket removed while it lives;
+ *  it killed, with the pid it gave when it came up another live process's (this one's: a pid
+ *  used again); or the VM let go while a first dial is on its way. What the first connection
+ *  and the next (to 8081, a forward of its own) got, and how many masters are left running
+ *  once the one let go has ended (waited for: it ends by itself). */
+export const channelsAfter = async (
+  what:
+    | "nothing"
+    | "control socket removed"
+    | "master killed, its pid another's"
+    | "let go while dialling",
+): Promise<{ first: string; next: string; left: number }> => {
+  const t = await standIn(10_000);
+  try {
+    if (what === "let go while dialling") {
+      const first = t.dial(8080);
+      t.backend.release(t.name);
+      const got = await first;
+      await t.until(() => t.masters().length === 0);
+      return { first: got, next: "", left: t.masters().length };
+    }
+    if (what === "master killed, its pid another's")
+      fs.writeFileSync(path.join(t.stands, "report-pid"), String(process.pid));
+    const first = await t.dial(8080);
+    const [pid] = t.masters();
+    if (what === "control socket removed") fs.rmSync(path.join(t.vm, "ch", "ctl"));
+    if (what === "master killed, its pid another's") {
+      t.end(pid!);
+      await t.until(() => !t.running(pid!));
+    }
+    const next = await t.dial(8081);
+    // The one ended (a master that no longer answered) ends by itself, as the new one carries.
+    await t.until(() => t.masters().length <= 1);
+    return { first, next, left: t.masters().length };
+  } finally {
+    t.done();
+  }
+};
+
+/** A forward that fails while a master is up (to 8081, after one to 8080 was carried), and the
+ *  check that follows it answered as `check` says (nothing set: as the master is; or it hangs
+ *  past its time, cannot be started, answers another pid, or finds no master on the socket).
+ *  What that connection got, whether the masters are still just the one that carried the
+ *  first, and what a third connection (to 8082) got. */
+export const checkThatFails = async (
+  check: "as it is" | "hang" | "cannot spawn" | "another pid" | "no socket",
+): Promise<{ next: string; sameMaster: boolean; carriesOn: string }> => {
+  const t = await standIn(STAND_IN_MS);
+  try {
+    await t.dial(8080);
+    const first = t.masters();
+    fs.writeFileSync(path.join(t.stands, "fail-forward"), "");
+    if (check !== "as it is") fs.writeFileSync(path.join(t.stands, "check-mode"), check);
+    const next = await t.dial(8081);
+    const sameMaster = t.same(first);
+    const carriesOn = await t.dial(8082);
+    return { next, sameMaster, carriesOn };
+  } finally {
+    t.done();
+  }
+};
+
+/** Each ssh's time in the rows whose stand-in hangs (it is waited out each time): 2 s, where a
+ *  stand-in's own step (a node that starts and answers) took 0.06 s at most of 30 with every
+ *  core of the M1 busy (`yes` on each of its 10, load 53; 2026-11-24). The other rows give each
+ *  ssh the backend's own 10 s, and every row of these tables two minutes in all (Configure,
+ *  lima.ts): what they wait on is facts (a master gone, a connection answered), not a time. */
+const STAND_IN_MS = 2000;
+
+/** What dials to one VM got after its channel folder was left in `state` once a first
+ *  connection (to 8080) was carried: its control socket replaced by a folder, the folder
+ *  made one this user cannot enter, the connection's configuration removed, the whole folder
+ *  removed, or its master stopped (SIGSTOP: it holds its sockets and answers nothing). Each
+ *  next dial is to a target of its own (a forward to add), up to three until one is carried;
+ *  then whether the masters are still just the first, and what one more connection got. */
+export const afterState = async (
+  state:
+    | "as it is"
+    | "control socket a folder"
+    | "folder unenterable"
+    | "config gone"
+    | "folder gone"
+    | "master stopped",
+): Promise<{ tries: string[]; sameMaster: boolean; carriesOn: string }> => {
+  const t = await standIn(state === "master stopped" ? STAND_IN_MS : 10_000);
+  const ch = path.join(t.vm, "ch");
+  try {
+    await t.dial(8080);
+    const first = t.masters();
+    if (state === "control socket a folder")
+      (fs.rmSync(path.join(ch, "ctl")), fs.mkdirSync(path.join(ch, "ctl")));
+    if (state === "folder unenterable") fs.chmodSync(ch, 0o000);
+    if (state === "config gone") fs.rmSync(path.join(ch, "ssh.config"));
+    if (state === "folder gone") fs.rmSync(ch, { recursive: true });
+    if (state === "master stopped") t.end(first[0]!, "SIGSTOP");
+    const tries: string[] = [];
+    for (let target = 8081; target <= 8083; target++) {
+      tries.push(await t.dial(target));
+      if (tries.at(-1)) break;
+    }
+    const sameMaster = t.same(first);
+    const carriesOn = await t.dial(8090);
+    return { tries, sameMaster, carriesOn };
+  } finally {
+    t.done();
+  }
+};
+
+/** A session's line (lima.ts sessionLine) for `argv` and `options`, run as sshd runs a
+ *  command: `/bin/sh -c <line>`, with SHELL a stand-in login shell, which refuses anything but
+ *  `-l`, writes down that it was started, and is /bin/sh. `<home>` in a `cwd` is the test's
+ *  home (the folder is made), and is written so in what comes back. What the line printed,
  *  split at NULs, its code, and whether it started SHELL. */
 export const lineRan = async (
   argv: string[],
-  form: "login" | "plain",
+  options: { env?: Record<string, string>; cwd?: string } = {},
 ): Promise<{ said: string[]; code: number; shell: boolean }> => {
   const { sessionLine } = await import("../host/vm/lima.ts");
   fs.mkdirSync(bin(), { recursive: true });
@@ -419,13 +729,18 @@ export const lineRan = async (
     `#!/bin/sh\n: >'${noted}'\n[ "$1" = -l ] || { echo "not a login shell" >&2; exit 99; }\nshift\nexec /bin/sh "$@"\n`,
     { mode: 0o755 },
   );
-  const line = sessionLine(argv, {}, { login: form === "login" });
+  const cwd = options.cwd?.split("<home>").join(fs.realpathSync(home()));
+  if (cwd) fs.mkdirSync(cwd, { recursive: true });
+  const line = sessionLine(argv, { ...options, ...(cwd ? { cwd } : {}) });
   const ran = spawnSync("/bin/sh", ["-c", line], {
     env: { ...process.env, SHELL: login },
     encoding: "utf8",
     timeout: 30_000,
   });
-  const said = ran.stdout === "" ? [] : ran.stdout.split("\0");
+  const said =
+    ran.stdout === ""
+      ? []
+      : ran.stdout.split("\0").map((word) => word.split(fs.realpathSync(home())).join("<home>"));
   if (said.at(-1) === "") said.pop();
   return { said, code: ran.status ?? 128, shell: fs.existsSync(noted) };
 };
