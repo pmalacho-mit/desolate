@@ -785,7 +785,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       idleMs?: number;
       input?: string | Buffer;
       extraEnv?: Record<string, string>;
-      inheritStderr?: boolean;
+      stderrLines?: (line: string) => void;
     } = {},
   ) =>
     run(LIMACTL, ["--tty=false", ...args], {
@@ -794,7 +794,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       signal: options.signal,
       idleMs: options.idleMs,
       input: options.input,
-      inheritStderr: options.inheritStderr,
+      stderrLines: options.stderrLines,
     });
   const limaOk = async (args: string[], options: Parameters<typeof lima>[1] = {}) => {
     const result = await lima(args, options);
@@ -1571,7 +1571,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         signal: options.signal,
         idleMs: options.idleMs,
         maxBytes: options.maxBytes,
-        inheritStderr: options.inheritStderr,
+        stderrLines: options.stderrLines,
       });
     },
 

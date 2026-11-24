@@ -53,7 +53,8 @@ export type ExecOptions = {
   /** The most of each stream kept, in bytes (shared/run.ts: RUN_MAX unless said). What runs
    *  in a VM is not trusted: a caller that needs a line of it says so. */
   maxBytes?: number;
-  inheritStderr?: boolean;
+  /** Each whole line of its stderr as it comes (shared/run.ts). */
+  stderrLines?: (line: string) => void;
   /** A long step a person is waiting on, streamed (host/vm/stream.ts). With any of these
    *  three no timer applies: the command runs until it ends or the person stops it.
    *  `lines`: each line of its stdout as it comes, so the step says what it is doing. */

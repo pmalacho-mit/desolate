@@ -12,9 +12,11 @@
 // checks it against what the Mac asked about, or rebuilds it from checked parts. Before this
 // table each caller added its own checks, and two that were missing were found by an audit
 // (2026-11-22).
-import { refuse } from "../shared/exit.ts";
+import { Refusal, refuse } from "../shared/exit.ts";
 import { LIMIT as ISSUE, ID as ISSUE_ID } from "../shared/issues.ts";
 import { NAMES } from "../shared/limits.ts";
+import { checkSize } from "../shared/size.ts";
+import { printable } from "../shared/text.ts";
 import {
   characters,
   isBranch,
@@ -26,8 +28,9 @@ import {
 import { checkoutPath } from "../shared/plan.ts";
 import { INSTANCE } from "./paths.ts";
 import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { answered, changed } from "../.harness/host-replies.ts";
+import type { answered, changed, cutOf } from "../.harness/host-replies.ts";
 import type { textOf } from "../.harness/shared-actions.ts";
+import type { refusalOf } from "../.harness/refusal.ts";
 
 /** Where in an answer a part is not in its form: the path to it from the top ("keys[0].role"),
  *  in the Mac's own names and numbers, never the answer's bytes. */
@@ -79,14 +82,77 @@ const orNull =
   (value, at) =>
     value === null ? null : part(value, at);
 
-/** Text of at most `most` characters (code points). Text is shown, never acted on: the code
- *  that shows it makes it printable (shared/text.ts). */
+/** Text of at most `most` characters (code points), as it is: what the Mac compares, hands on
+ *  whole or shows as many lines (a diff, an issue's body), never cut or changed here. */
 const text =
   (most: number): Part<string> =>
   (value, at) =>
     typeof value === "string" && (value.length <= most || characters(value) <= most)
       ? value
       : unformed(at);
+
+/** One line of text the Mac shows (a title, a name, a sentence): made printable here
+ *  (shared/text.ts), so it holds no newline, tab or control, and cut at `most` with the mark
+ *  rather than refused. A title from before a bound existed shows, cut; it does not refuse the
+ *  list it is in. */
+const line =
+  (most: number): Part<string> =>
+  (value, at) =>
+    typeof value === "string" ? printable(value, most) : unformed(at);
+
+declare namespace line {
+  /** a note shown on one line holds no newline or tab, nor what a terminal acts on; plain text
+   *  is as it was (the control) */
+  export type OneLine = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "domain.add-repo",
+          value: { domain: "acme"; repo: "acme/web"; added: true; note: "a plain note" },
+          asked: {},
+        ],
+        expected: { domain: "acme"; repo: "acme/web"; added: true; note: "a plain note" },
+      ],
+      [
+        args: [
+          op: "domain.add-repo",
+          value: {
+            domain: "acme";
+            repo: "acme/web";
+            added: true;
+            note: "two\nlines\tand \u001b[2Jmore";
+          },
+          asked: {},
+        ],
+        expected: { domain: "acme"; repo: "acme/web"; added: true; note: "two?lines?and ?[2Jmore" },
+      ],
+    ]
+  >;
+}
+
+/** A list of records the root collected from what workspaces sent (offers, issues, branches,
+ *  the egress log): each is read on its own, and one not in its form is left out and counted,
+ *  so one hostile record neither hides the rest nor locks the command (notShown says so). */
+const some =
+  <T>(item: Part<T>): Part<{ kept: T[]; dropped: number }> =>
+  (value, at) => {
+    if (!Array.isArray(value)) return unformed(at);
+    const kept: T[] = [];
+    for (const [i, entry] of value.entries())
+      try {
+        kept.push(item(entry, `${at}[${i}]`));
+      } catch (error) {
+        if (!(error instanceof Unformed)) throw error;
+      }
+    return { kept, dropped: value.length - kept.length };
+  };
+
+/** What a command says of the records `some` left out, once, or null when it left none. */
+export const notShown = (dropped: number): string | null =>
+  dropped === 0
+    ? null
+    : `${dropped} ${dropped === 1 ? "entry was" : "entries were"} not in a form this Mac shows`;
 
 const whole =
   (min: number, max: number): Part<number> =>
@@ -133,11 +199,49 @@ const APPROVAL_TEXT = 1024;
  *  carried whole into the next. */
 const DIFF_PAGE_MOST = 1024 * 1024;
 
-/** A VM's size as a record keeps it: whole numbers, each part on its own. Not checkSize's
- *  ranges: a workspace made before a range moved keeps what it was made with. */
+/** A VM's size: each part a whole number within what desolate makes for a person (checkSize's
+ *  ranges), since the Mac gives a VM that much of itself. */
+const sized =
+  <T extends Partial<Record<"cpus" | "memoryMiB" | "diskGiB", number>>>(part: Part<T>): Part<T> =>
+  (value, at) => {
+    const s = part(value, at);
+    return checkSize(s) ? unformed(at) : s;
+  };
 const sizePart = whole(1, 1 << 20);
-const size = shape({ cpus: maybe(sizePart), memoryMiB: maybe(sizePart), diskGiB: maybe(sizePart) });
-const fullSize = shape({ cpus: sizePart, memoryMiB: sizePart, diskGiB: sizePart });
+const size = sized(
+  shape({ cpus: maybe(sizePart), memoryMiB: maybe(sizePart), diskGiB: maybe(sizePart) }),
+);
+const fullSize = sized(shape({ cpus: sizePart, memoryMiB: sizePart, diskGiB: sizePart }));
+
+declare namespace sized {
+  /** a size desolate makes for a person; a part past its range (as a person would be refused
+   *  it: checkSize) is not, however the root records it */
+  export type Ranges = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "domain.size",
+          value: { domain: "acme"; size: { cpus: 4; memoryMiB: 8192 } },
+          asked: {},
+        ],
+        expected: { domain: "acme"; size: { cpus: 4; memoryMiB: 8192 } },
+      ],
+      [
+        args: [
+          op: "domain.size",
+          value: { domain: "acme"; size: { memoryMiB: 1048576 } },
+          asked: {},
+        ],
+        expected: "the root's answer to 'domain.size' is not in the form this Mac takes (size)",
+      ],
+      [
+        args: [op: "domain.size", value: { domain: "acme"; size: { cpus: 0 } }, asked: {}],
+        expected: "the root's answer to 'domain.size' is not in the form this Mac takes (size.cpus)",
+      ],
+    ]
+  >;
+}
 
 const listed = <T>(item: Part<T>) => shape({ items: list(item), total: count, from: count });
 
@@ -168,12 +272,12 @@ const workspaceRecord = shape({
   domain: slug,
   workspace: slug,
   vm: text(SAID.name),
-  title: text(200),
+  title: line(200),
   checkouts: list(checkout),
   env: maybe(repo),
   repos: maybe(list(repo)),
   size: maybe(fullSize),
-  author: maybe(shape({ name: text(200), email: text(200) })),
+  author: maybe(shape({ name: line(200), email: line(200) })),
   startedBy: maybe(shape({ workspace: slug, createdAt: stamp })),
   fetch: yes,
   createdAt: stamp,
@@ -430,22 +534,23 @@ declare namespace vouched {
 
 /** A domain as the root lists it, with its workspaces: a workspace record that does not name
  *  its own VM in this domain is left out, as every caller once left it out itself (it would
- *  give one domain's VM another domain's names, rules and proxy). */
+ *  give one domain's VM another domain's names, rules and proxy), and so is one not in its form
+ *  (one record does not take the list, and with it every command that reads it, down). */
 const domainFields = shape({
   slug,
-  title: text(200),
+  title: line(200),
   repos: list(repo),
   createdAt: stamp,
   env: maybe(repo),
   size: maybe(size),
   spawnMax: maybe(whole(0, 1000)),
-  workspaces: list(workspaceRecord),
+  workspaces: some(workspaceRecord),
 });
-const domainRecord: Part<Of<typeof domainFields>> = (value, at) => {
+const domainRecord = (value: unknown, at: string) => {
   const d = domainFields(value, at);
   return {
     ...d,
-    workspaces: d.workspaces.filter((w) => w.domain === d.slug && isOwnVm(d.slug, w)),
+    workspaces: d.workspaces.kept.filter((w) => w.domain === d.slug && isOwnVm(d.slug, w)),
   };
 };
 
@@ -552,6 +657,59 @@ const about =
 
 // ------------------------------------------------------------------ the rest of the answers
 
+/** The most lines of a git VM push's account the Mac passes on to the person's terminal there:
+ *  an honest one is a line or two (delivered, pushed, refused). */
+const GIT_PUSH_SAID = 50;
+
+/** One page of a diff: a later page starts past this one and within the diff, so asking for
+ *  the next always moves on and ends (and a count of what was shown has a whole to be of). */
+const diffPage: Part<{ text: string; from: number; next: number | null; total: number }> = (
+  value,
+  at,
+) => {
+  const d = shape({ text: text(DIFF_PAGE_MOST), from: count, next: orNull(count), total: count })(
+    value,
+    at,
+  );
+  if (d.from > d.total) unformed("from");
+  if (d.next !== null && (d.next <= d.from || d.next > d.total)) unformed("next");
+  return d;
+};
+
+declare namespace diffPage {
+  /** a page that moves on, the last page, and an empty diff; a page that would be asked for
+   *  again, or one past the end of the diff */
+  export type Pages = Table<
+    typeof answered,
+    [
+      [
+        args: [op: "review.diff", value: { text: "+a\n"; from: 0; next: 3; total: 6 }, asked: {}],
+        expected: { text: "+a\n"; from: 0; next: 3; total: 6 },
+      ],
+      [
+        args: [
+          op: "review.diff",
+          value: { text: "+b\n"; from: 3; next: null; total: 6 },
+          asked: {},
+        ],
+        expected: { text: "+b\n"; from: 3; next: null; total: 6 },
+      ],
+      [
+        args: [op: "review.diff", value: { text: ""; from: 0; next: null; total: 0 }, asked: {}],
+        expected: { text: ""; from: 0; next: null; total: 0 },
+      ],
+      [
+        args: [op: "review.diff", value: { text: "+a\n"; from: 3; next: 3; total: 6 }, asked: {}],
+        expected: "the root's answer to 'review.diff' is not in the form this Mac takes (next)",
+      ],
+      [
+        args: [op: "review.diff", value: { text: ""; from: 0; next: 5; total: 0 }, asked: {}],
+        expected: "the root's answer to 'review.diff' is not in the form this Mac takes (next)",
+      ],
+    ]
+  >;
+}
+
 const issue = shape({
   id: named((value) => typeof value === "string" && ISSUE_ID.test(value)),
   repo,
@@ -563,8 +721,8 @@ const issue = shape({
   at: stamp,
   state: oneOf("offered", "approving", "published", "rejected"),
   edited: maybe(yes),
-  url: maybe(text(SAID.name)),
-  problem: maybe(text(SAID.sentence)),
+  url: maybe(line(SAID.name)),
+  problem: maybe(line(SAID.sentence)),
 });
 
 declare namespace issue {
@@ -579,8 +737,9 @@ declare namespace issue {
     at: "2026-11-16T10:00:00.000Z";
     state: "offered";
   };
-  /** the issue asked for, in its form; a title past GitHub's bound, a label list for a label,
-   *  another issue than the one frozen: refused */
+  /** the issue asked for, in its form; in a list, one with a title past GitHub's bound or a
+   *  label for a list of labels is left out and counted, beside one that is kept; another
+   *  issue than the one frozen is refused */
   export type Reads = Table<
     typeof answered,
     [
@@ -596,15 +755,15 @@ declare namespace issue {
           ],
           asked: {},
         ],
-        expected: "the root's answer to 'issue.list' is not in the form this Mac takes ([0].title)",
+        expected: { kept: []; dropped: 1 },
       ],
       [
         args: [
           op: "issue.list",
-          value: [Invoke<typeof changed, [value: I, changes: { labels: "bug" }]>],
+          value: [Invoke<typeof changed, [value: I, changes: { labels: "bug" }]>, I],
           asked: {},
         ],
-        expected: "the root's answer to 'issue.list' is not in the form this Mac takes ([0].labels)",
+        expected: { kept: [I]; dropped: 1 },
       ],
       [
         args: [op: "issue.freeze", value: I, asked: { id: "w2abcd-0123abcd" }],
@@ -619,7 +778,7 @@ const offer = shape({
   repo,
   branch,
   commit,
-  workspace: text(NAMES.slug),
+  workspace: line(NAMES.slug),
   lfs: count,
   at: stamp,
   base: maybe(branch),
@@ -632,15 +791,15 @@ const review = shape({
   commit,
   base: text(NAMES.branch + 8),
   against: oneOf("origin", "domain"),
-  againstLabel: text(SAID.name),
+  againstLabel: line(SAID.name),
   defaultBranch: orNull(branch),
   pushable: yes,
   isDefault: yes,
   commits: listed(
     shape({
       commit,
-      subject: text(SAID.sentence),
-      author: text(SAID.sentence),
+      subject: line(SAID.sentence),
+      author: line(SAID.sentence),
       body: text(ISSUE.body),
     }),
   ),
@@ -654,9 +813,9 @@ const review = shape({
       lookalike: maybe(yes),
     }),
   ),
-  stat: text(SAID.sentence),
+  stat: line(SAID.sentence),
   lfsObjects: count,
-  warnings: list(text(SAID.sentence)),
+  warnings: list(line(SAID.sentence)),
   pushCommits: count,
 });
 
@@ -721,13 +880,13 @@ declare namespace review {
 
 const secretListed = shape({
   name: named((value) => typeof value === "string" && /^[A-Z][A-Z0-9_-]{7,63}$/.test(value)),
-  hosts: list(text(SAID.name)),
-  headers: orNull(list(text(SAID.name))),
+  hosts: list(line(SAID.name)),
+  headers: orNull(list(line(SAID.name))),
   on: yes,
   secondsLeft: maybe(count),
 });
 
-const ranked = listed(shape({ host: text(SAID.name), count }));
+const ranked = listed(shape({ host: line(SAID.name), count }));
 
 /** Keys the root's answer says it made: their roles, which must be the ones asked for (a read
  *  key unless anonymous, a write key only to push). Their public halves are not taken from it:
@@ -850,7 +1009,7 @@ declare namespace proxySocket {
 /** A domain removed: the one asked about. Only then does the Mac remove its folder and its
  *  templates, by the name the person gave (workspaces.ts remove). */
 const removedDomain = (value: unknown, asked: Asked) => {
-  const answer = shape({ domain: text(NAMES.slug), kept: text(SAID.sentence) })(value, "");
+  const answer = shape({ domain: text(NAMES.slug), kept: line(SAID.sentence) })(value, "");
   if (answer.domain !== asked.slug || !isSlug(asked.slug))
     refuse(
       `the root answered about another domain than ${String(asked.slug)}, so nothing was removed on this Mac`,
@@ -888,6 +1047,71 @@ declare namespace removedDomain {
   >;
 }
 
+/** What root/push.ts prepare says a push is (the last line of its stdout, as JSON): the
+ *  approval text, which the person's own words are checked against (push.ts approvalDiffers)
+ *  before it is shown, and the summary and warnings shown beside it. */
+export const pushPlan = (stdout: string) => {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout.trim().split("\n").pop() ?? "");
+  } catch {
+    return unformedReply("push.ts prepare", "the answer itself");
+  }
+  try {
+    return shape({
+      message: text(APPROVAL_TEXT),
+      summary: line(SAID.sentence),
+      warnings: list(line(SAID.sentence), 50),
+    })(value, "");
+  } catch (error) {
+    if (!(error instanceof Unformed)) throw error;
+    return unformedReply("push.ts prepare", error.message);
+  }
+};
+
+declare namespace pushPlan {
+  /** the plan, its warnings as text; one whose approval text is not text, or that is no JSON */
+  export type Plan = Table<
+    typeof refusalOf,
+    [
+      [
+        args: [
+          f: typeof pushPlan,
+          args: [
+            'progress\n{"message":"desolate push approval v2\\n","summary":"1 commit","warnings":["big"]}',
+          ],
+        ],
+        expected: null,
+      ],
+      [
+        args: [f: typeof pushPlan, args: ['{"message":7,"summary":"","warnings":[]}']],
+        expected: {
+          message: "the root's answer to 'push.ts prepare' is not in the form this Mac takes (message)";
+          fix: "desolate doctor; if it persists, the root VM is not well: desolate bootstrap";
+          code: 1;
+        },
+      ],
+      [
+        args: [f: typeof pushPlan, args: ["not json"]],
+        expected: {
+          message: "the root's answer to 'push.ts prepare' is not in the form this Mac takes (the answer itself)";
+          fix: "desolate doctor; if it persists, the root VM is not well: desolate bootstrap";
+          code: 1;
+        },
+      ],
+    ]
+  >;
+  /** a warning's escape arrives as text */
+  export type Warnings = Expect<
+    Invoke<
+      typeof pushPlan,
+      [stdout: '{"message":"m","summary":"s","warnings":["\\u001b[2Jgone"]}']
+    >,
+    "=",
+    { message: "m"; summary: "s"; warnings: ["?[2Jgone"] }
+  >;
+}
+
 /** An answer the Mac does not read: nothing of it is passed on. */
 const ignored = (): void => {};
 
@@ -903,10 +1127,10 @@ const REPLIES = {
   doctor: of(
     list(
       shape({
-        name: text(SAID.name),
+        name: line(SAID.name),
         ok: yes,
-        detail: text(SAID.sentence),
-        fix: maybe(text(SAID.sentence)),
+        detail: line(SAID.sentence),
+        fix: maybe(line(SAID.sentence)),
       }),
     ),
   ),
@@ -929,18 +1153,18 @@ const REPLIES = {
         pushable: yes,
         anonymous: yes,
         defaultBranch: orNull(branch),
-        fetchedAt: orNull(text(SAID.name)),
+        fetchedAt: orNull(line(SAID.name)),
       }),
     ),
   ),
   "domain.list": of(list(domainRecord)),
   "domain.show": about(domainRecord, "slug", "slug"),
   "domain.create": about(
-    shape({ slug, title: text(200), repos: list(repo), createdAt: stamp }),
+    shape({ slug, title: line(200), repos: list(repo), createdAt: stamp }),
     "slug",
     "slug",
   ),
-  "domain.add-repo": of(shape({ domain: slug, repo, added: yes, note: text(SAID.sentence) })),
+  "domain.add-repo": of(shape({ domain: slug, repo, added: yes, note: line(SAID.sentence) })),
   "domain.env": of(shape({ domain: slug, env: orNull(repo), repos: list(repo) })),
   "domain.size": of(shape({ domain: slug, size: orNull(size) })),
   "domain.spawn": ignored,
@@ -960,7 +1184,7 @@ const REPLIES = {
         repo,
         path: oneOf(".devcontainer/devcontainer.json", ".devcontainer.json"),
         size,
-        problems: list(text(SAID.sentence)),
+        problems: list(line(SAID.sentence)),
       }),
     ),
   ),
@@ -978,7 +1202,7 @@ const REPLIES = {
         branch: orNull(branch),
         commit: orNull(commit),
         count: orNull(count),
-        why: orNull(text(SAID.sentence)),
+        why: orNull(line(SAID.sentence)),
       }),
     ),
   ),
@@ -989,46 +1213,50 @@ const REPLIES = {
   "net.policy": of(
     shape({
       mode: oneOf("open", "enforce"),
-      hosts: list(text(SAID.name)),
-      internal: list(text(SAID.name)),
+      hosts: list(line(SAID.name)),
+      internal: list(line(SAID.name)),
       heldMiB: maybe(count),
     }),
   ),
   "net.recommend": of(
     shape({
       mode: oneOf("open", "enforce"),
-      listed: list(text(SAID.name)),
+      listed: list(line(SAID.name)),
       reached: ranked,
       refused: ranked,
     }),
   ),
   "net.log": of(
-    listed(
-      shape({
-        time: text(SAID.name),
-        domain: slug,
-        workspace: text(SAID.name),
-        host: text(SAID.name),
-        port: whole(0, 65535),
-        verdict: text(SAID.name),
-        address: maybe(text(SAID.name)),
-        via: maybe(text(SAID.name)),
-        method: maybe(text(SAID.name)),
-        route: maybe(text(SAID.path)),
-        reason: maybe(text(SAID.sentence)),
-        secrets: maybe(list(text(SAID.name))),
-      }),
-    ),
+    shape({
+      items: some(
+        shape({
+          time: line(SAID.name),
+          domain: slug,
+          workspace: maybe(line(SAID.name)),
+          host: line(SAID.name),
+          port: maybe(whole(0, 65535)),
+          verdict: line(SAID.name),
+          address: maybe(line(SAID.name)),
+          via: maybe(line(SAID.name)),
+          method: maybe(line(SAID.name)),
+          route: maybe(line(SAID.path)),
+          reason: maybe(line(SAID.sentence)),
+          secrets: maybe(list(line(SAID.name))),
+        }),
+      ),
+      total: count,
+      from: count,
+    }),
   ),
-  "offers.list": of(list(offer)),
+  "offers.list": of(some(offer)),
   "offers.refused": of(
     list(
-      shape({ domain: slug, repo, at: stamp, why: text(SAID.sentence), fix: text(SAID.sentence) }),
+      shape({ domain: slug, repo, at: stamp, why: line(SAID.sentence), fix: line(SAID.sentence) }),
     ),
   ),
   "offers.dismiss": ignored,
   "branches.list": of(
-    list(
+    some(
       shape({
         domain: slug,
         repo,
@@ -1041,9 +1269,7 @@ const REPLIES = {
     ),
   ),
   review: of(review),
-  "review.diff": of(
-    shape({ text: text(DIFF_PAGE_MOST), from: count, next: orNull(count), total: count }),
-  ),
+  "review.diff": of(diffPage),
   "suede.changed": of(
     list(
       shape({
@@ -1054,18 +1280,18 @@ const REPLIES = {
       }),
     ),
   ),
-  "issue.list": of(list(issue)),
+  "issue.list": of(some(issue)),
   "issue.freeze": about(issue, "id", "id"),
   "issue.done": ignored,
   "approvals.pending": of(
     list(
-      shape({ message: text(APPROVAL_TEXT), summary: text(SAID.sentence), at: text(SAID.name) }),
+      shape({ message: text(APPROVAL_TEXT), summary: line(SAID.sentence), at: line(SAID.name) }),
     ),
   ),
   "approvals.wait": of(
     shape({
       tag: text(SAID.name),
-      pending: list(shape({ message: text(APPROVAL_TEXT), at: text(SAID.name) })),
+      pending: list(shape({ message: text(APPROVAL_TEXT), at: line(SAID.name) })),
     }),
   ),
   "approvals.refuse": ignored,
@@ -1073,8 +1299,8 @@ const REPLIES = {
   "git.push": of(
     shape({
       pushed: yes,
-      error: maybe(text(SAID.sentence)),
-      said: maybe(list(text(SAID.sentence))),
+      error: maybe(line(SAID.sentence)),
+      said: maybe(list(line(SAID.sentence), GIT_PUSH_SAID)),
     }),
   ),
 } satisfies Record<string, (value: unknown, asked: Asked) => unknown>;
@@ -1083,6 +1309,67 @@ const REPLIES = {
 export type Op = keyof typeof REPLIES;
 export type Answer<O extends Op> = ReturnType<(typeof REPLIES)[O]>;
 
+/** The root's refusal, as the person is shown it: its words and its fix as text (printable),
+ *  and an exit code from 1 to 255, so a refusal never exits 0. */
+export const refusalIn = (reply: unknown): Refusal => {
+  const r = (typeof reply === "object" && reply !== null ? reply : {}) as Record<string, unknown>;
+  const code = r.code;
+  return new Refusal(
+    typeof r.error === "string" ? printable(r.error) : "the root refused",
+    typeof r.fix === "string" ? printable(r.fix) : "",
+    Number.isSafeInteger(code) && (code as number) >= 1 && (code as number) <= 255
+      ? (code as number)
+      : 1,
+  );
+};
+
+/** The root's envelope around an answer (root/rootctl.ts): `{ok: true, result}`, taken as
+ *  replyOf takes `result`; `{ok: false, ...}`, its refusal (refusalIn); anything else, an
+ *  answer not in its form. */
+export const opened = <O extends Op>(op: O, reply: unknown, asked: Asked = {}): Answer<O> => {
+  const r = (typeof reply === "object" && reply !== null ? reply : {}) as Record<string, unknown>;
+  if (r.ok === true) return replyOf(op, r.result, asked);
+  if (r.ok === false) throw refusalIn(r);
+  return unformedReply(op, "ok");
+};
+
+declare namespace opened {
+  /** an answer; a refusal with its own exit code; one that says exit 0, or no number, or not
+   *  text, still refuses (1), as text */
+  export type Envelope = Table<
+    typeof refusalOf,
+    [
+      [
+        args: [f: typeof opened, args: ["ping", { ok: true; result: { keyring: true } }]],
+        expected: null,
+      ],
+      [
+        args: [
+          f: typeof opened,
+          args: ["ping", { ok: false; error: "no"; fix: "desolate bootstrap"; code: 64 }],
+        ],
+        expected: { message: "no"; fix: "desolate bootstrap"; code: 64 },
+      ],
+      [
+        args: [f: typeof opened, args: ["ping", { ok: false; error: "gone\u001b[2J"; code: 0 }]],
+        expected: { message: "gone?[2J"; fix: ""; code: 1 },
+      ],
+      [
+        args: [f: typeof opened, args: ["ping", { ok: false; error: ["x"]; fix: 7; code: 256 }]],
+        expected: { message: "the root refused"; fix: ""; code: 1 },
+      ],
+      [
+        args: [f: typeof opened, args: ["ping", { ok: "yes"; result: { keyring: true } }]],
+        expected: {
+          message: "the root's answer to 'ping' is not in the form this Mac takes (ok)";
+          fix: "desolate doctor; if it persists, the root VM is not well: desolate bootstrap";
+          code: 1;
+        },
+      ],
+    ]
+  >;
+}
+
 /** The answer to `op`, asked with `asked`, as the Mac takes it; or a refusal that says which
  *  operation's answer was not in its form, and where. */
 export const replyOf = <O extends Op>(op: O, value: unknown, asked: Asked = {}): Answer<O> => {
@@ -1090,12 +1377,14 @@ export const replyOf = <O extends Op>(op: O, value: unknown, asked: Asked = {}):
     return REPLIES[op](value, asked) as Answer<O>;
   } catch (error) {
     if (!(error instanceof Unformed)) throw error;
-    return refuse(
-      `the root's answer to '${op}' is not in the form this Mac takes (${error.message})`,
-      "desolate doctor; if it persists, the root VM is not well: desolate bootstrap",
-    );
+    return unformedReply(op, error.message);
   }
 };
+const unformedReply = (op: string, where: string): never =>
+  refuse(
+    `the root's answer to '${op}' is not in the form this Mac takes (${where})`,
+    "desolate doctor; if it persists, the root VM is not well: desolate bootstrap",
+  );
 
 declare namespace replyOf {
   /** a refusal says which operation and where, and how to look into it; never what it held */
@@ -1115,7 +1404,8 @@ declare namespace replyOf {
     "=",
     undefined
   >;
-  /** a slug with a slash, a whole number that is not one, text past its bound */
+  /** a slug with a slash and a whole number that is not one are refused; a sentence past its
+   *  bound is shown cut, with the mark */
   export type Forms = Table<
     typeof answered,
     [
@@ -1160,7 +1450,12 @@ declare namespace replyOf {
           },
           asked: {},
         ],
-        expected: "the root's answer to 'domain.add-repo' is not in the form this Mac takes (note)",
+        expected: {
+          domain: "acme";
+          repo: "acme/web";
+          added: true;
+          note: Invoke<typeof cutOf, [length: 4000]>;
+        },
       ],
     ]
   >;

@@ -22,6 +22,7 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
+import { printable } from "../shared/text.ts";
 import { named, newId, requester, requestRefusal } from "../shared/git-out-box.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -314,10 +315,32 @@ declare namespace refspecOf {
 }
 
 /** The host's answer, as git's one line: anything the host said is kept on that line. */
-export const answerLine = (target: string, answer: { pushed?: boolean; error?: string }) =>
-  answer.pushed
+export const answerLine = (target: string, answer: { pushed?: unknown; error?: unknown }) =>
+  answer.pushed === true
     ? `ok ${target}`
-    : `error ${target} ${String(answer.error ?? "not pushed").replace(/\n/g, " ")}`;
+    : `error ${target} ${printable(answer.error ?? "not pushed", SAID.chars, " ")}`;
+
+/** What the host's answer may say to the person's terminal here: so many lines, each one line
+ *  of text (the host made them so; this side does again, since it prints them). */
+const SAID = { lines: 50, chars: 4000 } as const;
+export const saidLines = (said: unknown): string[] =>
+  (Array.isArray(said) ? said : []).slice(0, SAID.lines).map((line) => printable(line, SAID.chars));
+
+declare namespace saidLines {
+  /** each line printed as text: a sequence that clears the screen or hides what follows is
+   *  shown as marks; plain text is kept; a flood is cut to its bound */
+  export type Lines = Table<
+    typeof saidLines,
+    [
+      [args: [said: ["delivered to acme"]], expected: ["delivered to acme"]],
+      [
+        args: [said: ["\u001b[2J\u001b[8mhidden\nok refs/heads/main"]],
+        expected: ["?[2J?[8mhidden?ok refs/heads/main"],
+      ],
+      [args: [said: "not a list"], expected: []],
+    ]
+  >;
+}
 
 declare namespace answerLine {
   export type Answers = Table<
@@ -489,12 +512,15 @@ const pushOne = async (
       }
       fs.copyFileSync(file, box.leave(names.lfs(oid)));
     }
-    const answer = (await box.ask(id, request, (line) => process.stderr.write(`${line}\n`))) as {
-      pushed?: boolean;
-      error?: string;
-      said?: string[];
+    const asked = await box.ask(id, request, (line) =>
+      process.stderr.write(`${printable(line)}\n`),
+    );
+    const answer = (typeof asked === "object" && asked !== null ? asked : {}) as {
+      pushed?: unknown;
+      error?: unknown;
+      said?: unknown;
     };
-    for (const line of answer.said ?? []) process.stderr.write(`${line}\n`);
+    for (const line of saidLines(answer.said)) process.stderr.write(`${line}\n`);
     return answerLine(target, answer);
   } catch (error) {
     box.withdraw();

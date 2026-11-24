@@ -324,7 +324,7 @@ export const fakeBackend = (): Backend => {
         signal: options.signal,
         idleMs: options.idleMs,
         maxBytes: options.maxBytes,
-        inheritStderr: options.inheritStderr,
+        stderrLines: options.stderrLines,
       });
     },
 

@@ -825,6 +825,7 @@ export const up = async (
     throw error;
   }
   await rootctl("workspace.state", { domain, name: plan.workspace, state: "up" }, { quiet: true });
+  recordCheckouts(plan.vm, plan.checkouts);
   const parent = options.keep ? options.keep.parent : startedBy?.workspace;
   if (parent) (await import("./spawn.ts")).recordStarted(domain, plan.workspace, parent);
   // `-- <command...>`: an agent, started in it once it is up (host/agent.ts).
@@ -1239,7 +1240,16 @@ done`;
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
  *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
  *  its branches are written out for the root. What the VM says is its word about itself. */
-const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
+const unsaved = async (
+  w: Workspace,
+  sync = true,
+  // Never fewer than the Mac made it with (guardedCheckouts), whatever the root says now.
+  checkouts = guardedCheckouts(
+    w.checkouts.map((c) => c.path),
+    recordedCheckouts(w.vm),
+    () => checkoutsOnMac(w.domain),
+  ),
+): Promise<string[]> => {
   const b = backend();
   if ((await b.info(w.vm)).status !== "running")
     return [
@@ -1247,19 +1257,14 @@ const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
     ];
   const script = `${sync ? `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"` : ""}
 ${LOOK_EACH}`;
-  const looked = await b.exec(
-    w.vm,
-    ["bash", "-c", script, "_", ...w.checkouts.map((c) => c.path)],
-    { timeoutMs: 120_000 },
-  );
+  const looked = await b.exec(w.vm, ["bash", "-c", script, "_", ...checkouts], {
+    timeoutMs: 120_000,
+  });
   if (looked.code !== 0)
     return [
       `it could not be looked at: ${fromVm(w, "unsaved", looked.stderr, 3).replace(/\n/g, " ")}`,
     ];
-  return lostIn(
-    looked.stdout,
-    w.checkouts.map((c) => c.path),
-  );
+  return lostIn(looked.stdout, checkouts);
 };
 
 /** What the VM's look (above) says would be lost, in words: each line names what, and the
@@ -1353,6 +1358,97 @@ export const look = async (w: Workspace, atStop = false): Promise<Looked> => {
 };
 const forget = (vm: string) => fs.rmSync(lookedFile(vm), { force: true });
 
+/** The checkouts a workspace was made with, as this Mac planned it, kept on the Mac: what
+ *  `--if-clean` looks at is never fewer than these, whatever the root later says. */
+const checkoutsFile = (vm: string) => path.join(paths.state, "checkouts", `${vm}.json`);
+const recordCheckouts = (vm: string, checkouts: readonly { path: string }[]) => {
+  fs.mkdirSync(path.dirname(checkoutsFile(vm)), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(checkoutsFile(vm), JSON.stringify(checkouts.map((c) => c.path)));
+};
+const recordedCheckouts = (vm: string): string[] | null => {
+  try {
+    const paths = JSON.parse(fs.readFileSync(checkoutsFile(vm), "utf8")) as unknown;
+    return Array.isArray(paths) && paths.every((p) => typeof p === "string") ? paths : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Every checkout in a domain's folder on this Mac, as a workspace sees it: each repository's
+ *  own (`/workspaces/<owner>/<repo>`) and each worktree under its `.worktrees/`. Read by the
+ *  Mac, of its own folder: what the root says a workspace holds cannot shrink it. */
+export const checkoutsOnMac = (domain: string): string[] => {
+  const dirs = (at: string) => {
+    try {
+      return fs
+        .readdirSync(at, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith("."))
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+  };
+  const root = paths.domainRepos(domain);
+  return dirs(root).flatMap((owner) =>
+    dirs(path.join(root, owner)).flatMap((repo) => [
+      `${guest.workspaces}/${owner}/${repo}`,
+      ...dirs(path.join(root, owner, repo, ".worktrees")).map(
+        (name) => `${guest.workspaces}/${owner}/${repo}/.worktrees/${name}`,
+      ),
+    ]),
+  );
+};
+
+declare namespace checkoutsOnMac {
+  /** each repository's own checkout and each of its worktrees, as the VM sees them */
+  export type Lists = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeInHome, [name: "domains/acme/repos/acme/web/.git/HEAD", text: "x"]>,
+      Invoke<
+        typeof writeInHome,
+        [name: "domains/acme/repos/acme/web/.worktrees/fix-login/.git", text: "x"]
+      >,
+    ],
+    Expect<
+      Invoke<typeof checkoutsOnMac, [domain: "acme"]>,
+      "=",
+      ["/workspaces/acme/web", "/workspaces/acme/web/.worktrees/fix-login"]
+    >
+  >;
+}
+
+/** What `--if-clean` looks at: the root's answer's checkouts and the ones this Mac recorded
+ *  when it made the workspace; for one made before that record, every checkout in the
+ *  domain's folder on the Mac. An answer can add to the set, never take from it. */
+export const guardedCheckouts = (
+  answered: readonly string[],
+  recorded: readonly string[] | null,
+  onMac: () => string[],
+): string[] => [...new Set([...answered, ...(recorded ?? onMac())])];
+
+declare namespace guardedCheckouts {
+  /** an answer that names no checkout looks at the ones recorded; one with no record, at
+   *  every one on the Mac; an honest answer and its record are one set (the control) */
+  export type Set = Table<
+    typeof guardedCheckouts,
+    [
+      [
+        args: [answered: [], recorded: ["/workspaces/acme/web"], onMac: () => []],
+        expected: ["/workspaces/acme/web"],
+      ],
+      [
+        args: [
+          answered: ["/workspaces/acme/web"],
+          recorded: ["/workspaces/acme/web"],
+          onMac: () => [],
+        ],
+        expected: ["/workspaces/acme/web"],
+      ],
+    ]
+  >;
+}
+
 /** `--if-clean`: only if nothing in it would be lost (looked at now, or at its stop).
  *  `--if-pushed`: and every checkout's commits are on the remote, as the root sees them (the
  *  dashboard's Delete asks for both). */
@@ -1382,6 +1478,9 @@ export const remove = async (
   if (options.ifClean || options.ifPushed) {
     const running = (await backend().info(w.vm)).status === "running";
     const kept = running ? null : lookedAt(w.vm);
+    // (The checkouts looked at are never fewer than the Mac made it with: unsaved.
+    // `--if-pushed` rests on the root's word: whether a commit is on the remote is the root's
+    // to say, which holds the mirror, by design.)
     const lost = !options.ifClean
       ? []
       : running
@@ -1414,6 +1513,7 @@ export const remove = async (
   await rootctl("workspace.remove", { domain: w.domain, name: w.workspace }, { quiet: true });
   (await import("./spawn.ts")).forget(w.domain, w.workspace);
   forget(w.vm);
+  fs.rmSync(checkoutsFile(w.vm), { force: true });
   out(
     `removed ${w.domain}/${w.workspace}. Its branches and worktrees stay in the domain's clones.`,
   );

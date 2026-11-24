@@ -10,7 +10,7 @@ import { RUN_MAX } from "../shared/run.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { forTerminal } from "../shared/text.ts";
 import { because } from "./failures.ts";
-import { replyOf } from "./replies.ts";
+import { opened, refusalIn } from "./replies.ts";
 import type { Answer, Op } from "./replies.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
@@ -175,7 +175,8 @@ const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
 /** The CLI channel's service in the root (root/rootctl.ts serve): one request a connection. */
 const ROOTCTL_SOCKET = "/run/desolate/rootctl/rootctl.sock";
-type Reply = { ok: boolean; result?: unknown; error?: string; fix?: string; code?: number };
+/** The service's envelope: `{ok, result}` or a refusal; replies.ts `opened` reads it. */
+type Reply = Record<string, unknown>;
 
 // How long a call to the root may take is not decided here (docs/v3/limits.md, R4): a fetch
 // of a large repository takes what it takes, and whoever asked for it is the one waiting,
@@ -384,7 +385,10 @@ const viaService = (
           if (message.accepted) accepted = true;
           if (typeof message.progress === "string" && !asked.quiet && !settled)
             show(message.progress);
-          if (message.reply) settle(message.reply);
+          if (message.reply !== undefined)
+            settle(
+              typeof message.reply === "object" && message.reply !== null ? message.reply : {},
+            );
           else if (message.stale && !accepted) settle(null);
         } catch {
           /* not a line of the service's */
@@ -469,10 +473,8 @@ const ask = async <O extends Op>(
   if (left !== undefined && left <= 0) throw gaveUp(op, "late", asked);
   const reply =
     served ?? (await viaExec(op, args, { ...asked, totalMs: left, wholeMs: asked.totalMs }));
-  if (!reply.ok)
-    throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "", reply.code ?? 1);
   // What the Mac takes of it is what replies.ts takes for this operation, and nothing else.
-  return replyOf(op, reply.result, args);
+  return opened(op, reply, args);
 };
 
 /** One request over the CLI channel. The root's refusals arrive as Refusals, with their fix.
@@ -577,7 +579,7 @@ export const revealSecret = async (domain: string, name: string): Promise<string
     [...NODE, `${guest.release}/root/proxy/secret-store.ts`, domain, "reveal"],
     { root: true, input: JSON.stringify({ name }), timeoutMs: 60_000 },
   );
-  let reply: { ok: boolean; value?: string; error?: string; fix?: string };
+  let reply: Record<string, unknown>;
   try {
     reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   } catch {
@@ -592,8 +594,7 @@ export const revealSecret = async (domain: string, name: string): Promise<string
       "desolate doctor",
     );
   }
-  if (!reply.ok || typeof reply.value !== "string")
-    throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "");
+  if (reply?.ok !== true || typeof reply.value !== "string") throw refusalIn(reply);
   return reply.value;
 };
 
@@ -608,7 +609,7 @@ export const changeSecrets = async (
     [...NODE, `${guest.release}/root/proxy/secret-store.ts`, domain, op],
     { root: true, input: JSON.stringify(input), timeoutMs: 60_000 },
   );
-  let reply: { ok: boolean; error?: string; fix?: string };
+  let reply: Record<string, unknown>;
   try {
     reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   } catch {
@@ -621,6 +622,6 @@ export const changeSecrets = async (
       "desolate doctor",
     );
   }
-  if (!reply.ok) throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "");
+  if (reply?.ok !== true) throw refusalIn(reply);
   return rootctl("secret.apply", { domain }, { quiet: true });
 };

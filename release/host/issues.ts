@@ -321,13 +321,17 @@ export const refuseIssue = async (issue: Issue) => {
   });
 };
 
-const waiting = async () =>
-  (await rootctl("issue.list", { waiting: true }, { quiet: true })).filter(
-    (i) => i.state === "offered" || i.state === "approving",
-  );
+const waiting = async () => {
+  const listed = await rootctl("issue.list", { waiting: true }, { quiet: true });
+  return {
+    kept: listed.kept.filter((i) => i.state === "offered" || i.state === "approving"),
+    dropped: listed.dropped,
+  };
+};
 
 export const list = async (out: Out, json: boolean) => {
-  const all = await waiting();
+  const { kept: all, dropped } = await waiting();
+  (await import("./push.ts")).left(dropped, out, json);
   if (json) return out(JSON.stringify(all));
   if (all.length === 0)
     return out(
@@ -434,7 +438,7 @@ declare namespace list {
 export const decide = async (what: "publish" | "refuse", id: string | undefined, out: Out) => {
   if (!id) refuse(`${what} which issue?`, "desolate issues", EXIT.usage);
   let issue =
-    (await waiting()).find((i) => i.id === id) ??
+    (await waiting()).kept.find((i) => i.id === id) ??
     refuse(`no issue '${id}' is waiting`, "desolate issues");
   if (what === "refuse") {
     if (issue.state === "approving") await refuseIssue(issue);

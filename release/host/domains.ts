@@ -284,7 +284,9 @@ export const netLog = async (
       `desolate net log${domain ? ` ${domain}` : ""} --last 500`,
       EXIT.usage,
     );
-  const log = await rootctl("net.log", { domain, last }, { quiet: true });
+  const answer = await rootctl("net.log", { domain, last }, { quiet: true });
+  const log = { ...answer, items: answer.items.kept };
+  (await import("./push.ts")).left(answer.items.dropped, out, values.json === true);
   if (values.json === true) return out(JSON.stringify(log));
   if (log.from > 0)
     out(
@@ -292,7 +294,7 @@ export const netLog = async (
     );
   for (const e of log.items)
     out(
-      `${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
+      `${e.time}  domain=${e.domain} workspace=${e.workspace ?? "?"}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port ?? "?"}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
     );
 };
 
@@ -581,6 +583,14 @@ export const domainCommand = async (
             .map((part) => part.trim())
             .filter(Boolean)
         : [];
+    // The secret just changed, in the root's list after the change: one that is not there is
+    // said, not taken for one that is.
+    const named = <S extends { name: string }>(listed: S[]): S =>
+      listed.find((s) => s.name === name) ??
+      refuse(
+        `the root's list of ${first}'s secrets after the change does not hold ${name}`,
+        `desolate domain ${first} secret list`,
+      );
     if (action === "import") {
       // desolate domain <d> secret import <file> [--dry-run] [--print-env | --in-place]
       //   [--choose KEY=secret:host[,host][@header[,header]] | KEY=value | KEY=local]...
@@ -702,9 +712,9 @@ export const domainCommand = async (
           Number(match![1]) *
           { s: 1, m: 60, h: 3600, d: 86400 }[match![2] as "s" | "m" | "h" | "d"];
       }
-      const switched = (
-        await changeSecrets(first, "switch", { name, on: action === "on", ttlSeconds })
-      ).find((s) => s.name === name)!;
+      const switched = named(
+        await changeSecrets(first, "switch", { name, on: action === "on", ttlSeconds }),
+      );
       if (json) return out(JSON.stringify(switched));
       return out(
         switched.on
@@ -733,9 +743,7 @@ export const domainCommand = async (
           `desolate domain ${first} secret copy <NAME> --from <domain>`,
           EXIT.usage,
         );
-      const copied = (await changeSecrets(first, "copy", { name, from: values.from })).find(
-        (s) => s.name === name,
-      )!;
+      const copied = named(await changeSecrets(first, "copy", { name, from: values.from }));
       await trustCa(first);
       if (json) return out(JSON.stringify(copied));
       return out(
@@ -762,14 +770,9 @@ export const domainCommand = async (
         if (process.stdin.isTTY)
           process.stderr.write(`Paste the value of ${name} and press Enter (it is not shown): `);
         const value = await readSecretLine();
-        const set = (
-          await changeSecrets(first, "set", {
-            name,
-            value,
-            hosts: csv(values.hosts),
-            headers,
-          })
-        ).find((s) => s.name === name)!;
+        const set = named(
+          await changeSecrets(first, "set", { name, value, hosts: csv(values.hosts), headers }),
+        );
         await trustCa(first);
         if (json) return out(JSON.stringify(set));
         out(
@@ -1168,6 +1171,29 @@ declare namespace domainCommand {
             "ACME-OPENAI-KEY is held in the root for the domain acme. Its workspaces send the name; the value is put in its place on the way to: api.openai.com (in the header authorization only).",
             "in a workspace: export SOME_API_KEY=ACME-OPENAI-KEY   (the name is not a secret)",
           ]
+        >
+      >,
+      /** a list after the change that does not hold the secret is said, in words */
+      Given<
+        Invoke<typeof stdinGives, [text: "sk-3"]>,
+        Expect<
+          Invoke<
+            typeof refusalOf,
+            [
+              run: typeof domainCommand,
+              args: [
+                args: ["acme", "secret", "set", "ACME-OTHER-KEY"],
+                values: { hosts: "api.example.com"; headers: "authorization" },
+                out: typeof collect,
+              ],
+            ]
+          >,
+          "=",
+          {
+            message: "the root's list of acme's secrets after the change does not hold ACME-OTHER-KEY";
+            fix: "desolate domain acme secret list";
+            code: 1;
+          }
         >
       >,
     ]

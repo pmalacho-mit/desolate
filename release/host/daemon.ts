@@ -1156,7 +1156,9 @@ const approvalBackend = (): ApprovalBackend => {
         );
     },
     issues: async () =>
-      (await rootctlBrief("issue.list", { waiting: true })).filter((i) => i.state === "approving"),
+      (await rootctlBrief("issue.list", { waiting: true })).kept.filter(
+        (i) => i.state === "approving",
+      ),
     publishIssue: async (issue) => {
       const url = await (await import("./issues.ts")).publish(issue);
       events.publish(events.host("issue-published", { repo: issue.repo, id: issue.id, url }));
