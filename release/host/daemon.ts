@@ -1395,7 +1395,18 @@ const STATED_SOCKET = "/run/desolate/stated/host.sock";
  *
  *  A line that answers no question waiting, one past `most`, the stream's end, and a question
  *  not answered in its time each end the stream and refuse every question on it at once. An
- *  answer not in its form refuses its own question only. `ended`: told when a stream ends. */
+ *  answer not in its form refuses its own question only. `ended`: told when a stream ends.
+ *
+ *  WHAT WAITS BEHIND THE STATE. Answers come in order, so every answer the service has
+ *  ready while it sends the state (progress, facts, a nudge's, the requests) waits for that
+ *  line. Measured in T2 09-ui (2026-11-23): the state was 5.7 KB, a workspace 1.2 KB of it,
+ *  a listed branch 115 bytes. A domain lists 100 branches in the state (shared/listed.ts
+ *  PAGE) and its checked-out ones, so 50 workspaces and 500 branches come to about
+ *  60 + 17 KB: under 100 KB, milliseconds on the session. The state nears STATE_ANSWER_BYTES
+ *  only by what domains write into it (issues waiting, of up to 64 KiB each, refusals); a
+ *  line that size holds the answers behind it for as long as 16 MiB takes over ssh (not
+ *  measured), and the callers' own times (15 s, 70 s) are far past that. Nothing is built
+ *  for it. */
 export const heldAsker = (open: () => Duplex, ended = () => {}, most = STATE_ANSWER_BYTES) => {
   type Waiting = {
     op: Stated;
