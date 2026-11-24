@@ -224,6 +224,13 @@ textarea.wide { font: 13px/1.45 var(--mono); resize: vertical; }
 .markdown table { border-collapse: collapse; } .markdown th, .markdown td { border: 1px solid var(--line); padding: var(--s1) var(--s2); }
 .markdown blockquote { margin: 0; padding-left: var(--s3); border-left: 3px solid var(--line); color: var(--soft); }
 .markdown li.task { list-style: none; }
+/* Where a link goes, beside it (markdown.js where): the host the browser will use, set apart. */
+.markdown .address { color: var(--soft); font: 12px var(--mono); overflow-wrap: anywhere; }
+.markdown .address .host { color: var(--ink); font-weight: 650; }
+/* A line of the page's own in the preview (what was not drawn, and why): a badge no Markdown
+   can draw, as nothing in it gets a class or a ::before. */
+.md-own { margin: var(--s2) 0; padding: var(--s1) var(--s2); border: 1px dashed var(--orange); border-radius: 6px; color: var(--ink); font-size: 12.5px; }
+.md-own::before { content: "desolate"; margin-right: var(--s2); padding: 0 6px; border-radius: 4px; background: var(--ink); color: var(--card); font-weight: 650; }
 [data-preview-toggle] { justify-self: start; align-self: flex-start; width: auto; }
 
 /* ---- the review: a panel on the right, the window's height, its width the person's */
