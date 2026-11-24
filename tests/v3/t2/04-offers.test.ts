@@ -2289,10 +2289,29 @@ echo "=====waits"; cat /tmp/waits.lines`,
       `cd ${WT} && git switch -q -c pushed-here && echo more >> README.md && git commit -qam 'from git push'`,
     );
     const tip = inWs("dev/w1", `cd ${WT} && git rev-parse HEAD`).stdout.trim();
-    const pushed = inWs("dev/w1", `cd ${WT} && git push origin pushed-here 2>&1`);
+    // Recorded: what it says is what an agent (or a person pressing Sync) acts on.
+    const gitPush = (...args: string[]) => {
+      const r = stack.desolate(
+        "exec",
+        "dev/w1",
+        "--checkout",
+        "acme/widgets",
+        "--",
+        "git",
+        "push",
+        ...args,
+      );
+      return { code: r.code, said: r.stdout + r.stderr };
+    };
+    const pushed = gitPush("origin", "pushed-here");
     assert.notEqual(pushed.code, 0, "the push is not reported as done: nothing reached the remote");
-    assert.match(pushed.stdout, /offered acme\/widgets pushed-here at [0-9a-f]{12}/);
-    assert.match(pushed.stdout, /offered to the root, not pushed: nothing went to the remote/);
+    assert.match(pushed.said, /offered acme\/widgets pushed-here at [0-9a-f]{12}/);
+    assert.match(pushed.said, /The offer is of this commit: after more commits, offer again/);
+    assert.match(pushed.said, /git reports this push as rejected below, on purpose/);
+    assert.match(
+      pushed.said,
+      /! \[remote rejected\] pushed-here -> pushed-here \(offered for review, not pushed: this is the expected result/,
+    );
     assert.equal(
       inWs(
         "dev/w1",
@@ -2325,8 +2344,29 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
     const byHead = inWs("dev/w1", `cd ${WT} && git push -u origin HEAD 2>&1`);
     assert.match(byHead.stdout, /offered acme\/widgets by-head at [0-9a-f]{12}/, byHead.stdout);
-    const renamed = inWs("dev/w1", `cd ${WT} && git push origin HEAD:refs/heads/other-name 2>&1`);
-    assert.match(renamed.stdout, /push a branch by its own name/, renamed.stdout);
+    const renamed = gitPush("origin", "HEAD:refs/heads/other-name");
+    assert.match(renamed.said, /not offered: only a branch is offered, under its own name/);
+    assert.doesNotMatch(
+      renamed.said,
+      /rejected below, on purpose/,
+      "it was not the expected result",
+    );
+    // A branch desolate does not carry is refused by `desolate offer`, which says why: not as
+    // the expected result. And what it says of a hostile name is printable (git's own lines
+    // show the name as git has it).
+    inWs("dev/w1", `cd ${WT} && git branch -q fix+plus && git branch -q $'bidi-\u202ename'`);
+    const refused = gitPush("origin", "fix+plus");
+    assert.match(refused.said, /'fix\+plus' is not a branch desolate will carry/);
+    assert.match(refused.said, /not offered: desolate offer says why above, with its fix/);
+    assert.doesNotMatch(refused.said, /rejected below, on purpose/);
+    const hostile = inWs("dev/w1", `cd ${WT} && git push origin $'bidi-\u202ename' 2>&1`);
+    const ours = hostile.stdout
+      .split("\n")
+      .filter((l) => /desolate|offer/.test(l) && !/->/.test(l));
+    assert.ok(ours.length > 0, hostile.stdout);
+    for (const line of ours)
+      assert.doesNotMatch(line, /[\u0000-\u001f\u202e]/, JSON.stringify(line));
+    inWs("dev/w1", `cd ${WT} && git branch -q -D fix+plus $'bidi-\u202ename'`);
     assert.equal(
       forgeRefs("acme/widgets")["pushed-here"],
       undefined,
@@ -2385,8 +2425,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
     // A delete of a branch the remote has is refused, saying where branches are deleted.
     assert.match(
-      inWs("dev/w1", `cd ${WT} && git push origin :elsewhere 2>&1`).stdout,
-      /deleting a branch is not something a workspace does/,
+      gitPush("origin", ":elsewhere").said,
+      /not deleted: a workspace changes nothing on the remote; the person deletes branches there/,
     );
     assert.equal(forgeRefs("acme/widgets")["elsewhere"], theirs, "and it is still there");
     // With git-lfs's own pre-push hook (`git lfs install` adds it), an LFS file's push is

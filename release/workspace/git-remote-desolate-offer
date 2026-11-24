@@ -6,8 +6,12 @@
 # object directory", which told a person (pressing Sync in the editor) nothing. Now each
 # clone's push URL is `desolate-offer::<owner/repo>` (init.ts), and git runs this helper,
 # which offers each branch pushed (`desolate offer`). It then reports the push as refused,
-# saying why, so that no origin/<branch> appears here for a branch the remote does not have.
-# The person pushes it from the dashboard, or with `desolate push` on the Mac.
+# so that no origin/<branch> appears here for a branch the remote does not have, and says
+# that the refusal is the expected result. An agent read "rejected", followed by "Push it from
+# the dashboard", as a failure to solve: what it prints says that nothing more is needed, and
+# that only another offer tells the person there is something new (an offer is of one commit,
+# #278). A person pressing Sync in the editor reads the same words. They name no branch: the
+# offer's own line does, as `desolate offer` made it printable.
 #
 # git's remote-helper protocol (gitremote-helpers(7)), the push half only: git sends
 # "capabilities", "list for-push" (answered with the mirror's branches, which are the
@@ -16,7 +20,7 @@
 # "error <dst> <why>", and the batch a blank line.
 repo=$2
 mirror=/desolate/mirrors/$repo.git
-pushes=''
+pushes='' offered=''
 while IFS= read -r line; do
   case $line in
     capabilities) printf 'push\n\n' ;;
@@ -33,17 +37,21 @@ while IFS= read -r line; do
         [ "$src" = "$dst" ] && own=1
         [ "$src" = HEAD ] && [ "$(git symbolic-ref -q HEAD 2>/dev/null)" = "$dst" ] && own=1
         if [ -z "$src" ]; then
-          printf 'error %s deleting a branch is not something a workspace does: on the Mac, in desolate git\n' "$dst"
+          printf 'error %s not deleted: a workspace changes nothing on the remote; the person deletes branches there (desolate git, on the Mac)\n' "$dst"
         elif [ -z "$own" ] || [ "$branch" = "$dst" ]; then
-          printf 'error %s push a branch by its own name (git push origin <branch>): that branch is what is offered\n' "$dst"
+          printf 'error %s not offered: only a branch is offered, under its own name (git push origin <branch>)\n' "$dst"
         elif desolate offer "$repo" "$branch" >&2; then
-          printf 'error %s offered to the root, not pushed: nothing went to the remote. Push it from the dashboard (desolate ui, on the Mac)\n' "$dst"
+          offered=1
+          printf 'error %s offered for review, not pushed: this is the expected result, the person reviews and pushes it\n' "$dst"
         else
-          printf 'error %s not offered: see above\n' "$dst"
+          printf 'error %s not offered: desolate offer says why above, with its fix\n' "$dst"
         fi
       done
+      [ -z "$offered" ] || printf '%s\n' \
+        'git reports this push as rejected below, on purpose: nothing goes to the remote from a workspace, and git must not record a branch there that the remote does not have.' \
+        'Nothing more is needed now: do not retry the push or look for another way to push.' >&2
       printf '\n'
-      pushes=''
+      pushes='' offered=''
       ;;
   esac
 done
