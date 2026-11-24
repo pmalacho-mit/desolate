@@ -468,27 +468,33 @@ declare namespace hostKeyOf {
 
 /** desolate's own record of a VM's ssh host key, in its desolate.json: `hostKey`, the key it
  *  gave the VM, recorded once the VM was proved to hold it; `hostKeyNext` while a new one is
- *  being given, written before the VM puts it in place (`was`, the key it held; `next`). */
+ *  being given, written before the VM puts it in place (`was`, the key it held; `next`), and
+ *  kept beside `hostKey` until a later start proves the VM still holds `next`: a power loss
+ *  can keep the Mac's record and lose the VM's renames, and so can a restore of the two from
+ *  different moments. */
 type KeyRecord = { hostKey?: string; hostKeyNext?: { was: string; next: string } };
 
-/** What a start or bootstrap does next for a VM, from its record and the key it showed a new
- *  connection (`shown`, null when not asked): `own` (it has its own; nothing to do), `make`
- *  (give it one: it never was, or a change was cut short before the VM put the new key in
- *  place), `finish` (the VM holds the new key: record it), or `refuse` (it shows a key
- *  desolate did not record for it, and is used no further). Neither key of a change is
- *  trusted unless desolate recorded it for this VM. */
+/** What a start or bootstrap does next for a VM, from its record and the key it proved it
+ *  holds to a new connection (`shown`, null when not asked): `own` (it has its own; nothing to
+ *  do), `make` (give it one: it never was, or a change did not reach its disk), `finish` (the
+ *  VM holds the new key: record it), `confirm` (a later start found the new key still there:
+ *  the old one is forgotten), or `refuse` (it holds neither key desolate recorded for it, and
+ *  is used no further). Neither key of a change is trusted unless desolate recorded it for
+ *  this VM. */
 export const hostKeyStep = (
   record: KeyRecord,
   shown: string | null,
-): "own" | "make" | "finish" | "refuse" => {
+): "own" | "make" | "finish" | "confirm" | "refuse" => {
   const change = record.hostKeyNext;
   if (!change) return record.hostKey ? "own" : "make";
-  return shown === change.next ? "finish" : shown === change.was ? "make" : "refuse";
+  if (shown === change.next) return record.hostKey === change.next ? "confirm" : "finish";
+  return shown === change.was ? "make" : "refuse";
 };
 
 declare namespace hostKeyStep {
   /** given its own (the control); never given one; a change cut short before the VM put the
-   *  new key in place, or after; a VM showing neither key of its change */
+   *  new key in place, or after; a VM showing neither key of its change; a later start that
+   *  finds the new key, and one that finds the disk without it (the record ahead) */
   export type Steps = Table<
     typeof hostKeyStep,
     [
@@ -550,6 +556,32 @@ declare namespace hostKeyStep {
           shown: null,
         ],
         expected: "refuse",
+      ],
+      [
+        args: [
+          record: {
+            hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y";
+            hostKeyNext: {
+              was: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H";
+              next: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y";
+            };
+          },
+          shown: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y",
+        ],
+        expected: "confirm",
+      ],
+      [
+        args: [
+          record: {
+            hostKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y";
+            hostKeyNext: {
+              was: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H";
+              next: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y";
+            };
+          },
+          shown: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H",
+        ],
+        expected: "make",
       ],
     ]
   >;
@@ -1447,12 +1479,13 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     if (!m) throw new Error(`${name} is not a VM desolate made`);
     writeJson(metaFile(name), { ...m, hostKey: record.hostKey, hostKeyNext: record.hostKeyNext });
   };
-  /** Whether a VM is known by the key desolate gave it, and its ssh.known_hosts says so. The
-   *  record, not the other folders' files, says whether it was given one: a VM whose source
-   *  is gone (a template removed, a base made again) still has its key on its disk. */
+  /** Whether a VM is known by the key desolate gave it, and its ssh.known_hosts says so (a
+   *  change done, though not yet confirmed by a later start, counts). The record, not the
+   *  other folders' files, says whether it was given one: a VM whose source is gone (a
+   *  template removed, a base made again) still has its key on its disk. */
   const keyRight = (name: string) => {
     const m = meta(name);
-    if (!m || hostKeyStep(m, null) !== "own") return false;
+    if (!m?.hostKey || (m.hostKeyNext && m.hostKeyNext.next !== m.hostKey)) return false;
     try {
       return keysIn(fs.readFileSync(knownFile(name), "utf8")).join("\n") === m.hostKey;
     } catch {
@@ -1522,46 +1555,66 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       );
   };
   /** A new connection to a VM as its login user, its host key checked strictly against
-   *  `knownHosts` (the VM's own file unless said): let in only if the VM holds that key's
-   *  private half. */
-  const letIn = async (name: string, knownHosts = knownFile(name)) =>
-    (
-      await run(
-        "ssh",
-        [
-          "-o",
-          "ControlPath=none",
-          "-o",
-          `UserKnownHostsFile=${knownHosts}`,
-          ...sessionArgs(name, ["true"]),
-        ],
-        { env: env(), timeoutMs: 30_000, maxBytes: KEY_SAID_MOST },
-      )
-    ).code === 0;
+   *  `knownHosts` (the VM's own file unless said): `in` only if the VM holds that key's
+   *  private half; `key` if ssh refused the key the VM showed; `other` for any other end. */
+  const tryIn = async (name: string, knownHosts = knownFile(name)) => {
+    const tried = await run(
+      "ssh",
+      [
+        "-o",
+        "ControlPath=none",
+        "-o",
+        `UserKnownHostsFile=${knownHosts}`,
+        ...sessionArgs(name, ["true"]),
+      ],
+      { env: env(), timeoutMs: 30_000, maxBytes: KEY_SAID_MOST },
+    );
+    return tried.code === 0
+      ? "in"
+      : /Host key verification failed|IDENTIFICATION HAS CHANGED/.test(tried.stderr)
+        ? "key"
+        : "other";
+  };
+  const letIn = async (name: string) => (await tryIn(name)) === "in";
   /** Which of `keys`, each recorded by desolate for this VM, the VM proves it holds to a new
-   *  connection (tried one by one, each in a file of its own), or null. */
-  const heldKey = async (name: string, keys: string[]): Promise<string | null> => {
+   *  connection (tried one by one, each in a file of its own); `neither` if ssh refused the
+   *  key it showed against each; null if that could not be told. */
+  const heldKey = async (name: string, keys: string[]): Promise<string | "neither" | null> => {
     const trial = `${knownFile(name)}.trial.tmp`;
     try {
+      let refused = 0;
       for (const key of keys) {
         fs.writeFileSync(trial, `lima-${name} ${key}\n`, { mode: 0o600 });
-        if (await letIn(name, trial)) return key;
+        const tried = await tryIn(name, trial);
+        if (tried === "in") return key;
+        if (tried === "key") refused += 1;
       }
-      return null;
+      return refused === keys.length ? "neither" : null;
     } finally {
       fs.rmSync(trial, { force: true });
     }
   };
+  /** The keys desolate recorded for a VM, the likelier first, or none (never given one). */
+  const keysOf = (record: KeyRecord): string[] => {
+    const change = record.hostKeyNext;
+    if (!change) return record.hostKey ? [record.hostKey] : [];
+    return record.hostKey === change.next ? [change.next, change.was] : [change.was, change.next];
+  };
+  /** Said when a VM holds no key desolate recorded for it: what that means, and the way back. */
+  const holdsNeither = (name: string) =>
+    `${meta(name)?.spec.labels.title ?? name} holds no ssh host key desolate recorded for it (its disk may be from another moment than desolate's record, or something other than desolate changed its keys), and is not used. To take, once, the key it shows through its own Lima process and give it a new one at once: desolate host-key ${meta(name)?.spec.labels.title ?? name}`;
   /** Host keys of every type made by root in the VM, in a folder of their own beside sshd's
    *  (NEW_KEYS: the same file system, so that putting them in place is a rename), and the new
    *  ed25519 one printed. Every type: with none missing, cloud-init (which sees a new
    *  instance id at each boot: Lima gives one) makes none. */
   const NEW_KEYS = "/etc/ssh/.desolate-host-keys";
-  const MAKE_KEYS = `set -eu\nrm -rf ${NEW_KEYS}\nmkdir -p ${NEW_KEYS}/etc/ssh\nssh-keygen -A -f ${NEW_KEYS} >/dev/null\ncat ${NEW_KEYS}/etc/ssh/ssh_host_ed25519_key.pub`;
-  /** Those keys put in place, each by a rename (so sshd never reads half a key; it reads its
-   *  keys afresh for each connection: no reload, measured), the renames made durable, and the
-   *  key sshd now holds printed. Done again, it moves what is left and prints the same. */
-  const PUT_KEYS = `set -eu\nfor key in ${NEW_KEYS}/etc/ssh/ssh_host_*; do if [ -e "$key" ]; then mv -f "$key" /etc/ssh/; fi; done\nrm -rf ${NEW_KEYS}\nsync\ncat /etc/ssh/ssh_host_ed25519_key.pub`;
+  const MAKE_KEYS = `set -eu\nrm -rf ${NEW_KEYS}\ninstall -d -m 0700 ${NEW_KEYS}\nmkdir -p ${NEW_KEYS}/etc/ssh\nssh-keygen -A -f ${NEW_KEYS} >/dev/null\nsync ${NEW_KEYS}/etc/ssh/ssh_host_*\ncat ${NEW_KEYS}/etc/ssh/ssh_host_ed25519_key.pub`;
+  /** Those keys (already on the disk: MAKE_KEYS syncs each) put in place, each by a rename
+   *  (so sshd never reads half a key, nor an empty one after a crash; it reads its keys
+   *  afresh for each connection: no reload, measured), the folder synced so the renames
+   *  last, and the key sshd now holds printed. Done again, it moves what is left and prints
+   *  the same. */
+  const PUT_KEYS = `set -eu\nfor key in ${NEW_KEYS}/etc/ssh/ssh_host_*; do if [ -e "$key" ]; then mv -f "$key" /etc/ssh/; fi; done\nrm -rf ${NEW_KEYS}\nsync /etc/ssh\nsync\ncat /etc/ssh/ssh_host_ed25519_key.pub`;
   const asRoot = (name: string, script: string) =>
     backend.exec(name, ["bash", "-c", script], {
       root: true,
@@ -1574,8 +1627,10 @@ export const limaBackend = (platform: string = process.platform): Backend => {
 
   /** The rest of a change whose new key `next` is recorded: the keys put in place in the VM
    *  (again, if they were), the Mac's file saying `next`, the old control connections stopped,
-   *  a new connection checked against the file let in, and the change recorded as done. */
-  const finishKey = async (name: string, next: string) => {
+   *  a new connection checked against the file let in, and the change recorded as done (the
+   *  old key kept beside it until a later start confirms it: `confirm`). */
+  const finishKey = async (name: string, change: { was: string; next: string }) => {
+    const next = change.next;
     const put = await asRoot(name, PUT_KEYS);
     if (put.code !== 0 || hostKeyOf(lastLine(put)) !== next)
       throw new Error(
@@ -1591,7 +1646,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       throw new Error(
         `${name}'s new ssh host key was recorded, and a new connection checked against it was refused`,
       );
-    recordKey(name, { hostKey: next });
+    recordKey(name, { hostKey: next, hostKeyNext: change });
   };
   /** Give a running VM an ssh host key of its own, made in it, and make it the only one the
    *  Mac accepts for it; or finish a change of it that was cut short, or set its file back to
@@ -1612,28 +1667,33 @@ export const limaBackend = (platform: string = process.platform): Backend => {
    *  whose key is one of the two desolate recorded for it: `start` lets Lima in with
    *  whichever the VM proves it holds, and this then finishes the change or makes it again.
    *  Lima rewrites ssh.known_hosts at each start from the first key in it, and checks that
-   *  the VM presents it (pkg/sshutil/hostkey.go, v2.3.0). */
-  const ownKey = async (name: string): Promise<"own" | "made" | "finished"> => {
+   *  the VM presents it (pkg/sshutil/hostkey.go, v2.3.0). `started`: just after a start of
+   *  the VM, the only time a done change is confirmed (it outlived a boot). */
+  const ownKey = async (name: string, started: boolean): Promise<"own" | "made" | "finished"> => {
     const why = await notItself(name);
     if (why) throw new Error(why);
     const m = meta(name);
     if (!m) throw new Error(`${name} is not a VM desolate made`);
     const change = m.hostKeyNext;
-    const held = change ? await heldKey(name, [change.next, change.was]) : null;
+    const held = change ? await heldKey(name, keysOf(m)) : null;
+    if (held === "neither") throw new Error(holdsNeither(name));
     const step = hostKeyStep(m, held);
     if (step === "refuse")
-      throw new Error(`${name} proves it holds neither ssh host key desolate recorded for it`);
-    if (step === "own") {
-      accept(name, m.hostKey!);
+      throw new Error(`${name} could not be asked which ssh host key it holds: desolate doctor`);
+    if (step === "own" || step === "confirm") {
+      const key = m.hostKey!;
+      accept(name, key);
       await stopMasters(name);
-      if (!(await letIn(name)))
-        throw new Error(`${name} does not prove it holds the ssh host key desolate gave it`);
+      const tried = await tryIn(name);
+      if (tried === "key") throw new Error(holdsNeither(name));
+      if (tried !== "in") throw new Error(`${name} could not be reached over ssh: desolate doctor`);
+      if (step === "confirm" && started) recordKey(name, { hostKey: key });
       return "own";
     }
     if (step === "finish") {
       accept(name, change!.next);
       await stopMasters(name);
-      await finishKey(name, change!.next);
+      await finishKey(name, change!);
       return "finished";
     }
     const was = change ? change.was : keysIn(fs.readFileSync(knownFile(name), "utf8"))[0];
@@ -1653,7 +1713,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     if (next === was || keysElsewhere(name).has(next))
       throw new Error(`${name} answered with an ssh host key another VM is known by`);
     recordKey(name, { hostKeyNext: { was, next } });
-    await finishKey(name, next);
+    await finishKey(name, { was, next });
     return "made";
   };
 
@@ -1771,7 +1831,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
         const title = titled(vm.name);
         const said = shared[vm.name]
           ? `${title} accepts the same ssh host key as ${shared[vm.name]!.map(titled).join(", ")}`
-          : m.hostKeyNext
+          : m.hostKeyNext && m.hostKeyNext.next !== m.hostKey
             ? `${title}'s change of ssh host key was cut short`
             : !m.hostKey
               ? `${title} has not been given an ssh host key of its own`
@@ -1796,7 +1856,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
                     ]
                   : []),
               ].join("; "),
-        fix: "desolate bootstrap (it gives each running VM a key of its own, made in it)",
+        fix: "desolate bootstrap (it gives each running VM a key of its own, made in it); a VM that holds no key desolate recorded for it: desolate host-key <vm>",
       });
       const haveBase = fs.existsSync(path.join(LIMA_HOME, BASE, "lima.yaml"));
       const stamp = baseStamp();
@@ -1946,22 +2006,26 @@ export const limaBackend = (platform: string = process.platform): Backend => {
         keyLock(name),
         async () => {
           // The file says what desolate recorded (a `limactl copy` rewrites it from what it
-          // read before). A change cut short: the old key, and while Lima waits for the VM,
-          // whichever of the two it proves it holds (Lima reads the file at each try, every
-          // 3 s, and refuses a key it does not say).
-          const now = meta(name) ?? m;
-          const change = now.hostKeyNext;
-          if (change) accept(name, change.was);
-          else if (now.hostKey) accept(name, now.hostKey);
+          // read before): the likelier key. While Lima waits for the VM, the file is made to
+          // say whichever recorded key the VM proves it holds (Lima reads it at each try,
+          // every 3 s, and refuses a key it does not say): a change cut short, or a record
+          // ahead of the VM's disk, starts. A VM that holds none, said twice, is stopped, and
+          // refused in words below, rather than waited on for Lima's ten minutes.
+          const keys = keysOf(meta(name) ?? m);
+          if (keys[0]) accept(name, keys[0]);
           let starting = true;
+          let neither = 0;
           const found = (async () => {
-            while (change && starting) {
+            while (keys.length > 0 && starting && neither < 2) {
               await new Promise((resolve) => setTimeout(resolve, 1000));
               if (!starting || (await notItself(name)) !== null) continue;
-              const held = await heldKey(name, [change.was, change.next]);
-              if (held) return accept(name, held);
+              const held = await heldKey(name, keys);
+              if (held === "neither") neither += 1;
+              else if (held === null) neither = 0;
+              else return accept(name, held);
             }
-          })();
+            if (neither >= 2) await lima(["stop", "-f", name], { timeoutMs: 120_000 });
+          })().catch(() => {});
           // The host process starts under the profile and keeps it for its whole life.
           const result = await run("sandbox-exec", ["-f", file, LIMACTL, "--tty=false", ...args], {
             env: env(),
@@ -1969,6 +2033,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
           });
           starting = false;
           await found;
+          if (neither >= 2) throw new Error(holdsNeither(name));
           if (result.code !== 0)
             throw new Error(
               because(
@@ -1979,8 +2044,8 @@ export const limaBackend = (platform: string = process.platform): Backend => {
             );
           // Before any session of desolate's, and so before any project code runs in a clone
           // of the base. A clone has no record: it is given its own key, whoever else exists.
-          if (!keyRight(name))
-            await ownKey(name).catch(async (error: Error) => {
+          if (!keyRight(name) || meta(name)?.hostKeyNext)
+            await ownKey(name, true).catch(async (error: Error) => {
               await lima(["stop", "-f", name], { timeoutMs: 120_000 });
               throw new Error(`${name} was stopped: ${error.message}`);
             });
@@ -1988,6 +2053,34 @@ export const limaBackend = (platform: string = process.platform): Backend => {
         { signal: AbortSignal.timeout(boot().timeoutMs) },
       );
       await sharesReady(name, m);
+    },
+
+    async takeHostKey(name, log) {
+      const m = meta(named(name));
+      if (!m) throw new Error(`${name} is not a VM desolate made`);
+      const title = m.spec.labels.title ?? name;
+      const up = processesUp(path.join(LIMA_HOME, name));
+      if (up) await lima(["stop", "-f", name], { timeoutMs: 120_000 });
+      // With no record and no ssh.known_hosts, Lima takes the key the VM shows at its port
+      // once (pkg/sshutil/hostkey.go: on its own listener, which it holds), and the start then
+      // gives the VM a new key at once, as at a first start: only once lsof says the VM's own
+      // Lima process holds its port (`notItself`), else the VM is stopped and refused.
+      await withLock(
+        keyLock(name),
+        async () => {
+          recordKey(name, {});
+          fs.rmSync(knownFile(name), { force: true });
+        },
+        { signal: AbortSignal.timeout(60_000) },
+      );
+      log(
+        `${title}: its ssh host key record forgotten. Starting it: the key it shows through its own Lima process is taken once, and it is given a new one, made in it`,
+      );
+      await backend.start(name);
+      if (!up) await backend.stop(name);
+      log(
+        `${title}: given an ssh host key of its own, made in it${up ? "" : " (stopped again, as it was)"}`,
+      );
     },
 
     async ownHostKeys(log) {
@@ -1998,7 +2091,9 @@ export const limaBackend = (platform: string = process.platform): Backend => {
           continue;
         const title = vm.labels.title ?? vm.name;
         try {
-          const did = await withLock(keyLock(vm.name), () => ownKey(vm.name), { wait: false });
+          const did = await withLock(keyLock(vm.name), () => ownKey(vm.name, false), {
+            wait: false,
+          });
           log(
             did === "own"
               ? `${title}: its ssh.known_hosts set back to the key desolate gave it`
@@ -2204,10 +2299,19 @@ export const limaBackend = (platform: string = process.platform): Backend => {
         return ports;
       }
       for (const name of names) {
-        // A VM being cloned: its ports, given out before its folder is there (`clone`).
-        const m = name.endsWith(".ports.json")
-          ? readJson<{ sshPort: number; linkPort: number } | null>(path.join(LIMA_HOME, name), null)
-          : meta(name);
+        // A VM being cloned: its ports, given out before its folder is there (`clone`). One
+        // left by a desolate ended during a clone is nobody's, and goes: older than a clone
+        // may take (10 minutes), or its VM's own record written (it names them from then on).
+        let m: { sshPort: number; linkPort: number } | null = meta(name);
+        if (name.endsWith(".ports.json")) {
+          const file = path.join(LIMA_HOME, name);
+          const vm = name.slice(0, -".ports.json".length);
+          const stale =
+            meta(vm) !== null ||
+            Date.now() - (fs.statSync(file, { throwIfNoEntry: false })?.mtimeMs ?? 0) > 900_000;
+          if (stale) fs.rmSync(file, { force: true });
+          else m = readJson<{ sshPort: number; linkPort: number } | null>(file, null);
+        }
         if (m)
           for (const port of [m.sshPort, m.linkPort]) if (Number.isInteger(port)) ports.add(port);
         // A VM desolate did not clone (the base) has its ssh port in Lima's own file.

@@ -117,6 +117,9 @@ export interface Backend {
   /** Give every running VM that is known by an ssh host key another VM has one of its own,
    *  made in it; one that cannot be given one is stopped (bootstrap). */
   ownHostKeys?(log: (line: string) => void): Promise<void>;
+  /** For a VM that holds no ssh host key desolate recorded for it: forget its record, take
+   *  the key it shows once, and give it a new one at once (`desolate host-key`). */
+  takeHostKey?(name: string, log: (line: string) => void): Promise<void>;
 }
 
 export const GUEST_USER = "desolate";

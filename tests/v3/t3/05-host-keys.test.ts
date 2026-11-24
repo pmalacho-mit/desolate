@@ -93,7 +93,8 @@ const restarted = (name: string) => {
 };
 const ownAndRecorded = (name: string) => {
   const record = recordOf(name);
-  assert.equal(record.hostKeyNext, undefined);
+  // A change done is kept beside the key until a later start confirms it.
+  assert.ok(!record.hostKeyNext || record.hostKeyNext.next === record.hostKey);
   assert.deepEqual(accepted(name), [record.hostKey]);
   assert.equal(held(name), record.hostKey);
   assert.equal(sshAs(name, portOf(name)).status, 0);
@@ -305,6 +306,40 @@ describe(
       fs.writeFileSync(file, `${line[0]} ${old}\n`);
       restarted("one");
       assert.equal(recordOf("one").hostKey, own);
+      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
+    });
+
+    it("T3 a record ahead of the VM's disk (the new key recorded, the renames lost): Lima refuses, and the start makes another", () => {
+      const was = accepted("two")[0]!;
+      const next = asRootIn("two", MAKE);
+      writeRecord("two", { hostKey: next, hostKeyNext: { was, next } });
+      const file = path.join(dir("two"), "ssh.known_hosts");
+      fs.writeFileSync(file, `lima-${vm.two} ${next}\n`);
+      assert.equal(shown("two"), was);
+      restarted("two");
+      const now = recordOf("two").hostKey;
+      assert.notEqual(now, was);
+      assert.notEqual(now, next);
+      const log = fs.readFileSync(path.join(dir("two"), "ha.stderr.log"), "utf8");
+      assert.match(log, /host key mismatch/, "Lima refused the key the record was ahead with");
+      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
+    });
+
+    it("T3 a VM whose ed25519 host key is gone holds no key desolate recorded: its start is refused in those words, and desolate host-key brings it back", () => {
+      asRootIn("two", "rm -f /etc/ssh/ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key.pub");
+      assert.equal(stack.quiet("stop", "dev/two").code, 0);
+      const refused = stack.quiet("start", "dev/two");
+      assert.notEqual(refused.code, 0);
+      const said = refused.stdout + refused.stderr;
+      assert.match(said, /holds no ssh host key desolate recorded for it/);
+      assert.match(said, /desolate host-key dev\/two/);
+      assert.doesNotMatch(said, /sandbox extension/);
+      const back = stack.quiet("host-key", "dev/two");
+      assert.equal(back.code, 0, back.stderr + back.stdout);
+      assert.match(back.stdout, /dev\/two: given an ssh host key of its own/);
+      const started = stack.quiet("start", "dev/two");
+      assert.equal(started.code, 0, started.stderr + started.stdout.slice(-800));
+      ownAndRecorded("two");
       assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
     });
 
