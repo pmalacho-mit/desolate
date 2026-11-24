@@ -13,6 +13,9 @@
 // - A flood of requests from one domain does not slow another's: beside the control, the same
 //   offer from the other domain with no flood; and the flooding domain's own offer waits
 //   behind its flood (so the flood was real), and is answered, not refused.
+// - A domain's spawn and close requests waiting for the host are at most 8: a flood of 200
+//   that the host refuses each of is refused past 8 by the root, in words, and another
+//   domain's spawn is answered and made as fast as before the flood (the control).
 // - A root that is down is said to be down within the beat's 10 s, and the request is
 //   withdrawn; the same offer once it runs again is answered (the control).
 import assert from "node:assert/strict";
@@ -177,6 +180,106 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
       mine!.err,
       /desolate: (waiting for \d+ earlier request\(s\) of this domain to be answered|the root has not taken it yet)/,
     );
+  });
+
+  it("a domain's spawn and close requests waiting for the host are bounded at 8, and another domain's spawn is asked and made as fast as before it (the control)", async () => {
+    type Event = {
+      type: string;
+      workspace?: string;
+      request?: string;
+      ok?: boolean;
+      said?: string;
+    };
+    const events = (workspace: string): Event[] =>
+      inside(workspace, "desolate events --all")
+        .stdout.split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Event);
+    /** beta asks for a workspace: how long the root took to answer, and the host to make it */
+    const spawned = async (name: string) => {
+      const asked = inside("beta/b1", `desolate spawn --name ${name} --branch task/${name}`);
+      assert.equal(asked.code, 0, asked.stderr);
+      assert.match(asked.stdout, new RegExp(`asked for beta/${name}`));
+      const made = (e: Event) =>
+        e.type === "request" && e.request === "spawn" && e.workspace === name;
+      const start = Date.now();
+      assert.ok(
+        await until(() => events("beta/b1").some(made), 240_000),
+        `beta/${name} was not made`,
+      );
+      assert.equal(
+        events("beta/b1").find(made)!.ok,
+        true,
+        JSON.stringify(events("beta/b1").find(made)),
+      );
+      return { asked: asked.ms, made: Date.now() - start + asked.ms };
+    };
+    /** and closes it, so that the Mac has as many workspaces running for the next */
+    const closed = async (name: string) => {
+      const asked = inside("beta/b1", `desolate close ${name}`);
+      assert.equal(asked.code, 0, asked.stderr);
+      const done = (e: Event) =>
+        e.type === "request" && e.request === "close" && e.workspace === name;
+      assert.ok(
+        await until(() => events("beta/b1").some(done), 120_000),
+        `beta/${name} was not closed`,
+      );
+    };
+    // Small, so that two workspaces more fit on any Mac T2 runs on (a test VM of 10 GiB
+    // refused the third of 3 GiB): the room a Mac has is not what this measures.
+    assert.equal(stack.quiet("domain", "beta", "size", "--memory", "1g").code, 0);
+    const control = await spawned("b2");
+    await closed("b2");
+
+    // alpha writes 200 spawn requests straight into its outbox, each of a shape the root
+    // takes (it cannot check a signature) and a command of 60,000 characters, signed with
+    // nothing the host gave it. The host refuses each; the root holds at most 8 of them
+    // for it at once, and refuses the rest, saying so.
+    const flood = inside(
+      "alpha/a1",
+      `w=$(head -c 15000 /dev/zero | tr '\\0' x); at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z); cd /desolate/outbox/requests && for i in $(seq 1 200); do printf '{"op":"spawn","parent":"a1","name":"s%d","checkouts":[],"command":["%s","%s","%s","%s"],"at":"%s","nonce":"%032d","mac":"%064d"}' $i $w $w $w $w $at $i $i > .s$i && mv .s$i spawn-$i.json; done`,
+    );
+    assert.equal(flood.code, 0, flood.stderr);
+    // What the host's queue holds of alpha's, looked at every 100 ms while the flood is taken.
+    const looked = stack.inRoot([
+      "bash",
+      "-c",
+      'most=0; for i in $(seq 1 60); do n=$(grep -l \'"domain": "alpha"\' /var/lib/desolate/host-queue/* 2>/dev/null | wc -l); [ "$n" -gt "$most" ] && most=$n; sleep 0.1; done; echo $most',
+    ]);
+    const during = await spawned("b3");
+    assert.ok(
+      during.asked < control.asked + 5_000 && during.made < control.made + 30_000,
+      `beta's spawn was answered in ${during.asked} ms and made in ${during.made} ms during alpha's flood, ${control.asked} ms and ${control.made} ms without it`,
+    );
+    assert.ok(
+      Number(looked.stdout.trim()) <= 8,
+      `alpha had ${looked.stdout.trim()} waiting at once`,
+    );
+    // Every one of alpha's was answered: those over the bound in words, the rest by the host.
+    const replies = () =>
+      inside("alpha/a1", "cat /desolate/inbox/replies/spawn-*.json 2>/dev/null").stdout;
+    assert.ok(
+      await until(() => (replies().match(/"ok"/g) ?? []).length === 200, 60_000),
+      "alpha's requests were not all answered",
+    );
+    assert.match(
+      replies(),
+      /alpha has 8 spawn and close requests waiting for the host, the most a domain may have waiting: ask again once one is answered/,
+    );
+    assert.ok(
+      await until(
+        () =>
+          events("alpha/a1").filter(
+            (e) => e.type === "request" && /not signed by alpha\/a1/.test(String(e.said)),
+          ).length === (replies().match(/"ok": true/g) ?? []).length,
+        120_000,
+      ),
+      "the host did not refuse each of alpha's queued requests",
+    );
+    console.log(
+      `beta's spawn: answered in ${control.asked} ms, made in ${control.made} ms; during alpha's flood ${during.asked} ms and ${during.made} ms; alpha's waiting at most ${looked.stdout.trim()}`,
+    );
+    await closed("b3");
   });
 
   it("a root that is down is said to be within the beat's 10 s, and the request withdrawn (the control: answered once it runs)", () => {

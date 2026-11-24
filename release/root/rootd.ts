@@ -39,33 +39,63 @@ import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { aDomain, aWorkspace, emptyRoot, jsonFilesIn } from "../.harness/root-state.ts";
+import type {
+  aDomain,
+  aWorkspace,
+  emptyRoot,
+  jsonFilesIn,
+  queuedForHost,
+} from "../.harness/root-state.ts";
 
-const queuedFor = (
-  domain: string,
-): { kind: string; args: Record<string, string>; at: number }[] => {
+/** A domain's spawn and close requests waiting for the host, at most (R7: a bound against a
+ *  workspace, which may write as many as it likes, each with a command of up to
+ *  shared/spawn.ts's 200,000 characters). The host starts three of a domain's spawns at once
+ *  and refuses a fourth at once (host/spawn.ts, MOST_AT_ONCE), and a close is one for each
+ *  child: eight is three spawns under way and room for as many closes beside them. Past it the
+ *  domain's next request is refused here, saying so, and no other domain's is: each counts
+ *  only its own. A request waits from when it is queued until the host has answered it (the
+ *  state service then removes its file), or for half an hour. */
+const WAITING_MOST = 8;
+
+/** What waits in the host's queue: kind, domain and name of each request, by its file's name
+ *  without `.json` or `.taken` (the state service renames each as it hands it over, and
+ *  removes it once the host has answered, or after half an hour). Kept as this rootd writes
+ *  them, so that counting a domain's reads the queue's names and no file: reading every file
+ *  for each request was a cost on the loop every domain waits on. A file this rootd did not
+ *  write (it was started again) is read once. */
+type Queued = { kind: string; domain: string; workspace: string; at: number };
+const queue = new Map<string, Queued>();
+const queuedFor = (domain: string): Queued[] => {
+  let names: string[] = [];
   try {
-    // Waiting (.json), and handed to the host lately (.taken: the state service renames each
-    // as it hands it over, and sweeps them after half an hour), so a request between the two
-    // is still counted against the limit.
-    return fs
-      .readdirSync(HOST_QUEUE)
-      .filter((name) => name.endsWith(".json") || name.endsWith(".taken"))
-      .flatMap((name) => {
-        try {
-          const item = JSON.parse(fs.readFileSync(path.join(HOST_QUEUE, name), "utf8")) as {
-            kind: string;
-            args: Record<string, string>;
-            at: number;
-          };
-          return item.args?.domain === domain ? [item] : [];
-        } catch {
-          return [];
-        }
-      });
+    names = fs.readdirSync(HOST_QUEUE);
   } catch {
-    return [];
+    /* nothing queued yet */
   }
+  const here = new Set<string>();
+  for (const name of names) {
+    const stem = /^([0-9a-z]+-[0-9a-f]{10})\.(json|taken)$/.exec(name)?.[1];
+    if (!stem) continue;
+    here.add(stem);
+    if (queue.has(stem)) continue;
+    try {
+      const item = JSON.parse(fs.readFileSync(path.join(HOST_QUEUE, name), "utf8")) as {
+        kind: string;
+        args: Record<string, string>;
+        at: number;
+      };
+      queue.set(stem, {
+        kind: String(item.kind),
+        domain: String(item.args?.domain),
+        workspace: String(item.args?.workspace),
+        at: Number(item.at),
+      });
+    } catch {
+      /* renamed or removed meanwhile: looked at again next time */
+    }
+  }
+  for (const stem of queue.keys()) if (!here.has(stem)) queue.delete(stem);
+  return [...queue.values()].filter((q) => q.domain === domain);
 };
 
 /** How long a spawn in the host's queue holds its name and counts against the domain's limit.
@@ -83,6 +113,13 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
   const all = workspaces(domain);
   if (!all.some((w) => w.workspace === r.parent))
     return { ok: false, error: `${domain} has no workspace '${r.parent}'` };
+  const queued = queuedFor(domain);
+  if (queued.length >= WAITING_MOST)
+    return {
+      ok: false,
+      error: `${domain} has ${queued.length} spawn and close requests waiting for the host, the most a domain may have waiting: ask again once one is answered`,
+      fix: "desolate events --follow   (a `request` event says when each is answered)",
+    };
   if (r.op === "spawn" && r.name === "template")
     return {
       ok: false,
@@ -97,13 +134,13 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
         error: `${domain}'s workspaces cannot start workspaces: the person turned it off`,
         fix: `on the Mac: desolate domain ${domain} spawn --max none`,
       };
-    const pending = queuedFor(domain).filter(
+    const pending = queued.filter(
       (q) =>
         q.kind === "workspace.spawn" &&
         Date.now() - q.at < PENDING_MS &&
-        !all.some((w) => w.workspace === q.args.workspace),
+        !all.some((w) => w.workspace === q.workspace),
     );
-    if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.args.workspace === r.name))
+    if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.workspace === r.name))
       return {
         ok: false,
         error: `${domain} already has a workspace '${r.name}'`,
@@ -173,6 +210,12 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
         error: `${domain}/${r.name} was not started by ${r.parent}: only the workspace that started it can close it`,
         fix: "ask the person: desolate rm on the Mac",
       };
+    if (queued.some((q) => q.kind === "workspace.close" && q.workspace === r.name))
+      return {
+        ok: false,
+        error: `a close of ${domain}/${r.name} is waiting for the host already`,
+        fix: "desolate events --follow   (a `request` event says when it is answered)",
+      };
   }
   const args: Record<string, string> = {
     domain,
@@ -189,11 +232,15 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
         }
       : {}),
   };
+  const stem = `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}`;
+  const item = {
+    kind: r.op === "spawn" ? "workspace.spawn" : "workspace.close",
+    args,
+    at: Date.now(),
+  };
   fs.mkdirSync(HOST_QUEUE, { recursive: true });
-  writeJson(
-    path.join(HOST_QUEUE, `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}.json`),
-    { kind: r.op === "spawn" ? "workspace.spawn" : "workspace.close", args, at: Date.now() },
-  );
+  writeJson(path.join(HOST_QUEUE, `${stem}.json`), item);
+  queue.set(stem, { kind: item.kind, domain, workspace: r.name, at: item.at });
   return { ok: true, workspace: r.name };
 };
 
@@ -588,6 +635,122 @@ declare namespace signed {
         [{ kind: "workspace.close"; args: { domain: "acme"; workspace: "w2"; parent: "w1" } }]
       >,
     ]
+  >;
+  type Beta = Invoke<typeof aDomain, [slug: "beta", repos: ["beta/app"]]>;
+  type B1 = Invoke<typeof aWorkspace, [domain: "beta", name: "b1", checkouts: ["beta/app=main"]]>;
+  /** a domain has at most eight requests waiting for the host: with seven, its next is queued
+   *  (the control for the next) */
+  export type RoomForOneMore = Given<
+    [Fresh, Acme, W1, W2, Beta, B1, Invoke<typeof queuedForHost, [domain: "acme", count: 7]>],
+    Expect<
+      Invoke<
+        typeof signed,
+        [
+          domain: "acme",
+          request: {
+            at: "2026-11-16T12:00:00.000Z";
+            nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+            mac: "abababababababababababababababababababababababababababababababab";
+            op: "close";
+            parent: "w1";
+            name: "w2";
+          },
+        ]
+      >,
+      "=",
+      { ok: true; workspace: "w2" }
+    >
+  >;
+  /** with eight, its next is refused, saying so, and another domain's is queued all the same */
+  export type Waiting = Given<
+    [Fresh, Acme, W1, W2, Beta, B1, Invoke<typeof queuedForHost, [domain: "acme", count: 8]>],
+    [
+      Expect<
+        Invoke<
+          typeof signed,
+          [
+            domain: "acme",
+            request: {
+              at: "2026-11-16T12:00:00.000Z";
+              nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+              mac: "abababababababababababababababababababababababababababababababab";
+              op: "close";
+              parent: "w1";
+              name: "w2";
+            },
+          ]
+        >,
+        "=",
+        {
+          ok: false;
+          error: "acme has 8 spawn and close requests waiting for the host, the most a domain may have waiting: ask again once one is answered";
+          fix: "desolate events --follow   (a `request` event says when each is answered)";
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof signed,
+          [
+            domain: "beta",
+            request: {
+              at: "2026-11-16T12:00:00.000Z";
+              nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+              mac: "abababababababababababababababababababababababababababababababab";
+              op: "spawn";
+              parent: "b1";
+              name: "helper";
+            },
+          ]
+        >,
+        "=",
+        { ok: true; workspace: "helper" }
+      >,
+    ]
+  >;
+  /** a close already waiting for the host is not queued again */
+  export type CloseOnce = Given<
+    [
+      Fresh,
+      Acme,
+      W1,
+      W2,
+      Invoke<
+        typeof signed,
+        [
+          domain: "acme",
+          request: {
+            at: "2026-11-16T12:00:00.000Z";
+            nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+            mac: "abababababababababababababababababababababababababababababababab";
+            op: "close";
+            parent: "w1";
+            name: "w2";
+          },
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<
+        typeof signed,
+        [
+          domain: "acme",
+          request: {
+            at: "2026-11-16T12:00:00.000Z";
+            nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+            mac: "abababababababababababababababababababababababababababababababab";
+            op: "close";
+            parent: "w1";
+            name: "w2";
+          },
+        ]
+      >,
+      "=",
+      {
+        ok: false;
+        error: "a close of acme/w2 is waiting for the host already";
+        fix: "desolate events --follow   (a `request` event says when it is answered)";
+      }
+    >
   >;
 }
 
