@@ -100,8 +100,8 @@ yourself, and you create the pull request there: that needs no token. desolate k
 forge token of its own. Your `gh` on the Mac registers the deploy keys (`clone`) and creates
 the issues you publish, and `desolate upstream` reads its token (`gh auth token`, unless
 `GH_TOKEN` or `GITHUB_TOKEN` is set) to ask api.github.com, from the Mac, for the pull request
-it waits for. No VM is given it. The root keeps a record of what it pushed
-(`/var/lib/desolate/pushed.json`, kept across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
+it waits for. No VM is given it. The root keeps a record of what was offered and what it pushed
+(`/var/lib/desolate/record.json`, kept across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
 every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days; the dashboard's

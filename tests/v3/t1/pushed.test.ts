@@ -12,8 +12,15 @@ import { run } from "../../../release/shared/run.ts";
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-pushed-"));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 process.env.DESOLATE_ROOT_STATE = path.join(dir, "state");
-const { landedIn, landedFor, pushedList, recordPushed, settle, waiting } =
-  await import("../../../release/root/pushed.ts");
+const { landedIn, settle, waiting } = await import("../../../release/root/pushed.ts");
+const { afterPush, marked, pushes } = await import("../../../release/root/record.ts");
+const pushed = (branch: string, commit: string, base: string) =>
+  afterPush(
+    { domain: null, repo: "acme/app", branch, commit, sent: commit, fallback: base },
+    () => {},
+  );
+const landedFor = async (branch: string, commit: string) =>
+  marked("acme", [{ repo: "acme/app", branch, commit }])[0]!.landed;
 
 const repo = path.join(dir, "repo");
 const env = {
@@ -90,12 +97,12 @@ describe("T1 what was pushed, and whether it landed", () => {
 
   it("the record: the newest push of a branch replaces the last; settle marks what landed; a newer commit is not marked", async () => {
     const tip = branch("feature", "h.txt", "h\n");
-    recordPushed({ repo: "acme/app", branch: "feature", commit: "1".repeat(40), base: "main" });
-    recordPushed({ repo: "acme/app", branch: "feature", commit: tip, base: "main" });
-    recordPushed({ repo: "acme/app", branch: "solo", commit: tip, base: "solo" }); // a branch into itself: no base
-    recordPushed({ repo: "acme/app", branch: "--evil", commit: tip, base: "main" }); // not a branch: not recorded
+    await pushed("feature", "1".repeat(40), "main");
+    await pushed("feature", tip, "main");
+    await pushed("solo", tip, "solo"); // a branch into itself: no base
+    await pushed("--evil", tip, "main"); // not a branch: not recorded
     assert.deepEqual(
-      pushedList().map((p) => [p.branch, p.commit, p.base]),
+      pushes().map((p) => [p.branch, p.commit, p.base]),
       [
         ["feature", tip, "main"],
         ["solo", tip, null],
@@ -111,13 +118,13 @@ describe("T1 what was pushed, and whether it landed", () => {
       "another repository's fetch looks at nothing of this one",
     );
     assert.equal(await settle("acme/app", gitIn), 1);
-    assert.equal(landedFor(pushedList(), "acme/app", "feature", tip), "main");
+    assert.equal(await landedFor("feature", tip), "main");
     assert.equal(
-      landedFor(pushedList(), "acme/app", "feature", "2".repeat(40)),
+      await landedFor("feature", "2".repeat(40)),
       null,
       "the branch moved on since: not marked",
     );
-    assert.equal(landedFor(pushedList(), "acme/app", "solo", tip), null);
+    assert.equal(await landedFor("solo", tip), null);
     assert.deepEqual(waiting(), [], "nothing left to wait for");
   });
 });

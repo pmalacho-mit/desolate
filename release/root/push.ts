@@ -22,9 +22,9 @@ import { withLock } from "../shared/lock.ts";
 import { ask, hold } from "./keyring-client.ts";
 import { git } from "./git.ts";
 import { clonePath, KEYRING, ROOT } from "./layout.ts";
-import { offersOf, review, withdraw } from "./offers.ts";
+import { review } from "./offers.ts";
 import type { Review } from "./offers.ts";
-import { afterPush } from "./pushed.ts";
+import { afterPush } from "./record.ts";
 import * as repos from "./repos.ts";
 import { remoteTip } from "./repos.ts";
 import { submitForReview } from "./review-client.ts";
@@ -521,12 +521,18 @@ const main = async () => {
     if (error.holder) refuse(error.message, "try again when it is done", EXIT.busy);
     throw error;
   });
-  const base =
-    offersOf(domain).find((o) => o.repo === r.repo && o.branch === branch)?.base ?? r.defaultBranch;
-  const link = afterPush({ repo: r.repo, branch, commit: signed.commit, base }, (line) =>
-    process.stderr.write(`${line}\n`),
+  // Recorded, and the domain's offer of the branch withdrawn.
+  const { base, link } = await afterPush(
+    {
+      domain,
+      repo: r.repo,
+      branch,
+      commit: r.commit,
+      sent: signed.commit,
+      fallback: r.defaultBranch,
+    },
+    (line) => process.stderr.write(`${line}\n`),
   );
-  withdraw(domain, r.repo, branch);
   // What the remote now has, the mirror has: origin/* in every clone follows.
   await repos.fetch(repo).catch(() => {});
   // How many went: those the remote's branch did not have (r.commits counts from the default

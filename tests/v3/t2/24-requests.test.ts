@@ -459,8 +459,11 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
     const BT = "/workspaces/acme/widgets/.worktrees/task-b";
     const clone = "/desolate/root/acme/widgets/.git";
     const refusals = () =>
-      stack.inRoot(["bash", "-c", "cat /var/lib/desolate/refused/beta.json 2>/dev/null || echo []"])
-        .stdout;
+      stack.inRoot([
+        "bash",
+        "-c",
+        "jq -c '[.refused[]? | select(.domain == \"beta\")]' /var/lib/desolate/record.json 2>/dev/null || echo []",
+      ]).stdout;
     /** beta offers again, with a branch it had sent before deleted, so that the root's fetch
      *  deletes a ref (packed-refs' lock) as well as writing its own (each ref's). (Deleted only
      *  once the root has it: the workspace syncs on its own as its refs change.) */

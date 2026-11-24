@@ -13,6 +13,7 @@ import { parse as parseJsonc } from "../shared/jsonc.ts";
 import type { Checkout, WorkspacePlan } from "../shared/plan.ts";
 import { git, gitOk } from "./git.ts";
 import { clonePath, domainPath, mirrorPath, ROOT } from "./layout.ts";
+import * as record from "./record.ts";
 import { recordOf, registry } from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
@@ -1260,6 +1261,7 @@ export const remove = async (slugArg: unknown) => {
     if (repo && fs.existsSync(clonePath(repo)))
       await git(clonePath(repo), ["remote", "remove", d.slug]);
   }
+  await record.forget(d.slug);
   fs.rmSync(domainPath(d.slug), { recursive: true, force: true });
   return {
     domain: d.slug,

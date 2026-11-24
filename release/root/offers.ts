@@ -5,16 +5,16 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { refuse } from "../shared/exit.ts";
-import { readJson, writeJson } from "../shared/json.ts";
 import { LFS_POINTER_BYTES } from "../shared/limits.ts";
 import { listed, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
 import { isBranch, isCommit, isLfsOid, isSlug, lfsPointer, parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
-import { domain as domainOf, domains, workspaces } from "./domains.ts";
+import { domain as domainOf, workspaces } from "./domains.ts";
 import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
 import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
+import * as record from "./record.ts";
 import { recordOf } from "./repos.ts";
 import { lookalike } from "./reviewer-git.ts";
 import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
@@ -26,88 +26,20 @@ import type {
   Expect,
   Given,
   Invoke,
+  Mock,
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { aDomain, emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
+import type {
+  aDomain,
+  aRegistry,
+  emptyRoot,
+  mirrorsAndClonesHere,
+  writeJsonIn,
+} from "../.harness/root-state.ts";
+import type { offer, offersOf } from "./record.ts";
+import type { aBranchPastItsOffer } from "../.harness/root-record.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
-
-/** `base`: the branch a pull request of this one would go into, as the workspace said
- *  (`desolate offer --base`); without it, the repository's default branch. */
-export type Offer = {
-  domain: string;
-  repo: string;
-  branch: string;
-  commit: string;
-  workspace: string;
-  lfs: number;
-  at: string;
-  base?: string;
-};
-const file = (domain: string) => path.join(domainPath(domain), "offers.json");
-export const offersOf = (domain: string): Offer[] => readJson<Offer[]>(file(domain), []);
-export const allOffers = (only?: string): Offer[] =>
-  domains()
-    .filter((d) => !only || d.slug === only)
-    .flatMap((d) => offersOf(d.slug));
-
-declare namespace allOffers {
-  type Fresh = Invoke<typeof emptyRoot>;
-  /** every domain's offers, or one domain's; a domain that never offered has none */
-  export type ByDomain = Given<
-    [
-      Fresh,
-      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
-      Invoke<typeof aDomain, [slug: "beta", repos: ["acme/app"]]>,
-      Invoke<typeof aDomain, [slug: "quiet", repos: ["acme/app"]]>,
-      Invoke<
-        typeof writeJsonIn,
-        [
-          where: "domains",
-          name: "acme/offers.json",
-          value: [
-            {
-              domain: "acme";
-              repo: "acme/app";
-              branch: "fix";
-              commit: "0123456789abcdef0123456789abcdef01234567";
-              workspace: "w1";
-              lfs: 0;
-              at: "2026-11-16T12:00:00.000Z";
-            },
-          ],
-        ]
-      >,
-      Invoke<
-        typeof writeJsonIn,
-        [
-          where: "domains",
-          name: "beta/offers.json",
-          value: [
-            {
-              domain: "beta";
-              repo: "acme/app";
-              branch: "feat";
-              commit: "0123456789abcdef0123456789abcdef01234567";
-              workspace: "w1";
-              lfs: 0;
-              at: "2026-11-16T12:00:00.000Z";
-            },
-          ],
-        ]
-      >,
-    ],
-    [
-      Expect<
-        Invoke<typeof allOffers>,
-        "matches",
-        [{ domain: "acme"; branch: "fix" }, { domain: "beta"; branch: "feat" }]
-      >,
-      Expect<Invoke<typeof allOffers, [only: "beta"]>, "matches", [{ domain: "beta" }]>,
-      Expect<Invoke<typeof offersOf, [domain: "quiet"]>, "=", []>,
-    ]
-  >;
-}
 
 const lfsStore = (dir: string, oid: string) =>
   path.join(dir, oid.slice(0, 2), oid.slice(2, 4), oid);
@@ -327,17 +259,13 @@ export const take = async (
       fix: "offer again from the workspace that made them",
     };
 
-  // An offer again without --base (a `git push`) keeps the base the branch was offered for.
-  const before = offersOf(domain).find((o) => o.repo === id && o.branch === request.branch);
-  const base = isBranch(request.base) ? request.base : before?.base;
-  const offers = offersOf(domain).filter((o) => !(o.repo === id && o.branch === request.branch));
   // Which workspace offered it, as the workspace says: kept only when it names one of this
   // domain's own (it is shown, and a domain could name another, or write escapes into it).
   const from =
     isSlug(request.workspace) && workspaces(domain).some((w) => w.workspace === request.workspace)
       ? request.workspace
       : "";
-  offers.push({
+  await record.offer({
     domain,
     repo: id,
     branch: request.branch,
@@ -345,9 +273,8 @@ export const take = async (
     workspace: from,
     lfs: staged.length,
     at: new Date().toISOString(),
-    ...(base ? { base } : {}),
+    ...(isBranch(request.base) ? { base: request.base } : {}),
   });
-  writeJson(file(domain), offers);
   return { ok: true };
 };
 
@@ -434,26 +361,20 @@ declare namespace take {
   >;
 }
 
-export const withdraw = (domain: string, repo: string, branch: string) => {
-  writeJson(
-    file(domain),
-    offersOf(domain).filter((o) => !(o.repo === repo && o.branch === branch)),
-  );
-};
 /** The person's "not this one": the offer leaves "Needs you"; the branch stays in the domain
  *  (`desolate branches`), and offering it again brings it back. Before, an offer left only by
  *  being pushed: one from a removed workspace, or a stand-in agent's, stayed there for good. */
-export const dismiss = (
+export const dismiss = async (
   domainArg: unknown,
   repoArg: unknown,
   branchArg: unknown,
-): { ok: true } | { error: string } => {
+): Promise<{ ok: true } | { error: string }> => {
   const domain = typeof domainArg === "string" && isSlug(domainArg) ? domainArg : null;
   if (!domain || typeof repoArg !== "string" || typeof branchArg !== "string")
     return { error: "an offer is named by its domain, repository and branch" };
-  if (!offersOf(domain).some((o) => o.repo === repoArg && o.branch === branchArg))
+  if (!record.offersOf(domain).some((o) => o.repo === repoArg && o.branch === branchArg))
     return { error: `${domain} has offered no ${repoArg} ${branchArg}` };
-  withdraw(domain, repoArg, branchArg);
+  await record.withdraw(domain, repoArg, branchArg);
   return { ok: true };
 };
 
@@ -841,6 +762,7 @@ const targetOf = async (
   againstArg: unknown,
   fetch: boolean,
   signal?: AbortSignal,
+  offered = false,
 ): Promise<Target> => {
   const against = againstOf(againstArg);
   const d = domainOf(domain);
@@ -851,29 +773,40 @@ const targetOf = async (
   if (!d.repos.includes(id))
     refuse(`${id} is not in the domain '${domain}'`, `desolate domain ${domain} show`);
   if (!isBranch(branch)) refuse(`'${String(branch)}' is not a branch`, `desolate offers ${domain}`);
-  const record = recordOf(repo);
+  const known = recordOf(repo);
   if (fetch) await fetchDomain(domain, repo);
   const clone = clonePath(repo);
-  const commit = (
-    await git(clone, ["rev-parse", "--verify", "--quiet", `refs/remotes/${domain}/${branch}`])
-  ).stdout.trim();
+  // `offered` (the dashboard): an offered branch is reviewed at the commit offered, which is
+  // what its Push may send. Read at the branch, an offer the agent had committed past was
+  // reviewed at the new commit, which was not offered, so it could never be pushed from there,
+  // however often it was reviewed again (the review of 2026-11-22, A1). Elsewhere (`desolate
+  // review` and `desolate push`), the branch as it is now.
+  const asOffered = offered
+    ? record.offersOf(domain).find((o) => o.repo === id && o.branch === branch)?.commit
+    : undefined;
+  const commit =
+    asOffered && (await git(clone, ["cat-file", "-e", `${asOffered}^{commit}`])).code === 0
+      ? asOffered
+      : (
+          await git(clone, ["rev-parse", "--verify", "--quiet", `refs/remotes/${domain}/${branch}`])
+        ).stdout.trim();
   if (!commit)
     refuse(
       `the domain '${domain}' has no branch '${branch}' of ${id}`,
       `desolate offers ${domain}`,
     );
-  const upstream = !record.defaultBranch
+  const upstream = !known.defaultBranch
     ? ""
     : against === "domain"
-      ? `refs/remotes/${domain}/${record.defaultBranch}`
-      : `refs/remotes/origin/${record.defaultBranch}`;
+      ? `refs/remotes/${domain}/${known.defaultBranch}`
+      : `refs/remotes/origin/${known.defaultBranch}`;
   if (
     upstream &&
     against === "domain" &&
     !(await git(clone, ["rev-parse", "--verify", "--quiet", upstream])).stdout.trim()
   )
     refuse(
-      `the domain '${domain}' has no ${record.defaultBranch} of ${id} to compare with`,
+      `the domain '${domain}' has no ${known.defaultBranch} of ${id} to compare with`,
       "compare with origin instead",
     );
   const base = upstream ? (await git(clone, ["merge-base", commit, upstream])).stdout.trim() : "";
@@ -886,8 +819,8 @@ const targetOf = async (
     commit,
     base,
     against,
-    defaultBranch: record.defaultBranch,
-    pushable: record.pushable,
+    defaultBranch: known.defaultBranch,
+    pushable: known.pushable,
   };
 };
 
@@ -950,8 +883,9 @@ export const review = async (
   branch: unknown,
   againstArg: unknown = "origin",
   signal?: AbortSignal,
+  offered = false,
 ): Promise<Review> => {
-  const t = await targetOf(domain, repoArg, branch, againstArg, true, signal);
+  const t = await targetOf(domain, repoArg, branch, againstArg, true, signal, offered);
   const { clone, commit, base, against } = t;
   const commits = await commitsIn(clone, base ? `${base}..${commit}` : commit, 0);
   const changes = await changesBetween(clone, base || EMPTY, commit, signal);
@@ -1103,11 +1037,12 @@ export const more = async (
   againstArg: unknown,
   ask: Ask,
   signal?: AbortSignal,
+  offered = false,
 ): Promise<
   | { commit: string; commits: Listed<Commit> }
   | { commit: string; changes: Listed<Change>; of: number; pick?: { from: string; to: string } }
 > => {
-  const t = await targetOf(domain, repoArg, branch, againstArg, false, signal);
+  const t = await targetOf(domain, repoArg, branch, againstArg, false, signal, offered);
   const from = placeOf(ask?.from);
   if (ask?.list === "commits")
     return {
@@ -1124,6 +1059,69 @@ export const more = async (
     ...(pick ? { pick } : {}),
   };
 };
+
+declare namespace more {
+  type Past = Invoke<typeof aBranchPastItsOffer, [repo: "acme/app"]>;
+  /** the dashboard (`offered`) reads an offered branch at the commit offered, which is what
+   *  its Push sends, though the agent has committed since: reviewed again, it is still the
+   *  offer. The control: elsewhere (`desolate review`), the branch as it is now */
+  export type AtTheOffer = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>,
+      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
+      Past,
+      Invoke<
+        typeof offer,
+        [
+          o: {
+            domain: "acme";
+            repo: "acme/app";
+            branch: "fix";
+            commit: Past["offered"];
+            workspace: "w1";
+            lfs: 0;
+            at: "2026-11-16T12:00:00.000Z";
+          },
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof more,
+          [
+            domain: "acme",
+            repoArg: "acme/app",
+            branch: "fix",
+            againstArg: "origin",
+            ask: { list: "commits" },
+            signal: undefined,
+            offered: true,
+          ]
+        >,
+        "matches",
+        { commit: Past["offered"] }
+      >,
+      Expect<
+        Invoke<
+          typeof more,
+          [
+            domain: "acme",
+            repoArg: "acme/app",
+            branch: "fix",
+            againstArg: "origin",
+            ask: { list: "commits" },
+            signal: undefined,
+            offered: false,
+          ]
+        >,
+        "matches",
+        { commit: Past["moved"] }
+      >,
+    ]
+  >;
+}
 
 /** A page of a diff, not a cap: the next is asked for. One answer between two layers, and
  *  what a page draws at once: 3,000 lines is where drawing a diff stopped being quick (a
@@ -1273,6 +1271,7 @@ export const diff = async (
   against: unknown = "origin",
   ask: Ask = null,
   signal?: AbortSignal,
+  offered = false,
 ): Promise<
   DiffPage & {
     repo: string;
@@ -1286,7 +1285,7 @@ export const diff = async (
   }
 > => {
   // Asked for whole (`desolate review --diff`, with nothing said): the branch as it is now.
-  const t = await targetOf(domain, repoArg, branch, against, ask === null, signal);
+  const t = await targetOf(domain, repoArg, branch, against, ask === null, signal, offered);
   const { left, right, pick } = await picked(t, ask?.pickFrom, ask?.pickTo);
   const paths = [ask?.file, ask?.was].map(textOf).filter(Boolean);
   if (paths.some((p) => p.includes("\0"))) refuse("that is not a file's path", "name a file");

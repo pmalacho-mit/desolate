@@ -148,8 +148,8 @@ const main = async () => {
    *  domain's bundle carries all its branches: until that branch is gone from the domain,
    *  nothing new from the domain is taken. Said here, recorded for the dashboard and
    *  `desolate offers`, and told to the workspace that offered. */
-  const refused = (why: string) => {
-    noteRefusal(slug, repo, why);
+  const refused = async (why: string) => {
+    await noteRefusal(slug, repo, why);
     process.stderr.write(
       `git-remote-desolate: a bundle from ${slug} was refused and dropped: ${printable(why, WHY_MOST)}\n  Nothing new from ${slug} is taken while one of its branches holds what git refused: delete that branch in the workspace, then \`desolate sync\` there.\n`,
     );
@@ -203,13 +203,13 @@ const main = async () => {
             fetched = await fetch();
           }
           // What git says about a bundle is in part the bundle's author's text: shown as text.
-          if (fetched.code === 0) clearRefusal(slug, repo);
+          if (fetched.code === 0) await clearRefusal(slug, repo);
           else if (LOCKED.test(fetched.stderr))
             process.stderr.write(
               `git-remote-desolate: a bundle from ${slug} was not imported: the root clone was busy (${printable(gitSaid(fetched, 1), WHY_MOST)}); its next sync brings the same branches\n`,
             );
-          else refused(`did not import: ${gitSaid(fetched, 1)}`);
-        } else refused(why);
+          else await refused(`did not import: ${gitSaid(fetched, 1)}`);
+        } else await refused(why);
         fs.rmSync(copy, { force: true });
       }
     }
@@ -239,7 +239,7 @@ const main = async () => {
     // (Its own process, on this domain's lane: it may wait for the share to settle.)
     const listed = refsOf(slug, repo, true);
     if ("refused" in listed) {
-      noteRefusal(slug, repo, listed.refused);
+      await noteRefusal(slug, repo, listed.refused);
       return fail(
         `${printable(listed.refused, WHY_MOST)}: nothing from ${slug} is fetched, and none of its branches removed, until it is (\`desolate sync\` in a workspace writes it again)`,
       );
@@ -261,7 +261,7 @@ const main = async () => {
       else lines.push(`${commit} refs/heads/${branch}`);
     });
     // Everything the domain lists is here: whatever was refused before is no longer in it.
-    if (missing === 0) clearRefusal(slug, repo);
+    if (missing === 0) await clearRefusal(slug, repo);
     return lines;
   };
 

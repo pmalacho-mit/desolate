@@ -7,11 +7,11 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isBranch, isCommit, isLfsOid, parseRepo } from "../shared/names.ts";
-import { readJson, writeJson } from "../shared/json.ts";
 import { FORGE, over } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
 import { copyOut, copyOutSync } from "../shared/copy.ts";
 import { domainPath, ROOT } from "./layout.ts";
+import * as record from "./record.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aDomain, emptyRoot, pathIn } from "../.harness/root-state.ts";
@@ -495,12 +495,9 @@ export const takeBundles = (
 // that silently never arrives. Cleared for a repository when a bundle of it is next taken.
 // Each is read with what to do about it (`fix`), chosen here and only here: the workspace's
 // answer to an offer, `desolate offers` and the dashboard all show this one.
-type Noted = { domain: string; repo: string; at: string; why: string };
-export type Refusal = Noted & { fix: string };
-const refusedFile = (domain: string) => path.join(ROOT.state, "refused", `${domain}.json`);
-const noted = (domain: string): Noted[] => readJson<Noted[]>(refusedFile(domain), []);
+export type Refusal = record.Refused & { fix: string };
 export const refusalsOf = (domain: string): Refusal[] =>
-  noted(domain).map((r) => ({ ...r, fix: refusalFix(r.why) }));
+  record.refusedOf(domain).map((r) => ({ ...r, fix: refusalFix(r.why) }));
 
 /** What to do about a refusal, by its reason. A list the root could not open is no verdict on
  *  a branch: the share between the two VMs showed the root something other than the
@@ -533,24 +530,10 @@ declare namespace refusalFix {
   >;
 }
 
-export const noteRefusal = (domain: string, repo: string, why: string) => {
-  fs.mkdirSync(path.dirname(refusedFile(domain)), { recursive: true, mode: 0o700 });
-  // The reason is in part the bundle's author's text: printable ASCII only, and short.
-  const entry = {
-    domain,
-    repo,
-    at: new Date().toISOString(),
-    why: printable(why, WHY_MOST),
-  };
-  writeJson(
-    refusedFile(domain),
-    [...noted(domain).filter((r) => r.repo !== repo), entry].slice(-20),
-  );
-};
-export const clearRefusal = (domain: string, repo: string) => {
-  const kept = noted(domain).filter((r) => r.repo !== repo);
-  if (kept.length !== noted(domain).length) writeJson(refusedFile(domain), kept);
-};
+// The reason is in part the bundle's author's text: printable ASCII only, and short.
+export const noteRefusal = (domain: string, repo: string, why: string) =>
+  record.refuse(domain, repo, printable(why, WHY_MOST));
+export const clearRefusal = record.accept;
 
 declare namespace noteRefusal {
   type Fresh = Invoke<typeof emptyRoot>;

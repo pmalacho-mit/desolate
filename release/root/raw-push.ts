@@ -15,14 +15,20 @@ import { git } from "./git.ts";
 import { startOf } from "../shared/lock.ts";
 import { hold } from "./keyring-client.ts";
 import { APPROVALS, clonePath, KEYRING } from "./layout.ts";
-import { allOffers } from "./offers.ts";
-import { afterPush } from "./pushed.ts";
+import { afterPush } from "./record.ts";
 import * as repos from "./repos.ts";
 import { submitForReview } from "./review-client.ts";
 import { send } from "./send.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Mock,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { aRegistry, emptyRoot, mirrorsAndClonesHere } from "../.harness/root-state.ts";
+import type { offer, offersOf } from "./record.ts";
 
 /** Returns null when pushed, or why not (one line). `say` is for the person waiting.
  *  It waits for the person for as long as it is waited for (R4): until they approve or refuse
@@ -170,17 +176,86 @@ const pushed = async (
     );
     say(`desolate:   ${catchUp(branch, commit)}`);
   }
-  // The base a pull request goes into: what an offer of this commit named, else the default.
-  const base =
-    allOffers().find((o) => o.repo === name && o.branch === branch && o.commit === commit)?.base ??
-    repos.registry().repos[name]?.defaultBranch ??
-    null;
-  const link = afterPush({ repo: name, branch, commit: sent, base }, say);
+  // Recorded, and every domain's offer of this commit withdrawn: the base a pull request goes
+  // into is what that offer named, else the default branch.
+  const { base, link } = await afterPush(
+    {
+      domain: null,
+      repo: name,
+      branch,
+      commit,
+      sent,
+      fallback: repos.registry().repos[name]?.defaultBranch ?? null,
+    },
+    say,
+  );
   await repos.fetch(repo).catch(() => {});
   if (link)
     say(`desolate: open a pull request into ${base}, in your browser, as yourself: ${link}`);
   return null;
 };
+
+declare namespace pushed {
+  /** a raw push (the root's terminal, the git VM) of an offered commit withdraws that offer:
+   *  it was left under "Needs you" (the review of 2026-11-22, A1). The control: another
+   *  domain's offer of the branch at another commit stays */
+  export type Withdraws = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof emptyRoot>,
+      Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>,
+      Invoke<
+        typeof offer,
+        [
+          o: {
+            domain: "acme";
+            repo: "acme/app";
+            branch: "fix";
+            commit: "0123456789abcdef0123456789abcdef01234567";
+            workspace: "w1";
+            lfs: 0;
+            at: "2026-11-16T12:00:00.000Z";
+          },
+        ]
+      >,
+      Invoke<
+        typeof offer,
+        [
+          o: {
+            domain: "beta";
+            repo: "acme/app";
+            branch: "fix";
+            commit: "89abcdef0123456789abcdef0123456789abcdef";
+            workspace: "w1";
+            lfs: 0;
+            at: "2026-11-16T12:00:00.000Z";
+          },
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof pushed,
+          [
+            repo: { owner: "acme"; name: "app" },
+            commit: "0123456789abcdef0123456789abcdef01234567",
+            branch: "fix",
+            sent: "0123456789abcdef0123456789abcdef01234567",
+            say: typeof console.error,
+          ]
+        >,
+        "=",
+        null
+      >,
+      Expect<
+        Invoke<typeof offersOf>,
+        "matches",
+        [{ domain: "beta"; commit: "89abcdef0123456789abcdef0123456789abcdef" }]
+      >,
+    ]
+  >;
+}
 
 declare namespace pushCommit {
   type Fresh = Invoke<typeof emptyRoot>;

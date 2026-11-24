@@ -68,6 +68,7 @@ export const FEATURES: Feature[] = [
       "release/root/pusher.ts",
       "release/root/pushed.ts",
       "release/root/raw-push.ts",
+      "release/root/record.ts",
       "release/root/send.ts",
       "release/root/approvals.ts",
       "release/root/keyring.ts",

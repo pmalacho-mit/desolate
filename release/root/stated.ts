@@ -57,7 +57,6 @@ import {
   isLocalhostSuffix,
   isSlug,
   parseRepo,
-  pullRequestUrl,
   ROOT_HOSTNAME,
   ROOT_UI,
 } from "../shared/names.ts";
@@ -69,7 +68,7 @@ import { refusal, sameSecret } from "../shared/gate.ts";
 import { carriesCredential, cookieIn, cookieValue, signedInPage } from "../shared/page-key.ts";
 import * as domains from "./domains.ts";
 import { branchesOf, refusalsOf } from "./outbox.ts";
-import { forge, git } from "./git.ts";
+import { git } from "./git.ts";
 import { APPROVALS, clonePath, domainPath, HOST_QUEUE, ROOT } from "./layout.ts";
 import * as issues from "./issues.ts";
 import { issueUrl } from "../shared/issues.ts";
@@ -77,8 +76,7 @@ import * as offers from "./offers.ts";
 import * as proxy from "./proxy/manage.ts";
 import { proxyDomainDir } from "./proxy/as-proxy.ts";
 import { SECRETS_DIR } from "./proxy/secret-store.ts";
-import { landedFor, pushedList } from "./pushed.ts";
-import type { Pushed } from "./pushed.ts";
+import { marked, offersOf, pullRequestOf, pushes } from "./record.ts";
 import { pushCommit } from "./raw-push.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
@@ -664,19 +662,10 @@ const checkPushed = async () => {
   }
 };
 
-/** GitHub's page for opening a pushed branch's pull request (null on another forge). */
-const pullRequestOf = (p: Pushed): string | null => {
-  try {
-    return forge().kind === "github" ? pullRequestUrl(p.repo, p.branch, p.base) : null;
-  } catch {
-    return null; // no forge on record
-  }
-};
-
 /** A page of a domain's branches (branchesPage), each marked with the base it has landed in,
- *  if it has, or else with what was pushed of it and its pull request's page (pushed.ts):
+ *  if it has, or else with what was pushed of it and its pull request's page (record.ts):
  *  the link was only in the activity log, at the foot of the page (dogfooding, 2026-11-21). */
-const branchesFor = (d: { slug: string; repos: string[] }, from: number, pushed = pushedList()) => {
+const branchesFor = (d: { slug: string; repos: string[] }, from: number) => {
   const page = branchesPage(
     branchesOf(d.slug, d.repos),
     domains.workspaces(d.slug).flatMap((w) => w.checkouts.map((c) => `${c.repo}\n${c.branch}`)),
@@ -684,22 +673,14 @@ const branchesFor = (d: { slug: string; repos: string[] }, from: number, pushed 
   );
   return {
     ...page,
-    items: page.items.map((b) => {
-      const landed = landedFor(pushed, b.repo, b.branch, b.commit);
-      const p = landed ? null : pushed.find((e) => e.repo === b.repo && e.branch === b.branch);
-      return {
-        ...b,
-        landed,
-        pushed: p && !p.landed ? { commit: p.commit, pullRequest: pullRequestOf(p) } : null,
-      };
-    }),
+    items: marked(d.slug, page.items).map(({ offered: _, pushed, ...b }) => ({
+      ...b,
+      pushed: pushed ? { commit: pushed.commit, pullRequest: pullRequestOf(pushed) } : null,
+    })),
   };
 };
 
 const snapshot = () => {
-  // What was pushed and has since landed in the branch it was for (pushed.ts): a branch
-  // still at that commit is marked "merged into <base>".
-  const pushed = pushedList();
   const list = domains.domains().map((d) => ({
     slug: d.slug,
     title: d.title,
@@ -714,7 +695,7 @@ const snapshot = () => {
       }) ?? null,
     // Their first page, and how many there are (R2): `desolate branches <domain>` and the
     // dashboard's Show more (GET /branches) have the rest.
-    branches: branchesFor(d, 0, pushed),
+    branches: branchesFor(d, 0),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
     // Whose devcontainer New workspace runs, and which it may choose instead (null: not read yet).
@@ -773,7 +754,7 @@ const snapshot = () => {
     })),
     domains: list,
     spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? null])),
-    offers: offers.allOffers(),
+    offers: offersOf(),
     // Issues workspaces offered: every one still waiting, and the last few done with.
     issues: (() => {
       const all = issues.list();
@@ -843,9 +824,9 @@ const stateTag = () => createHash("sha256").update(last).digest("hex").slice(0, 
 //   what is counted in git (checkPushed: commits against the remote, a project's size, a
 //     domain's environments)            `nudged` when a count is done
 //   the root's own files, written by its own processes (rootd, rootctl, the pusher):
-//     /var/lib/desolate: the registry, what was pushed, the forge; approvals; refusals;
-//     issues; the host queue. The secrets' index, each domain's network policy. On the
-//     domains' share: a domain's record and offers, its workspaces' records
+//     /var/lib/desolate: the registry, what was offered, refused and pushed (record.ts),
+//     the forge; approvals; issues; the host queue. The secrets' index, each domain's network
+//     policy. On the domains' share: a domain's own file, its workspaces' records
 //                                       a watch on each directory (watchDomains), `nudged`:
 //                                       a VM's own writes to a share are its events, another
 //                                       VM's are not
@@ -875,15 +856,14 @@ const watchDomains = () => {
   const any = null;
   const only = (...names: string[]) => new Set(names);
   const wanted = new Map<string, Set<string> | null>([
-    [ROOT.state, only("registry.json", "pushed.json", "forge.json")],
+    [ROOT.state, only("registry.json", "record.json", "forge.json")],
     [APPROVALS, any],
-    [path.join(ROOT.state, "refused"), any],
     [path.join(ROOT.state, "issues"), any],
     [HOST_QUEUE, any],
     [SECRETS_DIR, any],
     [ROOT.domains, any],
     ...domains.domains().flatMap((d): [string, Set<string> | null][] => [
-      [domainPath(d.slug), only("domain.json", "offers.json")],
+      [domainPath(d.slug), only("domain.json")],
       [path.join(domainPath(d.slug), "workspaces"), any],
       [proxyDomainDir(d.slug), only("policy.json")],
     ]),
@@ -1254,9 +1234,7 @@ const push = (
     branch: args.branch,
     commit: args.commit,
   };
-  const offer = offers
-    .offersOf(kept.domain)
-    .find((o) => o.repo === kept.repo && o.branch === kept.branch);
+  const offer = offersOf(kept.domain).find((o) => o.repo === kept.repo && o.branch === kept.branch);
   if (!offer || offer.commit !== kept.commit)
     return {
       error: `${kept.branch} is no longer offered at ${kept.commit.slice(0, 12)}: it moved, or was withdrawn. Review it again.`,
@@ -1287,9 +1265,11 @@ const push = (
       action.state = failed ? "failed" : "done";
       if (failed) say(failed);
       else {
-        offers.withdraw(kept.domain, kept.repo, kept.branch);
-        // What the remote got: the commit, or the squash of it the person chose.
-        const sent = pushedList().find((p) => p.repo === kept.repo && p.branch === kept.branch);
+        // What the remote got: the commit, or the squash of it the person chose. (The push
+        // withdrew the offer it pushed: raw-push.ts.)
+        const sent = pushes().find(
+          (p) => p.domain === kept.domain && p.repo === kept.repo && p.branch === kept.branch,
+        );
         say(`pushed ${kept.repo} ${kept.branch} at ${sent?.commit ?? kept.commit}`);
         action.link = sent ? (pullRequestOf(sent) ?? undefined) : undefined;
       }
@@ -1744,10 +1724,13 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       signal: AbortSignal,
     ) => Promise<unknown>
   > = {
+    // (Each of an offered branch at the commit offered, which is what Push sends.)
     "/review": (domain, repo, branch, against, _ask, signal) =>
-      offers.review(domain, repo, branch, against, signal),
-    "/review/more": offers.more,
-    "/diff": offers.diff,
+      offers.review(domain, repo, branch, against, signal, true),
+    "/review/more": (domain, repo, branch, against, ask, signal) =>
+      offers.more(domain, repo, branch, against, ask, signal, true),
+    "/diff": (domain, repo, branch, against, ask, signal) =>
+      offers.diff(domain, repo, branch, against, ask, signal, true),
   };
   if (req.method === "GET" && Object.hasOwn(reviews, url.pathname)) {
     const gone = new AbortController();
@@ -1787,7 +1770,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     };
     const result =
       asked.do === "dismiss"
-        ? offers.dismiss(asked.domain, asked.repo, asked.branch)
+        ? await offers.dismiss(asked.domain, asked.repo, asked.branch)
         : { error: "dismiss" };
     changed();
     return "error" in result ? json(res, 400, result) : json(res, 200, result);

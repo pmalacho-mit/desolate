@@ -40,7 +40,7 @@ import { branchesOf, refusalsOf } from "./outbox.ts";
 import * as issues from "./issues.ts";
 import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
-import { landedFor, pushedList } from "./pushed.ts";
+import * as record from "./record.ts";
 import * as proxy from "./proxy/manage.ts";
 import * as secrets from "./proxy/secrets.ts";
 import * as repos from "./repos.ts";
@@ -263,7 +263,7 @@ export const ops: Record<string, Op> = {
   },
 
   async "offers.list"(args) {
-    return offers.allOffers(
+    return record.offersOf(
       typeof args.domain === "string" ? domains.slugOf(args.domain, "domain") : undefined,
     );
   },
@@ -276,7 +276,6 @@ export const ops: Record<string, Op> = {
       .domains()
       .filter((d) => !only || d.slug === only)
       .flatMap((d) => {
-        const offered = offers.offersOf(d.slug);
         const reposDir = path.join(domainPath(d.slug), "repos");
         const heads = domains.workspaces(d.slug).flatMap((w) =>
           w.checkouts.map((c) => ({
@@ -285,14 +284,13 @@ export const ops: Record<string, Op> = {
             head: readHead(reposDir, c),
           })),
         );
-        const pushed = pushedList();
-        return branchesOf(d.slug, d.repos).map((b) => ({
+        return record.marked(d.slug, branchesOf(d.slug, d.repos)).map((b) => ({
           domain: d.slug,
-          ...b,
-          landed: landedFor(pushed, b.repo, b.branch, b.commit),
-          offered: offered.some(
-            (o) => o.repo === b.repo && o.branch === b.branch && o.commit === b.commit,
-          ),
+          repo: b.repo,
+          branch: b.branch,
+          commit: b.commit,
+          landed: b.landed,
+          offered: b.offered,
           checkedOutIn: heads
             .filter((h) => h.repo === b.repo && h.head?.branch === b.branch)
             .map((h) => h.workspace),
@@ -300,7 +298,7 @@ export const ops: Record<string, Op> = {
       });
   },
   async "offers.dismiss"(args) {
-    const result = offers.dismiss(args.domain, args.repo, args.branch);
+    const result = await offers.dismiss(args.domain, args.repo, args.branch);
     if ("error" in result)
       refuse(result.error, "desolate offers   (what is offered, by domain, repository and branch)");
     return result;
