@@ -22,6 +22,9 @@
 // - One domain's import held for a minute in a root clone it shares with another holds up
 //   none of the other's work there: its offer is answered as fast as with nothing held (the
 //   control), while the hold is still on.
+// - Locks two domains' git takes in one clone are waited for: 80 rounds of two fetches at
+//   once, with the root's git and settings, fail none; an offer while another git holds
+//   packed-refs and a ref of its own for 15 s is taken, not refused (the control: none held).
 // - A root that is down is said to be down within the beat's 10 s, and the request is
 //   withdrawn; the same offer once it runs again is answered (the control).
 import assert from "node:assert/strict";
@@ -434,6 +437,77 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
         { root: true },
       );
     }
+  });
+
+  it("locks two domains' git takes in one clone are waited for, never a refusal: 80 rounds of two fetches at once with the root's git; and an offer while another holds packed-refs and a ref of its own for 15 s is taken (the control: the same with none held)", async () => {
+    // Two domains' `git fetch --prune` at once into one clone, each adding and deleting 30
+    // branches, half the rounds beside a `pack-refs --all --prune`: with the root's settings,
+    // and with git's own (said, not asserted: what the root's settings are for).
+    const stress = (config: string) =>
+      stack
+        .inRoot([
+          "bash",
+          "-c",
+          `export GIT_CONFIG_GLOBAL=${config} GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t; t=$(mktemp -d) && cd $t && git init -q -b main src && git -C src commit -q --allow-empty -m s && git clone -q src clone && cd clone && git pack-refs --all && for d in a b; do git init -q -b main ../$d && git -C ../$d commit -q --allow-empty -m $d && git remote add $d ../$d; done; fails=0; for r in $(seq 1 80); do for d in a b; do for i in $(seq 1 30); do git -C ../$d branch -f br$i-$r main; done; git -C ../$d for-each-ref --format='%(refname:short)' "refs/heads/br*-$((r-1))" | xargs -r git -C ../$d branch -q -D; done; git fetch -q --prune a 2>>err & p=$!; git fetch -q --prune b 2>>err & q=$!; [ $((r % 2)) = 0 ] && { git pack-refs --all --prune 2>>err || fails=$((fails+1)); }; wait $p || fails=$((fails+1)); wait $q || fails=$((fails+1)); done; echo "$(git --version): $fails failed, $(grep -c 'File exists' err) lock refusals; $(sort err | uniq -c | sort -rn | head -1)"; cd / && rm -rf $t`,
+        ])
+        .stdout.trim();
+    const withRoots = stress("/var/lib/desolate-root/gitconfig");
+    const withGits = stress("/dev/null");
+    console.log(`80 rounds, the root's settings: ${withRoots}; git's own: ${withGits}`);
+    assert.match(withRoots, /: 0 failed, 0 lock refusals;/);
+
+    const BT = "/workspaces/acme/widgets/.worktrees/task-b";
+    const clone = "/desolate/root/acme/widgets/.git";
+    const refusals = () =>
+      stack.inRoot(["bash", "-c", "cat /var/lib/desolate/refused/beta.json 2>/dev/null || echo []"])
+        .stdout;
+    /** beta offers again, with a branch it had sent before deleted, so that the root's fetch
+     *  deletes a ref (packed-refs' lock) as well as writing its own (each ref's). (Deleted only
+     *  once the root has it: the workspace syncs on its own as its refs change.) */
+    const offerAfterDeleting = async (gone: string) => {
+      const made = inside("beta/b1", `cd ${BT} && git branch ${gone} && desolate sync >/dev/null`);
+      assert.equal(made.code, 0, made.stderr);
+      const there = () =>
+        stack.inRoot([
+          "git",
+          "-C",
+          "/desolate/root/acme/widgets",
+          "rev-parse",
+          "--verify",
+          "-q",
+          `refs/remotes/beta/${gone}`,
+        ]).code === 0;
+      assert.ok(await until(there, 60_000), `beta's ${gone} never reached the root`);
+      return () => {
+        const offered = inside(
+          "beta/b1",
+          `cd ${BT} && git branch -D ${gone} >/dev/null && echo '${gone}' >> notes.txt && git commit -qam '${gone}' && desolate offer`,
+        );
+        return { ...offered, pruned: !there() };
+      };
+    };
+    const control = (await offerAfterDeleting("gone-1"))();
+    assert.equal(control.code, 0, control.stderr);
+    assert.match(control.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+    assert.ok(control.pruned, "the control's deleted branch was pruned");
+    const offer = await offerAfterDeleting("gone-2");
+    // Another git holds packed-refs and the ref beta's import writes first, for 15 s: past
+    // git's own waits and past the five tries offers.ts makes of a fetch that met a lock.
+    const held = stack.inRoot([
+      "bash",
+      "-c",
+      `mkdir -p ${clone}/refs/desolate/incoming/beta/task && touch ${clone}/packed-refs.lock ${clone}/refs/desolate/incoming/beta/task/b.lock && setsid bash -c 'sleep 15; rm -f ${clone}/packed-refs.lock ${clone}/refs/desolate/incoming/beta/task/b.lock' </dev/null >/dev/null 2>&1 &`,
+    ]);
+    assert.equal(held.code, 0, held.stderr);
+    const during = offer();
+    console.log(
+      `beta's offer: ${control.ms} ms with no lock held, ${during.ms} ms with two held for 15 s`,
+    );
+    assert.equal(during.code, 0, during.stderr);
+    assert.match(during.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+    assert.ok(during.ms >= 12_000, `the offer took ${during.ms} ms: the locks were not in its way`);
+    assert.ok(during.pruned, "the deleted branch was pruned once packed-refs was free");
+    assert.doesNotMatch(refusals(), /beta/, "nothing was recorded against beta");
   });
 
   it("a root that is down is said to be within the beat's 10 s, and the request withdrawn (the control: answered once it runs)", () => {
