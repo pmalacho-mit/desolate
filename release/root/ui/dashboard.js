@@ -506,7 +506,7 @@ const openIssue = (issue) => {
   const toggle = el("button", { class: "quiet small", type: "button", "data-preview-toggle": "", onclick: () => {
     previewing = !previewing;
     toggle.textContent = previewing ? "Write" : "Preview";
-    if (previewing) preview.replaceChildren(typeof DesolateMarkdown !== "undefined" ? DesolateMarkdown.render(body.value) : document.createTextNode(body.value));
+    if (previewing) preview.replaceChildren(typeof DesolateMarkdown !== "undefined" ? DesolateMarkdown.render(body.value, unhidden, location.origin) : document.createTextNode(body.value));
     preview.hidden = !previewing;
     body.hidden = previewing;
   } }, "Preview");
