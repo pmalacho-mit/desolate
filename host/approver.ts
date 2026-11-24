@@ -73,6 +73,14 @@ export const kind = (): Kind | null => {
   }
 };
 declare namespace kind {
+  /** the kind bootstrap wrote is the kind: the control for the two below */
+  export type Named = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeInHome, [name: "approver/kind", text: "terminal\n"]>,
+    ],
+    Expect<Invoke<typeof kind>, "=", "terminal">
+  >;
   /** none until bootstrap makes one; a kind file that names neither kind is none */
   export type NoneYet = Given<
     Invoke<typeof emptyHome>,
