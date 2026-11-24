@@ -556,7 +556,7 @@ v3 installs beside v2: a different VM and different ports. Projects move one at 
 
 ## 12. Non-goals for v3
 
-- Linux and Windows as hosts people use. A Linux `qemu` backend does exist, for testing and CI (section 13.2), and keeps the VM layer honest about being one interface; making Linux a supported host is later work.
+- Linux and Windows as hosts. desolate runs on macOS only, for now (2026-11-23: the Linux `qemu` backend, which had never run outside the first pass's sandbox, was removed); another host is later work.
 - More than one human.
 - Remote hosting.
 - Microsoft marketplace extensions.
@@ -568,17 +568,17 @@ v3 installs beside v2: a different VM and different ports. Projects move one at 
 
 ### 13.1 Bootstrapping (decided)
 
-- **One command from a clean machine to a working stack:** `desolate bootstrap [--backend <name>]`. It checks and installs desolate's pinned tools (checksummed, as v2's image downloads are), fetches or builds the base VM image (checksummed), creates the root VM, its keyring and its state service, and ends with `desolate doctor`. It is idempotent: run twice, the second run changes nothing and says so.
+- **One command from a clean machine to a working stack:** `desolate bootstrap`. It checks and installs desolate's pinned tools (checksummed, as v2's image downloads are), fetches or builds the base VM image (checksummed), creates the root VM, its keyring and its state service, and ends with `desolate doctor`. It is idempotent: run twice, the second run changes nothing and says so.
 - **`desolate doctor`** succeeds v2's `preflight`, with its false-pass discipline: run with nothing reachable, nothing passes (v2's `20-preflight-degraded` test, kept). Every failure names the command that fixes it.
 - **`desolate destroy --all`** puts the machine back as it was. A test checks nothing is left: no VMs, shares, listeners or files outside `~/.desolate`.
 - **Every end-to-end test starts from `bootstrap`**, never from a state set up by hand, so bootstrapping is itself tested every time.
 
 ### 13.2 Backends, and four test tiers (decided)
 
-The VM layer is one interface: create, boot, stop, suspend, resume, destroy, clone a disk, attach a share read-write or read-only, attach the network link to a proxy, report listening ports, exec, logs. It has three kinds of backend:
+The VM layer is one interface: create, boot, stop, suspend, resume, destroy, clone a disk, attach a share read-write or read-only, attach the network link to a proxy, report listening ports, exec, logs. It has these kinds of backend:
 
 - **`fake`:** each "VM" is a container (or a process namespace) on any Docker host, implementing the whole interface: read-only shares as read-only binds, the network link as a container network whose only route is the proxy, exec, port events. It gives **no hypervisor isolation**, and says so: it is not in `release/`, and runs only when a test run loads it into each command (`tests/v3/lib/fake-backend.ts`, by `node --import`); every workspace on it is labelled `not isolated` in the CLI and the dashboard; and `doctor` fails on it outside a test run.
-- **`qemu`:** a Linux backend on QEMU (through Lima's QEMU driver, or QEMU directly), with KVM where the host has `/dev/kvm` (GitHub's Ubuntu runners do: foldyard's CI boots Lima VMs there), and software emulation (TCG) where it does not. TCG is slow (minutes to boot, everything inside crawls) but it is a real hypervisor boundary.
+- **`qemu`:** removed on 2026-11-23 (desolate runs on macOS only, for now). It had never run outside the first pass's cloud sandbox, and lacked the share-swap protection of the vz path.
 - **The product backend**, Lima/vz or Apple Container (Phase 0 decides), on a Mac.
 
 On the owner's M1: the product backend's VMs are started by the Mac itself, so they run at full speed; the M1's lack of nested virtualization matters only for running v3 *inside* something (a sandbox, a desolate v2 workspace, Colima), which means TCG there.
@@ -587,10 +587,9 @@ On the owner's M1: the product backend's VMs are started by the Mac itself, so t
 |---|---|---|---|---|
 | **T1** static and unit | none | anywhere | seconds | as in v2 |
 | **T2** e2e-fast | `fake` | any Docker host: the agent's sandbox, the Mac | minutes | everything but the hypervisor boundary: root services, the proxy and its policy, the keyring and the push gate, mirrors and domain clones, offers, pushes and `upstream`, the port router (Vite in two "VMs" at one number), caches, the state service and the dashboard (Playwright), the CLI's transcripts |
-| **T3** e2e-slow | `qemu` (KVM or TCG) | CI on Linux with KVM; the agent's sandbox under TCG | tens of minutes | the boundaries that need a real VM: forced egress with root inside the VM, read-only shares against root inside the VM, the hostile-repository scenario, the cross-domain poisoning test. Run as `make e2e-slow` whenever something structural changes |
 | **T4** acceptance | the product backend | the owner's Mac (or any Mac the agent is given) | as long as it takes | section 13.4's scenarios for real, timed against section 4.7's targets |
 
-**Every boundary claim has a T3 test, and a T2 test is never taken as proof of one.** Test names carry their tier.
+**Every boundary claim has a real-VM test (`tests/v3/t3/`, run as T4 on a Mac), and a T2 test is never taken as proof of one.** Test names carry their tier.
 
 **Two architectures.** The agent's cloud sessions (Claude Code on the web) are Ubuntu 24.04 on **x86_64**, with Docker, 4 vCPUs, 16 GB of RAM and 30 GB of disk. The owner's Mac is **arm64**. T1 and T2 must pass on both. Base images, pinned tools and their checksums are per architecture, as v2's already are. The cloud documentation says nothing about `/dev/kvm`, so T3 there is under KVM if a session has it, and under TCG if not.
 

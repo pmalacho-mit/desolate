@@ -442,7 +442,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
     detail: b.isolated
       ? kind
       : `${kind}: containers stand in for VMs. NOTHING here is isolated${process.env.DESOLATE_TEST_RUN === "1" ? " (allowed: DESOLATE_TEST_RUN=1)" : ""}`,
-    fix: "use a real backend: `desolate destroy --all`, then `desolate bootstrap --backend qemu` (Linux) or `--backend vz` (macOS)",
+    fix: "use the real backend: `desolate destroy --all`, then `desolate bootstrap`",
   });
   try {
     checks.push(...(await b.check()));

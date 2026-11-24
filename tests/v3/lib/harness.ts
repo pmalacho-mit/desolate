@@ -17,8 +17,8 @@ const TRANSCRIPTS = path.join(REPO_ROOT, "tests", "v3", "transcripts");
 
 export type Result = { code: number; stdout: string; stderr: string; ms: number };
 export type Stack = {
-  tier: "T2" | "T3" | "T4";
-  backend: "fake" | "qemu" | "vz";
+  tier: "T2" | "T4";
+  backend: "fake" | "vz";
   instance: string;
   home: string;
   work: string;
@@ -121,9 +121,9 @@ export const outboxSaid = (stack: Stack) => {
   };
 };
 
-/** T2: the fake backend. T3: real VMs on Linux (qemu). T4: the product backend on a Mac (vz). */
-export const backendOfTier = (): "fake" | "qemu" | "vz" =>
-  process.env.DESOLATE_TIER === "T3" ? "qemu" : process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
+/** T2: the fake backend. T4: the product backend on a Mac (vz). */
+export const backendOfTier = (): "fake" | "vz" =>
+  process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
 
 export const newStack = (label: string): Stack => {
   const backend = backendOfTier();
@@ -241,9 +241,7 @@ export const newStack = (label: string): Stack => {
     DESOLATE_HOME: home,
     DESOLATE_INSTANCE: instance,
     // The fake backend is not in release/: each command loads it (lib/fake-backend.ts).
-    ...(backend === "fake"
-      ? { NODE_OPTIONS: `--import=${pathToFileURL(FAKE_BACKEND).href}` }
-      : { DESOLATE_BACKEND: backend }),
+    ...(backend === "fake" ? { NODE_OPTIONS: `--import=${pathToFileURL(FAKE_BACKEND).href}` } : {}),
     DESOLATE_TEST_RUN: "1",
     // Beside a real stack, and beside other test stacks: the editors on a port of this
     // stack's own (doctor fails a daemon that could not take its port).
@@ -362,7 +360,7 @@ export const newStack = (label: string): Stack => {
           );
 
   const stack: Stack = {
-    tier: backend === "fake" ? "T2" : backend === "qemu" ? "T3" : "T4",
+    tier: backend === "fake" ? "T2" : "T4",
     backend,
     instance,
     home,

@@ -87,7 +87,7 @@ $ desolate doctor
   ok   home: <home>
   ok   the install folder holds no credential: <repo>/release, shared read-only into every VM
   FAIL backend gives isolation: fake: containers stand in for VMs. NOTHING here is isolated
-         fix: use a real backend: `desolate destroy --all`, then `desolate bootstrap --backend qemu` (Linux) or `--backend vz` (macOS)
+         fix: use the real backend: `desolate destroy --all`, then `desolate bootstrap`
   ok   docker daemon: docker <version>
   ok   base image: desolate/base:latest <id>
   ok   root VM running: dsl-<instance>-root

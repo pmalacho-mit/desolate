@@ -24,14 +24,11 @@ export type ForgeConfig = {
   ssh: { user: string; host: string; port: number };
   knownHosts: string;
 };
-export type Config = { backend: "fake" | "qemu" | "vz"; forge: ForgeConfig };
+export type Config = { backend: "fake" | "vz"; forge: ForgeConfig };
 
 const CONFIG = path.join(paths.state, "config.json");
 export const config = (): Config | null => readJson<Config | null>(CONFIG, null);
 export const saveConfig = (value: Config) => writeJson(CONFIG, value);
-
-export const defaultBackend = (): Config["backend"] =>
-  process.platform === "darwin" ? "vz" : "qemu";
 
 /** The backend a test run loaded into this process before any command ran: the tests'
  *  stand-in for VMs (tests/v3/lib/fake-backend.ts, by `node --import`). Not in release/,
@@ -41,14 +38,11 @@ export const useBackend = (b: Backend) => {
   loaded = b;
 };
 
-/** Which backend this invocation uses. `fake` is never remembered as a default: it is the
- *  backend only when a test run loaded it into this very command (section 13.2), so a stack
- *  cannot quietly be the unisolated kind. */
+/** Which backend this invocation uses: vz, the one there is, unless a test run loaded its
+ *  stand-in into this very command (section 13.2). `fake` is never a default, and no
+ *  variable or setting selects it, so a stack cannot quietly be the unisolated kind. */
 export const backendKind = (testsLoaded = loaded?.kind): Config["backend"] => {
-  const env = process.env.DESOLATE_BACKEND;
   const stored = config()?.backend;
-  if (env !== undefined && env !== "qemu" && env !== "vz")
-    refuse(`DESOLATE_BACKEND is '${env}'`, "use qemu or vz");
   if (stored === "fake" && testsLoaded !== "fake")
     refuse(
       "this stack was bootstrapped on the tests' fake backend, which gives no isolation and runs only when a test run loads it",
@@ -59,30 +53,25 @@ export const backendKind = (testsLoaded = loaded?.kind): Config["backend"] => {
       `the tests' fake backend is loaded, but this stack was bootstrapped on ${stored}`,
       "unset NODE_OPTIONS",
     );
-  return testsLoaded ?? (env as Config["backend"] | undefined) ?? stored ?? defaultBackend();
+  return testsLoaded === "fake" ? "fake" : "vz";
 };
 
 declare namespace backendKind {
-  /** what bootstrap recorded, when this command names none */
-  export type Recorded = Given<
-    [
-      Invoke<typeof emptyHome>,
-      Invoke<typeof writeState, [name: "config.json", text: '{"backend":"qemu"}']>,
-      Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>,
-    ],
-    Expect<Invoke<typeof backendKind>, "=", "qemu">
-  >;
-  /** the fake backend (no isolation at all) only when a test run loaded it into this command */
+  /** the fake backend (no isolation at all) only when a test run loaded it into this command;
+   *  the control: vz, whatever DESOLATE_BACKEND (no longer read) says */
   export type FakeOnlyLoaded = [
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>],
+      [Invoke<typeof emptyHome>],
       Expect<Invoke<typeof backendKind, [testsLoaded: "fake"]>, "=", "fake">
+    >,
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
+      Expect<Invoke<typeof backendKind>, "=", "vz">
     >,
     Given<
       [
         Invoke<typeof emptyHome>,
         Invoke<typeof writeState, [name: "config.json", text: '{"backend":"fake"}']>,
-        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>,
       ],
       Expect<
         Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
@@ -94,53 +83,30 @@ declare namespace backendKind {
         }
       >
     >,
-    /** no variable selects it: the name is not a backend's */
-    Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
-      Expect<
-        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
-        "=",
-        { message: "DESOLATE_BACKEND is 'fake'"; fix: "use qemu or vz"; code: 1 }
-      >
-    >,
   ];
-  /** nor on a stack that was bootstrapped on a real one; and no backend it does not know */
-  export type Refuses = [
-    Given<
-      [
-        Invoke<typeof emptyHome>,
-        Invoke<typeof writeState, [name: "config.json", text: '{"backend":"vz"}']>,
-        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>,
-      ],
-      Expect<
-        Invoke<typeof refusalOf, [run: typeof backendKind, args: [testsLoaded: "fake"]]>,
-        "=",
-        {
-          message: "the tests' fake backend is loaded, but this stack was bootstrapped on vz";
-          fix: "unset NODE_OPTIONS";
-          code: 1;
-        }
-      >
-    >,
-    Given<
-      [
-        Invoke<typeof emptyHome>,
-        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "docker"]>,
-      ],
-      Expect<
-        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
-        "=",
-        { message: "DESOLATE_BACKEND is 'docker'"; fix: "use qemu or vz"; code: 1 }
-      >
-    >,
-  ];
+  /** nor on a stack that was bootstrapped on the real one */
+  export type Refuses = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeState, [name: "config.json", text: '{"backend":"vz"}']>,
+    ],
+    Expect<
+      Invoke<typeof refusalOf, [run: typeof backendKind, args: [testsLoaded: "fake"]]>,
+      "=",
+      {
+        message: "the tests' fake backend is loaded, but this stack was bootstrapped on vz";
+        fix: "unset NODE_OPTIONS";
+        code: 1;
+      }
+    >
+  >;
 }
 
 let cached: Backend | null = null;
 export const backend = (): Backend => {
   if (cached) return cached;
   const kind = backendKind();
-  cached = kind === "fake" ? loaded! : limaBackend(kind);
+  cached = kind === "fake" ? loaded! : limaBackend();
   return cached;
 };
 

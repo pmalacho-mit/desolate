@@ -12,6 +12,7 @@ import type { printed } from "../.harness/host-cli.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 const HELP = `desolate: develop in VMs of their own. A workspace per task, an editor inside it, every push through you.
+On macOS only, for now: its VMs are Apple's (Lima's vz), on a Mac with Apple silicon.
 
 Every day: a workspace, your work in it, and its push:
   desolate up <domain> [--name <workspace>] [--branch <branch>] [--fetch] [--base <ref>]
@@ -99,7 +100,7 @@ Suede dependencies:
                                                                  VM); you approve the push; waits for the pull request
 
 The stack itself:
-  desolate bootstrap [--backend vz|qemu] [--forge github]   from nothing to a working stack
+  desolate bootstrap [--forge github]                            from nothing to a working stack
   desolate doctor [--json]                                       check it; every failure names its fix
   desolate down                                                  stop every VM and the daemon; remove nothing
   desolate destroy [--all]                                       remove the VMs (--all: and ~/.desolate)
@@ -272,11 +273,9 @@ const main = async (argv: string[]): Promise<number> => {
   }
   if (verb === "bootstrap") {
     const { values } = flags(rest, {
-      backend: { type: "string" },
       forge: { type: "string" },
       "forge-known-hosts": { type: "string" },
     });
-    if (values.backend) process.env.DESOLATE_BACKEND = String(values.backend);
     const { bootstrap } = await import("./bootstrap.ts");
     await bootstrap(
       {
