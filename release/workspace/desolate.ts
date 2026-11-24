@@ -770,7 +770,7 @@ const main = async (argv: string[]) => {
     uncommitted();
     // The person sees it once the root's state service has published the offer, which is
     // when it writes it into this domain's inbox too: waited for here, so that a `desolate
-    // offer --check` straight after says yes. (T2 04 measures it: a publish follows the
+    // offer --check` straight after says yes. (41 ms in T2 04, 2026-11-24: a publish follows the
     // offer's write 40 ms after at the soonest, a second at the most; the slow look, every
     // 10 s, catches one a watch missed.)
     let shown = false;
