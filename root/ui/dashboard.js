@@ -451,7 +451,9 @@ const reviewMark = (offer) => {
   const d = state && state.domains.find((x) => x.slug === offer.domain);
   const b = d && branchesOf(d).find((b) => b.repo === offer.repo && b.branch === offer.branch);
   const repo = state && state.repos.find((r) => r.repo === offer.repo);
-  return JSON.stringify([repo && repo.fetchedAt, b && b.commit, b && b.pushed && b.pushed.commit, b && b.landed]);
+  // (And the offer's commit: offered again, the panel is read again.)
+  const o = state && state.offers.find((x) => x.domain === offer.domain && x.repo === offer.repo && x.branch === offer.branch);
+  return JSON.stringify([repo && repo.fetchedAt, b && b.commit, b && b.pushed && b.pushed.commit, b && b.landed, o && o.commit]);
 };
 const openReview = async (offer, against = "origin") => {
   if (reviewing && reviewing.gone) reviewing.gone.abort();
@@ -481,7 +483,7 @@ const openReview = async (offer, against = "origin") => {
 // form fields, and the preview is built as elements (shared/ui/markdown.js), never as HTML.
 let editing = null; // { id, element, parts }
 const dismissOffer = async (o) => {
-  const response = await fetch("/offer", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1", ...window.desolateKey.headers }, body: JSON.stringify({ domain: o.domain, repo: o.repo, branch: o.branch, do: "dismiss" }) });
+  const response = await fetch("/offer", { method: "POST", headers: { "content-type": "application/json", "x-desolate-ui": "1", ...window.desolateKey.headers }, body: JSON.stringify({ domain: o.domain, repo: o.repo, branch: o.branch, commit: o.commit, do: "dismiss" }) });
   if (!response.ok) alert(`Not dismissed: ${(await response.json().catch(() => ({}))).error || `HTTP ${response.status}`}`);
 };
 const issueCall = async (id, what, fields) => {
@@ -579,7 +581,9 @@ const needsYou = () => {
     // Two lines, their names in one column: what is offered, and where from.
     items.push(el("li", { "data-offer": `${o.domain}/${o.repo}/${o.branch}` }, el("span", { class: "dot blue" }), el("div", { class: "what pairs" },
       el("span", { class: "label name" }, "Offered"), el("div", { class: "name" }, named("branch", o.branch), named("repo", o.repo)),
-      el("span", { class: "label" }, "from"), el("div", { class: "line" }, named("domain", o.domain, null, o.domain), named("workspace", o.workspace, null, `${o.domain}/${o.workspace}`), el("span", { class: "sub" }, "at"), commitRef(o.commit), o.lfs ? el("span", { class: "sub" }, `with ${o.lfs} LFS object(s)`) : null)),
+      el("span", { class: "label" }, "from"), el("div", { class: "line" }, named("domain", o.domain, null, o.domain), named("workspace", o.workspace, null, `${o.domain}/${o.workspace}`), el("span", { class: "sub" }, "at"), commitRef(o.commit), o.lfs ? el("span", { class: "sub" }, `with ${o.lfs} LFS object(s)`) : null),
+      // The branch has left the commit offered (a commit since, or rewritten): not pushed from here.
+      o.now !== o.commit ? [el("span", {}), el("div", { class: "line warn", "data-offer-moved": "" }, `Moved since it was offered: the branch is ${o.now ? `at ${short(o.now)}` : "gone"} now. To push it from here, the workspace offers it again (`, el("code", {}, "desolate offer"), ", or its git push); or Dismiss this.")] : null),
       el("div", { class: "buttons" }, el("button", { class: "quiet", onclick: () => openReview(o) }, "Review"),
         // Not this one: off "Needs you". The branch stays, and offering it again brings it back.
         el("button", { class: "quiet", title: "Take it off this list. The branch stays in the domain; offering it again brings it back.", onclick: () => dismissOffer(o) }, "Dismiss"))));
@@ -729,7 +733,8 @@ const reviewPanel = () => {
   const key = `push:${offer.domain}:${offer.repo}:${offer.branch}`;
   // Pushing from here is for what the agent offered, at the commit reviewed: an offer is how
   // its new LFS objects reach the root. Anything else is pushed from the git terminal.
-  const offered = state.offers.some((o) => o.domain === offer.domain && o.repo === review.repo && o.branch === review.branch && o.commit === review.commit);
+  // (Only while the branch is still there: a state that says it moved takes Push away.)
+  const offered = state.offers.some((o) => o.domain === offer.domain && o.repo === review.repo && o.branch === review.branch && o.commit === review.commit && o.now === o.commit);
   const other = reviewing.against === "domain" ? "origin" : "domain";
   const repo = state.repos.find((r) => r.repo === review.repo) || {};
   const def = review.defaultBranch || "default branch";
@@ -767,6 +772,7 @@ const reviewPanel = () => {
     el("div", { class: "sub" }, "To see whole files, open the branch in a workspace's editor. The diff here is the one to trust: it is made in the root, by git alone."),
     el("div", { class: "buttons" }, !review.pushable ? el("span", { class: "sub" }, "Not pushable: cloned --no-push, so there is no write key for it.")
       : reviewing.against === "domain" ? el("span", { class: "sub" }, `A push would send ${review.pushCommits} commit(s), counted against origin: compare with origin to push.`)
+      : !offered && state.offers.some((o) => o.domain === offer.domain && o.repo === review.repo && o.branch === review.branch) ? el("span", { class: "sub", "data-review-moved": "" }, "Moved since it was offered, so not pushed from here: the workspace offers it again (", el("code", {}, "desolate offer"), ", or its git push), or Dismiss the offer.")
       : !offered ? el("span", { class: "sub" }, "Not offered at this commit, so not pushed from here. Open it in git (above) and run git push there, or have the agent run ", el("code", {}, "desolate offer"), ".")
       : el("button", { disabled: busy.has(key), "data-action": "offer.push", onclick: () => { openApproval({ repo: review.repo, branch: review.branch, commit: review.commit }); act(key, "offer.push", { domain: offer.domain, repo: review.repo, branch: review.branch, commit: review.commit }); } },
           busy.has(key) ? "Pushing..." : `Push exactly ${short(review.commit)}${review.isDefault ? ` to ${review.branch}` : ""}`)),

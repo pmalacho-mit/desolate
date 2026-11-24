@@ -300,7 +300,7 @@ export const ops: Record<string, Op> = {
       });
   },
   async "offers.dismiss"(args) {
-    const result = offers.dismiss(args.domain, args.repo, args.branch);
+    const result = await offers.dismiss(args.domain, args.repo, args.branch);
     if ("error" in result)
       refuse(result.error, "desolate offers   (what is offered, by domain, repository and branch)");
     return result;
