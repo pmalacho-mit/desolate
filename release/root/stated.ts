@@ -838,16 +838,17 @@ const stateTag = () => createHash("sha256").update(last).digest("hex").slice(0, 
 //   this process's own memory: the host's facts, the actions and what they printed, offers
 //     dismissed and issues edited here   each change calls `changed` where it is made
 //   what is counted in git (checkPushed: commits against the remote, a project's size, a
-//     domain's environments)            `changed` when a count is done
+//     domain's environments)            `nudged` when a count is done
 //   the root's own files, written by its own processes (rootd, rootctl, the pusher):
 //     /var/lib/desolate: the registry, what was pushed, the forge; approvals; refusals;
 //     issues; the host queue. The secrets' index, each domain's network policy. On the
 //     domains' share: a domain's record and offers, its workspaces' records
-//                                       a watch on each directory (watchDomains): a VM's own
-//                                       writes to a share are its events, another's are not
+//                                       a watch on each directory (watchDomains), `nudged`:
+//                                       a VM's own writes to a share are its events, another
+//                                       VM's are not
 //   what workspaces write (their checkouts' statuses, notes and HEADs; each repository's list
-//     of branches in the outbox)        the host's nudge: their VMs' writes are the Mac's file
-//                                       events (host/daemon.ts, register)
+//     of branches in the outbox)        the host's nudge (`nudged`): their VMs' writes are
+//                                       the Mac's file events (host/daemon.ts, register)
 //   time: whether the host has gone quiet (hostConnected), a secret's end, a raw push whose
 //     process was killed (its approval file stays, its pid does not)
 //                                       the slow look, every 10 s
