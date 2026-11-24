@@ -35,6 +35,7 @@ bootstrap: 7 step(s) done.
   ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
   ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
   ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   the root's records are in a form this Mac takes: 0 domain(s)
   ok   root: runs this desolate's code: its share of the release is <repo>/release
   ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
 doctor: all checks passed.
@@ -76,6 +77,7 @@ bootstrap: nothing changed; the stack was already up.
   ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
   ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
   ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   the root's records are in a form this Mac takes: 0 domain(s)
   ok   root: runs this desolate's code: its share of the release is <repo>/release
   ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
 doctor: all checks passed.
@@ -105,9 +107,10 @@ $ desolate doctor
   ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
   ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
   ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   the root's records are in a form this Mac takes: 0 domain(s)
   ok   root: runs this desolate's code: its share of the release is <repo>/release
   ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
-doctor: 1 of 22 checks FAILED.
+doctor: 1 of 23 checks FAILED.
 [exit 1]
 
 ## the fake backend is never a default
@@ -186,6 +189,7 @@ bootstrap: nothing changed; the stack was already up.
   ok   root: only the pusher reaches the write agent: /run/desolate/keyring-write is closed to the root's own user
   ok   root: the reviewer answers: /run/desolate/reviewer/control.sock; it is not this user, and its read relay is closed to it
   ok   root: the pusher answers: /run/desolate/pusher/control.sock; the forge it pushes to is root's copy
+  ok   the root's records are in a form this Mac takes: 1 domain(s)
   ok   root: runs this desolate's code: its share of the release is <repo>/release
   ok   host daemon holds its port: 127.0.0.1:31591: the dashboard, the editors and the approval page
 doctor: all checks passed.
