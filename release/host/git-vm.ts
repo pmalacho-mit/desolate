@@ -186,12 +186,8 @@ export const ensureGitClone = async (repo: Repo) => {
   // workspaces wrote (<domain>/<branch>), and `git push <domain> <branch>` delivers a branch
   // to it (its workspaces see root/<branch>). (A domain named like a remote already here is
   // reached through `root` alone.)
-  const domainList = (
-    await rootctlBrief<{ slug: string; repos: string[] }[]>("domain.list").catch(() => [])
-  )
-    .filter(
-      (d) => d.repos.includes(id) && isSlug(d.slug) && d.slug !== "origin" && d.slug !== "root",
-    )
+  const domainList = (await rootctlBrief("domain.list").catch(() => []))
+    .filter((d) => d.repos.includes(id) && d.slug !== "origin" && d.slug !== "root")
     .map((d) => d.slug);
   const perDomain = domainList.flatMap((d) => [
     `git remote get-url ${d} >/dev/null 2>&1 || git remote add ${d} "$4"`,
@@ -589,7 +585,7 @@ const takeOne = async (
         : "desolate: handed to the root; nothing has gone to the remote. Approve it on the approval page (desolate approve --web; in the git terminal, beside the shell). Until it is approved, Ctrl-C withdraws it.",
     );
     note(id, `  ${repoId(repo)}  ${String(asked.branch)}  ${String(asked.commit)}`);
-    const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>(
+    const reply = await rootctl(
       "git.push",
       {
         repo: repoId(repo),

@@ -15,7 +15,6 @@ import { EXIT, Refusal, refuse } from "../shared/exit.ts";
 import { digestOf, draftOf, issueUrl } from "../shared/issues.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { withLock } from "../shared/lock.ts";
-import { isSlug } from "../shared/names.ts";
 import type { Draft, Issue } from "../shared/issues.ts";
 import { printable, printableLines } from "../shared/text.ts";
 import { because } from "./failures.ts";
@@ -323,7 +322,7 @@ export const refuseIssue = async (issue: Issue) => {
 };
 
 const waiting = async () =>
-  (await rootctl<Issue[]>("issue.list", { waiting: true }, { quiet: true })).filter(
+  (await rootctl("issue.list", { waiting: true }, { quiet: true })).filter(
     (i) => i.state === "offered" || i.state === "approving",
   );
 
@@ -445,14 +444,12 @@ export const decide = async (what: "publish" | "refuse", id: string | undefined,
   }
   // From the terminal, a draft is frozen first: what is shown below is then what is sent.
   if (issue.state === "offered")
-    issue = await rootctl<Issue>("issue.freeze", { id: issue.id }, { quiet: true });
-  // What is shown is the checked draft, the very object gh is given, and the rest is checked
-  // too: the root's answer is written to this terminal (audit, 2026-11-16: its domain and
-  // workspace fields went to the tty as they were, and could have repainted the question).
+    issue = await rootctl("issue.freeze", { id: issue.id }, { quiet: true });
+  // What is shown is the checked draft, the very object gh is given; its domain and workspace
+  // are slugs (replies.ts): the root's answer is written to this terminal (audit, 2026-11-16:
+  // they went to the tty as they were, and could have repainted the question).
   const draft = draftOf(issue);
   if ("error" in draft) refuse(`not published: ${draft.error}`, "desolate issues");
-  if (!isSlug(issue.domain) || !isSlug(issue.workspace))
-    refuse("the root's account of this issue is not one desolate makes", "desolate doctor");
   const shown = [
     "",
     "desolate: this issue is created on GitHub, as you, only if you confirm it.",

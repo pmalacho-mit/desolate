@@ -145,14 +145,11 @@ export const applyAll = async (): Promise<{ running: number; applied: number }> 
   const running = new Set(
     (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
   );
-  const { isOwnVm } = await import("./workspaces.ts");
   let count = 0;
   let applied = 0;
-  for (const d of await rootctl<
-    { slug: string; workspaces: { vm: string; workspace: string; domain?: string }[] }[]
-  >("domain.list", {}, { quiet: true }))
+  for (const d of await rootctl("domain.list", {}, { quiet: true }))
     for (const w of d.workspaces)
-      if (running.has(w.vm) && isOwnVm(d.slug, w)) {
+      if (running.has(w.vm)) {
         count++;
         if ((await applyTo(w.vm)) === "applied") applied++;
       }

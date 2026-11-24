@@ -1,0 +1,1167 @@
+// What the Mac takes from the root's answers: one parser per operation, in one table. The root's
+// ordinary user answers every call over the CLI channel (stack.ts rootctl), and it is the user
+// that parses what workspaces send, so an answer is data from a party that may have been taken
+// over (shared/actions.ts checks the other direction the same way). host/stack.ts hands a
+// caller only what the parser for its operation gave back: each field's type, bound and form
+// checked, fields the Mac does not read dropped. An operation that is not in the table cannot
+// be asked for (it does not type-check), and an answer not in its form is a refusal that says
+// which operation's it was and where, never what it held.
+//
+// Where an answer names something the Mac then acts on (a workspace's VM, a domain whose folder
+// it removes, the keys it registers, a proxy's socket), the form is not enough: the parser also
+// checks it against what the Mac asked about, or rebuilds it from checked parts. Before this
+// table each caller added its own checks, and two that were missing were found by an audit
+// (2026-11-22).
+import { refuse } from "../shared/exit.ts";
+import { LIMIT as ISSUE, ID as ISSUE_ID } from "../shared/issues.ts";
+import { NAMES } from "../shared/limits.ts";
+import {
+  characters,
+  isBranch,
+  isCommit,
+  isSlug,
+  parseRepo,
+  workspaceVmName,
+} from "../shared/names.ts";
+import { checkoutPath } from "../shared/plan.ts";
+import { INSTANCE } from "./paths.ts";
+import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { answered, changed } from "../.harness/host-replies.ts";
+import type { textOf } from "../.harness/shared-actions.ts";
+
+/** Where in an answer a part is not in its form: the path to it from the top ("keys[0].role"),
+ *  in the Mac's own names and numbers, never the answer's bytes. */
+class Unformed extends Error {}
+const unformed = (at: string): never => {
+  throw new Unformed(at || "the answer itself");
+};
+
+/** A part of an answer: what it is, checked, or Unformed. `at`: where it is. */
+type Part<T> = (value: unknown, at: string) => T;
+/** A field that may be absent: then it is left out of what the Mac is given. */
+type Maybe<T> = Part<T> & { maybe: true };
+type Of<P> = P extends Part<infer T> ? T : never;
+type Fields = Record<string, Part<unknown>>;
+type Shaped<F extends Fields> = {
+  [K in keyof F as F[K] extends { maybe: true } ? never : K]: Of<F[K]>;
+} & { [K in keyof F as F[K] extends { maybe: true } ? K : never]?: Of<F[K]> } extends infer S
+  ? { [K in keyof S]: S[K] }
+  : never;
+
+const maybe = <T>(part: Part<T>): Maybe<T> =>
+  Object.assign((value: unknown, at: string) => part(value, at), { maybe: true as const });
+
+/** An object of these fields, and of no others: a field it has that the Mac does not read is
+ *  not passed on. Not an array, not null. */
+const shape =
+  <F extends Fields>(fields: F): Part<Shaped<F>> =>
+  (value, at) => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) unformed(at);
+    const given = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, part] of Object.entries(fields)) {
+      const field = Object.hasOwn(given, key) ? given[key] : undefined;
+      if (field === undefined && "maybe" in part) continue;
+      out[key] = part(field, at ? `${at}.${key}` : key);
+    }
+    return out as Shaped<F>;
+  };
+
+const list =
+  <T>(item: Part<T>, most = Infinity): Part<T[]> =>
+  (value, at) =>
+    Array.isArray(value) && value.length <= most
+      ? value.map((entry, i) => item(entry, `${at}[${i}]`))
+      : unformed(at);
+
+const orNull =
+  <T>(part: Part<T>): Part<T | null> =>
+  (value, at) =>
+    value === null ? null : part(value, at);
+
+/** Text of at most `most` characters (code points). Text is shown, never acted on: the code
+ *  that shows it makes it printable (shared/text.ts). */
+const text =
+  (most: number): Part<string> =>
+  (value, at) =>
+    typeof value === "string" && (value.length <= most || characters(value) <= most)
+      ? value
+      : unformed(at);
+
+const whole =
+  (min: number, max: number): Part<number> =>
+  (value, at) =>
+    Number.isSafeInteger(value) && (value as number) >= min && (value as number) <= max
+      ? (value as number)
+      : unformed(at);
+const count = whole(0, Number.MAX_SAFE_INTEGER);
+
+const yes: Part<boolean> = (value, at) => (typeof value === "boolean" ? value : unformed(at));
+
+const oneOf =
+  <const V extends readonly unknown[]>(...values: V): Part<V[number]> =>
+  (value, at) =>
+    values.includes(value) ? (value as V[number]) : unformed(at);
+
+const named =
+  (test: (value: unknown) => boolean): Part<string> =>
+  (value, at) =>
+    test(value) ? (value as string) : unformed(at);
+const slug = named(isSlug);
+const repo = named((value) => parseRepo(value) !== null);
+const branch = named(isBranch);
+const commit = named(isCommit);
+/** A time as the root writes one (`toISOString`, or the proxy's seconds): shown, and sorted. */
+const stamp = named(
+  (value) => typeof value === "string" && /^\d{4}-\d\d-\d\dT[\d:.]{8,12}Z$/.test(value),
+);
+
+/** How long the root's own sentences and names may be, in characters: each far past what an
+ *  honest root says (a sentence of a refusal, a hostname of 253), and each a bound on what this
+ *  Mac holds and prints of an answer it did not choose. */
+const SAID = {
+  /** A hostname, a header's or a secret's name, a label. */
+  name: 300,
+  /** One sentence: a reason, a fix, a note, a check's detail. */
+  sentence: 4000,
+  /** A path in a repository, a route a request named. */
+  path: 4096,
+} as const;
+/** The text a person signs to approve a push: shared/approval.ts reads no more than this. */
+const APPROVAL_TEXT = 1024;
+/** One page of a diff: root/offers.ts's DIFF_PAGE is 256 KiB of it, and a line the page cut is
+ *  carried whole into the next. */
+const DIFF_PAGE_MOST = 1024 * 1024;
+
+/** A VM's size as a record keeps it: whole numbers, each part on its own. Not checkSize's
+ *  ranges: a workspace made before a range moved keeps what it was made with. */
+const sizePart = whole(1, 1 << 20);
+const size = shape({ cpus: maybe(sizePart), memoryMiB: maybe(sizePart), diskGiB: maybe(sizePart) });
+const fullSize = shape({ cpus: sizePart, memoryMiB: sizePart, diskGiB: sizePart });
+
+const listed = <T>(item: Part<T>) => shape({ items: list(item), total: count, from: count });
+
+// ------------------------------------------------------------------ workspaces
+
+/** One checkout of a workspace's: a worktree's name is one name (its branch with each `/` a
+ *  `-`: root/domains.ts plan), and its path is the one the Mac builds from its repository, kind
+ *  and name (shared/plan.ts), so never a path the root chose. */
+const checkoutFields = shape({
+  repo,
+  kind: oneOf("main", "worktree"),
+  name: text(NAMES.branch),
+  branch,
+  base: branch,
+  path: text(SAID.path),
+});
+const checkout: Part<Of<typeof checkoutFields>> = (value, at) => {
+  const c = checkoutFields(value, at);
+  if (c.kind === "main" ? c.name !== "" : !isBranch(c.name) || c.name.includes("/"))
+    unformed(`${at}.name`);
+  if (c.path !== checkoutPath(c.repo, c.kind, c.name)) unformed(`${at}.path`);
+  return c;
+};
+
+/** A workspace as the root records it (root/domains.ts Workspace): its VM is checked by
+ *  whoever takes the record (vouched, domainRecord), against the name the Mac computes. */
+const workspaceRecord = shape({
+  domain: slug,
+  workspace: slug,
+  vm: text(SAID.name),
+  title: text(200),
+  checkouts: list(checkout),
+  env: maybe(repo),
+  repos: maybe(list(repo)),
+  size: maybe(fullSize),
+  author: maybe(shape({ name: text(200), email: text(200) })),
+  startedBy: maybe(shape({ workspace: slug, createdAt: stamp })),
+  fetch: yes,
+  createdAt: stamp,
+  state: oneOf("planned", "up", "stopped"),
+});
+
+declare namespace workspaceRecord {
+  type W = {
+    domain: "acme";
+    workspace: "w1";
+    vm: "dsl-main-ddb30a57cc";
+    title: "w1";
+    checkouts: [
+      {
+        repo: "acme/web";
+        kind: "worktree";
+        name: "fix-login";
+        branch: "fix/login";
+        base: "main";
+        path: "/workspaces/acme/web/.worktrees/fix-login";
+      },
+    ];
+    fetch: false;
+    createdAt: "2026-11-16T10:00:00.000Z";
+    state: "up";
+  };
+  type Asked = { domain: "acme"; name: "w1" };
+  /** a workspace's record is taken in its form; what the Mac does not read is not passed on */
+  export type Reads = Table<
+    typeof answered,
+    [
+      [args: [op: "workspace.get", value: W, asked: Asked], expected: W],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { extra: "dropped" }]>,
+          asked: Asked,
+        ],
+        expected: W,
+      ],
+    ]
+  >;
+  /** each part that could aim the Mac elsewhere is refused: a checkout's path not the one
+   *  its parts make, a worktree's name that climbs, a domain that is not a slug, a state it
+   *  does not have, the wrong type, an array, null */
+  export type Refuses = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<
+            typeof changed,
+            [
+              value: W,
+              changes: {
+                checkouts: [
+                  {
+                    repo: "acme/web";
+                    kind: "worktree";
+                    name: "fix-login";
+                    branch: "fix/login";
+                    base: "main";
+                    path: "/Users/someone";
+                  },
+                ];
+              },
+            ]
+          >,
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (checkouts[0].path)",
+      ],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<
+            typeof changed,
+            [
+              value: W,
+              changes: {
+                checkouts: [
+                  {
+                    repo: "acme/web";
+                    kind: "worktree";
+                    name: "../../..";
+                    branch: "fix/login";
+                    base: "main";
+                    path: "/workspaces/acme/web/.worktrees/../../..";
+                  },
+                ];
+              },
+            ]
+          >,
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (checkouts[0].name)",
+      ],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { domain: "acme/../x" }]>,
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (domain)",
+      ],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { state: "deleted" }]>,
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (state)",
+      ],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { fetch: "no" }]>,
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (fetch)",
+      ],
+      [
+        args: [op: "workspace.get", value: [W], asked: Asked],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (the answer itself)",
+      ],
+      [
+        args: [op: "workspace.get", value: null, asked: Asked],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (the answer itself)",
+      ],
+    ]
+  >;
+}
+
+/** Whether a record of the root's names its own workspace's VM, in that domain: the VM is a
+ *  hash of the domain and the workspace's name that the Mac computes itself. */
+export const isOwnVm = (domain: string, w: { domain?: unknown; workspace: unknown; vm: unknown }) =>
+  (w.domain === undefined || w.domain === domain) &&
+  isSlug(w.workspace) &&
+  w.vm === workspaceVmName(INSTANCE, domain, w.workspace);
+
+declare namespace isOwnVm {
+  /** the VM a record names is the one the host computes for that workspace, in that domain */
+  export type Records = Table<
+    typeof isOwnVm,
+    [
+      [
+        args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }],
+        expected: true,
+      ],
+      [args: [domain: "acme", w: { workspace: "w1"; vm: "dsl-main-ddb30a57cc" }], expected: true],
+      /** another domain's workspace of the same name has another VM */
+      [
+        args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-41eb634ef1" }],
+        expected: false,
+      ],
+      [
+        args: [domain: "acme", w: { domain: "beta"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }],
+        expected: false,
+      ],
+      [
+        args: [
+          domain: "acme",
+          w: { domain: "acme"; workspace: "../w1"; vm: "dsl-main-ddb30a57cc" },
+        ],
+        expected: false,
+      ],
+      [
+        args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-root" }],
+        expected: false,
+      ],
+    ]
+  >;
+}
+
+/** The root's word about one workspace, checked against what the host computes itself: a VM
+ *  named in its answer is a VM the host stops, starts, destroys and writes state for (audit,
+ *  2026-11-16: an answer naming another domain's VM would have had it removed). */
+const vouched = <W extends { domain: string; workspace: string; vm: string }>(
+  w: W,
+  domain: unknown,
+  workspace?: unknown,
+): W => {
+  if (
+    w.domain !== domain ||
+    (workspace !== undefined && w.workspace !== workspace) ||
+    !isOwnVm(w.domain, w)
+  )
+    refuse(
+      `the root's answer about ${String(domain)}/${String(workspace ?? w.workspace)} does not name that workspace's own VM`,
+      "desolate doctor; if it persists, the root VM is not well: desolate bootstrap",
+    );
+  return w;
+};
+
+declare namespace vouched {
+  type W = {
+    domain: "acme";
+    workspace: "w1";
+    vm: "dsl-main-ddb30a57cc";
+    title: "w1";
+    checkouts: [];
+    fetch: false;
+    createdAt: "2026-11-16T10:00:00.000Z";
+    state: "up";
+  };
+  /** the root's answer is taken only if it names the workspace asked about, and its own VM */
+  export type Passes = Expect<
+    Invoke<typeof answered, [op: "workspace.get", value: W, asked: { domain: "acme"; name: "w1" }]>,
+    "=",
+    W
+  >;
+  /** another domain's VM, another workspace, a plan named for another domain: refused */
+  export type Refuses = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { vm: "dsl-main-41eb634ef1" }]>,
+          asked: { domain: "acme"; name: "w1" },
+        ],
+        expected: "the root's answer about acme/w1 does not name that workspace's own VM",
+      ],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { workspace: "w2" }]>,
+          asked: { domain: "acme"; name: "w1" },
+        ],
+        expected: "the root's answer about acme/w1 does not name that workspace's own VM",
+      ],
+      [
+        args: [
+          op: "workspace.plan",
+          value: Invoke<typeof changed, [value: W, changes: { domain: "beta" }]>,
+          asked: { domain: "acme"; name: "w1" },
+        ],
+        expected: "the root's answer about acme/w1 does not name that workspace's own VM",
+      ],
+      [
+        args: [
+          op: "workspace.get",
+          value: Invoke<typeof changed, [value: W, changes: { workspace: "--x" }]>,
+          asked: { domain: "acme" },
+        ],
+        expected: "the root's answer to 'workspace.get' is not in the form this Mac takes (workspace)",
+      ],
+      /** a plan whose name the root chose (none was asked for) is taken with its own VM */
+      [args: [op: "workspace.plan", value: W, asked: { domain: "acme" }], expected: W],
+    ]
+  >;
+}
+
+/** A domain as the root lists it, with its workspaces: a workspace record that does not name
+ *  its own VM in this domain is left out, as every caller once left it out itself (it would
+ *  give one domain's VM another domain's names, rules and proxy). */
+const domainFields = shape({
+  slug,
+  title: text(200),
+  repos: list(repo),
+  createdAt: stamp,
+  env: maybe(repo),
+  size: maybe(size),
+  spawnMax: maybe(whole(0, 1000)),
+  workspaces: list(workspaceRecord),
+});
+const domainRecord: Part<Of<typeof domainFields>> = (value, at) => {
+  const d = domainFields(value, at);
+  return {
+    ...d,
+    workspaces: d.workspaces.filter((w) => w.domain === d.slug && isOwnVm(d.slug, w)),
+  };
+};
+
+declare namespace domainRecord {
+  type W = {
+    domain: "acme";
+    workspace: "w1";
+    vm: "dsl-main-ddb30a57cc";
+    title: "w1";
+    checkouts: [];
+    fetch: false;
+    createdAt: "2026-11-16T10:00:00.000Z";
+    state: "up";
+  };
+  type D = {
+    slug: "acme";
+    title: "Acme";
+    repos: ["acme/web"];
+    createdAt: "2026-11-16T09:00:00.000Z";
+  };
+  /** a domain's workspaces, but a record naming another VM or another domain is left out */
+  export type Own = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "domain.list",
+          value: [Invoke<typeof changed, [value: D, changes: { workspaces: [W] }]>],
+          asked: {},
+        ],
+        expected: [Invoke<typeof changed, [value: D, changes: { workspaces: [W] }]>],
+      ],
+      [
+        args: [
+          op: "domain.list",
+          value: [
+            Invoke<
+              typeof changed,
+              [
+                value: D,
+                changes: {
+                  workspaces: [
+                    Invoke<typeof changed, [value: W, changes: { vm: "dsl-main-41eb634ef1" }]>,
+                    Invoke<typeof changed, [value: W, changes: { domain: "beta" }]>,
+                  ];
+                },
+              ]
+            >,
+          ],
+          asked: {},
+        ],
+        expected: [Invoke<typeof changed, [value: D, changes: { workspaces: [] }]>],
+      ],
+    ]
+  >;
+  /** a domain that is not a slug, a repository that is not one, an object for a list */
+  export type Refuses = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "domain.list",
+          value: [Invoke<typeof changed, [value: D, changes: { slug: "acme/x"; workspaces: [] }]>],
+          asked: {},
+        ],
+        expected: "the root's answer to 'domain.list' is not in the form this Mac takes ([0].slug)",
+      ],
+      [
+        args: [
+          op: "domain.list",
+          value: [Invoke<typeof changed, [value: D, changes: { repos: ["../x"]; workspaces: [] }]>],
+          asked: {},
+        ],
+        expected: "the root's answer to 'domain.list' is not in the form this Mac takes ([0].repos[0])",
+      ],
+      [
+        args: [
+          op: "domain.list",
+          value: Invoke<typeof changed, [value: D, changes: { workspaces: [] }]>,
+          asked: {},
+        ],
+        expected: "the root's answer to 'domain.list' is not in the form this Mac takes (the answer itself)",
+      ],
+      /** domain.show is about the domain asked for */
+      [
+        args: [
+          op: "domain.show",
+          value: Invoke<typeof changed, [value: D, changes: { workspaces: [] }]>,
+          asked: { slug: "beta" },
+        ],
+        expected: "the root's answer to 'domain.show' is not in the form this Mac takes (slug)",
+      ],
+    ]
+  >;
+}
+
+/** An answer that must name what was asked about: `field` of it equal to `asked[key]`. */
+const about =
+  <T extends Record<string, unknown>>(part: Part<T>, field: keyof T & string, key: string) =>
+  (value: unknown, asked: Asked): T => {
+    const answer = part(value, "");
+    return answer[field] === asked[key] ? answer : unformed(field);
+  };
+
+// ------------------------------------------------------------------ the rest of the answers
+
+const issue = shape({
+  id: named((value) => typeof value === "string" && ISSUE_ID.test(value)),
+  repo,
+  title: text(ISSUE.title),
+  body: text(ISSUE.body),
+  labels: list(text(ISSUE.label), ISSUE.labels),
+  domain: slug,
+  workspace: slug,
+  at: stamp,
+  state: oneOf("offered", "approving", "published", "rejected"),
+  edited: maybe(yes),
+  url: maybe(text(SAID.name)),
+  problem: maybe(text(SAID.sentence)),
+});
+
+declare namespace issue {
+  type I = {
+    id: "w1abcd-0123abcd";
+    repo: "acme/web";
+    title: "Login loops";
+    body: "";
+    labels: ["bug"];
+    domain: "acme";
+    workspace: "w1";
+    at: "2026-11-16T10:00:00.000Z";
+    state: "offered";
+  };
+  /** the issue asked for, in its form; a title past GitHub's bound, a label list for a label,
+   *  another issue than the one frozen: refused */
+  export type Reads = Table<
+    typeof answered,
+    [
+      [args: [op: "issue.freeze", value: I, asked: { id: "w1abcd-0123abcd" }], expected: I],
+      [
+        args: [
+          op: "issue.list",
+          value: [
+            Invoke<
+              typeof changed,
+              [value: I, changes: { title: Invoke<typeof textOf, [length: 257]> }]
+            >,
+          ],
+          asked: {},
+        ],
+        expected: "the root's answer to 'issue.list' is not in the form this Mac takes ([0].title)",
+      ],
+      [
+        args: [
+          op: "issue.list",
+          value: [Invoke<typeof changed, [value: I, changes: { labels: "bug" }]>],
+          asked: {},
+        ],
+        expected: "the root's answer to 'issue.list' is not in the form this Mac takes ([0].labels)",
+      ],
+      [
+        args: [op: "issue.freeze", value: I, asked: { id: "w2abcd-0123abcd" }],
+        expected: "the root's answer to 'issue.freeze' is not in the form this Mac takes (id)",
+      ],
+    ]
+  >;
+}
+
+const offer = shape({
+  domain: slug,
+  repo,
+  branch,
+  commit,
+  workspace: text(NAMES.slug),
+  lfs: count,
+  at: stamp,
+  base: maybe(branch),
+});
+
+const review = shape({
+  domain: slug,
+  repo,
+  branch,
+  commit,
+  base: text(NAMES.branch + 8),
+  against: oneOf("origin", "domain"),
+  againstLabel: text(SAID.name),
+  defaultBranch: orNull(branch),
+  pushable: yes,
+  isDefault: yes,
+  commits: listed(
+    shape({
+      commit,
+      subject: text(SAID.sentence),
+      author: text(SAID.sentence),
+      body: text(ISSUE.body),
+    }),
+  ),
+  changes: listed(
+    shape({
+      path: text(SAID.path),
+      status: oneOf("added", "modified", "deleted", "renamed", "changed"),
+      added: orNull(count),
+      removed: orNull(count),
+      was: maybe(text(SAID.path)),
+      lookalike: maybe(yes),
+    }),
+  ),
+  stat: text(SAID.sentence),
+  lfsObjects: count,
+  warnings: list(text(SAID.sentence)),
+  pushCommits: count,
+});
+
+declare namespace review {
+  type R = {
+    domain: "acme";
+    repo: "acme/web";
+    branch: "fix/login";
+    commit: "0123456789abcdef0123456789abcdef01234567";
+    base: "origin/main";
+    against: "origin";
+    againstLabel: "origin/main";
+    defaultBranch: "main";
+    pushable: true;
+    isDefault: false;
+    commits: {
+      items: [
+        {
+          commit: "0123456789abcdef0123456789abcdef01234567";
+          subject: "Fix the login";
+          author: "A <a@example.com>";
+          body: "";
+        },
+      ];
+      total: 1;
+      from: 0;
+    };
+    changes: {
+      items: [{ path: "src/login.ts"; status: "modified"; added: 3; removed: 1 }];
+      total: 1;
+      from: 0;
+    };
+    stat: "1 file changed";
+    lfsObjects: 0;
+    warnings: [];
+    pushCommits: 1;
+  };
+  /** a review in its form; a count that is not a whole number, a commit that is not an id */
+  export type Reads = Table<
+    typeof answered,
+    [
+      [args: [op: "review", value: R, asked: {}], expected: R],
+      [
+        args: [
+          op: "review",
+          value: Invoke<typeof changed, [value: R, changes: { pushCommits: -1 }]>,
+          asked: {},
+        ],
+        expected: "the root's answer to 'review' is not in the form this Mac takes (pushCommits)",
+      ],
+      [
+        args: [
+          op: "review",
+          value: Invoke<typeof changed, [value: R, changes: { commit: "HEAD" }]>,
+          asked: {},
+        ],
+        expected: "the root's answer to 'review' is not in the form this Mac takes (commit)",
+      ],
+    ]
+  >;
+}
+
+const secretListed = shape({
+  name: named((value) => typeof value === "string" && /^[A-Z][A-Z0-9_-]{7,63}$/.test(value)),
+  hosts: list(text(SAID.name)),
+  headers: orNull(list(text(SAID.name))),
+  on: yes,
+  secondsLeft: maybe(count),
+});
+
+const ranked = listed(shape({ host: text(SAID.name), count }));
+
+/** Keys the root's answer says it made: their roles, which must be the ones asked for (a read
+ *  key unless anonymous, a write key only to push). Their public halves are not taken from it:
+ *  repos.ts reads them from the keyring itself. */
+const prepared = (value: unknown, asked: Asked) => {
+  const answer = shape({
+    repo,
+    pushable: yes,
+    anonymous: yes,
+    keys: list(shape({ role: oneOf("read", "write") })),
+  })(value, "");
+  const roles = [...(asked.anonymous ? [] : ["read"]), ...(asked.push ? ["write"] : [])];
+  const answeredRoles = answer.keys.map((k) => k.role);
+  if (
+    answeredRoles.length !== roles.length ||
+    roles.some((role) => !answeredRoles.includes(role as "read"))
+  )
+    refuse(
+      `the root answered for other keys than the ones asked for ${String(asked.repo)}, so none was registered`,
+      "desolate doctor",
+    );
+  return answer;
+};
+
+declare namespace prepared {
+  type Asked = { repo: "acme/web"; push: false; anonymous: false };
+  /** the read key asked for, and no public half passed on; a write key a --no-push clone did
+   *  not ask for, or a role that is neither, refused */
+  export type Roles = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "repo.prepare",
+          value: {
+            repo: "acme/web";
+            pushable: false;
+            anonymous: false;
+            keys: [{ role: "read"; pubkey: "ssh-ed25519 AAAAroots" }];
+          },
+          asked: Asked,
+        ],
+        expected: { repo: "acme/web"; pushable: false; anonymous: false; keys: [{ role: "read" }] },
+      ],
+      [
+        args: [
+          op: "repo.prepare",
+          value: {
+            repo: "acme/web";
+            pushable: false;
+            anonymous: false;
+            keys: [{ role: "read" }, { role: "write" }];
+          },
+          asked: Asked,
+        ],
+        expected: "the root answered for other keys than the ones asked for acme/web, so none was registered",
+      ],
+      [
+        args: [
+          op: "repo.prepare",
+          value: {
+            repo: "acme/web";
+            pushable: false;
+            anonymous: false;
+            keys: [{ role: "../read" }];
+          },
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'repo.prepare' is not in the form this Mac takes (keys[0].role)",
+      ],
+    ]
+  >;
+}
+
+/** Where the root's proxies listen (root/proxy/as-proxy.ts proxyOutDir, under root/layout.ts's
+ *  ROOT.proxies): a workspace's is `<domain>/<vm>.sock` there. The link is wired to the socket
+ *  the Mac names for the workspace it asked about, never to one an answer chose. */
+const PROXY_SOCKETS = "/var/lib/desolate-proxies/out";
+const proxySocket = (value: unknown, asked: Asked) => {
+  const socket = `${PROXY_SOCKETS}/${String(asked.domain)}/${String(asked.vm)}.sock`;
+  const answer = shape({ socket: text(SAID.path) })(value, "");
+  if (!isSlug(asked.domain) || answer.socket !== socket) unformed("socket");
+  return { socket };
+};
+
+declare namespace proxySocket {
+  type Asked = { vm: "dsl-main-ddb30a57cc"; domain: "acme"; workspace: "w1" };
+  /** the workspace's own proxy, and no other socket in the root */
+  export type Socket = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "proxy.start",
+          value: { socket: "/var/lib/desolate-proxies/out/acme/dsl-main-ddb30a57cc.sock" },
+          asked: Asked,
+        ],
+        expected: { socket: "/var/lib/desolate-proxies/out/acme/dsl-main-ddb30a57cc.sock" },
+      ],
+      [
+        args: [
+          op: "proxy.start",
+          value: { socket: "/var/lib/desolate-proxies/out/beta/dsl-main-41eb634ef1.sock" },
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'proxy.start' is not in the form this Mac takes (socket)",
+      ],
+      [
+        args: [
+          op: "proxy.start",
+          value: { socket: ["/run/desolate/rootctl/rootctl.sock"] },
+          asked: Asked,
+        ],
+        expected: "the root's answer to 'proxy.start' is not in the form this Mac takes (socket)",
+      ],
+    ]
+  >;
+}
+
+/** A domain removed: the one asked about. Only then does the Mac remove its folder and its
+ *  templates, by the name the person gave (workspaces.ts remove). */
+const removedDomain = (value: unknown, asked: Asked) => {
+  const answer = shape({ domain: text(NAMES.slug), kept: text(SAID.sentence) })(value, "");
+  if (answer.domain !== asked.slug || !isSlug(asked.slug))
+    refuse(
+      `the root answered about another domain than ${String(asked.slug)}, so nothing was removed on this Mac`,
+      "desolate doctor",
+    );
+  return answer;
+};
+
+declare namespace removedDomain {
+  /** the domain asked about, or a refusal before anything on the Mac is removed */
+  export type Removed = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "domain.remove",
+          value: { domain: "acme"; kept: "kept" },
+          asked: { slug: "acme" },
+        ],
+        expected: { domain: "acme"; kept: "kept" },
+      ],
+      [
+        args: [op: "domain.remove", value: { domain: ".."; kept: "kept" }, asked: { slug: "acme" }],
+        expected: "the root answered about another domain than acme, so nothing was removed on this Mac",
+      ],
+      [
+        args: [
+          op: "domain.remove",
+          value: { domain: "beta"; kept: "kept" },
+          asked: { slug: "acme" },
+        ],
+        expected: "the root answered about another domain than acme, so nothing was removed on this Mac",
+      ],
+    ]
+  >;
+}
+
+/** An answer the Mac does not read: nothing of it is passed on. */
+const ignored = (): void => {};
+
+type Asked = Record<string, unknown>;
+const of =
+  <T>(part: Part<T>) =>
+  (value: unknown, _asked: Asked): T =>
+    part(value, "");
+
+/** Every operation the Mac asks of the root, and what it takes of the answer. */
+const REPLIES = {
+  ping: of(shape({ keyring: yes })),
+  doctor: of(
+    list(
+      shape({
+        name: text(SAID.name),
+        ok: yes,
+        detail: text(SAID.sentence),
+        fix: maybe(text(SAID.sentence)),
+      }),
+    ),
+  ),
+  "forge.set": ignored,
+  "keys.list": of(list(shape({ repo, role: oneOf("read", "write") }))),
+  "repo.prepare": prepared,
+  "repo.fetch": of(
+    shape({
+      repo,
+      branches: count,
+      defaultBranch: orNull(branch),
+      lfsObjects: count,
+      rootClone: oneOf("created", "present"),
+    }),
+  ),
+  "repo.list": of(
+    list(
+      shape({
+        repo,
+        pushable: yes,
+        anonymous: yes,
+        defaultBranch: orNull(branch),
+        fetchedAt: orNull(text(SAID.name)),
+      }),
+    ),
+  ),
+  "domain.list": of(list(domainRecord)),
+  "domain.show": about(domainRecord, "slug", "slug"),
+  "domain.create": about(
+    shape({ slug, title: text(200), repos: list(repo), createdAt: stamp }),
+    "slug",
+    "slug",
+  ),
+  "domain.add-repo": of(shape({ domain: slug, repo, added: yes, note: text(SAID.sentence) })),
+  "domain.env": of(shape({ domain: slug, env: orNull(repo), repos: list(repo) })),
+  "domain.size": of(shape({ domain: slug, size: orNull(size) })),
+  "domain.spawn": ignored,
+  "domain.env-key": of(
+    orNull(
+      shape({
+        repo,
+        spec: oneOf(".devcontainer", ".devcontainer.json"),
+        id: commit,
+      }),
+    ),
+  ),
+  "domain.remove": removedDomain,
+  "domain.projectSize": of(
+    orNull(
+      shape({
+        repo,
+        path: oneOf(".devcontainer/devcontainer.json", ".devcontainer.json"),
+        size,
+        problems: list(text(SAID.sentence)),
+      }),
+    ),
+  ),
+  "workspace.plan": (value: unknown, asked: Asked) =>
+    vouched(workspaceRecord(value, ""), asked.domain, asked.name),
+  "workspace.get": (value: unknown, asked: Asked) =>
+    vouched(workspaceRecord(value, ""), asked.domain, asked.name),
+  "workspace.state": ignored,
+  "workspace.resize": ignored,
+  "workspace.remove": ignored,
+  "workspace.unpushed": of(
+    list(
+      shape({
+        repo,
+        branch: orNull(branch),
+        commit: orNull(commit),
+        count: orNull(count),
+        why: orNull(text(SAID.sentence)),
+      }),
+    ),
+  ),
+  "proxy.start": proxySocket,
+  "proxy.stop": ignored,
+  "secret.list": of(list(secretListed)),
+  "secret.apply": of(list(secretListed)),
+  "net.policy": of(
+    shape({
+      mode: oneOf("open", "enforce"),
+      hosts: list(text(SAID.name)),
+      internal: list(text(SAID.name)),
+      heldMiB: maybe(count),
+    }),
+  ),
+  "net.recommend": of(
+    shape({
+      mode: oneOf("open", "enforce"),
+      listed: list(text(SAID.name)),
+      reached: ranked,
+      refused: ranked,
+    }),
+  ),
+  "net.log": of(
+    listed(
+      shape({
+        time: text(SAID.name),
+        domain: slug,
+        workspace: text(SAID.name),
+        host: text(SAID.name),
+        port: whole(0, 65535),
+        verdict: text(SAID.name),
+        address: maybe(text(SAID.name)),
+        via: maybe(text(SAID.name)),
+        method: maybe(text(SAID.name)),
+        route: maybe(text(SAID.path)),
+        reason: maybe(text(SAID.sentence)),
+        secrets: maybe(list(text(SAID.name))),
+      }),
+    ),
+  ),
+  "offers.list": of(list(offer)),
+  "offers.refused": of(
+    list(
+      shape({ domain: slug, repo, at: stamp, why: text(SAID.sentence), fix: text(SAID.sentence) }),
+    ),
+  ),
+  "offers.dismiss": ignored,
+  "branches.list": of(
+    list(
+      shape({
+        domain: slug,
+        repo,
+        branch,
+        commit,
+        landed: maybe(orNull(branch)),
+        offered: yes,
+        checkedOutIn: list(slug),
+      }),
+    ),
+  ),
+  review: of(review),
+  "review.diff": of(
+    shape({ text: text(DIFF_PAGE_MOST), from: count, next: orNull(count), total: count }),
+  ),
+  "suede.changed": of(
+    list(
+      shape({
+        dir: text(SAID.path),
+        remote: orNull(repo),
+        branch,
+        files: list(text(SAID.path)),
+      }),
+    ),
+  ),
+  "issue.list": of(list(issue)),
+  "issue.freeze": about(issue, "id", "id"),
+  "issue.done": ignored,
+  "approvals.pending": of(
+    list(
+ shape({ message: text(APPROVAL_TEXT), summary: text(SAID.sentence), at: text(SAID.name) }),
+ ),
+  ),
+  "approvals.wait": of(
+    shape({
+      tag: text(SAID.name),
+      pending: list(shape({ message: text(APPROVAL_TEXT), at: text(SAID.name) })),
+    }),
+  ),
+  "approvals.refuse": ignored,
+  "approvals.answer": ignored,
+  "git.push": of(
+    shape({
+      pushed: yes,
+      error: maybe(text(SAID.sentence)),
+      said: maybe(list(text(SAID.sentence))),
+    }),
+  ),
+} satisfies Record<string, (value: unknown, asked: Asked) => unknown>;
+
+/** An operation the Mac may ask of the root, and what its answer is once it is checked. */
+export type Op = keyof typeof REPLIES;
+export type Answer<O extends Op> = ReturnType<(typeof REPLIES)[O]>;
+
+/** The answer to `op`, asked with `asked`, as the Mac takes it; or a refusal that says which
+ *  operation's answer was not in its form, and where. */
+export const replyOf = <O extends Op>(op: O, value: unknown, asked: Asked = {}): Answer<O> => {
+  try {
+    return REPLIES[op](value, asked) as Answer<O>;
+  } catch (error) {
+    if (!(error instanceof Unformed)) throw error;
+    return refuse(
+      `the root's answer to '${op}' is not in the form this Mac takes (${error.message})`,
+      "desolate doctor; if it persists, the root VM is not well: desolate bootstrap",
+    );
+  }
+};
+
+declare namespace replyOf {
+  /** a refusal says which operation and where, and how to look into it; never what it held */
+  export type Says = Throws<
+    Invoke<typeof replyOf, [op: "ping", value: { keyring: "\u001b[2Jyes" }]>,
+    "the root's answer to 'ping' is not in the form this Mac takes (keyring)"
+  >;
+  /** what an answer holds that the Mac does not read is not passed on */
+  export type Drops = Expect<
+    Invoke<typeof replyOf, [op: "ping", value: { keyring: true; node: "v22"; user: 501 }]>,
+    "=",
+    { keyring: true }
+  >;
+  /** an answer the Mac does not read at all gives the caller nothing of it */
+  export type Ignored = Expect<
+    Invoke<typeof replyOf, [op: "proxy.stop", value: { anything: ["at all"] }]>,
+    "=",
+    undefined
+  >;
+  /** a slug with a slash, a whole number that is not one, text past its bound */
+  export type Forms = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "domain.add-repo",
+          value: { domain: "acme"; repo: "acme/web"; added: true; note: "" },
+          asked: {},
+        ],
+        expected: { domain: "acme"; repo: "acme/web"; added: true; note: "" },
+      ],
+      [
+        args: [
+          op: "domain.add-repo",
+          value: { domain: "acme/x"; repo: "acme/web"; added: true; note: "" },
+          asked: {},
+        ],
+        expected: "the root's answer to 'domain.add-repo' is not in the form this Mac takes (domain)",
+      ],
+      [
+        args: [
+          op: "repo.fetch",
+          value: {
+            repo: "acme/web";
+            branches: 1.5;
+            defaultBranch: "main";
+            lfsObjects: 0;
+            rootClone: "present";
+          },
+          asked: {},
+        ],
+        expected: "the root's answer to 'repo.fetch' is not in the form this Mac takes (branches)",
+      ],
+      [
+        args: [
+          op: "domain.add-repo",
+          value: {
+            domain: "acme";
+            repo: "acme/web";
+            added: true;
+            note: Invoke<typeof textOf, [length: 4001]>;
+          },
+          asked: {},
+        ],
+        expected: "the root's answer to 'domain.add-repo' is not in the form this Mac takes (note)",
+      ],
+    ]
+  >;
+}

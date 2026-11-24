@@ -9,14 +9,8 @@ import type { StatusView as View } from "../shared/status.ts";
 import { paths } from "./paths.ts";
 import { rootctl } from "./stack.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type {
-  Call,
-  Expect,
-  Given,
-  Invoke,
-  Mock,
-  Mocked,
-} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Mock } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { fakeStack, rootAnswers } from "../.harness/host-stack.ts";
 import type { checkoutSays, rootRecord, statusSays } from "../.harness/host-status.ts";
 import type { emptyHome } from "../.harness/home.ts";
 
@@ -34,19 +28,10 @@ export const status = async (
   const [domain, workspace] = (target ?? "").split("/");
   if (!domain)
     refuse("status of what?", "desolate status <domain>[/<workspace>] [--json]", EXIT.usage);
-  const d = await rootctl<{ workspaces: WorkspacePlan[] }>(
-    "domain.show",
-    { slug: domain },
-    { quiet: true },
-  );
-  // The root's records, checked: the domain it names is where status files are read on the
-  // Mac (third review: a path the root chose).
-  const { isOwnVm } = await import("./workspaces.ts");
-  const views = d.workspaces
-    .filter(
-      (w) => (!workspace || w.workspace === workspace) && w.domain === domain && isOwnVm(domain, w),
-    )
-    .map(viewOf);
+  // The root's records, each naming its own VM in this domain (replies.ts): the domain is where
+  // status files are read on the Mac (third review: a path the root chose).
+  const d = await rootctl("domain.show", { slug: domain }, { quiet: true });
+  const views = d.workspaces.filter((w) => !workspace || w.workspace === workspace).map(viewOf);
   if (workspace && views.length === 0)
     refuse(`there is no workspace '${target}'`, `desolate list ${domain}`);
   if (json) return out(JSON.stringify(workspace ? views[0] : views));
@@ -67,6 +52,10 @@ export const status = async (
 
 declare namespace status {
   type Dev = {
+    slug: "dev";
+    title: "dev";
+    repos: ["acme/widgets"];
+    createdAt: "2026-11-16T09:00:00Z";
     workspaces: [
       Invoke<
         typeof rootRecord,
@@ -82,8 +71,8 @@ declare namespace status {
   export type Board = Given<
     [
       Invoke<typeof emptyHome>,
-      Mock<"./stack.ts">,
-      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: Dev]>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.show": Dev }]>,
       Invoke<
         typeof checkoutSays,
         [
@@ -114,8 +103,8 @@ declare namespace status {
   export type Notes = Given<
     [
       Invoke<typeof emptyHome>,
-      Mock<"./stack.ts">,
-      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: Dev]>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.show": Dev }]>,
     ],
     Expect<
       Invoke<
@@ -143,8 +132,8 @@ declare namespace status {
   export type AsText = Given<
     [
       Invoke<typeof emptyHome>,
-      Mock<"./stack.ts">,
-      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: Dev]>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.show": Dev }]>,
       Invoke<
         typeof checkoutSays,
         [
@@ -171,8 +160,8 @@ declare namespace status {
   export type Json = Given<
     [
       Invoke<typeof emptyHome>,
-      Mock<"./stack.ts">,
-      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: Dev]>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.show": Dev }]>,
     ],
     Expect<
       Invoke<typeof statusSays, [command: typeof status, target: "dev/w2", json: true]>,
@@ -189,26 +178,37 @@ declare namespace status {
   export type ForeignRecords = Given<
     [
       Invoke<typeof emptyHome>,
-      Mock<"./stack.ts">,
-      Call<
-        Mocked<typeof rootctl>,
-        "mockResolvedValue",
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<
+        typeof rootAnswers,
         [
-          value: {
-            workspaces: [
-              Invoke<
-                typeof rootRecord,
-                [domain: "other", workspace: "w1", repo: "acme/widgets", branch: "main"]
-              >,
-              Invoke<
-                typeof rootRecord,
-                [domain: "dev", workspace: "w2", repo: "acme/widgets", branch: "w2", vmOf: "other"]
-              >,
-              Invoke<
-                typeof rootRecord,
-                [domain: "dev", workspace: "w3", repo: "acme/widgets", branch: "w3"]
-              >,
-            ];
+          answers: {
+            "domain.show": {
+              slug: "dev";
+              title: "dev";
+              repos: ["acme/widgets"];
+              createdAt: "2026-11-16T09:00:00Z";
+              workspaces: [
+                Invoke<
+                  typeof rootRecord,
+                  [domain: "other", workspace: "w1", repo: "acme/widgets", branch: "main"]
+                >,
+                Invoke<
+                  typeof rootRecord,
+                  [
+                    domain: "dev",
+                    workspace: "w2",
+                    repo: "acme/widgets",
+                    branch: "w2",
+                    vmOf: "other",
+                  ]
+                >,
+                Invoke<
+                  typeof rootRecord,
+                  [domain: "dev", workspace: "w3", repo: "acme/widgets", branch: "w3"]
+                >,
+              ];
+            };
           },
         ]
       >,
@@ -223,8 +223,8 @@ declare namespace status {
   export type NoSuchWorkspace = Given<
     [
       Invoke<typeof emptyHome>,
-      Mock<"./stack.ts">,
-      Call<Mocked<typeof rootctl>, "mockResolvedValue", [value: Dev]>,
+      Mock<"./stack.ts", typeof fakeStack>,
+      Invoke<typeof rootAnswers, [answers: { "domain.show": Dev }]>,
     ],
     Expect<
       Invoke<typeof statusSays, [command: typeof status, target: "dev/w9", json: false]>,

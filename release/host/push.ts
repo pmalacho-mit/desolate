@@ -8,7 +8,6 @@
 //      that one push.
 // Nothing in a VM can do step 2, so nothing in a VM can push.
 import { andMore } from "../shared/listed.ts";
-import type { Listed } from "../shared/listed.ts";
 import type { DiffPage } from "../shared/review-account.ts";
 import { printable, printableLines } from "../shared/text.ts";
 import { EXIT, refuse } from "../shared/exit.ts";
@@ -21,7 +20,6 @@ import { formatBytes } from "../shared/limits.ts";
 import type { Account, AccountLine, AccountRequest } from "../shared/review-account.ts";
 import { guest } from "./paths.ts";
 import { backend, ROOT_VM, rootctl } from "./stack.ts";
-import type { Issue } from "../shared/issues.ts";
 import type {
   Expect,
   Given,
@@ -34,52 +32,21 @@ import type { refusalOf } from "../.harness/refusal.ts";
 import type { accountOf, pagesOf, shownOf } from "../.harness/host-push.ts";
 
 type Out = (line: string) => void;
-type Offer = {
-  domain: string;
-  repo: string;
-  branch: string;
-  commit: string;
-  workspace: string;
-  lfs: number;
-  at: string;
-  base?: string;
-};
-/** The root's review of a branch (root/offers.ts `review`): its lists are a page and the true
- *  total (shared/listed.ts), so every number printed is one the root counted. */
-type Review = {
-  repo: string;
-  branch: string;
-  commit: string;
-  pushable: boolean;
-  isDefault: boolean;
-  commits: Listed<{ commit: string; subject: string }>;
-  changes: Listed<{ path: string; was?: string }>;
-  stat: string;
-  lfsObjects: number;
-  warnings: string[];
-  againstLabel?: string;
-  pushCommits: number;
-};
-
 /** Text from a repository (a branch name, a commit subject) is shown as text: control
  *  characters that could repaint a terminal are replaced. */
 const plain = (text: string) => printable(text, Infinity);
 
 export const offers = async (domain: string | undefined, out: Out, json: boolean) => {
-  const list = await rootctl<Offer[]>("offers.list", { domain }, { quiet: true });
+  const list = await rootctl("offers.list", { domain }, { quiet: true });
   if (json) return out(JSON.stringify(list));
   // What to do about each is the root's (outbox.ts, refusalFix), as the workspace and the
   // dashboard are told it.
-  const refused = await rootctl<
-    { domain: string; repo: string; at: string; why: string; fix: string }[]
-  >("offers.refused", { domain }, { quiet: true }).catch(() => []);
+  const refused = await rootctl("offers.refused", { domain }, { quiet: true }).catch(() => []);
   for (const r of refused)
     out(`Refused from ${r.domain} (${r.repo}, ${r.at}): ${plain(r.why)}\n  ${plain(r.fix)}`);
   // Issues a workspace offered need you too (the dashboard puts them under "Needs you").
   const issues = (
-    await rootctl<Issue[]>("issue.list", { waiting: true }, { quiet: true }).catch(
-      () => [] as Issue[],
-    )
+    await rootctl("issue.list", { waiting: true }, { quiet: true }).catch(() => [])
   ).filter(
     (i) => (i.state === "offered" || i.state === "approving") && (!domain || i.domain === domain),
   );
@@ -175,8 +142,9 @@ declare namespace offers {
       ["no offers. In a workspace, `desolate offer` marks a branch ready for you."]
     >
   >;
-  /** a branch name is the domain's text: shown as text on both its lines, whatever prints them */
-  export type BranchAsText = Given<
+  /** a branch desolate would not carry (this one would repaint a terminal) is not in an
+   *  offer the root makes: the list is refused, and nothing of it is printed */
+  export type BranchNotOne = Given<
     [
       Mock<"./stack.ts", typeof fakeStack>,
       Invoke<
@@ -199,34 +167,29 @@ declare namespace offers {
           },
         ]
       >,
-      Invoke<typeof offers, [domain: undefined, out: typeof collect, json: false]>,
     ],
-    Expect<
-      Invoke<typeof said>,
-      "=",
-      [
-        "Needs you:",
-        "  acme  acme/web  fix/login?]0;pwned?  0123456789ab  from w1",
-        "    review: desolate review acme acme/web fix/login?]0;pwned?",
-      ]
-    >
+    [
+      Expect<
+        Invoke<
+          typeof refusalOf,
+          [run: typeof offers, args: [domain: undefined, out: typeof collect, json: false]]
+        >,
+        "=",
+        {
+          message: "the root's answer to 'offers.list' is not in the form this Mac takes ([0].branch)";
+          fix: "desolate doctor; if it persists, the root VM is not well: desolate bootstrap";
+          code: 1;
+        }
+      >,
+      Expect<Invoke<typeof said>, "=", []>,
+    ]
   >;
 }
 
 /** `desolate branches [<domain>]`: every branch each domain has, not only what was offered.
  *  The list is each domain's own word; `desolate review` reads the branch in the root. */
 export const branches = async (domain: string | undefined, out: Out, json: boolean) => {
-  const list = await rootctl<
-    {
-      domain: string;
-      repo: string;
-      branch: string;
-      commit: string;
-      offered: boolean;
-      checkedOutIn: string[];
-      landed?: string | null;
-    }[]
-  >("branches.list", domain ? { domain } : {}, { quiet: true });
+  const list = await rootctl("branches.list", domain ? { domain } : {}, { quiet: true });
   if (json) return out(JSON.stringify(list));
   if (list.length === 0)
     return out(
@@ -258,13 +221,13 @@ export const review = async (
       "desolate review <domain> <owner/repo> <branch> [--against origin|domain]   (see `desolate branches` and `desolate offers`)",
       EXIT.usage,
     );
-  const r = await rootctl<Review>("review", { domain, repo, branch, against }, { quiet: true });
+  const r = await rootctl("review", { domain, repo, branch, against }, { quiet: true });
   if (json) return out(JSON.stringify(r));
-  out(`${r.repo}  ${plain(r.branch)}  at ${r.commit}, against ${r.againstLabel ?? "origin"}`);
+  out(`${r.repo}  ${plain(r.branch)}  at ${r.commit}, against ${plain(r.againstLabel)}`);
   out(
     against === "domain"
-      ? `beyond ${r.againstLabel ?? "the domain's default branch"}: ${r.commits.total} commit(s), ${r.stat || "no file changes"}. A push would send ${r.pushCommits} commit(s) (against origin).`
-      : `a push would send ${r.pushCommits} commit(s): ${r.stat || "no file changes"}${r.lfsObjects ? `, and ${r.lfsObjects} LFS object(s) first` : ""}`,
+      ? `beyond ${plain(r.againstLabel)}: ${r.commits.total} commit(s), ${plain(r.stat) || "no file changes"}. A push would send ${r.pushCommits} commit(s) (against origin).`
+      : `a push would send ${r.pushCommits} commit(s): ${plain(r.stat) || "no file changes"}${r.lfsObjects ? `, and ${r.lfsObjects} LFS object(s) first` : ""}`,
   );
   // The first of each list, as a terminal reads at a glance, and how many more there are (the
   // root's count): every one is in the dashboard's review, and in git.
@@ -278,7 +241,7 @@ export const review = async (
     out(`  ${c.was === undefined ? plain(c.path) : `${plain(c.was)} -> ${plain(c.path)}`}`);
   const moreFiles = andMore(files, "file");
   if (moreFiles) out(`  ... ${moreFiles} ${rest}`);
-  for (const warning of r.warnings) out(`  WARNING: ${warning}`);
+  for (const warning of r.warnings) out(`  WARNING: ${plain(warning)}`);
   if (diff) {
     // The diff is the content's own text, made in the root by git alone. Shown as text:
     // anything that could repaint a terminal is replaced. It comes a page at a time, each
@@ -288,7 +251,7 @@ export const review = async (
     let at: number | null = 0;
     let carried = "";
     while (at !== null) {
-      const d: DiffPage = await rootctl<DiffPage>(
+      const d: DiffPage = await rootctl(
         "review.diff",
         { domain, repo, branch, against, at },
         { quiet: true },
@@ -341,7 +304,12 @@ declare namespace review {
         [
           answers: {
             review: {
+              domain: "acme";
               repo: "acme/web";
+              base: "";
+              against: "origin";
+              againstLabel: "origin";
+              defaultBranch: "main";
               branch: "fix/login";
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
@@ -351,12 +319,18 @@ declare namespace review {
                   {
                     commit: "0123456789abcdef0123456789abcdef01234567";
                     subject: "Fix the login loop\u001b[2J";
+                    author: "A <a@example.com>";
+                    body: "";
                   },
                 ];
                 total: 1;
                 from: 0;
               };
-              changes: { items: [{ path: "src/login.ts" }]; total: 1; from: 0 };
+              changes: {
+                items: [{ path: "src/login.ts"; status: "modified"; added: 3; removed: 0 }];
+                total: 1;
+                from: 0;
+              };
               pushCommits: 1;
               stat: "1 file changed, 3 insertions(+)";
               lfsObjects: 0;
@@ -395,7 +369,12 @@ declare namespace review {
         [
           answers: {
             review: {
+              domain: "acme";
               repo: "acme/web";
+              base: "";
+              against: "origin";
+              againstLabel: "origin";
+              defaultBranch: "main";
               branch: "main";
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
@@ -405,12 +384,18 @@ declare namespace review {
                   {
                     commit: "0123456789abcdef0123456789abcdef01234567";
                     subject: "Fix the login loop\u001b[2J";
+                    author: "A <a@example.com>";
+                    body: "";
                   },
                 ];
                 total: 1;
                 from: 0;
               };
-              changes: { items: [{ path: "src/login.ts" }]; total: 1; from: 0 };
+              changes: {
+                items: [{ path: "src/login.ts"; status: "modified"; added: 3; removed: 0 }];
+                total: 1;
+                from: 0;
+              };
               pushCommits: 1;
               stat: "1 file changed, 3 insertions(+)";
               lfsObjects: 0;
@@ -435,7 +420,12 @@ declare namespace review {
         [
           answers: {
             review: {
+              domain: "acme";
               repo: "acme/web";
+              base: "";
+              against: "origin";
+              againstLabel: "origin";
+              defaultBranch: "main";
               branch: "fix/login";
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: false;
@@ -445,12 +435,18 @@ declare namespace review {
                   {
                     commit: "0123456789abcdef0123456789abcdef01234567";
                     subject: "Fix the login loop\u001b[2J";
+                    author: "A <a@example.com>";
+                    body: "";
                   },
                 ];
                 total: 1;
                 from: 0;
               };
-              changes: { items: [{ path: "src/login.ts" }]; total: 1; from: 0 };
+              changes: {
+                items: [{ path: "src/login.ts"; status: "modified"; added: 3; removed: 0 }];
+                total: 1;
+                from: 0;
+              };
               pushCommits: 1;
               stat: "1 file changed, 3 insertions(+)";
               lfsObjects: 0;
@@ -480,19 +476,33 @@ declare namespace review {
         [
           answers: {
             review: {
+              domain: "acme";
               repo: "acme/web";
+              base: "";
+              against: "origin";
+              againstLabel: "origin";
+              defaultBranch: "main";
               branch: "big";
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
               isDefault: false;
               commits: {
                 items: [
-                  { commit: "0123456789abcdef0123456789abcdef01234567"; subject: "the last" },
+                  {
+                    commit: "0123456789abcdef0123456789abcdef01234567";
+                    subject: "the last";
+                    author: "A <a@example.com>";
+                    body: "";
+                  },
                 ];
                 total: 250;
                 from: 0;
               };
-              changes: { items: [{ path: "b.ts"; was: "a.ts" }]; total: 1200; from: 0 };
+              changes: {
+                items: [{ path: "b.ts"; status: "renamed"; added: 0; removed: 0; was: "a.ts" }];
+                total: 1200;
+                from: 0;
+              };
               pushCommits: 250;
               stat: "1200 files changed";
               lfsObjects: 0;
@@ -530,7 +540,12 @@ declare namespace review {
         [
           answers: {
             review: {
+              domain: "acme";
               repo: "acme/web";
+              base: "";
+              against: "origin";
+              againstLabel: "origin";
+              defaultBranch: "main";
               branch: "fix/login";
               commit: "0123456789abcdef0123456789abcdef01234567";
               pushable: true;
@@ -1053,11 +1068,7 @@ export const approve = async (
   out: Out,
   choice: { squash: boolean; replace: boolean } = { squash: false, replace: false },
 ): Promise<number> => {
-  const pending = await rootctl<{ message: string; summary: string }[]>(
-    "approvals.pending",
-    {},
-    { quiet: true },
-  );
+  const pending = await rootctl("approvals.pending", {}, { quiet: true });
   if (pending.length === 0) {
     out(
       "nothing is waiting for approval. (`desolate push` asks by itself; this is for a raw `git push` in `desolate root shell`.)",

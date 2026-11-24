@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { refuse } from "../shared/exit.ts";
 import { formatBytes } from "../shared/limits.ts";
 import { waitFor } from "../shared/run.ts";
+import { printable } from "../shared/text.ts";
 import * as approver from "./approver.ts";
 import { because, lastFailure } from "./failures.ts";
 import { INSTANCE, paths, RELEASE_DIR, guest } from "./paths.ts";
@@ -270,7 +271,7 @@ export const bootstrap = async (
   }
   step(info.status !== "running", "root VM running");
 
-  const wasUp = await rootctlBrief<{ keyring: boolean }>("ping").then(
+  const wasUp = await rootctlBrief("ping").then(
     (r) => r.keyring,
     () => false,
   );
@@ -356,11 +357,7 @@ export const bootstrap = async (
     }
   }
   const waitKeyring = async () => {
-    const up = await waitFor(
-      () => rootctlBrief<{ keyring: boolean }>("ping").then((r) => r.keyring),
-      30_000,
-      500,
-    );
+    const up = await waitFor(() => rootctlBrief("ping").then((r) => r.keyring), 30_000, 500);
     if (!up) refuse("the root's keyring did not come up", "desolate doctor");
   };
   // Always: start.sh leaves alone what is running, and starts what a newer desolate added.
@@ -370,7 +367,7 @@ export const bootstrap = async (
   // What a `destroy` kept of the root before (carry.ts): into this root, if it is new.
   {
     const { restoreRootState } = await import("./carry.ts");
-    const held = await rootctl<unknown[]>("keys.list", {}, { quiet: true });
+    const held = await rootctl("keys.list", {}, { quiet: true });
     if (await restoreRootState(out, held.length > 0)) {
       await startRootServices();
       await waitKeyring();
@@ -491,7 +488,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
   let asked: Check[] | null = null;
   if (rootUp)
     try {
-      asked = await rootctlBrief<Check[]>("doctor");
+      asked = await rootctlBrief("doctor");
     } catch {
       asked = null;
     }
@@ -650,7 +647,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
   else {
     for (const check of checks)
       out(
-        `  ${check.ok ? "ok  " : "FAIL"} ${check.name}: ${check.detail}${check.ok || !check.fix ? "" : `\n         fix: ${check.fix}`}`,
+        `  ${check.ok ? "ok  " : "FAIL"} ${printable(check.name, Infinity)}: ${printable(check.detail, Infinity)}${check.ok || !check.fix ? "" : `\n         fix: ${printable(check.fix, Infinity)}`}`,
       );
     out(
       failed.length === 0

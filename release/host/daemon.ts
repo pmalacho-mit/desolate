@@ -1102,8 +1102,6 @@ declare namespace reviewerSummary {
   ];
 }
 
-/** What the root lists as waiting for the approval page (root/ops.ts, approvals.wait). */
-type WaitingList = { tag: string; pending: { message: string; at: string }[] };
 const approvalBackend = (): ApprovalBackend => {
   return {
     secrets: secretOps,
@@ -1128,8 +1126,8 @@ const approvalBackend = (): ApprovalBackend => {
     // Held by the root until its list changes, and ended with the page's request.
     pending: (since, signal) =>
       since === ""
-        ? rootctlBrief<WaitingList>("approvals.wait", { since }, { signal })
-        : rootctl<WaitingList>("approvals.wait", { since }, { quiet: true, signal }),
+        ? rootctlBrief("approvals.wait", { since }, { signal })
+        : rootctl("approvals.wait", { since }, { quiet: true, signal }),
     summary: reviewerSummary,
     approve: async (signed) => {
       const push = parseSigned(signed);
@@ -1158,9 +1156,7 @@ const approvalBackend = (): ApprovalBackend => {
         );
     },
     issues: async () =>
-      (await rootctlBrief<unknown[]>("issue.list", { waiting: true })).filter(
-        (i) => (i as { state?: unknown }).state === "approving",
-      ),
+      (await rootctlBrief("issue.list", { waiting: true })).filter((i) => i.state === "approving"),
     publishIssue: async (issue) => {
       const url = await (await import("./issues.ts")).publish(issue);
       events.publish(events.host("issue-published", { repo: issue.repo, id: issue.id, url }));
@@ -2459,7 +2455,7 @@ const serve = async () => {
       for (const entry of entries.values()) {
         if (!running.has(entry.vm)) continue;
         try {
-          const w = await rootctlBrief<import("./workspaces.ts").Workspace>("workspace.get", {
+          const w = await rootctlBrief("workspace.get", {
             domain: entry.domain,
             name: entry.workspace,
           });
@@ -2482,13 +2478,7 @@ const serve = async () => {
     try {
       const { stackDefaults } = await import("./workspaces.ts");
       const { merge } = await import("../shared/size.ts");
-      const all = await rootctlBrief<
-        {
-          slug: string;
-          size?: Partial<Size>;
-          workspaces: { vm: string; size?: Partial<Size> }[];
-        }[]
-      >("domain.list");
+      const all = await rootctlBrief("domain.list");
       const up = new Set(
         (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
       );
@@ -2845,20 +2835,16 @@ const serve = async () => {
 
   // After a restart of the host: take up every workspace whose VM is running.
   try {
-    const domains =
-      await rootctlBrief<{ slug: string; workspaces: (WorkspacePlan & { proxy?: string })[] }[]>(
-        "domain.list",
-      );
+    const domains = await rootctlBrief("domain.list");
     const running = new Set(
       (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
     );
-    const { isOwnVm } = await import("./workspaces.ts");
     for (const d of domains)
       for (const w of d.workspaces)
-        // The root's word, checked: a record naming another domain's VM gets no link and no
-        // proxy (it would give that VM this domain's names and rules: review of the fixes).
-        if (running.has(w.vm) && w.domain === d.slug && isOwnVm(d.slug, w)) {
-          const proxy = await rootctlBrief<{ socket: string }>("proxy.start", {
+        // (A record naming another domain's VM is not in the list, replies.ts: it would give
+        // that VM this domain's names and rules: review of the fixes.)
+        if (running.has(w.vm)) {
+          const proxy = await rootctlBrief("proxy.start", {
             vm: w.vm,
             domain: w.domain,
             workspace: w.workspace,
@@ -2868,8 +2854,7 @@ const serve = async () => {
             domain: w.domain,
             workspace: w.workspace,
             proxy: proxy.socket,
-            checkouts: w.checkouts,
-          } as Registered);
+          });
         }
   } catch (error) {
     log(`could not list workspaces at start: ${String(error)}`);

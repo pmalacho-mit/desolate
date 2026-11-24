@@ -146,11 +146,7 @@ const domainFor = async (
   repo: string,
   named: string | undefined,
 ): Promise<{ slug: string; made: boolean; added: boolean } | { taken: string[] }> => {
-  const existing = await rootctl<{ slug: string; repos: string[] }[]>(
-    "domain.list",
-    {},
-    { quiet: true },
-  );
+  const existing = await rootctl("domain.list", {}, { quiet: true });
   const holding = (slug: string) => existing.find((d) => d.slug === slug);
   const join = async (slug: string) => {
     const there = holding(slug);
@@ -187,28 +183,20 @@ export const clone = async (
     ...(options.anonymous ? [] : (["read"] as const)),
     ...(options.push ? (["write"] as const) : []),
   ];
-  // It makes the keys; what it says they are is not used (keyringKey).
-  const prepared = await rootctl<{ pushable: boolean; anonymous: boolean; keys: Key[] }>(
-    "repo.prepare",
-    { repo, push: options.push, anonymous: options.anonymous },
-  );
-  const answered = Array.isArray(prepared?.keys) ? prepared.keys.map((k) => k?.role) : null;
-  if (!answered || answered.length !== roles.length || roles.some((r) => !answered.includes(r)))
-    refuse(
-      `the root answered for other keys than the ones asked for ${repo}, so none was registered`,
-      "desolate doctor",
-    );
+  // It makes the keys: the ones asked for, or a refusal (replies.ts). What it says they are is
+  // not used (keyringKey).
+  const prepared = await rootctl("repo.prepare", {
+    repo,
+    push: options.push,
+    anonymous: options.anonymous,
+  });
   const made: Key[] = [];
   for (const role of roles) made.push({ role, pubkey: (await keyringKey(repo, role)).key });
   if (options.byHand) {
     // Keys added by whoever administers the repository (GitHub: Settings, Deploy keys). The
     // root made them and keeps them; only their public halves are shown. The fetch says
     // whether the read key is in place yet; the write key is first used by a push you approve.
-    const tried = await rootctl<Record<string, unknown>>(
-      "repo.fetch",
-      { repo },
-      { quiet: true },
-    ).catch(() => null);
+    const tried = await rootctl("repo.fetch", { repo }, { quiet: true }).catch(() => null);
     if (!tried) {
       out(
         `Add ${made.length === 1 ? "this deploy key" : "these deploy keys"} to ${repo}${config()?.forge.kind === "github" ? ` (https://github.com/${repo}/settings/keys/new)` : ""}, then run this command again:`,
@@ -233,7 +221,7 @@ export const clone = async (
           `  ${key.role} key: ${how}${key.role === "write" ? " (it asks you before every push)" : ""}`,
         );
     }
-  const fetched = await rootctl<Record<string, unknown>>("repo.fetch", { repo });
+  const fetched = await rootctl("repo.fetch", { repo });
   const placed = options.domain === false ? null : await domainFor(repo, options.domain);
   const domain = placed && "slug" in placed ? placed : null;
   if (json)
@@ -271,7 +259,13 @@ export const clone = async (
 
 declare namespace clone {
   type Anonymous = { push: false; anonymous: true };
-  type Fetched = { branches: 3; defaultBranch: "main"; lfsObjects: 0 };
+  type Fetched = {
+    repo: "acme/web";
+    branches: 3;
+    defaultBranch: "main";
+    lfsObjects: 0;
+    rootClone: "created";
+  };
   /** names that become paths and VM labels are checked before the root is asked anything */
   export type Refuses = Given<
     [Mock<"./stack.ts", typeof fakeStack>, Invoke<typeof rootAnswers, [answers: {}]>],
@@ -314,11 +308,16 @@ declare namespace clone {
         typeof rootAnswers,
         [
           answers: {
-            "repo.prepare": { pushable: false; anonymous: true; keys: [] };
+            "repo.prepare": { repo: "acme/web"; pushable: false; anonymous: true; keys: [] };
             "repo.fetch": Fetched;
             "domain.list": [];
-            "domain.create": {};
-            "domain.add-repo": {};
+            "domain.create": {
+              slug: "acme--web";
+              title: "acme/web";
+              repos: [];
+              createdAt: "2026-11-16T09:00:00Z";
+            };
+            "domain.add-repo": { domain: "acme--web"; repo: "acme/web"; added: true; note: "" };
           },
         ]
       >,
@@ -345,9 +344,17 @@ declare namespace clone {
         typeof rootAnswers,
         [
           answers: {
-            "repo.prepare": { pushable: false; anonymous: true; keys: [] };
+            "repo.prepare": { repo: "acme/web"; pushable: false; anonymous: true; keys: [] };
             "repo.fetch": Fetched;
-            "domain.list": [{ slug: "acme--web"; repos: ["acme/other"] }];
+            "domain.list": [
+              {
+                slug: "acme--web";
+                title: "acme--web";
+                repos: ["acme/other"];
+                createdAt: "2026-11-16T09:00:00Z";
+                workspaces: [];
+              },
+            ];
           },
         ]
       >,
@@ -376,6 +383,7 @@ declare namespace clone {
         [
           answers: {
             "repo.prepare": {
+              repo: "acme/web";
               pushable: true;
               anonymous: false;
               keys: [
@@ -419,7 +427,7 @@ declare namespace clone {
   };
   type ReadOnly = { push: false; anonymous: false; domain: false };
   type Prepared<K> = {
-    "repo.prepare": { pushable: false; anonymous: false; keys: K };
+    "repo.prepare": { repo: "acme/web"; pushable: false; anonymous: false; keys: K };
     "repo.fetch": Fetched;
   };
   /** the forge is given the keyring's read key, without its comment, and nothing else */
@@ -543,7 +551,7 @@ declare namespace clone {
 
 export const fetch = async (name: string | undefined, out: Out, json: boolean) => {
   const repo = repoId(repoArg(name));
-  const fetched = await rootctl<Record<string, unknown>>("repo.fetch", { repo });
+  const fetched = await rootctl("repo.fetch", { repo });
   out(
     json
       ? JSON.stringify(fetched)
@@ -552,15 +560,7 @@ export const fetch = async (name: string | undefined, out: Out, json: boolean) =
 };
 
 export const repos = async (out: Out, json: boolean) => {
-  const list = await rootctl<
-    {
-      repo: string;
-      pushable: boolean;
-      anonymous: boolean;
-      defaultBranch: string | null;
-      fetchedAt: string | null;
-    }[]
-  >("repo.list", {}, { quiet: true });
+  const list = await rootctl("repo.list", {}, { quiet: true });
   if (json) return out(JSON.stringify(list));
   if (list.length === 0)
     return out("no repositories yet. Start with: desolate clone <owner>/<repo>");
@@ -572,7 +572,7 @@ export const repos = async (out: Out, json: boolean) => {
 
 /** The keys the root holds, and a key's public half, for adding it to a forge by hand. */
 export const keys = async (name: string | undefined, out: Out, json: boolean) => {
-  const held = await rootctl<{ repo: string; role: string }[]>("keys.list", {}, { quiet: true });
+  const held = await rootctl("keys.list", {}, { quiet: true });
   if (!name) {
     if (json) return out(JSON.stringify(held));
     if (held.length === 0)
@@ -589,13 +589,10 @@ export const keys = async (name: string | undefined, out: Out, json: boolean) =>
   const mine = held.filter((key) => key.repo === repo);
   if (mine.length === 0) refuse(`the root holds no key for ${repo}`, `desolate clone ${repo}`);
   const shown: { role: string; pubkey: string }[] = [];
-  for (const key of mine) {
-    if (key.role !== "read" && key.role !== "write")
-      refuse(`the root listed a key for ${repo} that is neither read nor write`, "desolate doctor");
-    // Read from the keyring itself, as clone's are; shown whole, comment and all, which names
-    // the repository it is for.
+  // Read from the keyring itself, as clone's are; shown whole, comment and all, which names
+  // the repository it is for. (A role is read or write, or the list is refused: replies.ts.)
+  for (const key of mine)
     shown.push({ role: key.role, pubkey: (await keyringKey(repo, key.role)).line });
-  }
   if (json) return out(JSON.stringify(shown));
   for (const key of shown)
     out(
@@ -668,7 +665,7 @@ declare namespace keys {
         [run: typeof keys, args: [name: "acme/web", out: typeof collect, json: false]]
       >,
       "matches",
-      { message: "the root listed a key for acme/web that is neither read nor write" }
+      { message: "the root's answer to 'keys.list' is not in the form this Mac takes ([0].role)" }
     >
   >;
   /** which keys the root holds; a write key asks before every push */
