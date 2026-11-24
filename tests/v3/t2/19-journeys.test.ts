@@ -48,7 +48,7 @@ const agent = (script: string) => {
   assert.equal(done.code, 0, `${done.stdout}\n${done.stderr}`);
   assert.match(
     done.stdout,
-    /offered to the root, not pushed/,
+    /offered for review, not pushed: this is the expected result/,
     `the push did not offer: ${done.stdout}\n${done.stderr}`,
   );
   return done.stdout

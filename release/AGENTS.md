@@ -22,16 +22,16 @@ reach is unreachable on purpose, and is not a bug in the project.
   remote has now: the root refreshes its read-only mirror first, and `origin` is that mirror,
   so they need no key and no network here. (`desolate fetch` does the same for every
   repository at once.)
-- **When your work is ready:** commit it, then `desolate offer` (in the checkout, on the
-  branch). That hands the branch to the person, who reviews it and pushes it.
-  `git push origin <branch>` offers it too, but then **exits with an error on purpose**
-  (`! [remote rejected] ... (offered to the root, not pushed ...)`), so that git does not
-  record a remote branch that does not exist. That error means the offer worked; the line
-  `offered <repo> <branch> at <commit>` above it says so. Do not retry it or look for another
-  way to push. Prefer `desolate offer`, which exits 0 when the offer is taken. **Offering is
-  not pushing: the person pushes.** Do not look for a token, install `gh`, or add a
-  remote: there is nothing to find. If the pull request should go into a branch other
-  than the default one, say which: `desolate offer --base <branch>`.
+- **When your work is ready, offer it:** commit, then `desolate offer` (in the checkout, on
+  the branch; `--base <branch>` for a pull request into another branch). That is how the
+  person learns it is ready, and the only way. **Offering is not pushing:** they review it and
+  push it; nothing here can push, so do not look for a token, install `gh`, or add a remote.
+  Offer nothing unready just to be safe: the offer is the signal.
+- **An offer is of the commit offered.** Commit again, and the person sees "Moved since it
+  was offered" and cannot push it until you offer again.
+- **`git push origin <branch>` offers too, then git reports a rejection, on purpose**, so it
+  records no remote branch that does not exist. The offer was taken when it says
+  `Nothing more is needed now: do not retry the push or look for another way to push.` and `! [remote rejected] <branch> -> <branch> (offered for review, not pushed: this is the expected result, the person reviews and pushes it)`.
 - **If an offer is refused** with "the root refused this domain's bundle" and a reason that
   says its directory in the outbox "is not a plain one", the share between this VM and the
   root's lagged behind what you wrote: offer again (`desolate offer`). With any other reason,

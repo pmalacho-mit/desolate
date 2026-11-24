@@ -43,7 +43,8 @@ doctor: all checks passed.
 
 $ desolate exec dev/w1 --checkout acme/widgets -- desolate offer
 offered acme/widgets issue/12 at <id>, with 1 LFS object(s).
-It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac), where the person reviews it and pushes it. Offering is not pushing: nothing in a workspace can push.
+The offer is of this commit: after more commits, offer again (git push, or desolate offer), since only an offer tells the person there is something new to review.
 [exit 0]
 
 $ desolate offers
@@ -335,9 +336,41 @@ $ desolate branches dev
 
 ## git fetch and git push in a workspace
 
+$ desolate exec dev/w1 --checkout acme/widgets -- git push origin pushed-here
+offered acme/widgets pushed-here at <id>.
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac), where the person reviews it and pushes it. Offering is not pushing: nothing in a workspace can push.
+The offer is of this commit: after more commits, offer again (git push, or desolate offer), since only an offer tells the person there is something new to review.
+git reports this push as rejected below, on purpose: nothing goes to the remote from a workspace, and git must not record a branch there that the remote does not have.
+Nothing more is needed now: do not retry the push or look for another way to push.
+To desolate-offer::acme/widgets
+ ! [remote rejected] pushed-here -> pushed-here (offered for review, not pushed: this is the expected result, the person reviews and pushes it)
+error: failed to push some refs to 'desolate-offer::acme/widgets'
+[exit 1]
+
+$ desolate exec dev/w1 --checkout acme/widgets -- git push origin HEAD:refs/heads/other-name
+To desolate-offer::acme/widgets
+ ! [remote rejected] HEAD -> other-name (not offered: only a branch is offered, under its own name: git push origin <branch>)
+error: failed to push some refs to 'desolate-offer::acme/widgets'
+[exit 1]
+
+$ desolate exec dev/w1 --checkout acme/widgets -- git push origin fix+plus
+desolate: 'fix+plus' is not a branch desolate will carry
+  fix: rename it with letters, digits and . _ / - only: git branch -m <new-name>
+To desolate-offer::acme/widgets
+ ! [remote rejected] fix+plus -> fix+plus (not offered: desolate offer says why above, with its fix)
+error: failed to push some refs to 'desolate-offer::acme/widgets'
+[exit 1]
+
+$ desolate exec dev/w1 --checkout acme/widgets -- git push origin :elsewhere
+To desolate-offer::acme/widgets
+ ! [remote rejected] elsewhere (not deleted: a workspace changes nothing on the remote; the person deletes branches there, in desolate git on the Mac)
+error: failed to push some refs to 'desolate-offer::acme/widgets'
+[exit 1]
+
 ## an offer of 2,001 LFS objects
 
 $ desolate exec dev/w1 --checkout acme/widgets -- desolate offer
 offered acme/widgets lfs/many at <id>, with 2001 LFS object(s).
-It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.
+It is under "Needs you" on the dashboard now (desolate ui, on the Mac), where the person reviews it and pushes it. Offering is not pushing: nothing in a workspace can push.
+The offer is of this commit: after more commits, offer again (git push, or desolate offer), since only an offer tells the person there is something new to review.
 [exit 0]

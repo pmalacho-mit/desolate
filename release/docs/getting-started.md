@@ -251,8 +251,11 @@ and 443 ([what that means for registries and builds](reference.md)).
 
   ```
   offered you/app feature/greet-by-name at 3f2a91c0d4e1.
-  It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. ...
-   ! [remote rejected] feature/greet-by-name -> feature/greet-by-name (offered to the root, not pushed: ...)
+  It is under "Needs you" on the dashboard now (desolate ui, on the Mac), where the person reviews it and pushes it. ...
+  The offer is of this commit: after more commits, offer again (git push, or desolate offer), ...
+  git reports this push as rejected below, on purpose: ...
+  Nothing more is needed now: do not retry the push or look for another way to push.
+   ! [remote rejected] feature/greet-by-name -> feature/greet-by-name (offered for review, not pushed: this is the expected result, ...)
   ```
 
   Nothing reached GitHub yet: that is step 7, from the root, and only once you approve it.
@@ -265,7 +268,9 @@ and 443 ([what that means for registries and builds](reference.md)).
   Try running Pull first" dialog for the same reason, and the button still says Publish
   Branch until the push lands. Close the dialog: the branch was offered. Show Command Output has the
   `offered ... at ...` line, and the dashboard lists the branch. Pushing again only offers it
-  again (the newer offer replaces the older one), so it does no harm, but there is no need.
+  again (the newer offer replaces the older one), so it does no harm. Do push again after
+  more commits: an offer is of the commit offered, and the dashboard shows one that moved
+  since as "Moved since it was offered", not pushable until it is offered again.
 
 Every commit on every branch reaches the root within seconds, offered or not; offering says
 "this one is ready".
@@ -511,7 +516,7 @@ Then, on GitHub, delete the deploy keys titled `desolate read (host ...)` and
   and why each was refused, are in `desolate net log you--app`; `desolate domain you--app net
   allow <host>` lets one through.
 - **The editor says "Can't push refs to remote"** after Publish Branch or Sync, or `git push`
-  ends with `! [remote rejected] ... (offered to the root, not pushed ...)`: the branch was
+  ends with `! [remote rejected] ... (offered for review, not pushed ...)`: the branch was
   offered, which is all a workspace can do. Review and push it from the dashboard. See
   [step 5](#5-work-in-it).
 - **A push was refused at approval**, or timed out: a `git push` waits for you for as long as

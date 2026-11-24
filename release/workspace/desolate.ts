@@ -595,10 +595,7 @@ const main = async (argv: string[]) => {
     const branch = named ?? current;
     const notBranch = branchRefusal(branch);
     if (notBranch)
-      fail(
-        notBranch,
-        "check out the branch to offer, or name it: desolate offer <owner>/<repo> <branch>",
-      );
+      fail(notBranch, "rename it with letters, digits and . _ / - only: git branch -m <new-name>");
     const commit =
       (await branches(repo))[branch] ??
       fail(`${repo} has no branch '${branch}' in this domain`, "git branch --list");
@@ -637,8 +634,11 @@ const main = async (argv: string[]) => {
     process.stdout.write(
       `offered ${repo} ${branch} at ${commit.slice(0, 12)}${base ? `, for ${base}` : ""}${lfs.length ? `, with ${lfs.length} LFS object(s)` : ""}.\n`,
     );
+    // Said as what happens, not as an order: an agent read "push it" as a task. An offer is of
+    // this commit (#278): one after it shows as moved, and nothing is pushable until offered.
     process.stdout.write(
-      'It is under "Needs you" on the dashboard now (desolate ui, on the Mac): review it there and push it. Offering is not pushing: nothing in a workspace can push.\n',
+      'It is under "Needs you" on the dashboard now (desolate ui, on the Mac), where the person reviews it and pushes it. Offering is not pushing: nothing in a workspace can push.\n' +
+        "The offer is of this commit: after more commits, offer again (git push, or desolate offer), since only an offer tells the person there is something new to review.\n",
     );
     if (dirty.stdout.trim())
       process.stdout.write(
