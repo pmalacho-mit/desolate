@@ -286,6 +286,8 @@ P
 # approver on the HOST, checked against the public key the host installs here (a directory
 # and file only root writes; keyring.ts refuses a key anyone else could have replaced).
 install -d -m 0755 -o root -g root /etc/desolate
+# The host's token for the state service is retired (stated.ts: the host's own socket).
+rm -f /etc/desolate/host-token
 # ($STATE/approvals, where a raw `git push` in the root's terminal leaves its request for
 # `desolate approve`, was made above, by the user.)
 
@@ -362,7 +364,9 @@ kept() { # kept <name> <script>
   echo $! >"$RUN/$1.pid"
 }
 alive "$RUN/rootd.pid" || kept rootd rootd.ts
-# The state service: what the dashboard draws from (stated.ts).
+# The state service: what the dashboard draws from (stated.ts). The host's socket's directory
+# is the user's alone, as the CLI channel's is: the host asks as that user.
+install -d -m 0700 -o "$USER_NAME" "$RUN/stated"
 alive "$RUN/stated.pid" || kept stated stated.ts
 # The CLI channel, kept running (rootctl.ts serve): the host's calls skip loading the root's
 # code each time. Its socket's directory is the user's alone; the host asks as that user.

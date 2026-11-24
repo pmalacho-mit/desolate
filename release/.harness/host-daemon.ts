@@ -162,23 +162,6 @@ export const helloTo = (name: string | null) => {
 export const asked = (text: string) => said(text).sniffed;
 /** `text`, its names written as above, as bytes. */
 export const wire = (text: string) => Buffer.from(named(text), "latin1");
-/** What a reader of the root's state answer (daemon.ts, stateReader) gives first when it is
- *  handed `text`'s bytes `piece` at a time, as `shown` has it; null when it gives nothing. */
-export const readInPieces = (
-  reader: (most?: number) => { take: (chunk: Buffer) => unknown },
-  text: string,
-  piece: number,
-  most?: number,
-) => {
-  const read = reader(most);
-  const bytes = wire(text);
-  for (let at = 0; at < bytes.length; at += piece) {
-    const got = read.take(bytes.subarray(at, at + piece));
-    if (got !== null) return shown(got);
-  }
-  return null;
-};
-
 /** What a line reader (daemon.ts, lineReader) gave of `chunks`, handed it one at a time: the
  *  lines, and the error it stopped at, if it did. */
 export const linesInPieces = (
@@ -250,6 +233,58 @@ export const heldWatch = async (
   watch.close();
   await new Promise((resolve) => setTimeout(resolve, 30));
   return { sent, lines, missed, openAfterClose: opened - before };
+};
+
+/** Questions asked over a held asker (daemon.ts, heldAsker) of stand-ins for the root's state
+ *  service, one per dial, in turn: after its i-th question has been written, a stream sends
+ *  `replies[i]`, and after the `endAfter`-th it ends. Each round of questions is asked at
+ *  once, each given 300 ms, and the next round once all are settled. What each question was
+ *  answered, as the asker took it (a refusal's words), how many streams were dialed, and how
+ *  many ended. */
+export const askedOver = async (
+  asker: (
+    open: () => Duplex,
+    ended?: () => void,
+    most?: number,
+  ) => { ask: (op: any, asked?: Record<string, unknown>, timeoutMs?: number) => Promise<unknown> },
+  rounds: [op: string, asked: Record<string, unknown>][][],
+  streams: { replies: (string | Buffer)[][]; endAfter?: number }[],
+  most?: number,
+) => {
+  let opened = 0;
+  let ended = 0;
+  const held = asker(
+    () => {
+      const script = streams[opened++] ?? { replies: [] };
+      let heard = 0;
+      const stream: Duplex = new Duplex({
+        read() {},
+        write(_chunk, _encoding, done) {
+          const now = heard++;
+          for (const line of script.replies[now] ?? [])
+            stream.push(typeof line === "string" ? Buffer.from(line) : line);
+          if (script.endAfter === heard) stream.push(null);
+          done();
+        },
+      });
+      return stream;
+    },
+    () => void ended++,
+    most,
+  );
+  const answers: unknown[] = [];
+  for (const round of rounds)
+    answers.push(
+      ...(await Promise.all(
+        round.map(([op, asked]) =>
+          held.ask(op, asked, 300).then(
+            (answer) => answer,
+            (error: Error) => error.message,
+          ),
+        ),
+      )),
+    );
+  return { answers, opened, ended };
 };
 
 /** `count` ports from `from` on, which a type would take a long time to write. */

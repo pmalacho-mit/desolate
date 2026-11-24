@@ -13,12 +13,12 @@
 //   the host's facts       which VMs run, forwarded ports, each editor's address, a
 //                          start's progress. The root cannot see these, and cannot ask: no
 //                          VM can open a connection to the host. The host's daemon dials
-//                          IN and tells it (PUT /host/facts), and nudges it when a file in
+//                          IN and tells it (its socket, below), and nudges it when a file in
 //                          a share changed (a VM gets no change events for a share).
 //
 // WHAT IT CAN DO
 //   Nothing on the host by itself. The dashboard's actions are queued here; the host's
-//   daemon collects them (GET /host/requests) and runs, as its own CLI, the ones on its
+//   daemon collects them (a held question) and runs, as its own CLI, the ones on its
 //   fixed list. A push is the exception that proves the rule: it starts here, as a raw
 //   push (raw-push.ts), and then WAITS for the person to approve it on the host (the
 //   approval page, or `desolate approve`). Nothing here can approve.
@@ -28,7 +28,8 @@
 //               only with the cookie it got for the address `desolate ui` prints (so no
 //               other program on the machine), and for actions only with a header a
 //               cross-site page cannot send.
-//   the host    with the token the host installed as root at bootstrap.
+//   the host    on a socket of its own, which only this user can open: the host reaches
+//               it as this user, over ssh. No other user of the root VM can connect.
 // Repository content (branch names, commit subjects, statuses, notes) leaves here as JSON
 // strings and is put on the page as text, never as HTML.
 import { pendingIn } from "./approvals.ts";
@@ -37,12 +38,13 @@ import { CUT, printable } from "../shared/text.ts";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import { createServer } from "node:http";
+import { createServer as createSocketServer } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as path from "node:path";
 import { actionRefusal, hostArgv, SIGNED_KINDS } from "../shared/actions.ts";
 import { stateEvents } from "../shared/events.ts";
 import { LIMIT as ISSUE } from "../shared/issues.ts";
-import { writeJson } from "../shared/json.ts";
+import { isRecord, writeJson } from "../shared/json.ts";
 import { formatBytes, NAMES } from "../shared/limits.ts";
 import { listed, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
@@ -72,7 +74,6 @@ import { branchesOf, refusalsOf } from "./outbox.ts";
 import { forge, git } from "./git.ts";
 import { APPROVALS, clonePath, domainPath, HOST_QUEUE, ROOT } from "./layout.ts";
 import * as issues from "./issues.ts";
-import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
 import * as proxy from "./proxy/manage.ts";
 import { proxyDomainDir } from "./proxy/as-proxy.ts";
@@ -87,7 +88,6 @@ import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.
 import type { aDomain, emptyRoot, pathIn, writeIn, writeJsonIn } from "../.harness/root-state.ts";
 
 const HERE = path.dirname(new URL(import.meta.url).pathname);
-const TOKEN_FILE = "/etc/desolate/host-token";
 const readToken = (file: string): string | null => {
   try {
     const token = fs.readFileSync(file, "utf8").trim();
@@ -143,7 +143,6 @@ declare namespace readToken {
   >;
 }
 
-const hostToken = () => readToken(TOKEN_FILE);
 /** A page of a domain's branches, as the dashboard lists them: those a workspace has checked
  *  out first, so that every workspace row's own branch is on the first page, however many
  *  that takes; then the rest, a page at a time (GET /branches). The list is the domain's to
@@ -291,9 +290,9 @@ const said = (action: Action, lines: readonly string[]) => {
 const forget = (action: Action) => {
   if (action.log) fs.rmSync(action.log, { force: true });
 };
-/** The host's long polls that are waiting for something to do. An action stays "queued"
- *  (and is handed to every poll) until the host reports on it: a poll whose connection
- *  died takes nothing with it. The host runs each id once. */
+/** The host's held questions for something to do (serveHost). An action stays "queued"
+ *  (and is handed to every question) until the host reports on it: a question whose
+ *  connection died takes nothing with it. The host runs each id once. */
 const waiters = new Set<() => void>();
 /** The oldest of them, as many as fit in REQUESTS_BYTES (one at least, which BODY_BYTES
  *  bounds): the rest are handed over once these are reported on. A quarter of what the host
@@ -834,7 +833,7 @@ const publish = () => {
   for (const subscriber of subscribers) subscriber.write(`data: ${text}\n\n`);
   for (const wake of [...stateWaiters]) wake();
 };
-/** The host's `GET /host/state` (host/events.ts), held until the state changes. */
+/** The host's held questions for the state (serveHost; host/events.ts), until it changes. */
 const stateWaiters = new Set<() => void>();
 const stateTag = () => createHash("sha256").update(last).digest("hex").slice(0, 16);
 // WHAT THE STATE IS MADE OF, AND WHAT SAYS IT CHANGED (snapshot, above). Each input, and its event:
@@ -1475,113 +1474,8 @@ const takeSignin = (given: string, now = Date.now()) => {
  *  dashboard's address as another site's request, and sends it no cookie (SameSite=Strict).
  *  A refresh from this page of its own is the dashboard's own request. */
 
-const fromHost = (req: IncomingMessage) => {
-  const token = hostToken();
-  const given = /^Bearer ([0-9a-f]{48})$/.exec(String(req.headers.authorization ?? ""))?.[1];
-  return token !== null && given !== undefined && sameSecret(given, token);
-};
-
 const handle = async (req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? "/", "http://x");
-  if (url.pathname.startsWith("/host/")) {
-    if (!fromHost(req)) return json(res, 403, { error: "this is the host daemon's side" });
-    // The host back after a silence is a change: the page said it was not connected.
-    if (Date.now() - hostSeen >= HOST_QUIET) changed();
-    hostSeen = Date.now();
-    if (req.method === "PUT" && url.pathname === "/host/facts") {
-      facts = (await body(req)) as HostFacts;
-      changed();
-      return json(res, 200, { ok: true });
-    }
-    if (req.method === "POST" && url.pathname === "/host/signin") {
-      const digest = ((await body(req)) as { digest?: unknown }).digest;
-      if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))
-        return json(res, 400, { error: "a sign-in code's digest is 64 hex digits" });
-      signinCodes.set(digest, Date.now() + SIGNIN.ttlMs);
-      while (signinCodes.size > SIGNIN.most) signinCodes.delete(signinCodes.keys().next().value!);
-      return json(res, 200, { ok: true });
-    }
-    if (req.method === "POST" && url.pathname === "/host/nudge") {
-      // The host paces its nudges (host/daemon.ts, nudge): looked at at once.
-      changed();
-      return json(res, 200, { ok: true });
-    }
-    if (req.method === "POST" && url.pathname === "/host/progress") {
-      const report = (await body(req)) as {
-        id?: string;
-        lines?: string[];
-        done?: boolean;
-        code?: number;
-      };
-      const action = actions.find((a) => a.id === report.id);
-      // (The host sends an end again when its answer was lost: an ended action takes no more.)
-      if (action && action.state !== "done" && action.state !== "failed") {
-        action.state = report.done ? (report.code === 0 ? "done" : "failed") : "running";
-        if (report.done) action.code = report.code;
-        said(action, (report.lines ?? []).map(String));
-        if (report.done) requestEnded(action);
-        changed();
-      }
-      return json(res, 200, { ok: true });
-    }
-    // The issues the person chose to publish, waiting for the approval on the Mac
-    // (host/issues.ts); and what became of each.
-    if (req.method === "GET" && url.pathname === "/host/issues")
-      return json(
-        res,
-        200,
-        issues.list().filter((i) => i.state === "approving"),
-      );
-    if (req.method === "POST" && url.pathname === "/host/issue") {
-      const told = (await body(req)) as { id?: unknown; url?: unknown; refused?: unknown };
-      const issue = issues.get(told.id);
-      if (!issue) return json(res, 404, { error: "no such issue" });
-      const where = told.url === undefined ? null : issueUrl(issue.repo, told.url);
-      const result = where
-        ? issues.published(issue.id, where)
-        : issues.backToDraft(
-            issue.id,
-            typeof told.refused === "string" ? told.refused : "not published",
-          );
-      changed();
-      return "error" in result ? json(res, 409, result) : json(res, 200, { ok: true });
-    }
-    if (req.method === "GET" && url.pathname === "/host/state") {
-      // The state, when it is not the one the host has (by its tag): for `desolate events`.
-      if (!last) publish();
-      const send = () => json(res, 200, { tag: stateTag(), state: JSON.parse(last || "{}") });
-      if (url.searchParams.get("since") !== stateTag()) return send();
-      const answer = () => {
-        clearTimeout(timer);
-        stateWaiters.delete(answer);
-        if (!res.writableEnded) send();
-      };
-      const timer = setTimeout(answer, 50_000);
-      stateWaiters.add(answer);
-      res.on("close", () => {
-        clearTimeout(timer);
-        stateWaiters.delete(answer);
-      });
-      return;
-    }
-    if (req.method === "GET" && url.pathname === "/host/requests") {
-      // Held open until there is something to do: the host learns of a click at once.
-      if (queued().length > 0) return json(res, 200, queued());
-      const answer = () => {
-        clearTimeout(timer);
-        waiters.delete(answer);
-        if (!res.writableEnded) json(res, 200, queued());
-      };
-      const timer = setTimeout(answer, 50_000);
-      waiters.add(answer);
-      res.on("close", () => {
-        clearTimeout(timer);
-        waiters.delete(answer);
-      });
-      return;
-    }
-    return json(res, 404, { error: "no such thing" });
-  }
 
   // A browser. The gate's rules: this name only, this origin only.
   // The dashboard's name, as the host says it is (a stack inside a workspace has its own:
@@ -1845,6 +1739,120 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
   return json(res, 404, { error: "no such thing" });
 };
 
+// ------------------------------------------------------------------ the host's side
+/** The host daemon's way in (host/daemon.ts heldAsker): a socket in a directory only this
+ *  user may open (start.sh), which the Mac reaches as this user, over ssh. No other user of
+ *  this VM can connect: not a domain's proxies, the pusher or the reviewer. (It was HTTP on
+ *  the dashboard's port, which every process here can open, with a token.) */
+export const HOST_SOCKET = path.join(ROOT.run, "stated", "host.sock");
+/** How long a held question waits before it is answered as things are: the host gives one
+ *  70 s, then ends its stream. */
+const HELD_MS = 50_000;
+const ok = (result: unknown = null) => JSON.stringify({ ok: true, result });
+
+/** The answer to one of the host's questions, as its JSON, in rootctl's envelope; null: not
+ *  yet, held until something changes, or until it is `late` and answered as things are. */
+const hostAnswer = (op: unknown, args: Record<string, unknown>, late: boolean): string | null => {
+  if (op === "facts") {
+    facts = args as HostFacts;
+    changed();
+    return ok();
+  }
+  if (op === "nudge") {
+    // The host paces its nudges (host/daemon.ts, nudge): looked at at once.
+    changed();
+    return ok();
+  }
+  if (op === "signin") {
+    const digest = args.digest;
+    if (typeof digest !== "string" || !/^[0-9a-f]{64}$/.test(digest))
+      return JSON.stringify({ ok: false, error: "a sign-in code's digest is 64 hex digits" });
+    signinCodes.set(digest, Date.now() + SIGNIN.ttlMs);
+    while (signinCodes.size > SIGNIN.most) signinCodes.delete(signinCodes.keys().next().value!);
+    return ok();
+  }
+  if (op === "progress") {
+    const report = args as { id?: string; lines?: string[]; done?: boolean; code?: number };
+    const action = actions.find((a) => a.id === report.id);
+    // (The host sends an end again when its answer was lost: an ended action takes no more.)
+    if (action && action.state !== "done" && action.state !== "failed") {
+      action.state = report.done ? (report.code === 0 ? "done" : "failed") : "running";
+      if (report.done) action.code = report.code;
+      said(action, (report.lines ?? []).map(String));
+      if (report.done) requestEnded(action);
+      changed();
+    }
+    return ok();
+  }
+  if (op === "state") {
+    // The state, when it is not the one the host has (by its tag): for `desolate events`.
+    // (Put in as the text it is kept as: it is up to 16 MiB, and was parsed to be sent.)
+    if (!last) publish();
+    if (args.since === stateTag() && !late) return null;
+    return `{"ok":true,"result":{"tag":"${stateTag()}","state":${last || "{}"}}}`;
+  }
+  if (op === "requests") {
+    // Held until there is something to do: the host learns of a click at once.
+    const items = queued();
+    return items.length > 0 || late ? ok(items) : null;
+  }
+  return JSON.stringify({ ok: false, error: "the state service takes no such question" });
+};
+
+/** Each line from the host a question, `{n, op, args}`, each line back an answer, `{n, reply}`;
+ *  a held one waits for the state to change (`stateWaiters`) or a request (`waiters`). A line
+ *  past BODY_BYTES, or one that is not a question, ends the connection. */
+const serveHost = () => {
+  fs.rmSync(HOST_SOCKET, { force: true });
+  createSocketServer((connection) => {
+    const held = new Set<() => void>();
+    const close = () => {
+      for (const done of [...held]) done();
+      connection.destroy();
+    };
+    connection.on("error", close);
+    connection.on("close", close);
+    connection.setEncoding("utf8");
+    let text = "";
+    connection.on("data", (chunk: string) => {
+      text += chunk;
+      for (let end = text.indexOf("\n"); end >= 0; end = text.indexOf("\n")) {
+        let asked: { n?: unknown; op?: unknown; args?: unknown } = {};
+        try {
+          asked = Object(JSON.parse(text.slice(0, end)));
+        } catch {
+          /* not a question: below */
+        }
+        text = text.slice(end + 1);
+        const n = asked.n;
+        if (!Number.isSafeInteger(n)) return close();
+        // The host back after a silence is a change: the page said it was not connected.
+        if (Date.now() - hostSeen >= HOST_QUIET) changed();
+        hostSeen = Date.now();
+        const args = isRecord(asked.args) ? asked.args : {};
+        const answer = (late: boolean) => {
+          const reply = hostAnswer(asked.op, args, late);
+          if (reply !== null) connection.write(`{"n":${n},"reply":${reply}}\n`);
+          return reply !== null;
+        };
+        if (answer(false)) continue;
+        const waiting = asked.op === "state" ? stateWaiters : waiters;
+        const wake = () => void (answer(false) && done());
+        const timer = setTimeout(() => (answer(true), done()), HELD_MS);
+        const done = () => {
+          clearTimeout(timer);
+          waiting.delete(wake);
+          held.delete(done);
+        };
+        waiting.add(wake);
+        held.add(done);
+      }
+      // (In UTF-16 units: at least that many bytes.)
+      if (text.length > BODY_BYTES) close();
+    });
+  }).listen(HOST_SOCKET, () => fs.chmodSync(HOST_SOCKET, 0o600));
+};
+
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   createServer((req, res) => {
     handle(req, res).catch((error: Error) => {
@@ -1854,6 +1862,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   }).listen(ROOT_UI.port, "127.0.0.1", () =>
     console.error(`stated: listening on 127.0.0.1:${ROOT_UI.port}`),
   );
+  serveHost();
   // The actions of a process before this one are not remembered: nor is what they printed.
   fs.rmSync(LOGS, { recursive: true, force: true });
   // A workspace's request (rootd queues it here) is taken on its event (watchDomains), and

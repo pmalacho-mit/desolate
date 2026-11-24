@@ -480,22 +480,34 @@ describe("T2 section 4.8: the root UI", () => {
       ).status,
       403,
     );
-    // The host's side takes the host's token, which no browser has.
+    // The host's side is not on this port at all, even for the signed-in page: the host's
+    // daemon asks on a socket of the state service's own (root/stated.ts, serveHost).
     for (const [method, target] of [
       ["GET", "/host/requests"],
       ["PUT", "/host/facts"],
       ["POST", "/host/progress"],
     ] as const)
-      assert.equal((await http(method, target, { body: {} })).status, 403, target);
-    assert.equal(
-      (
-        await http("PUT", "/host/facts", {
-          headers: [`Authorization: Bearer ${"0".repeat(48)}`],
-          body: { stack: { isolated: true } },
-        })
-      ).status,
-      403,
+      assert.equal((await http(method, target, { body: {} })).status, 404, target);
+    // And no other user of the root VM can open that socket (a domain's proxies run as users
+    // of their own): their facts are never told. The root's own user is answered (the control).
+    const tell = (question: object) =>
+      `printf '%s\\n' '${JSON.stringify(question)}' | socat -t 2 - UNIX-CONNECT:/run/desolate/stated/host.sock`;
+    const other = stack.inRoot(
+      [
+        "runuser",
+        "-u",
+        "nobody",
+        "--",
+        "bash",
+        "-c",
+        tell({ n: 1, op: "facts", args: { stack: { isolated: true } } }),
+      ],
+      { root: true },
     );
+    assert.notEqual(other.code, 0, other.stdout);
+    assert.match(other.stderr, /Permission denied/);
+    const own = stack.inRoot(["bash", "-c", tell({ n: 1, op: "nudge", args: {} })]);
+    assert.equal(own.stdout.trim(), '{"n":1,"reply":{"ok":true,"result":null}}', own.stderr);
     // Only what is on the list, with arguments that are names.
     for (const [kind, args] of [
       ["workspace.rm", { domain: "web", workspace: "one" }],
@@ -685,6 +697,23 @@ describe("T2 section 4.8: the root UI", () => {
 
   it("the state is pushed when it changes, not looked for: a branch at once, a flood at most once a second", async () => {
     stack.step("events, not a timer");
+    // How large the state is, and what of it a workspace and a listed branch take: the host
+    // reads it as one line, behind which its other answers wait (host/daemon.ts heldAsker).
+    {
+      const text = (await http("GET", "/state")).body;
+      const ds = (
+        JSON.parse(text) as { domains: { workspaces: object[]; branches: { items: object[] } }[] }
+      ).domains;
+      const each = (items: object[]) => [
+        items.length,
+        items.reduce((n, i) => n + JSON.stringify(i).length, 0),
+      ];
+      const [w, wBytes] = each(ds.flatMap((d) => d.workspaces));
+      const [b, bBytes] = each(ds.flatMap((d) => d.branches.items));
+      console.log(
+        `# the state: ${Buffer.byteLength(text)} bytes; ${w} workspaces, ${Math.round(wBytes! / Math.max(1, w!))} bytes each; ${b} branches listed, ${Math.round(bBytes! / Math.max(1, b!))} bytes each`,
+      );
+    }
     // A branch moved in the workspace: its daemon writes the list to the outbox, which the
     // host watches and nudges the state service for. The service's own look is every 10 s,
     // so six moves each pushed within 2 s would have to land in its first fifth every time

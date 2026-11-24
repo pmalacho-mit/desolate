@@ -1227,6 +1227,35 @@ const of =
   (value: unknown, _asked: Asked): T =>
     part(value, "");
 
+/** A value the Mac reads only through shared/events.ts, which takes each as a name of its
+ *  form or as null (slugOrNull and the rest) and shows text printable: passed on as it is, so
+ *  one odd record says null in its own events and does not stop the others'. */
+const asIs: Part<unknown> = (value) => value;
+const matching = (form: RegExp) => named((value) => typeof value === "string" && form.test(value));
+/** A record (or a list of them) of these fields, each as it is, and of these parts. */
+const record = <K extends string, F extends Fields = {}>(keys: K[], parts?: F) =>
+  shape({
+    ...(Object.fromEntries(keys.map((key) => [key, maybe(asIs)])) as Record<K, Maybe<unknown>>),
+    ...(parts as F),
+  });
+const records = <K extends string, F extends Fields = {}>(keys: K[], parts?: F) =>
+  maybe(list(record(keys, parts)));
+/** The root's state as `desolate events` reads it (shared/events.ts stateEvents), and how many
+ *  dashboards were opened (each asks every workspace's daemon for a look). */
+const rootState = shape({
+  offers: records(["domain", "workspace", "repo", "branch", "commit"]),
+  refused: records(["domain", "repo", "why"]),
+  approvals: records(["repo", "branch", "commit"]),
+  issues: records(["id", "domain", "workspace", "repo", "title", "state", "url"]),
+  domains: records(["slug"], {
+    workspaces: records(["workspace", "state", "startedBy"], {
+      checkouts: records(["repo"], { head: maybe(orNull(record(["branch", "commit"]))) }),
+      says: maybe(shape({ status: maybe(orNull(record(["color", "message", "updated"]))) })),
+    }),
+  }),
+  lookAsked: maybe(count),
+});
+
 /** Every operation the Mac asks of the root, and what it takes of the answer. */
 const REPLIES = {
   ping: of(shape({ keyring: yes })),
@@ -1409,11 +1438,26 @@ const REPLIES = {
       said: maybe(list(line(SAID.sentence), GIT_PUSH_SAID)),
     }),
   ),
+  // The state service's own (host/daemon.ts heldAsker; rootctl's service does not answer
+  // them). A request the dashboard queued is run only as hostArgv builds it from its kind and
+  // arguments (shared/actions.ts), a workspace's spawn or close only once its signature is
+  // checked (host/spawn.ts admit), in that order: so here only its id, which its progress is
+  // said back with, as the service makes one. One whose id is not is left out.
+  "stated.facts": ignored,
+  "stated.nudge": ignored,
+  "stated.signin": ignored,
+  "stated.progress": ignored,
+  "stated.state": of(shape({ tag: matching(/^[0-9a-f]{16}$/), state: rootState })),
+  "stated.requests": of(
+    some(shape({ id: matching(/^[0-9a-z]{1,12}-[0-9a-z]{1,8}$/), kind: asIs, args: asIs })),
+  ),
 } satisfies Record<string, (value: unknown, asked: Asked) => unknown>;
 
 /** An operation the Mac may ask of the root, and what its answer is once it is checked. */
 export type Op = keyof typeof REPLIES;
 export type Answer<O extends Op> = ReturnType<(typeof REPLIES)[O]>;
+/** A question for the root's state service: `stated.<it>` in the table. */
+export type Stated = Op extends infer O ? (O extends `stated.${infer K}` ? K : never) : never;
 
 /** The root's refusal, as the person is shown it: its words and its fix as text (printable),
  *  and an exit code from 1 to 255, so a refusal never exits 0. */
@@ -1564,5 +1608,65 @@ declare namespace replyOf {
         },
       ],
     ]
+  >;
+}
+
+declare namespace rootState {
+  type W = { workspace: "w1"; state: "up"; startedBy: null; checkouts: []; says: { status: null } };
+  /** the state as `desolate events` reads it: what it does not read is not passed on (a
+   *  domain's network mode, the page's bounds), and a name not of its form is passed on, for
+   *  stateEvents to make null; a tag not of its form, or a list that is not one, is refused,
+   *  naming where */
+  export type State = Table<
+    typeof answered,
+    [
+      [
+        args: [
+          op: "stated.state",
+          value: {
+            tag: "0123456789abcdef";
+            state: {
+              domains: [{ slug: "-x"; net: "open"; workspaces: [W] }];
+              bounds: { slug: 40 };
+              lookAsked: 3;
+            };
+          },
+          asked: {},
+        ],
+        expected: {
+          tag: "0123456789abcdef";
+          state: { domains: [{ slug: "-x"; workspaces: [W] }]; lookAsked: 3 };
+        },
+      ],
+      [
+        args: [op: "stated.state", value: { tag: "0123 HTTP/1.1"; state: {} }, asked: {}],
+        expected: "the root's answer to 'stated.state' is not in the form this Mac takes (tag)",
+      ],
+      [
+        args: [
+          op: "stated.state",
+          value: { tag: "0123456789abcdef"; state: { offers: "all" } },
+          asked: {},
+        ],
+        expected: "the root's answer to 'stated.state' is not in the form this Mac takes (state.offers)",
+      ],
+    ]
+  >;
+  /** a request is passed on as it came, for hostArgv to build or refuse; one whose id is not
+   *  one the service makes is left out and counted, beside one that is kept */
+  export type Requests = Expect<
+    Invoke<
+      typeof answered,
+      [
+        op: "stated.requests",
+        value: [
+          { id: "mia1x2-abc123"; kind: "repo.fetch"; args: { repo: "acme/app" }; state: "queued" },
+          { id: "../x"; kind: "repo.fetch"; args: {} },
+        ],
+        asked: {},
+      ]
+    >,
+    "=",
+    { kept: [{ id: "mia1x2-abc123"; kind: "repo.fetch"; args: { repo: "acme/app" } }]; dropped: 1 }
   >;
 }
