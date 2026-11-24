@@ -995,8 +995,6 @@ export const reconnectRunning = async (): Promise<number> => {
         ],
         { root: true, timeoutMs: 120_000 },
       );
-      // Its key too: a workspace made before keys were given gets one here, without a restart.
-      await (await import("./spawn.ts")).giveIdentity(b, w.vm);
       // And its editor's token, made again if the host retired the tokens since it was made.
       if (await editorTokenStale(w.vm))
         await b.exec(

@@ -1,6 +1,6 @@
 // A domain's secret values, kept by root and read only by that domain's proxies.
 //
-//   node secret-store.ts <domain> set|switch|remove|import|copy (as root; the request on stdin)
+//   node secret-store.ts <domain> set|switch|remove|copy (as root; the request on stdin)
 //
 // The host runs this as root in the root VM, through its own way in (never the root's
 // ordinary user), with a secret's value on stdin. It writes two files, both root's:
@@ -136,8 +136,7 @@ export const change = (
     next.secrets[name] = secret!;
   } else if (op === "remove") {
     delete next.secrets[name];
-  } else if (op !== "import")
-    refuse(`'${op}' is not a change to a domain's secrets`, "set, switch, remove");
+  } else refuse(`'${op}' is not a change to a domain's secrets`, "set, switch, remove");
   return next;
 };
 
@@ -608,24 +607,7 @@ const main = async () => {
     process.stdout.write(JSON.stringify({ ok: true, result: indexOf(copied) }) + "\n");
     return;
   }
-  // `import`: a store kept by an older desolate, as the data it is (root/start.sh hands it
-  // over, read by the user who could read it), checked like any set.
-  let next = change(current, domain!, op!, input);
-  if (op === "import" && typeof input.secrets === "object" && input.secrets !== null)
-    for (const [name, s] of Object.entries(input.secrets as Record<string, Secret>)) {
-      next = change(next, domain!, "set", {
-        name,
-        value: s.value,
-        hosts: s.hosts,
-        headers: s.headers,
-      });
-      if (s.off === true || typeof s.until === "number")
-        next.secrets[name] = {
-          ...next.secrets[name]!,
-          ...(s.off === true ? { off: true } : {}),
-          ...(typeof s.until === "number" ? { until: s.until } : {}),
-        };
-    }
+  const next = change(current, domain!, op!, input);
   writeRoot(storeFile(domain!), JSON.stringify(next, null, 2) + "\n", gid, 0o640);
   writeRoot(indexFile(domain!), JSON.stringify(indexOf(next), null, 2) + "\n", 0, 0o644);
   process.stdout.write(JSON.stringify({ ok: true, result: indexOf(next) }) + "\n");
