@@ -278,6 +278,14 @@ pre.diff span.hl { display: inline; padding: 0; }
 .sbs-row .code.add mark { background: color-mix(in srgb, var(--green) 36%, transparent); color: inherit; border-radius: 2px; }
 .sbs-row .empty { background: color-mix(in srgb, var(--soft) 7%, transparent); }
 .sbs-file { font-weight: 650; padding: 6px var(--s3); border-top: 1px solid var(--line); background: var(--raise); position: sticky; top: 0; }
+/* A file's header is a button of its name, that collapses its diff (dashboard.js collapsible):
+   the header's text as it was, the whole row to click, an arrow saying which way it is. */
+button.collapse { display: block; width: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: inherit; font: inherit; text-align: left; white-space: inherit; overflow-wrap: anywhere; }
+button.collapse:hover { opacity: 1; text-decoration: underline; }
+button.collapse::before { content: "\25BE" / ""; display: inline-block; width: 1.5ch; color: var(--soft); font-weight: 400; }
+button.collapse[aria-expanded="false"]::before { content: "\25B8" / ""; }
+pre.diff .file.collapsed { color: var(--soft); }
+.sbs-file.collapsed { color: var(--soft); }
 .sbs-hunk { color: var(--link); padding: 2px var(--s3); background: color-mix(in srgb, var(--link) 6%, transparent); }
 .sbs-meta { color: var(--soft); padding: 2px var(--s3); font-style: italic; }
 /* Syntax colour (shared/ui/highlight.js): each token's colours, for light and dark. */
