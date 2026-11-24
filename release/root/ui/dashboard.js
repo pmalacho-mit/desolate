@@ -282,8 +282,44 @@ let shownDiff = null; // { diff, layout, pages, tokens, node }
 const diffElement = (diff) => {
   if (shownDiff && shownDiff.diff === diff && shownDiff.layout === layout && shownDiff.pages === diff.pages && shownDiff.tokens === diff.tokens) return shownDiff.node;
   const node = el("div", { class: "diff-box" }, layout === "sides" ? sideBySide(diff.text, diff.tokens) : diffView(diff.text, diff.tokens));
+  for (const part of partsOf(node)) collapsible(part);
   shownDiff = { diff, layout, pages: diff.pages, tokens: diff.tokens, node };
   return node;
+};
+// Each file's diff can be collapsed by its header, a button of the file's name (or a renamed
+// file's two), to scroll past files the person does not care about (#281). Collapsing hides
+// what is drawn and nothing else: every page is still asked for, drawn and coloured. It is
+// kept while the review shows the same commits (`collapsed`, by the header's file), across
+// a redraw, a layout, more pages; picking other commits, or a new commit reviewed (a review
+// of its own), opens every file again, so a collapsed file never hides a change not yet seen.
+/** A drawn diff's files: each header (the row that names a file) and the rows under it. */
+const partsOf = (node) => {
+  const parts = [];
+  for (const row of node.querySelector("[data-diff]").children) {
+    if (row.hasAttribute("data-file")) parts.push({ head: row, file: row.getAttribute("data-file"), rows: [] });
+    else if (parts.length) parts[parts.length - 1].rows.push(row);
+  }
+  return parts;
+};
+/** A part shown as the review has it: open, or only its header. */
+const showPart = (part) => {
+  const closed = Boolean(reviewing && reviewing.collapsed && reviewing.collapsed.has(part.file));
+  part.head.querySelector("button.collapse").setAttribute("aria-expanded", String(!closed));
+  part.head.classList.toggle("collapsed", closed);
+  for (const row of part.rows) row.hidden = closed;
+};
+/** Its header's text, as it was, moved into a button that collapses it and opens it again. */
+const collapsible = (part) => {
+  const button = el("button", { type: "button", class: "collapse", "aria-expanded": "true", "data-focus": `collapse:${part.file}`, title: "Collapse this file's diff, or open it again" }, [...part.head.childNodes]);
+  button.addEventListener("click", () => {
+    const collapsed = reviewing && reviewing.collapsed;
+    if (!collapsed) return;
+    if (collapsed.has(part.file)) collapsed.delete(part.file);
+    else collapsed.add(part.file);
+    showPart(part);
+  });
+  part.head.append(button);
+  showPart(part);
 };
 let layout = (() => {
   try {
@@ -301,6 +337,12 @@ const setLayout = (value) => {
   }
   render();
 };
+/** The layout, as both its choices with the chosen one marked: radio buttons drawn as one
+ *  control (a button named after the layout it was not showed one choice at a time, #281).
+ *  Being radios, the arrow keys move between them and a screen reader says which is chosen. */
+const layoutChoice = () => el("div", { class: "segmented", role: "radiogroup", "aria-label": "Diff layout" },
+  [["sides", "Side by side"], ["unified", "Unified"]].map(([value, label]) => el("label", { "data-layout": value },
+    el("input", { type: "radio", name: "diff-layout", value, checked: layout === value, "data-focus": `layout:${value}`, onchange: () => setLayout(value) }), label)));
 
 const query = (target, against) => `domain=${encodeURIComponent(target.domain)}&repo=${encodeURIComponent(target.repo)}&branch=${encodeURIComponent(target.branch)}&against=${encodeURIComponent(against)}`;
 /** What the review asks the root for after its first answer: the next page of a list, the
@@ -404,6 +446,9 @@ const loadDiff = async (file = null) => {
   const r = reviewing;
   const asked = ++diffAsked;
   const params = { ...pickParams(r), whitespace: r.whitespace === "ignore" ? "ignore" : null, file: file ? file.path : null, was: file ? file.was : null };
+  // (Other commits picked: every file open again. See `collapsible`.)
+  const commits = JSON.stringify(pickParams(r));
+  if (r.collapsedFor !== commits) Object.assign(r, { collapsedFor: commits, collapsed: new Set() });
   r.diff = { loading: true };
   render();
   let diff;
@@ -506,7 +551,7 @@ const openIssue = (issue) => {
   const toggle = el("button", { class: "quiet small", type: "button", "data-preview-toggle": "", onclick: () => {
     previewing = !previewing;
     toggle.textContent = previewing ? "Write" : "Preview";
-    if (previewing) preview.replaceChildren(typeof DesolateMarkdown !== "undefined" ? DesolateMarkdown.render(body.value) : document.createTextNode(body.value));
+    if (previewing) preview.replaceChildren(typeof DesolateMarkdown !== "undefined" ? DesolateMarkdown.render(body.value, unhidden, location.origin) : document.createTextNode(body.value));
     preview.hidden = !previewing;
     body.hidden = previewing;
   } }, "Preview");
@@ -640,8 +685,10 @@ let filesFilter = "";
 const jumpTo = (change) => {
   const find = () => [...document.querySelectorAll("#review [data-file]")].find((n) => n.dataset.file === change.path || (change.was !== undefined && n.dataset.file === change.was));
   const at = find();
-  if (at) at.scrollIntoView({ block: "start", behavior: "smooth" });
-  else loadDiff(change);
+  if (!at) return loadDiff(change);
+  // (Asked for, so shown: a collapsed file opens.)
+  if (reviewing.collapsed.delete(at.getAttribute("data-file"))) for (const part of partsOf(shownDiff.node)) if (part.head === at) showPart(part);
+  at.scrollIntoView({ block: "start", behavior: "smooth" });
 };
 const filesChanged = () => {
   const r = reviewing;
@@ -713,7 +760,7 @@ const diffPart = (diff, review) => {
   return [
     el("div", { class: "toolbar" },
       el("button", { class: "quiet small", "data-whitespace": "", onclick: () => { reviewing.whitespace = reviewing.whitespace === "ignore" ? "show" : "ignore"; loadDiff(file ? { path: file, was: diff.params.was } : null); } }, reviewing.whitespace === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes"),
-      el("button", { class: "quiet small", "data-layout": "", onclick: () => setLayout(layout === "sides" ? "unified" : "sides") }, layout === "sides" ? "Unified" : "Side by side"),
+      layoutChoice(),
       file ? [el("span", { class: "sub", "data-diff-file": file }, "The diff of one file: ", el("span", { class: "mono" }, file)),
         el("button", { class: "quiet small", type: "button", "data-diff-all": "", onclick: () => loadDiff() }, "Every file's diff")] : null),
     diff.total === 0 ? el("div", { class: "sub" }, "No changes to show.") : diffElement(diff),
@@ -1262,8 +1309,12 @@ const render = () => {
   document.getElementById("review").hidden = !panel;
   document.body.classList.toggle("reviewing", Boolean(panel));
   const body = document.getElementById("review-body");
+  // (A control the focus was on keeps it, drawn again: a layout chosen with the arrow keys
+  // went on to the next control, and a redraw from the stream lost the focus.)
+  const focus = body.contains(document.activeElement) && document.activeElement.getAttribute("data-focus");
   if (panel) body.replaceChildren(panel);
   else body.replaceChildren();
+  if (focus) [...body.querySelectorAll("[data-focus]")].find((n) => n.getAttribute("data-focus") === focus)?.focus({ preventScroll: true });
   for (const [node, top, left] of scrolled) if (node.isConnected) { node.scrollTop = top; node.scrollLeft = left; }
   for (const [at, top] of lists) { const node = document.querySelector(at); if (node) node.scrollTop = top; }
   const first = firstRun();
