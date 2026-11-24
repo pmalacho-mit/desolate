@@ -2319,9 +2319,12 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       : `what listens at ${name}'s ssh port (127.0.0.1:${port}) is not its own Lima process (${pid || "no ha.pid"})`;
   };
   /** Lima's control connection to a VM, and root's in the root VM, take no more sessions
-   *  (`-O stop`: the sessions they carry go on), so that the next session connects anew and
-   *  checks the host key as the VM's ssh.known_hosts says now. No master: nothing to stop. */
+   *  (`-O stop`: the sessions they carry go on), and desolate's own connection for channels
+   *  ends (its channels with it: the daemon opens it again at its next dial), so that the
+   *  next of each connects anew and checks the host key as the VM's ssh.known_hosts says now.
+   *  No master: nothing to stop. */
   const stopMasters = async (name: string) => {
+    await channels.exit(name);
     for (const socket of ["ssh.sock", "ssh-root.sock"])
       await run(
         "ssh",
@@ -2841,31 +2844,23 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       await sharesReady(name, m);
     },
 
-    async takeHostKey(name, log) {
+    async forgetHostKey(name) {
       const m = meta(named(name));
       if (!m) throw new Error(`${name} is not a VM desolate made`);
-      const title = m.spec.labels.title ?? name;
-      const up = processesUp(path.join(LIMA_HOME, name));
-      if (up) await lima(["stop", "-f", name], { timeoutMs: 120_000 });
       // With no record and no ssh.known_hosts, Lima takes the key the VM shows at its port
-      // once (pkg/sshutil/hostkey.go: on its own listener, which it holds), and the start then
-      // gives the VM a new key at once, as at a first start: only once lsof says the VM's own
-      // Lima process holds its port (`notItself`), else the VM is stopped and refused.
+      // once, at its next start (pkg/sshutil/hostkey.go: on its own listener, which it holds),
+      // and that start gives the VM a new key at once, as at a first start: only once lsof
+      // says the VM's own Lima process holds its port (`notItself`), else the VM is stopped
+      // and refused.
       await withLock(
         keyLock(name),
         async () => {
+          if (processesUp(path.join(LIMA_HOME, name)))
+            throw new Error(`${m.spec.labels.title ?? name} is running: it must be stopped first`);
           recordKey(name, {});
           fs.rmSync(knownFile(name), { force: true });
         },
         { signal: AbortSignal.timeout(60_000) },
-      );
-      log(
-        `${title}: its ssh host key record forgotten. Starting it: the key it shows through its own Lima process is taken once, and it is given a new one, made in it`,
-      );
-      await backend.start(name);
-      if (!up) await backend.stop(name);
-      log(
-        `${title}: given an ssh host key of its own, made in it${up ? "" : " (stopped again, as it was)"}`,
       );
     },
 

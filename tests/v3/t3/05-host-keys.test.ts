@@ -99,6 +99,28 @@ const ownAndRecorded = (name: string) => {
   assert.equal(held(name), record.hostKey);
   assert.equal(sshAs(name, portOf(name)).status, 0);
 };
+/** A new connection made with desolate's own configuration for its channels to the VM (written
+ *  by the daemon from Lima's, `ch/ssh.config`): its host key strictly checked against the file
+ *  that configuration names, as a channel master's is. */
+const channelLetIn = (name: string) => {
+  const config = path.join(dir(name), "ch", "ssh.config");
+  assert.ok(fs.existsSync(config), `${name}: the daemon has a channel configuration`);
+  return spawnSync(
+    "ssh",
+    [
+      "-F",
+      config,
+      "-o",
+      "ControlPath=none",
+      "-o",
+      "LogLevel=ERROR",
+      `lima-${vm[name]}`,
+      "--",
+      "true",
+    ],
+    { encoding: "utf8", env: stack.env, timeout: 60_000 },
+  );
+};
 const refusedForKey = /Host key verification failed|IDENTIFICATION HAS CHANGED/;
 const keyCheck = () =>
   stack
@@ -161,6 +183,11 @@ describe(
         keyCheck(),
         /^ {2}ok {3}VMs have ssh host keys of their own: every running VM is known by the key desolate gave it alone/,
       );
+      // desolate's channels follow the key recorded at a first start.
+      for (const name of ["one", "two"]) {
+        const channel = channelLetIn(name);
+        assert.equal(channel.status, 0, channel.stderr);
+      }
     });
 
     it("T3 a VM answering at another's port is refused by the Mac's client (the right pairing is let in)", () => {
@@ -236,6 +263,9 @@ describe(
       assert.match(asRoot.stderr, refusedForKey);
       assert.equal(sshAs("root", portOf("root")).status, 0);
       assert.equal(stack.inRoot(["true"], { root: true }).code, 0);
+      // A channel connection made after the change (the old master was ended) is let in.
+      const channel = channelLetIn("one");
+      assert.equal(channel.status, 0, channel.stderr);
       assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
       // Lima's own sessions: a shell and a copy.
       const shell = spawnSync("limactl", ["--tty=false", "shell", vm.one!, "true"], {
@@ -336,7 +366,8 @@ describe(
       assert.doesNotMatch(said, /sandbox extension/);
       const back = stack.quiet("host-key", "dev/two");
       assert.equal(back.code, 0, back.stderr + back.stdout);
-      assert.match(back.stdout, /dev\/two: given an ssh host key of its own/);
+      assert.match(back.stdout, /dev\/two: its ssh host key record forgotten/);
+      assert.match(back.stdout, /start it: desolate start dev\/two/);
       const started = stack.quiet("start", "dev/two");
       assert.equal(started.code, 0, started.stderr + started.stdout.slice(-800));
       ownAndRecorded("two");

@@ -797,13 +797,31 @@ const main = async (argv: string[]): Promise<number> => {
     const vm = (await b.list()).find(
       (each) => each.name === positionals[0] || each.labels.title === positionals[0],
     );
-    if (!vm || !b.takeHostKey)
+    if (!vm || !b.forgetHostKey)
       refuse(
         `'${positionals[0] ?? ""}' is not one of this stack's VMs`,
         "desolate doctor (it names each VM whose key is not right)",
         EXIT.usage,
       );
-    await b.takeHostKey(vm.name, out);
+    const title = vm.labels.title ?? vm.name;
+    const target =
+      vm.labels.domain && vm.labels.workspace ? `${vm.labels.domain}/${vm.labels.workspace}` : null;
+    const workspaces = await import("./workspaces.ts");
+    // A workspace is stopped and started as any is (the daemon lets go of its connections
+    // and takes them up again); the root and git VMs are stopped by `down`.
+    const up = vm.status === "running";
+    if (up && !target)
+      refuse(`${title} is running`, `desolate down, then desolate host-key ${title}`);
+    if (up) await workspaces.stop(target!, out);
+    await b.forgetHostKey(vm.name);
+    out(
+      `${title}: its ssh host key record forgotten. Its next start takes, once, the key it shows through its own Lima process, and gives it a new one, made in it`,
+    );
+    if (up) await workspaces.start(target!, out);
+    else
+      out(
+        `start it: ${target ? `desolate start ${target}` : vm.labels.role === "git" ? "desolate git" : "desolate bootstrap"}`,
+      );
     return EXIT.ok;
   }
   if (verb === "root" && rest[0] === "shell") {
