@@ -894,8 +894,7 @@ const checkLanded = (everyMs: number) => {
 //                        again whenever what is being done changes; removed with the answer
 //   replies/<id>.json    the answer
 // So the workspace waits for as long as the root is there and on it, with no deadline (R4),
-// and is told at once when it is not. A workspace from before this reads only the reply, as
-// it always did; one after, facing a root from before (no beat), waits as it always did.
+// and is told at once when it is not.
 //
 // The loop never waits on a request's work. Each domain has one lane: its requests are worked
 // on one at a time, in the order they came, beside every other domain's lane. Its imports

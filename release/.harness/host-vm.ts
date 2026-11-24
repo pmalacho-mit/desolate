@@ -1,4 +1,4 @@
-// Harness for in-source tests of the VM layer's own helpers (host/vm/fake.ts, used by both
+// Harness for in-source tests of the VM layer's own helpers (host/vm/stream.ts, used by both
 // backends): a child process whose spawn failed, as node gives one, and how a stream ends.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";

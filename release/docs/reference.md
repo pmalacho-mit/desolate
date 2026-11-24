@@ -749,7 +749,7 @@ last ran in the first pass's cloud sandbox.
 cli.sh             the launcher: finds node >= 22.18, runs host/cli.ts
 pins.env           the tools the image downloads, by version and sha256 (its top says what is not)
 host/              runs on the host: the CLI, the daemon (forwarder, links), the VM layer
-  vm/              one interface, three backends: fake, qemu, vz
+  vm/              one interface, two backends: qemu, vz (the tests' stand-in: tests/v3/lib/fake-backend.ts)
   approver.ts      the key that approves pushes (approver/touchid.swift: opt-in, the Mac's Secure Enclave)
 root/              runs in the root VM: keyring, mirrors, clones, offers, push, proxies
   proxy/           each workspace's proxy; each domain's secrets and its secrets proxy

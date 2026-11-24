@@ -334,15 +334,11 @@ export const overrideOf = (
   spec: Record<string, unknown>,
   checkout: string,
   home: string,
-  who: { domain: string; workspace: string; devHostname?: string; cache?: boolean } = {
+  who: { domain: string; workspace: string; devHostname?: string } = {
     domain: "",
     workspace: "",
   },
 ): Record<string, unknown> => {
-  // The domain's cache is a share a VM gets when it is made: one made by an older desolate has
-  // none, and a bind of a missing path failed the container on every start after an upgrade
-  // ("bind source path does not exist: /desolate/cache", two workspaces on the M1).
-  const cache = who.cache !== false;
   const list = (value: unknown): unknown[] => (Array.isArray(value) ? value : []);
   const env = (value: unknown): Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value)
@@ -375,7 +371,7 @@ export const overrideOf = (
       "/usr/local/bin/git-remote-desolate-mirror",
       "/desolate/status",
     ].map((target) => bind("/desolate/release/workspace/entry", target, true)),
-    ...(cache ? [bind("/desolate/cache", "/desolate/cache")] : []),
+    bind("/desolate/cache", "/desolate/cache"),
     // The VM's own disk, at the same path (start.sh): binds for docker-outside-of-docker.
     bind("/desolate/scratch", "/desolate/scratch"),
   ];
@@ -401,7 +397,7 @@ export const overrideOf = (
     // stack run in this workspace takes as its DESOLATE_HOSTNAME_SUFFIX (shared/names.ts).
     ...(who.devHostname ? { DESOLATE_DEV_HOSTNAME: who.devHostname } : {}),
     // The domain's package caches (C4), where the container can see them.
-    ...(cache ? CACHE_ENV : {}),
+    ...CACHE_ENV,
     ...env(spec.containerEnv),
   };
   if (compose)
@@ -550,8 +546,7 @@ declare namespace overrideOf {
 
   /** a compose spec: the same shares in its primary service, read-only written in the target
    *  (the CLI drops every other option), the project's own mounts first and /workspaces last,
-   *  so it is mounted over whatever the compose file puts there. Its network stays its own.
-   *  A VM made before the domain's cache existed gets no cache mount and no cache variables */
+   *  so it is mounted over whatever the compose file puts there. Its network stays its own. */
   export type Compose = Expect<
     Invoke<
       typeof overrideOf,
@@ -563,7 +558,7 @@ declare namespace overrideOf {
         },
         checkout: "/workspaces/acme/app",
         home: "/home/acme",
-        who: { domain: "acme"; workspace: "w1"; cache: false },
+        who: { domain: "acme"; workspace: "w1" },
       ]
     >,
     "=",
@@ -586,6 +581,7 @@ declare namespace overrideOf {
         "source=/desolate/release/workspace/entry,target=/usr/local/bin/git-remote-desolate-offer:ro,type=bind",
         "source=/desolate/release/workspace/entry,target=/usr/local/bin/git-remote-desolate-mirror:ro,type=bind",
         "source=/desolate/release/workspace/entry,target=/desolate/status:ro,type=bind",
+        "source=/desolate/cache,target=/desolate/cache,type=bind",
         "source=/desolate/scratch,target=/desolate/scratch,type=bind",
         "source=/workspaces,target=/workspaces,type=bind",
       ];
@@ -601,6 +597,12 @@ declare namespace overrideOf {
         DESOLATE_WORKSPACE: "1";
         DESOLATE_DOMAIN: "acme";
         DESOLATE_WORKSPACE_NAME: "w1";
+        npm_config_cache: "/desolate/cache/npm";
+        npm_config_store_dir: "/desolate/cache/pnpm";
+        YARN_CACHE_FOLDER: "/desolate/cache/yarn";
+        PIP_CACHE_DIR: "/desolate/cache/pip";
+        UV_CACHE_DIR: "/desolate/cache/uv";
+        GOMODCACHE: "/desolate/cache/go-mod";
       };
     }
   >;
@@ -842,11 +844,9 @@ const main = async () => {
   const home = os.homedir();
   fs.mkdirSync(`${home}/.desolate-editor`, { recursive: true, mode: 0o700 });
   const instance = /^dsl-([a-z0-9]{1,12})-/.exec(plan.vm)?.[1];
-  const cache = (await run("mountpoint", ["-q", "/desolate/cache"])).code === 0;
   const merged = overrideOf(spec, checkout.path, home, {
     domain: plan.domain,
     workspace: plan.workspace,
-    cache,
     ...(instance ? { devHostname: devHostname(instance, plan.domain, plan.workspace) } : {}),
   });
   const text = JSON.stringify(merged, null, 2);

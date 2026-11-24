@@ -264,19 +264,6 @@ describe("T1 the spec desolate hands the devcontainer CLI", () => {
       "/home/dev",
     ) as { containerEnv: Record<string, string> };
     assert.equal(own.containerEnv.npm_config_cache, "/home/node/.npm");
-    // A VM made before the cache share existed: no bind of it (docker refuses a missing
-    // source, and the container failed on every start), and nothing pointed at it.
-    const older = overrideOf({ image: "x" }, "/workspaces/acme/app", "/home/dev", {
-      domain: "acme",
-      workspace: "w1",
-      cache: false,
-    }) as { containerEnv: Record<string, string>; mounts: string[] };
-    assert.ok(!older.mounts.some((m) => m.includes("/desolate/cache")), "no cache mount");
-    assert.equal(older.containerEnv.npm_config_cache, undefined);
-    assert.ok(
-      older.mounts.some((m) => m.includes("/desolate/mirrors")),
-      "control: the other mounts are there",
-    );
   });
   it("extension ids are taken only if they are ids", () => {
     assert.deepEqual(extensionsOf(spec), ["rust-lang.rust-analyzer", "a.b@1.2.3"]);

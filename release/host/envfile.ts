@@ -1002,21 +1002,6 @@ export const keepApart = (rows: PlanRow[], others: string[] = []): PlanRow[] => 
   return out;
 };
 
-/** Two secret names that one would hold the other (the root refuses such a pair, since its
- *  proxy puts a value in place of each name in text), as a refusal, or null when every
- *  secret row is apart from the rest and from the domain's own: what keepApart could not
- *  end, said before anything is set, rather than partway through an import. */
-export const apartRefusal = (rows: PlanRow[], others: string[] = []): string | null => {
-  const names = rows.filter((r) => r.kind === "secret").map((r) => r.name!);
-  for (const [i, name] of names.entries())
-    for (const other of [...names.slice(i + 1), ...others])
-      if (name !== other && (name.includes(other) || other.includes(name)))
-        return name.includes(other)
-          ? `the secret ${name} would hold ${other}: rename one of their keys in the .env`
-          : `the secret ${other} would hold ${name}: rename one of their keys in the .env`;
-  return null;
-};
-
 declare namespace keepApart {
   type Row<K extends string, N extends string> = {
     key: K;
@@ -1087,29 +1072,6 @@ declare namespace keepApart {
     "matches",
     [{ name: "MY-API-TOKEN" }, { name: "MY-API-TOKEN-2" }]
   >;
-  /** what no number ends is said, before anything is set (the control: names kept apart
-   *  are nothing to say) */
-  export type Said = [
-    Expect<
-      Invoke<
-        typeof apartRefusal,
-        [
-          rows: [Row<"MY_API_TOKEN", "MY-API-TOKEN">, Row<"MY_API_TOKEN_2", "MY-API-TOKEN-2">],
-          others: ["API-TOKEN"],
-        ]
-      >,
-      "=",
-      "the secret MY-API-TOKEN-2 would hold MY-API-TOKEN: rename one of their keys in the .env"
-    >,
-    Expect<
-      Invoke<
-        typeof apartRefusal,
-        [rows: [Row<"API_KEY", "API-KEY-SECRET-1">], others: ["MYAPP-API-KEY-SECRET"]]
-      >,
-      "=",
-      null
-    >,
-  ];
   /** a name at its longest is cut to make room for its number: never past 64, which the
    *  root would refuse */
   export type Longest = Expect<
