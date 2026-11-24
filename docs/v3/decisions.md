@@ -1100,7 +1100,12 @@ Three things the first workspaces on the Mac showed, each measured by hand on Li
 2. **Two guests do not agree at once.** A workspace replaced a symlink in its outbox with a
    directory; the root VM went on seeing the symlink for about a second (reading through
    it gave "Invalid argument"), then saw the directory. A file replaced by rename (a refs
-   list) can likewise look as it was.
+   list) can likewise look as it was. Measured on 2026-11-23 (#259, 100 rounds each): the
+   guest's kernel keeps what the host said of a name for 1.00 to 1.03 s from its lookup;
+   lstat and open within that second answer from it, however many; listing, stat'ing or
+   opening the directory above changes nothing; a lookup for a create (mkdir, link) asks
+   the host at once. So the root's fetch makes one (`root/outbox.ts`, askHost), and sees a
+   link turned back into a directory, or a directory turned into a link, at once.
 3. **Any user of a guest that reaches a share can write it.** A file in a share reports as
    owned by whichever user of the guest last asked about it, so the guest's permission
    bits give that user the owner's rights: in the root VM the proxies' user (uid 995) saw

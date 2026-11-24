@@ -108,8 +108,9 @@ const PAUSE = new Int32Array(new SharedArrayBuffer(4));
  *  link). A name looked up to be created is always asked of the host (fuse revalidates an
  *  exclusive lookup), and a hard link to it from `/` is a create that never makes anything:
  *  EEXIST when the name is there, else EXDEV (`/` is not on the share) or EPERM (`/` is a
- *  directory, which is never hard linked). Measured with mkdir, the same lookup: the truth at
- *  the next look, 30 of 30, against 1 s later without. */
+ *  directory, which is never hard linked). Measured on vz, 100 of 100: right after the
+ *  workspace's change the fetch's list was the directory's, in under 2 ms, while a plain look
+ *  just before it still saw the link; and a directory just turned into a link was refused. */
 const askHost = (dir: string) => {
   try {
     fs.linkSync("/", dir);
