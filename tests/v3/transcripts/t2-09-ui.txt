@@ -52,6 +52,8 @@ doctor: all checks passed.
 
 ## events, not a timer
 
+## the look on git's events
+
 ## stop and start
 
 ## new workspace in another repository's environment

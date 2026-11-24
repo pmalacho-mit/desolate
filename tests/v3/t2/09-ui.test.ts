@@ -174,9 +174,6 @@ const pushed = (
 describe("T2 section 4.8: the root UI", () => {
   before(() => {
     stack = newStack("ui");
-    // The host looks in each running workspace for what a remove would lose every 2 s, not
-    // every 30 s (the setting workspace.lookSeconds): Delete waits for those looks.
-    stack.env.DESOLATE_WORKSPACE_LOOK_SECONDS = "2";
     stack.seed("acme/app", (dir) => {
       fs.writeFileSync(path.join(dir, "README.md"), "# app\n");
       git(dir, "add", "-A");
@@ -769,6 +766,37 @@ describe("T2 section 4.8: the root UI", () => {
       ),
       "and back as it was",
     );
+  });
+
+  it("what a remove would lose is said by the workspace's daemon when git records a change, with no session into it", async () => {
+    stack.step("the look on git's events");
+    type Looked = { host?: { looked?: { lost: string[] } } | null };
+    const lostIn = async () =>
+      (ws(await state(), "web/one") as Looked | undefined)?.host?.looked?.lost;
+    // Read with GET /state, which opens no dashboard (a stream would ask for a look). The
+    // daemon's own look is every minute: each change shown within 6 s, twice, by chance 1 in 100.
+    assert.ok(await until(async () => (await lostIn())?.length === 0, 60_000), "clean, to start");
+    const timed = async (command: string, wanted: (lost: string[]) => boolean) => {
+      assert.equal(stack.quiet("exec", "web/one", "--", "sh", "-c", command).code, 0);
+      const started = performance.now();
+      assert.ok(
+        await until(async () => wanted((await lostIn()) ?? ["?"]), 6_000),
+        `seen: ${JSON.stringify(await lostIn())}`,
+      );
+      return Math.round(performance.now() - started);
+    };
+    // Staged: the index changed.
+    const staged = await timed("echo x > staged.txt && git add staged.txt", (lost) =>
+      lost.some((l) =>
+        /^uncommitted changes or untracked files in \/workspaces\/acme\/app$/.test(l),
+      ),
+    );
+    // And taken back out: the index again.
+    const unstaged = await timed(
+      "git rm -q --cached staged.txt && rm staged.txt",
+      (lost) => lost.length === 0,
+    );
+    console.log(`# a staged change shown after ${staged} ms, its undoing after ${unstaged} ms`);
   });
 
   it("stop and start from the dashboard; its agents as they are after the start, at once", async () => {
@@ -1582,7 +1610,7 @@ describe("T2 section 4.8: the root UI", () => {
     };
     const spare = async () => ws(await state(), "web/spare") as Seen | undefined;
     const lost = async () => (await spare())?.host?.looked?.lost;
-    // The host looks at it while it runs (every 2 s here); the root counts its commits.
+    // Its daemon says what it holds once it is up; the root counts its commits.
     assert.ok(
       await until(
         async () =>
@@ -1611,16 +1639,10 @@ describe("T2 section 4.8: the root UI", () => {
       );
       return (await state()).actions.at(-1)!;
     };
-    // CONTROL: an untracked file in it. The dashboard is told why, and the host refuses too
-    // when asked anyway: the workspace is still there.
+    // An untracked file in it, removed at once: refused, by the host's own look at that
+    // moment. What the dashboard shows is not what decides: nothing in git changed, so no
+    // event told the workspace's daemon, and what it last said was "nothing to lose".
     assert.equal(stack.quiet("exec", "web/spare", "--", "touch", "notes.txt").code, 0);
-    assert.ok(
-      await until(
-        async () => ((await lost()) ?? []).some((l) => /untracked files/.test(l)),
-        90_000,
-      ),
-      `seen: ${JSON.stringify(await lost())}`,
-    );
     const refused = await removeIt();
     assert.equal(refused.command, "desolate rm web/spare --if-clean --if-pushed");
     assert.equal(refused.state, "failed");
@@ -1629,10 +1651,27 @@ describe("T2 section 4.8: the root UI", () => {
       /was not removed: uncommitted changes or untracked files/,
     );
     assert.ok(await spare(), "still there");
-    // Nothing left in it: removed.
+    // A dashboard opened (a stream: the page's own) asks each workspace to look now: it is
+    // shown within seconds, not at the look every minute (by chance within 20 s: 1 in 3;
+    // the time is printed: a few seconds when the ask is what made it).
+    const untracked = (s: State) =>
+      ((ws(s, "web/spare") as Seen | undefined)?.host?.looked?.lost ?? []).some((l) =>
+        /untracked files/.test(l),
+      );
+    const asked = performance.now();
+    const seen = await pushed(untracked, 20_000);
+    assert.ok(seen, `seen: ${JSON.stringify(await lost())}`);
+    console.log(
+      `# an untracked file shown ${Math.round(seen.at - asked)} ms after a dashboard opened`,
+    );
+    // Nothing left in it: shown so when a dashboard opens (control: the same way, the other
+    // answer; by chance both within 20 s, 1 in 9), and removed.
     assert.equal(stack.quiet("exec", "web/spare", "--", "rm", "notes.txt").code, 0);
     assert.ok(
-      await until(async () => (await lost())?.length === 0, 90_000),
+      await pushed(
+        (s) => (ws(s, "web/spare") as Seen | undefined)?.host?.looked?.lost?.length === 0,
+        20_000,
+      ),
       `seen: ${JSON.stringify(await lost())}`,
     );
     const done = await removeIt();

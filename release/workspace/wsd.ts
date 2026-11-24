@@ -10,16 +10,19 @@
 //             number instead of colliding with one that cannot be shared by name.
 //   compose   a compose devcontainer's listeners, and its `service:port` forwards, mirrored
 //             onto this VM's loopback (bridge.ts), so they are listeners here like any other.
+//   look      what a remove would lose in the checkouts the host names, and the agents here,
+//             for the dashboard (lookAt).
 //
-// The host holds a watch on its socket (a dial, the VM layer's socat): port numbers in,
-// taken ports out, nothing else.
+// The host holds a watch on its socket (a dial, the VM layer's socat): port numbers and
+// checkouts' paths in; taken ports, what would be lost and the agents out; nothing else.
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { createServer } from "node:net";
 import type { Server, Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { PORTS } from "../shared/limits.ts";
-import { paced, sleep } from "../shared/run.ts";
+import { LOOK_EACH } from "../shared/plan.ts";
+import { paced, run, sleep } from "../shared/run.ts";
 import { MIRRORS, tick as bridgeTick, unmirrored } from "./bridge.ts";
 import { branches, clone, domainRepos, importDeliveries, syncRepo, watchRefs } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -393,6 +396,8 @@ const portsReply = async (): Promise<unknown> => {
     reserved: [...reserved.keys()].sort((a, b) => a - b),
     unforwarded,
     ...surfaces(unforwarded),
+    ...(looked === null ? {} : { looked }),
+    ...(agents === null ? {} : { agents }),
   };
 };
 
@@ -444,12 +449,14 @@ const REQUEST_MOST = 65536;
 /** The socket's requests, each a line. `watch`: one answer at once, and another whenever
  *  `look` finds it would differ, for as long as the connection lasts; a `reserve` line on it
  *  changes what this VM holds, and is looked at the same way. `hold` takes the ports a
- *  request asks to hold, `answer` makes the answer. A watcher that has not taken its last line
+ *  request asks to hold, `answer` makes the answer, `ask` is given each watch line's `look`
+ *  (the checkouts the host asks about: lookAt). A watcher that has not taken its last line
  *  by the time another is due is let go (it is asked to reconnect, not waited for). */
 export const portsService = (
   hold: (wanted: number[]) => void,
   answer: () => Promise<unknown>,
   most = WATCHERS_MOST,
+  ask: (look: unknown) => void = () => {},
 ) => {
   const watchers = new Map<Socket, string | null>();
   let looked: Promise<void> = Promise.resolve();
@@ -472,9 +479,9 @@ export const portsService = (
     }));
   const request = async (connection: Socket, line: string) => {
     if (connection.writableEnded || connection.destroyed) return;
-    let asked: { op?: unknown; reserve?: unknown };
+    let asked: { op?: unknown; reserve?: unknown; look?: unknown };
     try {
-      asked = JSON.parse(line) as { op?: unknown; reserve?: unknown };
+      asked = JSON.parse(line) as { op?: unknown; reserve?: unknown; look?: unknown };
     } catch (error) {
       return void connection.end(`${JSON.stringify({ ok: false, error: String(error) })}\n`);
     }
@@ -483,6 +490,9 @@ export const portsService = (
     if (op !== "watch" && !(op === "reserve" && watching))
       return void connection.end(`${JSON.stringify({ ok: false, error: "unknown op" })}\n`);
     if (Array.isArray(asked.reserve)) hold(asked.reserve.map(Number));
+    // Every watch line asks for a look at the checkouts it names (the host sends its line
+    // again when the dashboard is opened).
+    if (op === "watch") ask(asked.look);
     if (!watching) {
       if (watchers.size >= most) watchers.keys().next().value?.destroy();
       watchers.set(connection, null);
@@ -568,6 +578,26 @@ declare namespace portsService {
       { clients: [{ got: ['{"ok":false,"error":"unknown op"}']; closed: true }]; held: [] }
     >,
   ];
+  /** each watch line names the checkouts to look at, and asks for a look: the first, and the
+   *  same line again (a dashboard opened); a reserve line asks for none */
+  export type Look = Expect<
+    Invoke<
+      typeof watching,
+      [
+        service: typeof portsService,
+        requests: [
+          '{"op":"watch","reserve":[],"look":["/workspaces/acme/app"]}\n{"op":"reserve","reserve":[]}\n{"op":"watch","reserve":[],"look":["/workspaces/acme/app"]}',
+        ],
+        replies: [{ listeners: [] }],
+      ]
+    >,
+    "=",
+    {
+      clients: [{ got: ['{"listeners":[]}']; closed: false }];
+      held: [[], [], []];
+      asked: [["/workspaces/acme/app"], ["/workspaces/acme/app"]];
+    }
+  >;
   /** what a watcher may cost: past `most` watchers the oldest is let go, the others kept;
    *  a request line past 64 KiB is not kept growing, and its connection is closed */
   export type Bounds = [
@@ -606,6 +636,165 @@ declare namespace portsService {
   ];
 }
 
+// WHAT A REMOVE WOULD LOSE, AND THE AGENTS: looked at here, said on the watch when it
+// changes, for the dashboard's Delete and agents' line. The host looked every 30 s: two
+// sessions into this VM, about 19 processes (ticket #258). It still looks itself before a
+// remove and at a stop (host/workspaces.ts): what is said here is shown, never trusted.
+//
+// What raises an event: what git records. A commit, a `git add`, a checkout, a reset, a stash
+// (in the checkout's git directory: its index and HEAD; in the common one: refs/stash and
+// packed-refs). Not an edit to a file that is not staged, nor a new file: those change nothing
+// under .git, so no event can say a checkout became "uncommitted". The look every minute does
+// (LOOK_EVERY_MS), and the dashboard asks for one when it is opened.
+/** What the last look at the asked checkouts said (LOOK_EACH's lines), null before one. */
+let looked: string | null = null;
+/** The agents here, as the dashboard is shown them (agentsNow), null before a look. */
+let agents: { items: Record<string, unknown>[]; total: number } | null = null;
+/** The look that catches what raises no event: an edit, a new file, an agent's holder that
+ *  died. Two git processes per checkout and a few small files, no session: it was every 30 s
+ *  with the session. A minute, since a remove looks again itself, and the dashboard asks
+ *  for a look when it is opened, which is when a person reads the answer. */
+const LOOK_EVERY_MS = 60_000;
+/** Most checkouts looked at: a workspace has a few, and these are the host's own list. */
+const CHECKOUTS_MOST = 32;
+/** The agents sent: the dashboard shows eight (host/daemon.ts AGENTS_SHOWN), each command
+ *  cut to 200 characters (COMMAND_SHOWN). The line the host reads is 64 KiB at most. */
+const AGENTS_SENT = 8;
+const COMMAND_SENT = 200;
+const AGENTS_DIR = `${os.homedir()}/.desolate-agents`;
+
+/** The agents of agent-holder.py, read from its own files as its `list` reads them (a
+ *  running one whose holder is gone is lost): the running first, then the one that spoke
+ *  last, AGENTS_SENT of them, each command cut; and how many there are. No program started. */
+const agentsNow = () => {
+  const rows: Record<string, unknown>[] = [];
+  let names: string[] = [];
+  try {
+    names = fs.readdirSync(AGENTS_DIR).filter((name) => name.endsWith(".json"));
+  } catch {
+    /* none yet */
+  }
+  for (const name of names.slice(0, 1000)) {
+    try {
+      const s = JSON.parse(fs.readFileSync(`${AGENTS_DIR}/${name}`, "utf8")) as Record<
+        string,
+        unknown
+      >;
+      let alive = false;
+      try {
+        alive = Number(s.holder) > 0 && process.kill(Number(s.holder), 0);
+      } catch (error) {
+        alive = (error as NodeJS.ErrnoException).code === "EPERM";
+      }
+      let left = COMMAND_SENT;
+      const command: string[] = [];
+      for (const word of Array.isArray(s.command) ? s.command.map(String) : []) {
+        if (left <= 0) break;
+        command.push(word.slice(0, left));
+        left -= word.length + 1;
+      }
+      rows.push({
+        name: s.name,
+        state: s.state === "running" && !alive ? "lost" : s.state,
+        command,
+        started: s.started,
+        lastOutput: s.lastOutput,
+        exit: s.exit,
+        ended: s.ended,
+      });
+    } catch {
+      /* being written, or not one */
+    }
+  }
+  const at = (r: Record<string, unknown>) => String(r.lastOutput ?? r.started ?? "");
+  rows.sort(
+    (a, b) =>
+      Number(b.state === "running") - Number(a.state === "running") || at(b).localeCompare(at(a)),
+  );
+  return { items: rows.slice(0, AGENTS_SENT), total: rows.length };
+};
+
+/** A checkout's git directories, where git records what it does there: its own (index, HEAD)
+ *  and the common one (packed-refs) with its refs (stash). The same for a main checkout. */
+const gitDirs = async (checkout: string): Promise<string[]> => {
+  const said = await run("git", [
+    "-C",
+    checkout,
+    "rev-parse",
+    "--path-format=absolute",
+    "--absolute-git-dir",
+    "--git-common-dir",
+  ]);
+  if (said.code !== 0) return [];
+  const [own, common] = said.stdout.trim().split("\n");
+  return own && common ? [...new Set([own, common, `${common}/refs`])] : [];
+};
+
+/** The look at the checkouts the host asks about (`ask`, with its list from its watch line)
+ *  and at the agents, each on its events, paced (at most one a second: an editor's own git
+ *  may rewrite the index on every save), and every LOOK_EVERY_MS; `tell` when an answer
+ *  changed. */
+const lookAt = (tell: () => void) => {
+  let asked: string[] = [];
+  let watchers: fs.FSWatcher[] = [];
+  const checkouts = paced(async () => {
+    const at = asked;
+    if (at.length === 0) return;
+    const said = await run("bash", ["-c", LOOK_EACH, "_", ...at]);
+    // (Asked about others meanwhile: their own look follows.)
+    if (at !== asked) return;
+    const now = said.code === 0 ? said.stdout : at.map((p) => `UNREADABLE ${p}\n`).join("");
+    if (now === looked) return;
+    looked = now;
+    tell();
+  });
+  const agentsLook = paced(async () => {
+    const now = agentsNow();
+    if (JSON.stringify(now) === JSON.stringify(agents)) return;
+    agents = now;
+    tell();
+  });
+  const watched = (dir: string, poke: () => void, wanted = (_: string | null) => true) => {
+    try {
+      const watcher = fs.watch(dir, (_, file) => wanted(file) && poke());
+      // A watch that fails is closed: the minute's look remains.
+      watcher.on("error", () => watcher.close());
+      return [watcher];
+    } catch {
+      return [];
+    }
+  };
+  // (Made as the holder makes it, so that its first agent is an event here.)
+  fs.mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
+  watched(AGENTS_DIR, agentsLook.poke, (file) => !file || file.endsWith(".json"));
+  agentsLook.poke();
+  setInterval(() => {
+    checkouts.poke();
+    agentsLook.poke();
+  }, LOOK_EVERY_MS);
+  return {
+    ask: (look: unknown) => {
+      checkouts.poke();
+      agentsLook.poke();
+      const wanted = Array.isArray(look)
+        ? [...new Set(look.filter((p): p is string => typeof p === "string"))].slice(
+            0,
+            CHECKOUTS_MOST,
+          )
+        : [];
+      if (JSON.stringify(wanted) === JSON.stringify(asked)) return;
+      asked = wanted;
+      looked = null;
+      for (const watcher of watchers.splice(0)) watcher.close();
+      void (async () => {
+        const dirs = new Set((await Promise.all(wanted.map(gitDirs))).flat());
+        if (asked !== wanted) return;
+        for (const dir of dirs) watchers.push(...watched(dir, checkouts.poke));
+      })();
+    },
+  };
+};
+
 /** How often a watch looks, while there is one: a read of the kernel's two tables, no program
  *  started. Linux says nothing when a socket starts listening (no file to watch, and its
  *  netlink events are for sockets that close), so it is looked at. */
@@ -614,7 +803,8 @@ const LOOK_MS = 1000;
 const serve = () => {
   fs.mkdirSync("/run/desolate", { recursive: true });
   fs.rmSync(SOCKET, { force: true });
-  const ports = portsService(reserve, portsReply);
+  const checkouts = lookAt(() => void ports.look());
+  const ports = portsService(reserve, portsReply, undefined, checkouts.ask);
   createServer(ports.connection).listen(SOCKET, () => fs.chmodSync(SOCKET, 0o600));
   void (async () => {
     for (;;) {

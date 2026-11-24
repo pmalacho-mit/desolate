@@ -1,5 +1,5 @@
 // T1. The look the host takes in each running workspace's checkouts, by itself, on a timer
-// (host/workspaces.ts, LOOK_EACH): it runs beside whatever a person or an agent is doing in
+// (shared/plan.ts, LOOK_EACH): it runs beside whatever a person or an agent is doing in
 // the same repository, so it must take no lock there.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -7,7 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { LOOK_EACH } from "../../../release/host/workspaces.ts";
+import { LOOK_EACH } from "../../../release/shared/plan.ts";
 
 const git = (repo: string, ...args: string[]) =>
   execFileSync("git", ["-C", repo, ...args], {
