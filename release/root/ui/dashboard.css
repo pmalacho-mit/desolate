@@ -294,6 +294,9 @@ pre.diff span.hl { display: inline; padding: 0; }
 .sbs-row .code.add mark { background: var(--add-mark); --hl-l: var(--hl-mark); color: inherit; border-radius: 2px; }
 .sbs-row .empty { background: color-mix(in srgb, var(--soft) 7%, transparent); }
 .sbs-file { font-weight: 650; padding: 6px var(--s3); border-top: 1px solid var(--line); background: var(--raise); position: sticky; top: 0; }
+/* A file's names keep every space, a run and a trailing one, as the unified header's do: run
+   together, "a.md  Rendered" read as a name beside a control (review of #281). */
+.sbs-file { white-space: break-spaces; }
 /* A file's header is a button of its name, that collapses its diff (dashboard.js collapsible):
    the header's text as it was, the whole row to click, an arrow saying which way it is. */
 button.collapse { display: block; width: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: inherit; font: inherit; text-align: left; white-space: inherit; overflow-wrap: anywhere; }
