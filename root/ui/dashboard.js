@@ -833,7 +833,7 @@ const deletable = (w, running) => {
   const looked = w.host && w.host.looked;
   if (!w.host) why.push("the host has not said what it holds yet");
   else if (!looked || (!running && !looked.atStop))
-    why.push(running ? "desolate has not looked at what it holds yet (it does within half a minute)" : "it stopped before desolate looked at what it holds: start it and stop it again, and Delete can tell");
+    why.push(running ? "desolate has not looked at what it holds yet (its daemon in the VM says, once it is up)" : "it stopped before desolate looked at what it holds: start it and stop it again, and Delete can tell");
   else why.push(...looked.lost);
   if (!w.pushed) why.push("its commits have not been counted against the remote yet");
   else for (const c of w.pushed) if (c.why) why.push(`${c.repo}: ${c.why}`);

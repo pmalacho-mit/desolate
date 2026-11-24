@@ -295,7 +295,7 @@ export const startIn = async (w: Workspace, command: string[]): Promise<string> 
   return "agent";
 };
 
-type Row = Agent & { workspace: string };
+export type Row = Agent & { workspace: string };
 
 /** How many of a workspace's agents are listed, at most: far more than one VM runs (each
  *  running one holds a pty, and Linux has 4096 by default), so a longer list is the VM's
@@ -399,8 +399,7 @@ declare namespace rowsOf {
   >;
 }
 
-/** A running VM's agents, as its holder says (rowsOf): for the dashboard, which the host's
- *  daemon tells (host/daemon.ts). (`list` could read each VM's with this too.) */
+/** A running VM's agents, as its holder says (rowsOf): for `agent log`. */
 export const agentsIn = async (vm: string, workspace: string): Promise<Listed<Row>> => {
   const said = await backend().exec(vm, [...HOLDER(), "list"], {
     timeoutMs: 30_000,
@@ -412,6 +411,62 @@ export const agentsIn = async (vm: string, workspace: string): Promise<Listed<Ro
     return rowsOf([], workspace); // no agents there
   }
 };
+
+/** A running VM's agents, as its workspace's daemon says them on its watch (workspace/wsd.ts:
+ *  the few the dashboard shows, and how many there are), read as its holder's list is
+ *  (rowsOf): for the dashboard, which the host's daemon tells (host/daemon.ts). */
+export const agentsFrom = (said: unknown, workspace: string): Listed<Row> => {
+  const { items, total } = (said ?? {}) as { items?: unknown; total?: unknown };
+  const listed = rowsOf(items, workspace);
+  return Number.isSafeInteger(total) && Number(total) >= listed.total
+    ? { ...listed, total: Number(total) }
+    : listed;
+};
+
+declare namespace agentsFrom {
+  type Web = {
+    name: "web";
+    state: "running";
+    command: ["npm", "run", "dev"];
+    started: "2026-11-16T10:00:00Z";
+    lastOutput: null;
+    exit: null;
+  };
+  type Row = {
+    name: "web";
+    state: "running";
+    workspace: "acme/w1";
+    command: ["npm run dev"];
+    started: "2026-11-16T10:00:00Z";
+    lastOutput: null;
+    exit: null;
+  };
+  /** the few sent, read as rows, and how many there are, as the daemon says */
+  export type Few = Expect<
+    Invoke<typeof agentsFrom, [said: { items: [Web]; total: 12 }, workspace: "acme/w1"]>,
+    "=",
+    { items: [Row]; total: 12; from: 0 }
+  >;
+  /** a count below the rows sent, or not a count, is the rows' own; what is not a list, none */
+  export type NotACount = Table<
+    typeof agentsFrom,
+    [
+      [
+        args: [said: { items: [Web]; total: 0 }, workspace: "acme/w1"],
+        expected: { items: [Row]; total: 1; from: 0 },
+      ],
+      [
+        args: [said: { items: [Web]; total: "12" }, workspace: "acme/w1"],
+        expected: { items: [Row]; total: 1; from: 0 },
+      ],
+      [
+        args: [said: { items: "web" }, workspace: "acme/w1"],
+        expected: { items: []; total: 0; from: 0 },
+      ],
+      [args: [said: null, workspace: "acme/w1"], expected: { items: []; total: 0; from: 0 }],
+    ]
+  >;
+}
 
 /** A line fitted to a terminal `width` columns wide, the cut marked; whole when the width is
  *  not known (a pipe, a file: whatever reads it has all of it). Counted in code points, as

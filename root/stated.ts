@@ -257,6 +257,8 @@ type Action = {
 };
 let facts: HostFacts = {};
 let hostSeen = 0;
+/** How many times a dashboard was opened: the host's daemon asks for a look at each change. */
+let lookAsked = 0;
 /** How long the host may say nothing before the page says it is not connected. */
 const HOST_QUIET = 150_000;
 const actions: Action[] = [];
@@ -785,6 +787,7 @@ const snapshot = () => {
     refused: domains.domains().flatMap((d) => refusalsOf(d.slug)),
     approvals: pendingApprovals(),
     actions: actions.slice(-12),
+    lookAsked,
     bounds: bounds(),
   };
 };
@@ -1708,6 +1711,10 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
     });
     res.write(`data: ${last || JSON.stringify(snapshot())}\n\n`);
     subscribers.add(res);
+    // A dashboard opened: the host asks each workspace to look now at what a remove would
+    // lose (an edit raises no event there: workspace/wsd.ts), so what it shows is current.
+    lookAsked += 1;
+    changed();
     const beat = setInterval(() => res.write(": still here\n\n"), 15_000);
     req.on("close", () => {
       clearInterval(beat);

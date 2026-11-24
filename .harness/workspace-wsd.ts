@@ -14,12 +14,13 @@ type Service = (
   hold: (wanted: number[]) => void,
   answer: () => Promise<unknown>,
   most?: number,
+  ask?: (look: unknown) => void,
 ) => { connection: (socket: net.Socket) => void; look: () => Promise<void> };
 
 /** Each of `requests` sent by a client of its own, in turn (a string as a line, bytes as they
  *  are), answered with `replies[0]`; then a look for each further reply. What each client was
- *  sent, line by line, and whether its connection was closed; and what the service was asked
- *  to hold. */
+ *  sent, line by line, and whether its connection was closed; what the service was asked
+ *  to hold; and the checkouts it was asked to look at, if any were named. */
 export const watching = async (
   service: Service,
   requests: (string | Buffer)[],
@@ -27,11 +28,13 @@ export const watching = async (
   most?: number,
 ) => {
   const held: number[][] = [];
+  const asked: unknown[] = [];
   let at = 0;
   const ports = service(
     (wanted) => void held.push(wanted),
     async () => replies[at],
     most,
+    (look) => void (look !== undefined && asked.push(look)),
   );
   const file = path.join(process.env.DESOLATE_HOME!, `wsd-${process.pid}-${made++}.sock`);
   const server = net.createServer(ports.connection);
@@ -63,7 +66,7 @@ export const watching = async (
       await ports.look();
       await settled();
     }
-    return { clients, held };
+    return { clients, held, ...(asked.length ? { asked } : {}) };
   } finally {
     for (const socket of sockets) socket.destroy();
     server.close();
