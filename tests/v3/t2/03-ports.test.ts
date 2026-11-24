@@ -1,7 +1,7 @@
 // T2 (fake backend). Section 4.4: ports keep their numbers, nothing is declared, several
 // workspaces share a number by name, and what has no name is reserved instead.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -322,7 +322,19 @@ else {
   it("a protocol with no name reaches the first workspace that had the port; the others keep the number taken", async () => {
     stack.step("a raw TCP port");
     serve("web/one", "one 5432 raw");
-    assert.ok(await until(() => urlOf("web/one", 5432) !== undefined), JSON.stringify(ports()));
+    // 5432 because it is one of the ports desolate knows a protocol with no name is spoken on
+    // (forward.ts, RAW_PORTS). When something on this machine holds it already, the failure
+    // says what, by its pid (twice, under the whole of T2: not found then).
+    if (!(await until(() => urlOf("web/one", 5432) !== undefined))) {
+      const holder = spawnSync(
+        "bash",
+        ["-c", "lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; ss -ltnp 'sport = :5432' 2>&1"],
+        { encoding: "utf8" },
+      ).stdout;
+      assert.fail(
+        `5432 is not forwarded: ${JSON.stringify(ports())}\nwhat holds 5432 here:\n${holder}`,
+      );
+    }
     const raw = await new Promise<string>((resolve) => {
       const socket = net.connect(5432, "127.0.0.1");
       let data = "";
