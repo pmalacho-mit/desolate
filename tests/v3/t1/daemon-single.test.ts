@@ -140,6 +140,16 @@ describe(
   () => {
     after(() => {
       for (const child of started) child.kill("SIGKILL");
+      // And each daemon a command started (detached, so not a child of this test's).
+      for (const at of homes)
+        try {
+          process.kill(
+            Number(fs.readFileSync(path.join(at, "state", "daemon.pid"), "utf8")),
+            "SIGKILL",
+          );
+        } catch {
+          // none, or gone
+        }
       for (const at of homes) fs.rmSync(at, { recursive: true, force: true });
     });
 

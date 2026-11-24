@@ -1754,6 +1754,11 @@ declare namespace pusherLogRead {
 
 const serving = async () => {
   const b = backend();
+  // The connections for channels a daemon before this one left (one that did not stop, but
+  // ended), ended first, before this one dials anything or answers: so a daemon that answers
+  // has, and what it makes from then on is its own (T1 daemon-single made a connection the
+  // moment this one answered, and a busy Mac saw it ended by this, a moment late).
+  b.release?.();
   const entries = new Map<string, Entry>();
   /** A host listener per forwarded port. */
   const forwards = new Map<number, Server>();
@@ -2911,9 +2916,6 @@ const serving = async () => {
   fs.writeFileSync(PIDFILE, String(process.pid));
   log(`daemon up, pid ${process.pid}`);
 
-  // The connections for channels a daemon before this one left (one that did not stop, but
-  // ended), ended: this one makes its own as it dials.
-  b.release?.();
   // After a restart of the host: take up every workspace whose VM is running.
   try {
     const domains = (await rootctlBrief("domain.list")).domains;
