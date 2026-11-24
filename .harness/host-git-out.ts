@@ -62,3 +62,9 @@ export const linkInHome = (name: string, target: string) => {
 };
 /** What is still in the out-box, sorted. */
 export const outbox = (): string[] => fs.readdirSync(outBox()).sort();
+
+/** Whether this Mac holds a folder for a domain, as a test says: for these slugs, and no others. */
+export const heldOnly =
+  (slugs: string[]) =>
+  (slug: string): boolean =>
+    slugs.includes(slug);

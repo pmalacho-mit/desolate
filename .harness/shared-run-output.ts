@@ -24,3 +24,11 @@ export const toFile = async (script: string, also: string[] = []) => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 };
+
+/** `command args`, run with each line of its stderr collected as it comes: the lines, and the
+ *  stderr the answer kept. */
+export const stderrSaid = async (command: string, args: string[]) => {
+  const lines: string[] = [];
+  const result = await run(command, args, { stderrLines: (line) => lines.push(line) });
+  return { lines, stderr: result.stderr };
+};

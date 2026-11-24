@@ -138,11 +138,7 @@ const target = async (value: string | undefined): Promise<Workspace> => {
       "desolate agent <start|attach|log|stop> <domain>/<workspace>",
       EXIT.usage,
     );
-  const w = (await import("./workspaces.ts")).vouched(
-    await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }),
-    domain,
-    workspace,
-  );
+  const w = await rootctl("workspace.get", { domain, name: workspace }, { quiet: true });
   if ((await backend().info(w.vm)).status !== "running")
     refuse(`${domain}/${workspace} is not running`, `desolate start ${domain}/${workspace}`);
   return w;
@@ -454,26 +450,18 @@ const lostSaid = (a: Row) =>
 
 export const list = async (only: string | undefined, out: Out, json: boolean) => {
   const [domain, workspace] = String(only ?? "").split("/");
-  const all = await rootctl<{ slug: string; workspaces: Workspace[] }[]>(
-    "domain.list",
-    {},
-    { quiet: true },
-  );
+  const all = (await rootctl("domain.list", {}, { quiet: true })).domains;
   const b = backend();
   const running = new Set(
     (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
   );
   const found: Listed<Row>[] = [];
-  const { isOwnVm } = await import("./workspaces.ts");
   await Promise.all(
     all
       .filter((d) => !domain || d.slug === domain)
       .flatMap((d) =>
         d.workspaces
-          .filter(
-            (w) =>
-              (!workspace || w.workspace === workspace) && running.has(w.vm) && isOwnVm(d.slug, w),
-          )
+          .filter((w) => (!workspace || w.workspace === workspace) && running.has(w.vm))
           .map(async (w) => {
             const said = await b.exec(w.vm, [...HOLDER(), "list"], {
               timeoutMs: 30_000,
@@ -546,9 +534,30 @@ declare namespace list {
             "domain.list": [
               {
                 slug: "acme";
+                title: "acme";
+                repos: [];
+                createdAt: "2026-11-16T09:00:00Z";
                 workspaces: [
-                  { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc"; checkouts: [] },
-                  { domain: "acme"; workspace: "w2"; vm: "dsl-main-41eb634ef1"; checkouts: [] },
+                  {
+                    domain: "acme";
+                    workspace: "w1";
+                    vm: "dsl-main-ddb30a57cc";
+                    title: "w1";
+                    checkouts: [];
+                    fetch: false;
+                    createdAt: "2026-11-16T09:00:00Z";
+                    state: "up";
+                  },
+                  {
+                    domain: "acme";
+                    workspace: "w2";
+                    vm: "dsl-main-41eb634ef1";
+                    title: "w2";
+                    checkouts: [];
+                    fetch: false;
+                    createdAt: "2026-11-16T09:00:00Z";
+                    state: "up";
+                  },
                 ];
               },
             ];
@@ -600,8 +609,20 @@ declare namespace list {
             "domain.list": [
               {
                 slug: "acme";
+                title: "acme";
+                repos: [];
+                createdAt: "2026-11-16T09:00:00Z";
                 workspaces: [
-                  { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc"; checkouts: [] },
+                  {
+                    domain: "acme";
+                    workspace: "w1";
+                    vm: "dsl-main-ddb30a57cc";
+                    title: "w1";
+                    checkouts: [];
+                    fetch: false;
+                    createdAt: "2026-11-16T09:00:00Z";
+                    state: "up";
+                  },
                 ];
               },
             ];

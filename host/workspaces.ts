@@ -12,10 +12,9 @@ import {
   isBranch,
   isSlug,
   parseRepo,
-  workspaceVmName,
 } from "../shared/names.ts";
 import { outlived } from "../shared/plan.ts";
-import type { Unpushed, WorkspacePlan } from "../shared/plan.ts";
+import type { WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
 import {
   capToMac,
@@ -60,7 +59,6 @@ import type { refusalOf } from "../.harness/refusal.ts";
 
 type Out = (line: string) => void;
 export type Workspace = WorkspacePlan & { state: string };
-type DomainView = { slug: string; title: string; repos: string[]; workspaces: Workspace[] };
 
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
@@ -471,7 +469,7 @@ export const startServices = async (plan: WorkspacePlan) => {
   // The workspace's own proxy, in the root, as its domain's proxies' user; then its link,
   // which leads there and nowhere else.
   await ensureProxyUser(plan.domain);
-  const proxy = await rootctl<{ socket: string }>(
+  const proxy = await rootctl(
     "proxy.start",
     { vm: plan.vm, domain: plan.domain, workspace: plan.workspace },
     { quiet: true },
@@ -672,7 +670,7 @@ export const up = async (
   // (`keep`: a workspace made again on its own checkouts keeps who started it.)
   let startedBy: { workspace: string; createdAt: string } | undefined = options.keep?.startedBy;
   if (options.startedBy !== undefined) {
-    const parent = await rootctl<Workspace>(
+    const parent = await rootctl(
       "workspace.get",
       { domain, name: options.startedBy },
       { quiet: true },
@@ -707,7 +705,7 @@ export const up = async (
       `desolate up ${domain} --name <another>`,
       EXIT.usage,
     );
-  const view = await rootctl<DomainView>("domain.show", { slug: domain }, { quiet: true });
+  const view = await rootctl("domain.show", { slug: domain }, { quiet: true });
   // The environment: the first repository the person named with --checkout (its devcontainer,
   // if it has one), else the domain's. Before --branch adds the rest.
   const envRepo = options.checkouts[0]?.split("=")[0];
@@ -739,7 +737,7 @@ export const up = async (
   // docker images. The setting workspace.templates, off, makes every workspace from the base.
   // What the project asks for (its devcontainer.json, as the remote published it): after the
   // person's own choices, before the stack's defaults, and kept within this Mac.
-  const asked = await rootctl<ProjectAsk | null>(
+  const asked = await rootctl(
     "domain.projectSize",
     { slug: domain, preferred: envRepo },
     { quiet: true },
@@ -747,7 +745,7 @@ export const up = async (
   const project = asked
     ? capToMac(asked.size, os.cpus().length, Math.floor(os.totalmem() / 1024 / 1024))
     : null;
-  const domainSize = (view as DomainView & { size?: Partial<Size> }).size;
+  const domainSize = view.size;
   let template: string | null = null;
   if (b.kind !== "fake" && valueOf(TEMPLATES) === "on") {
     const { ensure } = await import("./templates.ts");
@@ -770,25 +768,22 @@ export const up = async (
   const mine = (key: string) =>
     spawnSync("git", ["config", "--global", key], { encoding: "utf8" }).stdout?.trim() ?? "";
   const author = { name: mine("user.name"), email: mine("user.email") };
-  const plan = vouched(
-    await rootctl<Workspace>(
-      "workspace.plan",
-      {
-        instance: INSTANCE,
-        domain,
-        name: options.name,
-        checkouts: options.checkouts,
-        base: options.base,
-        fetch: options.fetch,
-        size,
-        author,
-        ...(startedBy ? { startedBy } : {}),
-        ...(envRepo ? { env: envRepo } : {}),
-      },
-      { quiet: true },
-    ),
-    domain,
-    options.name,
+  // Checked to name this workspace's own VM, in this domain (replies.ts).
+  const plan = await rootctl(
+    "workspace.plan",
+    {
+      instance: INSTANCE,
+      domain,
+      name: options.name,
+      checkouts: options.checkouts,
+      base: options.base,
+      fetch: options.fetch,
+      size,
+      author,
+      ...(startedBy ? { startedBy } : {}),
+      ...(envRepo ? { env: envRepo } : {}),
+    },
+    { quiet: true },
   );
   // A VM of that name already here is not this workspace's: refused, and never destroyed below.
   // (Names are a hash of the domain and the workspace; one domain could search for a name of
@@ -830,6 +825,7 @@ export const up = async (
     throw error;
   }
   await rootctl("workspace.state", { domain, name: plan.workspace, state: "up" }, { quiet: true });
+  recordCheckouts(plan.vm, plan.checkouts);
   const parent = options.keep ? options.keep.parent : startedBy?.workspace;
   if (parent) (await import("./spawn.ts")).recordStarted(domain, plan.workspace, parent);
   // `-- <command...>`: an agent, started in it once it is up (host/agent.ts).
@@ -891,7 +887,7 @@ export const up = async (
 
 export const list = async (out: Out, json: boolean, only?: string) => {
   const b = backend();
-  const domains = (await rootctl<DomainView[]>("domain.list", {}, { quiet: true })).filter(
+  const domains = (await rootctl("domain.list", {}, { quiet: true })).domains.filter(
     (d) => !only || d.slug === only,
   );
   const vms = new Map((await b.list()).map((vm) => [vm.name, vm.status]));
@@ -970,13 +966,12 @@ export const reconnectRunning = async (): Promise<number> => {
   );
   const { connectWorkspace } = await import("./daemon.ts");
   let count = 0;
-  for (const d of await rootctl<DomainView[]>("domain.list", {}, { quiet: true }))
+  for (const d of (await rootctl("domain.list", {}, { quiet: true })).domains)
     for (const w of d.workspaces) {
-      // A record naming a VM that is not its own workspace's (the root's word, checked) gets
-      // no proxy and no link: it would give one domain's VM another domain's rules.
-      if (!running.has(w.vm) || w.domain !== d.slug || !isOwnVm(d.slug, w)) continue;
+      // (A record naming a VM that is not its own workspace's is not in the list: replies.ts.)
+      if (!running.has(w.vm)) continue;
       await ensureProxyUser(w.domain);
-      const proxy = await rootctl<{ socket: string }>(
+      const proxy = await rootctl(
         "proxy.start",
         { vm: w.vm, domain: w.domain, workspace: w.workspace },
         { quiet: true },
@@ -1013,104 +1008,6 @@ export const reconnectRunning = async (): Promise<number> => {
   return count;
 };
 
-/** The root's word about a workspace, checked against what the host computes itself: the root
- *  is where every domain's data is parsed, and a VM named in its answer is a VM the host
- *  stops, starts or destroys (audit, 2026-11-16: an answer naming another domain's VM would
- *  have had it removed). */
-/** Whether a record of the root's names its own workspace's VM, in that domain. */
-export const isOwnVm = (domain: string, w: { domain?: unknown; workspace: unknown; vm: unknown }) =>
-  (w.domain === undefined || w.domain === domain) &&
-  isSlug(w.workspace) &&
-  w.vm === workspaceVmName(INSTANCE, domain, w.workspace);
-export const vouched = <W extends { domain: string; workspace: string; vm: string }>(
-  w: W,
-  domain: string,
-  workspace?: string,
-): W => {
-  if (
-    w.domain !== domain ||
-    (workspace !== undefined && w.workspace !== workspace) ||
-    !isSlug(w.workspace) ||
-    w.vm !== workspaceVmName(INSTANCE, domain, w.workspace)
-  )
-    refuse(
-      `the root's answer about ${domain}/${workspace ?? w.workspace} does not name that workspace's own VM`,
-      "desolate doctor; if it persists, the root VM is not well: desolate bootstrap",
-    );
-  return w;
-};
-declare namespace isOwnVm {
-  /** the VM a record names is the one the host computes for that workspace, in that domain */
-  export type Records = Table<
-    typeof isOwnVm,
-    [
-      [
-        args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }],
-        expected: true,
-      ],
-      [args: [domain: "acme", w: { workspace: "w1"; vm: "dsl-main-ddb30a57cc" }], expected: true],
-      /** another domain's workspace of the same name has another VM */
-      [
-        args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-41eb634ef1" }],
-        expected: false,
-      ],
-      [
-        args: [domain: "acme", w: { domain: "beta"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }],
-        expected: false,
-      ],
-      [
-        args: [
-          domain: "acme",
-          w: { domain: "acme"; workspace: "../w1"; vm: "dsl-main-ddb30a57cc" },
-        ],
-        expected: false,
-      ],
-      [
-        args: [domain: "acme", w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-root" }],
-        expected: false,
-      ],
-    ]
-  >;
-}
-declare namespace vouched {
-  /** the root's answer is used only if it names the workspace asked about, and its own VM */
-  export type Passes = Expect<
-    Invoke<
-      typeof vouched,
-      [
-        w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" },
-        domain: "acme",
-        workspace: "w1",
-      ]
-    >,
-    "=",
-    { domain: "acme"; workspace: "w1"; vm: "dsl-main-ddb30a57cc" }
-  >;
-  export type Refuses = [
-    Throws<
-      Invoke<
-        typeof vouched,
-        [
-          w: { domain: "acme"; workspace: "w1"; vm: "dsl-main-41eb634ef1" },
-          domain: "acme",
-          workspace: "w1",
-        ]
-      >,
-      "the root's answer about acme/w1 does not name that workspace's own VM"
-    >,
-    Throws<
-      Invoke<
-        typeof vouched,
-        [
-          w: { domain: "acme"; workspace: "w2"; vm: "dsl-main-ddb30a57cc" },
-          domain: "acme",
-          workspace: "w1",
-        ]
-      >,
-      "the root's answer about acme/w1 does not name that workspace's own VM"
-    >,
-  ];
-}
 /** What a domain's environment asks for (the root's projectSizeOf). */
 type ProjectAsk = ProjectSize & { repo: string; path: string };
 
@@ -1207,7 +1104,7 @@ export const resize = async (target: string | undefined, given: Partial<Size>, o
   const now: Size = w.size ?? stackDefaults();
   if (Object.keys(given).length === 0) {
     out(`${name}  ${describeSize(now)}`);
-    const asked = await rootctl<ProjectAsk | null>(
+    const asked = await rootctl(
       "domain.projectSize",
       { slug: w.domain, preferred: w.env },
       { quiet: true },
@@ -1251,11 +1148,7 @@ export const resize = async (target: string | undefined, given: Partial<Size>, o
 
 const find = async (target: string | undefined) => {
   const { domain, workspace } = splitTarget(target);
-  return vouched(
-    await rootctl<Workspace>("workspace.get", { domain, name: workspace }, { quiet: true }),
-    domain,
-    workspace,
-  );
+  return rootctl("workspace.get", { domain, name: workspace }, { quiet: true });
 };
 
 export const stop = async (target: string | undefined, out: Out) => {
@@ -1345,7 +1238,16 @@ done`;
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
  *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
  *  its branches are written out for the root. What the VM says is its word about itself. */
-const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
+const unsaved = async (
+  w: Workspace,
+  sync = true,
+  // Never fewer than the Mac made it with (guardedCheckouts), whatever the root says now.
+  checkouts = guardedCheckouts(
+    w.checkouts.map((c) => c.path),
+    recordedCheckouts(w.vm),
+    () => checkoutsOnMac(w.domain),
+  ),
+): Promise<string[]> => {
   const b = backend();
   if ((await b.info(w.vm)).status !== "running")
     return [
@@ -1353,19 +1255,14 @@ const unsaved = async (w: Workspace, sync = true): Promise<string[]> => {
     ];
   const script = `${sync ? `${NODE.join(" ")} ${guest.release}/workspace/desolate.ts sync >/dev/null 2>&1 || echo "UNSYNCED"` : ""}
 ${LOOK_EACH}`;
-  const looked = await b.exec(
-    w.vm,
-    ["bash", "-c", script, "_", ...w.checkouts.map((c) => c.path)],
-    { timeoutMs: 120_000 },
-  );
+  const looked = await b.exec(w.vm, ["bash", "-c", script, "_", ...checkouts], {
+    timeoutMs: 120_000,
+  });
   if (looked.code !== 0)
     return [
       `it could not be looked at: ${fromVm(w, "unsaved", looked.stderr, 3).replace(/\n/g, " ")}`,
     ];
-  return lostIn(
-    looked.stdout,
-    w.checkouts.map((c) => c.path),
-  );
+  return lostIn(looked.stdout, checkouts);
 };
 
 /** What the VM's look (above) says would be lost, in words: each line names what, and the
@@ -1459,6 +1356,97 @@ export const look = async (w: Workspace, atStop = false): Promise<Looked> => {
 };
 const forget = (vm: string) => fs.rmSync(lookedFile(vm), { force: true });
 
+/** The checkouts a workspace was made with, as this Mac planned it, kept on the Mac: what
+ *  `--if-clean` looks at is never fewer than these, whatever the root later says. */
+const checkoutsFile = (vm: string) => path.join(paths.state, "checkouts", `${vm}.json`);
+const recordCheckouts = (vm: string, checkouts: readonly { path: string }[]) => {
+  fs.mkdirSync(path.dirname(checkoutsFile(vm)), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(checkoutsFile(vm), JSON.stringify(checkouts.map((c) => c.path)));
+};
+const recordedCheckouts = (vm: string): string[] | null => {
+  try {
+    const paths = JSON.parse(fs.readFileSync(checkoutsFile(vm), "utf8")) as unknown;
+    return Array.isArray(paths) && paths.every((p) => typeof p === "string") ? paths : null;
+  } catch {
+    return null;
+  }
+};
+
+/** Every checkout in a domain's folder on this Mac, as a workspace sees it: each repository's
+ *  own (`/workspaces/<owner>/<repo>`) and each worktree under its `.worktrees/`. Read by the
+ *  Mac, of its own folder: what the root says a workspace holds cannot shrink it. */
+export const checkoutsOnMac = (domain: string): string[] => {
+  const dirs = (at: string) => {
+    try {
+      return fs
+        .readdirSync(at, { withFileTypes: true })
+        .filter((e) => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith("."))
+        .map((e) => e.name);
+    } catch {
+      return [];
+    }
+  };
+  const root = paths.domainRepos(domain);
+  return dirs(root).flatMap((owner) =>
+    dirs(path.join(root, owner)).flatMap((repo) => [
+      `${guest.workspaces}/${owner}/${repo}`,
+      ...dirs(path.join(root, owner, repo, ".worktrees")).map(
+        (name) => `${guest.workspaces}/${owner}/${repo}/.worktrees/${name}`,
+      ),
+    ]),
+  );
+};
+
+declare namespace checkoutsOnMac {
+  /** each repository's own checkout and each of its worktrees, as the VM sees them */
+  export type Lists = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof writeInHome, [name: "domains/acme/repos/acme/web/.git/HEAD", text: "x"]>,
+      Invoke<
+        typeof writeInHome,
+        [name: "domains/acme/repos/acme/web/.worktrees/fix-login/.git", text: "x"]
+      >,
+    ],
+    Expect<
+      Invoke<typeof checkoutsOnMac, [domain: "acme"]>,
+      "=",
+      ["/workspaces/acme/web", "/workspaces/acme/web/.worktrees/fix-login"]
+    >
+  >;
+}
+
+/** What `--if-clean` looks at: the root's answer's checkouts and the ones this Mac recorded
+ *  when it made the workspace; for one made before that record, every checkout in the
+ *  domain's folder on the Mac. An answer can add to the set, never take from it. */
+export const guardedCheckouts = (
+  answered: readonly string[],
+  recorded: readonly string[] | null,
+  onMac: () => string[],
+): string[] => [...new Set([...answered, ...(recorded ?? onMac())])];
+
+declare namespace guardedCheckouts {
+  /** an answer that names no checkout looks at the ones recorded; one with no record, at
+   *  every one on the Mac; an honest answer and its record are one set (the control) */
+  export type Set = Table<
+    typeof guardedCheckouts,
+    [
+      [
+        args: [answered: [], recorded: ["/workspaces/acme/web"], onMac: () => []],
+        expected: ["/workspaces/acme/web"],
+      ],
+      [
+        args: [
+          answered: ["/workspaces/acme/web"],
+          recorded: ["/workspaces/acme/web"],
+          onMac: () => [],
+        ],
+        expected: ["/workspaces/acme/web"],
+      ],
+    ]
+  >;
+}
+
 /** `--if-clean`: only if nothing in it would be lost (looked at now, or at its stop).
  *  `--if-pushed`: and every checkout's commits are on the remote, as the root sees them (the
  *  dashboard's Delete asks for both). */
@@ -1474,22 +1462,13 @@ export const remove = async (
         "a domain name is a slug: lowercase letters, digits and single dashes, at most 40",
         EXIT.usage,
       );
-    const result = await rootctl<{ domain: string; kept: string }>(
-      "domain.remove",
-      { slug: target },
-      { quiet: true },
-    );
     // The root's ordinary user answers this, so what the Mac deletes is named by the person's
-    // checked name, and only once the root says it removed exactly that domain.
-    if (result?.domain !== target)
-      refuse(
-        `the root answered about another domain than ${target}, so nothing was removed on this Mac`,
-        "desolate doctor",
-      );
+    // checked name, and only once the root says it removed exactly that domain (replies.ts).
+    const result = await rootctl("domain.remove", { slug: target }, { quiet: true });
     // Its template is its own and goes with it.
     await (await import("./templates.ts")).removeAll(target);
     fs.rmSync(paths.domain(target), { recursive: true, force: true });
-    return out(`removed the domain ${target}; ${result.kept}.`);
+    return out(`removed the domain ${target}; ${printable(result.kept)}.`);
   }
   const w = await find(target);
   // --if-clean (a workspace closing one it started, or the dashboard's Delete): only if
@@ -1497,6 +1476,9 @@ export const remove = async (
   if (options.ifClean || options.ifPushed) {
     const running = (await backend().info(w.vm)).status === "running";
     const kept = running ? null : lookedAt(w.vm);
+    // (The checkouts looked at are never fewer than the Mac made it with: unsaved.
+    // `--if-pushed` rests on the root's word: whether a commit is on the remote is the root's
+    // to say, which holds the mirror, by design.)
     const lost = !options.ifClean
       ? []
       : running
@@ -1507,7 +1489,7 @@ export const remove = async (
               "it is stopped, and was not looked at as it stopped (start it, or remove it yourself)",
             ];
     if (options.ifPushed) {
-      const pushed = await rootctl<Unpushed[]>(
+      const pushed = await rootctl(
         "workspace.unpushed",
         { domain: w.domain, name: w.workspace },
         { quiet: true },
@@ -1529,6 +1511,7 @@ export const remove = async (
   await rootctl("workspace.remove", { domain: w.domain, name: w.workspace }, { quiet: true });
   (await import("./spawn.ts")).forget(w.domain, w.workspace);
   forget(w.vm);
+  fs.rmSync(checkoutsFile(w.vm), { force: true });
   out(
     `removed ${w.domain}/${w.workspace}. Its branches and worktrees stay in the domain's clones.`,
   );
