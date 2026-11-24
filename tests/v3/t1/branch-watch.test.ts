@@ -2,7 +2,9 @@
 // repository, paced as wsd paces it, counting the looks. A branch that moves is looked at
 // within a second; a repository where nothing moves is not looked at; a flood is looked at
 // about once a second. Here on the Mac's file events (FSEvents); in a workspace VM, inotify's
-// (measured there, 2026-11-23; T2's 04-offers has a branch reach the root on it).
+// (measured there, 2026-11-23; T2's 04-offers has a branch reach the root on it). Run in a
+// Linux container on 2026-11-23, node 24: passes; with node's recursive watch it did not,
+// at the same branch's third move (control).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -70,6 +72,15 @@ describe("T1 the workspace daemon's branch watch", { concurrency: true }, () => 
       assert.ok((await lookedWithin(w.counted)) >= 1, "a commit is looked at within a second");
       await sleep(1100);
       w.counted.looks = 0;
+
+      // The same branch again and again: each move is git's rename over the ref, which a
+      // watch on the file itself (node's recursive watch on Linux) stopped hearing after two.
+      for (let i = 0; i < 4; i++) {
+        git(w.repo, "commit", "-q", "--allow-empty", "-m", `again ${i}`);
+        assert.ok((await lookedWithin(w.counted)) >= 1, `commit ${i} on the same branch`);
+        await sleep(1100);
+        w.counted.looks = 0;
+      }
 
       git(w.repo, "branch", "feature/x");
       assert.ok((await lookedWithin(w.counted)) >= 1, "a new branch feature/x, within a second");

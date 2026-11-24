@@ -130,29 +130,70 @@ export const watchRefs = async (
   if (named.code !== 0) throw new Error(failure(named.stderr, 3, () => null));
   const common = named.stdout.trim();
   const heads = path.join(common, "refs", "heads");
-  // A link there would have node's recursive watch (on Linux, a watch on each directory and
-  // file below: node 20 and later, the image's is 24) walk wherever it points.
   if (!fs.lstatSync(heads).isDirectory()) throw new Error(`${heads} is not a directory`);
-  const watchers: fs.FSWatcher[] = [];
-  const stop = () => watchers.splice(0).forEach((watcher) => watcher.close());
+  // Each directory by itself, not node's recursive watch: on Linux that watches each file
+  // too, and a ref git replaces (it writes <name>.lock and renames it over the ref) is never
+  // heard of again. Seen in T2 (2026-11-23, node 24): a branch's first two moves heard, then
+  // none, so the third waited for the minute's look. A directory hears every rename in it.
+  const watchers = new Map<string, fs.FSWatcher>();
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    for (const watcher of watchers.values()) watcher.close();
+    watchers.clear();
+  };
+  const watch = (at: string, wanted: (file: string | null) => boolean) => {
+    const watcher = fs.watch(at, (_, file) => wanted(file) && changed());
+    watcher.on("error", (error: NodeJS.ErrnoException) => {
+      watcher.close();
+      watchers.delete(at);
+      // A directory gone (refs/heads/feature/, its last branch deleted): it was a change.
+      if (error.code === "ENOENT") return changed();
+      if (stopped) return;
+      stop();
+      failed(error);
+    });
+    watchers.set(at, watcher);
+  };
+  // refs/heads and each directory below it (a branch feature/x is a file in one; a link is
+  // not followed), looked at again on each event there, so that a new one is watched.
+  const tree = () => {
+    const dirs = new Set([heads]);
+    for (const at of dirs)
+      try {
+        for (const entry of fs.readdirSync(at, { withFileTypes: true }))
+          if (entry.isDirectory()) dirs.add(path.join(at, entry.name));
+      } catch {
+        /* gone meanwhile */
+      }
+    for (const [at, watcher] of watchers)
+      if (at !== common && !dirs.has(at)) {
+        watcher.close();
+        watchers.delete(at);
+      }
+    for (const at of dirs)
+      if (!watchers.has(at) && !stopped)
+        try {
+          watch(at, () => {
+            try {
+              tree();
+            } catch (error) {
+              stop();
+              failed(error as Error);
+            }
+            return true;
+          });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // gone meanwhile
+        }
+  };
   try {
-    watchers.push(fs.watch(heads, { recursive: true }, changed));
-    watchers.push(
-      fs.watch(common, (_, file) => (!file || file.startsWith("packed-refs")) && changed()),
-    );
+    watch(common, (file) => !file || file.startsWith("packed-refs"));
+    tree();
   } catch (error) {
     stop();
     throw error;
   }
-  for (const watcher of watchers)
-    watcher.on("error", (error: NodeJS.ErrnoException) => {
-      // A directory gone before node's recursive watch read it (refs/heads/feature/, made
-      // and removed by git): the rest is still watched, and it was a change.
-      if (error.code === "ENOENT") return changed();
-      if (watchers.length === 0) return;
-      stop();
-      failed(error);
-    });
   return stop;
 };
 
