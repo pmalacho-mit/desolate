@@ -714,8 +714,10 @@ describe("T2 section 4.8: the root UI", () => {
     // A flood: the workspace's status rewritten every 20 ms for 3 s (here on the host's side
     // of the share, as a VM's writes are). The host nudges at most once a second, and the
     // service looks on each nudge: four from the flood (at once, then one a second until it
-    // stops), and the service's own look every 10 s if it falls in the window: five states at
-    // most in the 4.5 s from its start. CONTROL:
+    // stops). Any other look while the file changes shows it too, and two others may fall in
+    // the window (the service's look every 10 s, the host's facts said again every 45 s): six
+    // states at most in the 4.5 s from its start (it was one a second and one per nudge, with
+    // the host's two a second: up to fifteen). CONTROL:
     // the flood is seen while it lasts, more than once, not held back until it stops.
     const file = path.join(
       stack.home,
@@ -758,7 +760,7 @@ describe("T2 section 4.8: the root UI", () => {
       `# ${n} writes; ${during.length} states pushed, ${flooded.size} of them during the flood`,
     );
     assert.ok(n > 100, `the flood was a flood: ${n} writes`);
-    assert.ok(during.length <= 5, `at most once a second: ${during.length} states in 4.5 s`);
+    assert.ok(during.length <= 6, `about once a second: ${during.length} states in 4.5 s`);
     assert.ok(flooded.size >= 2, `control: seen while it lasted, ${flooded.size} times`);
     assert.ok(
       await until(
