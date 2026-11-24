@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { bootstrap, git, newStack } from "../lib/harness.ts";
+import { bootstrap, git, newStack, REPO_ROOT as REPO } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
@@ -60,6 +60,44 @@ const sshAs = (alias: string, port: number) =>
     ],
     { encoding: "utf8", env: stack.env, timeout: 60_000 },
   );
+/** desolate's record of a VM (its desolate.json), and the same with its key record taken
+ *  away, as a VM made before desolate kept one has none. */
+const recordOf = (name: string) =>
+  JSON.parse(fs.readFileSync(path.join(dir(name), "desolate.json"), "utf8")) as {
+    hostKey?: string;
+    hostKeyNext?: { was: string; next: string };
+  };
+const writeRecord = (name: string, change: object) => {
+  const file = path.join(dir(name), "desolate.json");
+  const m = JSON.parse(fs.readFileSync(file, "utf8"));
+  delete m.hostKey;
+  delete m.hostKeyNext;
+  fs.writeFileSync(file, JSON.stringify({ ...m, ...change }, null, 2) + "\n");
+};
+/** What lima.ts runs as root in a VM to change its key, in two halves: new keys made in a
+ *  folder of their own (printing the new public key), then put in place. */
+const NEW_KEYS = "/etc/ssh/.desolate-host-keys";
+const MAKE = `set -eu; rm -rf ${NEW_KEYS}; mkdir -p ${NEW_KEYS}/etc/ssh; ssh-keygen -A -f ${NEW_KEYS} >/dev/null; cut -d' ' -f1,2 ${NEW_KEYS}/etc/ssh/ssh_host_ed25519_key.pub`;
+const PUT = `set -eu; for key in ${NEW_KEYS}/etc/ssh/ssh_host_*; do mv -f "$key" /etc/ssh/; done; rm -rf ${NEW_KEYS}`;
+const asRootIn = (name: string, script: string) => {
+  const r = stack.inVm(vm[name]!, ["bash", "-c", script], { root: true });
+  assert.equal(r.code, 0, r.stderr);
+  return r.stdout.trim();
+};
+/** Workspace `name` stopped and started, and then known by its own key, the one recorded. */
+const restarted = (name: string) => {
+  assert.equal(stack.quiet("stop", `dev/${name}`).code, 0);
+  const started = stack.quiet("start", `dev/${name}`);
+  assert.equal(started.code, 0, started.stderr + started.stdout.slice(-800));
+  ownAndRecorded(name);
+};
+const ownAndRecorded = (name: string) => {
+  const record = recordOf(name);
+  assert.equal(record.hostKeyNext, undefined);
+  assert.deepEqual(accepted(name), [record.hostKey]);
+  assert.equal(held(name), record.hostKey);
+  assert.equal(sshAs(name, portOf(name)).status, 0);
+};
 const refusedForKey = /Host key verification failed|IDENTIFICATION HAS CHANGED/;
 const keyCheck = () =>
   stack
@@ -110,6 +148,7 @@ describe(
         // The control: the same comparison finds the key equal where it is the same key.
         assert.equal(accepted(name)[0], held(name), `${name}: accepted is what it holds`);
         assert.equal(shown(name), held(name), `${name}: shown to a new connection`);
+        assert.equal(recordOf(name).hostKey, held(name), `${name}: recorded by desolate`);
       }
       const keys = vms.map((name) => accepted(name)[0]);
       assert.equal(new Set(keys).size, vms.length, `each its own: ${keys.join(" | ")}`);
@@ -117,7 +156,10 @@ describe(
       const base = accepted("base")[0]!;
       assert.match(base, /^ssh-ed25519 /);
       for (const key of keys) assert.notEqual(key, base);
-      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own: no running VM/);
+      assert.match(
+        keyCheck(),
+        /^ {2}ok {3}VMs have ssh host keys of their own: every running VM is known by the key desolate gave it alone/,
+      );
     });
 
     it("T3 a VM answering at another's port is refused by the Mac's client (the right pairing is let in)", () => {
@@ -146,7 +188,7 @@ describe(
       assert.equal(sshAs("one", portOf("one")).status, 0);
     });
 
-    it("T3 a workspace given the root VM's key: doctor names both, and bootstrap gives each its own", () => {
+    it("T3 a workspace given the root VM's key, neither with a record (a stack made before): doctor names both, and bootstrap gives each its own", () => {
       const rootKey = accepted("root")[0]!;
       const oneKey = accepted("one")[0]!;
       // Two VMs with one key, as VMs made before each had its own were: the root VM's host keys,
@@ -168,6 +210,7 @@ describe(
       const file = path.join(dir("one"), "ssh.known_hosts");
       const line = fs.readFileSync(file, "utf8").trim().split(" ");
       fs.writeFileSync(file, `${line[0]} ${rootKey}\n`);
+      for (const name of ["root", "one"]) writeRecord(name, {});
       assert.equal(shown("one"), rootKey);
       // The control for the refusal below: with one key, the client cannot tell the two apart.
       const together = sshAs("root", portOf("one"));
@@ -207,6 +250,95 @@ describe(
       );
       assert.equal(copy.status, 0, copy.stderr);
       assert.ok(fs.readFileSync(copied, "utf8").length > 0);
+    });
+
+    it("T3 a change cut short after the new key was recorded and before the VM put it in place: the next start makes another", () => {
+      const was = accepted("two")[0]!;
+      const next = asRootIn("two", MAKE);
+      assert.match(next, /^ssh-ed25519 /);
+      writeRecord("two", { hostKeyNext: { was, next } });
+      assert.match(
+        keyCheck(),
+        /FAIL VMs have ssh host keys of their own: dev\/two's change of ssh host key was cut short/,
+      );
+      restarted("two");
+      const now = recordOf("two").hostKey;
+      assert.notEqual(now, was);
+      assert.notEqual(now, next);
+      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
+    });
+
+    it("T3 a change cut short after the VM put the new key in place and before the Mac's file said it: Lima refuses the old key, and the start finishes the change", () => {
+      const was = accepted("two")[0]!;
+      const next = asRootIn("two", MAKE);
+      writeRecord("two", { hostKeyNext: { was, next } });
+      asRootIn("two", PUT);
+      assert.equal(shown("two"), next);
+      assert.deepEqual(accepted("two"), [was]);
+      restarted("two");
+      // The control beside the case above: the key kept is the one the VM had put in place.
+      assert.equal(recordOf("two").hostKey, next);
+      const log = fs.readFileSync(path.join(dir("two"), "ha.stderr.log"), "utf8");
+      assert.match(
+        log,
+        /host key mismatch/,
+        "Lima refused the old key before the file said the new",
+      );
+      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
+    });
+
+    it("T3 the Mac's file rewritten with an old key (as a limactl copy that read it before a change writes it back): doctor names it, bootstrap sets it back, and so does a start", () => {
+      const own = recordOf("one").hostKey!;
+      const file = path.join(dir("one"), "ssh.known_hosts");
+      const line = fs.readFileSync(file, "utf8").trim().split(" ");
+      const old = accepted("base")[0]!;
+      fs.writeFileSync(file, `${line[0]} ${old}\n`);
+      assert.match(keyCheck(), /FAIL VMs have ssh host keys of their own: .*dev\/one/);
+      const result = bootstrap(stack);
+      assert.equal(result.code, 0, result.stderr + result.stdout.slice(-1500));
+      assert.match(
+        result.stdout,
+        /dev\/one: its ssh\.known_hosts set back to the key desolate gave it/,
+      );
+      ownAndRecorded("one");
+      assert.equal(recordOf("one").hostKey, own);
+      fs.writeFileSync(file, `${line[0]} ${old}\n`);
+      restarted("one");
+      assert.equal(recordOf("one").hostKey, own);
+      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
+    });
+
+    it("T3 two changes of one VM's key at once: one makes it, the other leaves it alone", () => {
+      const was = accepted("two")[0]!;
+      writeRecord("two", {});
+      // Two of bootstrap's passes at once, in one process of desolate's own code.
+      const lima = path.join(REPO, "release", "host", "vm", "lima.ts");
+      const both = spawnSync(
+        process.execPath,
+        [
+          "--disable-warning=ExperimentalWarning",
+          "--input-type=module",
+          "-e",
+          `const { limaBackend } = await import(${JSON.stringify(lima)}); const b = limaBackend(); const said = []; await Promise.all([b.ownHostKeys((l) => said.push(l)), b.ownHostKeys((l) => said.push(l))]); console.log(said.join("\\n"));`,
+        ],
+        { env: stack.env, encoding: "utf8", timeout: 300_000 },
+      );
+      assert.equal(both.status, 0, both.stderr);
+      const lines = both.stdout.trim().split("\n");
+      assert.equal(
+        lines.filter((l) => l.includes("given an ssh host key of its own")).length,
+        1,
+        both.stdout,
+      );
+      assert.equal(
+        lines.filter((l) => l.includes("being seen to by another")).length,
+        1,
+        both.stdout,
+      );
+      ownAndRecorded("two");
+      assert.notEqual(recordOf("two").hostKey, was);
+      restarted("two");
+      assert.match(keyCheck(), /^ {2}ok {3}VMs have ssh host keys of their own/);
     });
   },
 );
