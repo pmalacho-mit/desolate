@@ -8,7 +8,13 @@ type Vitest = {
   onTestFinished(fn: () => unknown): void;
   /** Runs `fn` when the current test file ends. */
   afterAll(fn: () => unknown): void;
-  vi: { stubGlobal(name: string, value: unknown): unknown; unstubAllGlobals(): unknown };
+  vi: {
+    stubGlobal(name: string, value: unknown): unknown;
+    unstubAllGlobals(): unknown;
+    useFakeTimers(): unknown;
+    useRealTimers(): unknown;
+    runAllTimersAsync(): Promise<unknown>;
+  };
 };
 
 export const { onTestFinished, afterAll, vi } = (await import("vitest" as string)) as Vitest;

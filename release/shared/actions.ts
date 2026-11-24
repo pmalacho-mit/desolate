@@ -7,8 +7,8 @@ import { characters, isSlug, parseRepo } from "./names.ts";
 import { checkoutsOf, LIMIT as SPAWN, parseSigned } from "./spawn.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { reposOf, textOf } from "../.harness/shared-actions.ts";
+import type { Expect, Invoke, Repeat, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { reposOf } from "../.harness/shared-actions.ts";
 
 type Args = Record<string, string | undefined>;
 
@@ -219,10 +219,7 @@ declare namespace actionRefusal {
         expected: null,
       ],
       [
-        args: [
-          kind: "domain.create",
-          args: { domain: "dev"; title: Invoke<typeof textOf, [length: 81]> },
-        ],
+        args: [kind: "domain.create", args: { domain: "dev"; title: Repeat<"t", 81> }],
         expected: "the title is 81 characters, over the 80 allowed",
       ],
       [
@@ -237,7 +234,7 @@ declare namespace actionRefusal {
         expected: "the new domain is 21 repositories, over the 20 one Create takes",
       ],
       [
-        args: [kind: "domain.create", args: { domain: Invoke<typeof textOf, [length: 201]> }],
+        args: [kind: "domain.create", args: { domain: Repeat<"t", 201> }],
         expected: "its domain is 201 characters, over the 200 allowed",
       ],
       [
@@ -378,18 +375,12 @@ declare namespace hostArgv {
         expected: null,
       ],
       [
-        args: [
-          kind: "domain.create",
-          args: { domain: "dev"; title: Invoke<typeof textOf, [length: 81]> },
-        ],
+        args: [kind: "domain.create", args: { domain: "dev"; title: Repeat<"t", 81> }],
         expected: null,
       ],
       [
-        args: [
-          kind: "domain.create",
-          args: { domain: "dev"; title: Invoke<typeof textOf, [length: 80]> },
-        ],
-        expected: ["domain", "create", "dev", "--title", Invoke<typeof textOf, [length: 80]>],
+        args: [kind: "domain.create", args: { domain: "dev"; title: Repeat<"t", 80> }],
+        expected: ["domain", "create", "dev", "--title", Repeat<"t", 80>],
       ],
       [
         args: [kind: "domain.create", args: { domain: "dev"; title: "" }],
