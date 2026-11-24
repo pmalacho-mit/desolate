@@ -1186,6 +1186,7 @@ const approvalBackend = (): ApprovalBackend => {
       return url;
     },
     refuseIssue: async (issue) => (await import("./issues.ts")).refuseIssue(issue),
+    pusherMark: () => pusherLog.mark(),
     pushes: (heard) =>
       events.listen(0, (line) => {
         const e = JSON.parse(line) as PusherSaid & { source: string };
@@ -1632,6 +1633,9 @@ const PUSHER_LOOK_BYTES = 1024 * 1024;
  *  waits for the next look; a line longer than a whole look is skipped to its end (once,
  *  `skipped`), where it once stopped every later event: the offset never moved past it. */
 type LogAt = { inode: string; offset: number; skipping?: true } | null;
+/** Where the pusher's log ends now, read from the root as root (followPusher sets it once it
+ *  runs): the approval page marks it before it signs (approve-web.ts, Backend.pusherMark). */
+const pusherLog = { mark: async (): Promise<{ inode: string; offset: number } | null> => null };
 const pusherLogRead = (
   where: LogAt,
   stdout: string,
@@ -2745,30 +2749,22 @@ const serving = async () => {
   void followState();
   const followPusher = async () => {
     const file = "/var/lib/desolate-root/pusher.log";
-    let where: { inode: string; offset: number } | null = null;
-    // Asked only while someone listens; its place in the log is kept while nobody does, so a
-    // word written after someone starts listening is heard however late the first look comes
-    // (a look starting at the log's end lost the word of a push approved just before it: T2 04,
-    // 2026-11-24, twice under load). What was written while nobody listened is not news: a
-    // line older than when listening began (by its own time, less PUSHER_SKEW_MS for the root's
-    // clock) is passed over.
-    let since: number | null = null;
-    const PUSHER_SKEW_MS = 5_000;
-    for (;;) {
-      if (since !== null) await sleep(2000);
-      // (In this process alone: the root is asked nothing while nobody listens, but once, as
-      // it comes up, where the log ends.)
-      if (!rootUp || (!events.listening() && where !== null)) {
-        since = null;
-        await sleep(500);
-        continue;
-      }
-      if (events.listening()) since ??= Date.now() - 500 - PUSHER_SKEW_MS;
-      try {
-        // One look: the file's identity and size, and up to PUSHER_LOOK_BYTES of what is
-        // new, as base64 (bytes, so an offset is never miscounted).
-        const from = where ? where.offset : -1;
-        const read = await b.exec(
+    // Asked only while someone listens. Its place in the log is kept while nobody listens for
+    // PUSHER_KEPT_MS, then forgotten: a listener that comes later hears from where the log then
+    // ends. An approval signed on the approval page first marks where the log ends
+    // (`pusherLog.mark`): a place forgotten starts there, so the word of that push is read
+    // however late the first look comes (a look that started at the log's end lost one: T2 04,
+    // 2026-11-24, twice under load). Each word says where in the log it ends, which is what
+    // binds it to an approval (approve-web.ts, endedBy): never the root's clock, which may be
+    // far off the Mac's after it slept (the review of #283).
+    let where: LogAt = null;
+    let idleSince = 0;
+    // Far longer than the moment between two of a page's asks; short enough that a
+    // `desolate events` started later hears little from before it started.
+    const PUSHER_KEPT_MS = 60_000;
+    const look = async (from: number, most: number) =>
+      (
+        await b.exec(
           ROOT_VM,
           [
             "bash",
@@ -2777,25 +2773,56 @@ const serving = async () => {
             "_",
             file,
             String(from),
-            String(PUSHER_LOOK_BYTES),
+            String(most),
           ],
           { root: true, timeoutMs: 20_000 },
-        );
-        const step = pusherLogRead(where, read.stdout);
+        )
+      ).stdout;
+    pusherLog.mark = async () => {
+      const at = pusherLogRead(null, await look(-1, 0)).where;
+      if (at && (!where || where.inode !== at.inode)) where = at;
+      return at && { inode: at.inode, offset: at.offset };
+    };
+    for (;;) {
+      if (!rootUp || !events.listening()) {
+        idleSince ||= Date.now();
+        if (Date.now() - idleSince > PUSHER_KEPT_MS) where = null;
+        // (In this process alone: the root is asked nothing while nobody listens.)
+        await sleep(500);
+        continue;
+      }
+      idleSince = 0;
+      try {
+        // One look: the file's identity and size, and up to PUSHER_LOOK_BYTES of what is
+        // new, as base64 (bytes, so an offset is never miscounted).
+        const from: LogAt = where;
+        const step = pusherLogRead(from, await look(from ? from.offset : -1, PUSHER_LOOK_BYTES));
+        // (A mark made meanwhile moved the place: this look's answer is from before it.)
+        if (where !== from) continue;
         where = step.where;
         if (step.skipped)
           log(
             `the pusher's log has a line longer than ${formatBytes(PUSHER_LOOK_BYTES)}: skipped to its end (if it was a push's, \`desolate events\` does not have it)`,
           );
-        for (const line of step.lines) {
+        // Where each line ends, back from where the look ended.
+        let end = where?.offset ?? 0;
+        const ends = step.lines
+          .slice()
+          .reverse()
+          .map((line) => {
+            const at = end;
+            end -= Buffer.byteLength(line) + 1;
+            return at;
+          })
+          .reverse();
+        for (const [i, line] of step.lines.entries()) {
           const e = pusherEvent(line);
-          if (e && since !== null && !(Date.parse(e.at) < since)) events.publish(e);
+          if (e && where) events.publish({ ...e, log: { inode: where.inode, end: ends[i] } });
         }
       } catch {
         /* the root is not answering: next time */
       }
-      // (A look that was not a listener's: the next, if this one failed, in a while.)
-      if (since === null) await sleep(2000);
+      await sleep(2000);
     }
   };
   void followPusher();

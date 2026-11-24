@@ -253,6 +253,27 @@ export const openBrowser = async (
       if (r.exceptionDetails) throw new Error(`in the page: ${r.exceptionDetails.text}`);
       return r.result?.value as T;
     };
+    /** A key pressed and let go where the focus is, as a person's: Tab (Shift+Tab, with
+     *  `shift`) or Enter. */
+    const pressKey = async (key: "Tab" | "Enter", shift = false) => {
+      const code = key === "Tab" ? 9 : 13;
+      const base = {
+        key,
+        code: key,
+        windowsVirtualKeyCode: code,
+        nativeVirtualKeyCode: code,
+        modifiers: shift ? 8 : 0,
+      };
+      await send(
+        "Input.dispatchKeyEvent",
+        key === "Enter"
+          ? { type: "keyDown", ...base, text: "\r", unmodifiedText: "\r" }
+          : { type: "rawKeyDown", ...base },
+        sessionId,
+      );
+      await send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, sessionId);
+      await sleep(100);
+    };
     let pointer = { x: width / 2, y: height / 2 };
     const self = {
       said,
@@ -402,6 +423,15 @@ export const openBrowser = async (
             sessionId,
           );
         await sleep(300);
+      },
+      key: pressKey,
+      /** Tab pressed until the focus is on `element` (an expression): at most 120 times. */
+      tabTo: async (element: string) => {
+        for (let i = 0; i < 120; i++) {
+          if (await evaluate<boolean>(`document.activeElement === ${element}`)) return;
+          await pressKey("Tab");
+        }
+        throw new Error(`Tab never reached ${element}`);
       },
       /** Where the pointer is. */
       pointer: () => ({ ...pointer }),

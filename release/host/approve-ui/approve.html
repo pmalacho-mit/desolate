@@ -46,8 +46,8 @@
     <div class="actions">
       <span class="arm"><button type="button" class="approve" disabled>Approve push</button></span>
       <span class="arm squash" hidden><button type="button" class="approve squash" disabled>Approve, squashed into one commit</button></span>
-      <span class="arm refuse"><button type="button" class="refuse" disabled>Refuse</button></span>
-      <span class="arm dismiss" hidden title="Rest the pointer here a second: it arms"><button type="button" class="dismiss" disabled>Dismiss</button></span>
+      <span class="arm refuse"><button type="button" class="refuse" aria-disabled="true">Refuse</button></span>
+      <span class="arm dismiss" hidden title="Rest the pointer here a second, or Tab to it and wait a second: it arms"><button type="button" class="dismiss" aria-disabled="true">Dismiss</button></span>
       <span class="hint"></span>
     </div>
   </section>
@@ -63,7 +63,7 @@
     <pre class="body"></pre>
     <div class="actions">
       <span class="arm"><button type="button" class="approve" disabled>Publish issue</button></span>
-      <span class="arm refuse"><button type="button" class="refuse" disabled>Not now</button></span>
+      <span class="arm refuse"><button type="button" class="refuse" aria-disabled="true">Not now</button></span>
       <span class="hint"></span>
     </div>
   </section>

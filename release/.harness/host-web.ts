@@ -108,6 +108,7 @@ export const waiting = (messages: string[], says?: AccountLine[]): Backend => {
     issues: async () => [],
     publishIssue: async () => "",
     refuseIssue: async () => {},
+    pusherMark: async () => null,
     pushes: () => () => {},
     github: () => false,
   };

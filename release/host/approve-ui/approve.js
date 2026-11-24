@@ -10,7 +10,10 @@
 // again: a button that came under a still pointer never arms (the review of #283: a card that
 // went brought the next card's Approve under the pointer that had approved it). Nothing the
 // page does moves a card from under the pointer either: one that ends keeps its place until
-// the pointer is off the list of cards (`keep`). Keys do not approve, refuse or dismiss.
+// the pointer is off the list of cards (`keep`). Keys do not approve. Refuse and Dismiss take a
+// key too, by the same rule: only once the person moved the focus onto the button with their
+// own Tab since the page last changed, and rested there a second (`keyReady`): focus the page
+// moved, or that was there when the page changed, arms nothing.
 //
 // Embedded beside the git terminal (/embed, approve-web.ts): the key from the address's
 // fragment is the credential (sent as a header), the pointer over the frame counts as
@@ -100,10 +103,20 @@ document.addEventListener("pointermove", (event) => {
   pointerMoved = event.isTrusted && pointerAt !== null && (event.screenX !== pointerAt[0] || event.screenY !== pointerAt[1]);
   pointerAt = [event.screenX, event.screenY];
 }, true);
-/** The page changed: no button of `card` has had the pointer come to it since. */
-const unmoved = (card) => { for (const arm of card.arms) { arm.came = false; arm.overSince = 0; } };
+/** The page changed: no button of `card` has had the pointer, or the person's Tab, come to it
+ *  since. */
+const unmoved = (card, keys = true) => { for (const arm of card.arms) { arm.came = false; arm.overSince = 0; if (keys) arm.keyedAt = 0; } };
+// When the person last pressed Tab here: a button focused just after came to by their key.
+let tabbedAt = -Infinity;
+document.addEventListener("keydown", (event) => { if (event.isTrusted && event.key === "Tab") tabbedAt = performance.now(); }, true);
+/** Refuse or Dismiss, focused by the person's own Tab since the page last changed, and a
+ *  second ago; the page and the card still, and this page with the focus. */
+const keyReady = (card, arm) => arm.keyedAt !== 0 && document.activeElement === arm.button && document.hasFocus() && performance.now() - arm.keyedAt >= READY_MS && still(card, arm) && !card.busy && (arm.kind === "dismiss" ? card.done : !card.done);
+/** A button looks pressable, or not: Approve by `disabled` (it takes no key at all), Refuse
+ *  and Dismiss by aria-disabled, so a key can still reach them. */
+const pressable = (arm, yes) => { if (signs(arm)) arm.button.disabled = !yes; else arm.button.setAttribute("aria-disabled", String(!yes)); };
 const disarm = (card) => {
-  for (const arm of card.arms) { arm.armedAt = 0; arm.button.disabled = true; }
+  for (const arm of card.arms) { arm.armedAt = 0; pressable(arm, false); }
   if (card.done || performance.now() < card.saidUntil) return;
   arming(card, whyNotArmed(card));
 };
@@ -125,9 +138,11 @@ const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 // Whatever changes a card's size (a card folded, a diff opened, what happened said on one, as
 // late as the pusher's word) moves every Approve below it: each waits its second again.
 // So does the page scrolling: it moves Approve under a pointer that did not move.
-const moved = () => { for (const card of cards.values()) { card.changedAt = performance.now(); unmoved(card); } disarmAll(); };
-new ResizeObserver(moved).observe(list);
-window.addEventListener("scroll", moved, { passive: true });
+// (A scroll moves the buttons under the pointer, not the focus: the focus the person's Tab
+// brought to a button stays where it was, and so does what a key acts on. Tab itself scrolls.)
+const moved = (keys = true) => { for (const card of cards.values()) { card.changedAt = performance.now(); unmoved(card, keys); } disarmAll(); };
+new ResizeObserver(() => moved()).observe(list);
+window.addEventListener("scroll", () => moved(false), { passive: true });
 /** Armed, if the pointer came to it and has been over it (moving or not) for a second while
  *  nothing on the page changed. Approve, only once the push can be signed; Refuse, at any
  *  time it waits; Dismiss, once it has ended. */
@@ -135,7 +150,7 @@ const tryArm = (card, arm) => {
   if (card.busy || armedOf(card) || !arm.came || !arm.overSince || performance.now() - arm.overSince < READY_MS || !still(card, arm)) return;
   if (arm.kind === "dismiss" ? !card.done : card.done || performance.now() < card.saidUntil || (signs(arm) && !ready(card, arm))) return;
   arm.armedAt = performance.now();
-  arm.button.disabled = false;
+  pressable(arm, true);
   // (Dismiss leaves the line as it is: it says what became of the push.)
   if (arm.kind === "dismiss") return;
   card.saidUntil = 0;
@@ -151,7 +166,14 @@ setInterval(() => {
       else if (over && arm.came && !arm.overSince) arm.overSince = performance.now();
       tryArm(card, arm);
     }
-    if (!armedOf(card)) disarm(card);
+    if (!armedOf(card)) {
+      disarm(card);
+      // Reached by the person's Tab and rested on: pressable by a key.
+      for (const arm of card.arms) if (!signs(arm) && keyReady(card, arm)) {
+        pressable(arm, true);
+        if (arm.kind === "refuse") arming(card, `armed: press Enter to ${card.issue ? "leave it for now" : "refuse"}`);
+      }
+    }
   }
   // A card that ended goes once the pointer is off the list of cards: nothing then moves under it.
   if (kept.size && !list.matches(":hover")) collapse();
@@ -469,14 +491,31 @@ const add = (push, issue) => {
     });
     // A real pointer's click, on an armed button: not a key, not a script.
     const real = (event) => event.isTrusted && event.detail !== 0 && arm.armedAt && !card.busy;
-    if (arm.kind === "dismiss") arm.button.addEventListener("click", (event) => { if (real(event) && card.done) dismiss(card); });
-    else if (arm.kind === "refuse") arm.button.addEventListener("click", async (event) => {
-      if (!real(event) || card.done) return;
+    const refuseIt = async () => {
       card.busy = true;
       try { await post("refuse", card); card.done = true; tellTerminal({ desolateDecided: true }); said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
       catch (error) { said(card, error.message); }
       finally { card.busy = false; disarm(card); }
-    });
+    };
+    if (arm.kind === "dismiss") arm.button.addEventListener("click", (event) => { if (real(event) && card.done) dismiss(card); });
+    else if (arm.kind === "refuse") arm.button.addEventListener("click", (event) => { if (real(event) && !card.done) void refuseIt(); });
+    if (!signs(arm)) {
+      // Focused by the person's Tab (this keydown's own default), or by anything else.
+      arm.button.addEventListener("focus", () => { arm.keyedAt = performance.now() - tabbedAt < 100 ? performance.now() : 0; });
+      arm.button.addEventListener("blur", () => { arm.keyedAt = 0; });
+      // A key's press of its own, a second after the Tab that came to it. (Its default, a click
+      // with no pointer, does nothing: `real`.)
+      arm.button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (!event.isTrusted || event.repeat || !keyReady(card, arm)) {
+          if (arm.kind === "refuse" && !card.done) { arming(card, "not armed yet: move to Refuse with Tab, wait a second, then press Enter"); card.saidUntil = performance.now() + SAID_MS; }
+          return;
+        }
+        if (arm.kind === "dismiss") dismiss(card);
+        else void refuseIt();
+      });
+    }
     else arm.button.addEventListener("click", async (event) => {
       if (!real(event) || card.done || !confirmed(card)) return;
       card.busy = true;

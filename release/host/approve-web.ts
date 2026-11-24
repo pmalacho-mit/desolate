@@ -209,7 +209,12 @@ export type PusherSaid = {
   commit: string;
   onto: string | null;
   error?: string;
+  /** Where in the pusher's log its line ends (host/daemon.ts, followPusher). */
+  log?: LogEnd;
 };
+/** A place in the pusher's log: the file, and a byte offset in it. */
+export type LogMark = { inode: string; offset: number };
+export type LogEnd = { inode: string; end: number };
 /** An approval this page signed, as the page is told of it (/pending, `approved`): by the
  *  token over the very text signed (another text under the same nonce is another push), the
  *  move the Mac signed (the commit is the squash's when squashed, `squashes` the one it
@@ -249,6 +254,9 @@ export type Backend = {
   publishIssue: (issue: Issue) => Promise<string>;
   /** Not now: back to a draft on the dashboard. */
   refuseIssue: (issue: Issue) => Promise<void>;
+  /** Where the pusher's log ends now (null: the root did not say): marked before an approval is
+   *  signed, so only a word written after it can end that approval. */
+  pusherMark: () => Promise<LogMark | null>;
   /** The pusher's word on each push as it ends (host/events.ts, pusherEvent: from a log only
    *  root writes), heard until the answer is called. `github`: the forge is GitHub. */
   pushes: (heard: (said: PusherSaid) => void) => () => void;
@@ -422,17 +430,21 @@ const pullRequestPage = (repo: string, branch: string) =>
   `https://github.com/${[repo, "compare", branch].join("/").split("/").map(encodeURIComponent).join("/")}?expand=1`;
 
 /** Which approvals signed here a word of the pusher's ends: of those still listened for
- *  (`HEARD_MS` after the click, by `now`) and not ended, that name the very move the Mac signed
- *  (repository, branch, commit, and the commit the branch moves from). The word names no
- *  approval of its own (the pusher's event carries none: root/pusher.ts, `emit`), so nothing it
- *  says picks another approval. "pushed" ends every one of them: it says the remote's branch
- *  is that commit, which is so for each (an approval whose word was missed, pushed again, is
- *  answered "pushed" by the pusher, which finds the remote there already). Any other word ends
- *  the oldest: pushes to a repository go one at a time (root/push.ts, its lock), so their words
- *  come in the order they were approved. One already ended keeps its first word. */
+ *  (`HEARD_MS` after the click, by `now`, the Mac's clock) and not ended, that name the very
+ *  move the Mac signed (repository, branch, commit, and the commit the branch moves from), and
+ *  whose mark in the pusher's log (`after`: where it ended when the Mac signed) the word comes
+ *  after. So a word written before the signature (a failure of the same move, approved before)
+ *  ends nothing, and no clock is compared: the root's may be far off the Mac's. One with no
+ *  mark (the root did not say where its log ended) is ended by no word. The word names no
+ *  approval of its own (root/pusher.ts, `emit`), so nothing it says picks another. "pushed"
+ *  ends every one of them: it says the remote's branch is that commit, which is so for each
+ *  (an approval whose word was missed, pushed again, is answered "pushed" by the pusher, which
+ *  finds the remote there already). Any other word ends the oldest: pushes to a repository go
+ *  one at a time (root/push.ts, its lock), so their words come in the order they were
+ *  approved. One already ended keeps its first word. */
 export const endedBy = (
-  approvals: readonly Approved[],
-  said: Pick<PusherSaid, "type" | "repo" | "branch" | "commit" | "onto">,
+  approvals: readonly (Approved & { after: LogMark | null })[],
+  said: Pick<PusherSaid, "type" | "repo" | "branch" | "commit" | "onto" | "log">,
   now: number,
 ): number[] => {
   const open = approvals.flatMap((a, at) =>
@@ -442,7 +454,10 @@ export const endedBy = (
     a.repo === said.repo &&
     a.branch === said.branch &&
     a.commit === said.commit &&
-    a.onto === (said.onto ?? null)
+    a.onto === (said.onto ?? null) &&
+    a.after !== null &&
+    said.log !== undefined &&
+    (said.log.inode !== a.after.inode || said.log.end > a.after.offset)
       ? [at]
       : [],
   );
@@ -452,6 +467,7 @@ export const endedBy = (
 declare namespace endedBy {
   type A = "0123456789abcdef0123456789abcdef01234567";
   type B = "fedcba9876543210fedcba9876543210fedcba98";
+  /** Signed when the pusher's log (file 7) ended at byte 100. */
   type Signed = {
     token: "t1";
     repo: "acme/widgets";
@@ -461,7 +477,9 @@ declare namespace endedBy {
     squashes: null;
     at: 1000;
     pushed: false;
+    after: { inode: "7"; offset: 100 };
   };
+  /** The same move, signed again when the log ended at 200. */
   type Again = {
     token: "t2";
     repo: "acme/widgets";
@@ -471,6 +489,7 @@ declare namespace endedBy {
     squashes: null;
     at: 1500;
     pushed: false;
+    after: { inode: "7"; offset: 200 };
   };
   type Failed = {
     token: "t0";
@@ -482,6 +501,7 @@ declare namespace endedBy {
     at: 500;
     pushed: false;
     error: "no";
+    after: { inode: "7"; offset: 50 };
   };
   type Pushed = {
     token: "t1";
@@ -492,9 +512,37 @@ declare namespace endedBy {
     squashes: null;
     at: 1000;
     pushed: true;
+    after: { inode: "7"; offset: 100 };
   };
-  type Word = { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: B };
-  type Refused = { type: "push-failed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: B };
+  /** Signed when the root did not say where its log ended. */
+  type Unmarked = {
+    token: "t3";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    squashes: null;
+    at: 1000;
+    pushed: false;
+    after: null;
+  };
+  /** Words on that move, their lines ending at byte 300 of the log. */
+  type Word = {
+    type: "pushed";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    log: { inode: "7"; end: 300 };
+  };
+  type Refused = {
+    type: "push-failed";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    log: { inode: "7"; end: 300 };
+  };
   /** the word on the move signed ends it; on any other move (another commit, branch,
    *  repository, or what the branch moves from), nothing */
   export type Moves = Table<
@@ -504,7 +552,14 @@ declare namespace endedBy {
       [
         args: [
           approvals: [Signed],
-          said: { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: B; onto: B },
+          said: {
+            type: "pushed";
+            repo: "acme/widgets";
+            branch: "main";
+            commit: B;
+            onto: B;
+            log: { inode: "7"; end: 300 };
+          },
           now: 2000,
         ],
         expected: [],
@@ -512,7 +567,14 @@ declare namespace endedBy {
       [
         args: [
           approvals: [Signed],
-          said: { type: "pushed"; repo: "acme/widgets"; branch: "other"; commit: A; onto: B },
+          said: {
+            type: "pushed";
+            repo: "acme/widgets";
+            branch: "other";
+            commit: A;
+            onto: B;
+            log: { inode: "7"; end: 300 };
+          },
           now: 2000,
         ],
         expected: [],
@@ -520,7 +582,14 @@ declare namespace endedBy {
       [
         args: [
           approvals: [Signed],
-          said: { type: "pushed"; repo: "acme/other"; branch: "main"; commit: A; onto: B },
+          said: {
+            type: "pushed";
+            repo: "acme/other";
+            branch: "main";
+            commit: A;
+            onto: B;
+            log: { inode: "7"; end: 300 };
+          },
           now: 2000,
         ],
         expected: [],
@@ -528,7 +597,76 @@ declare namespace endedBy {
       [
         args: [
           approvals: [Signed],
-          said: { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: null },
+          said: {
+            type: "pushed";
+            repo: "acme/widgets";
+            branch: "main";
+            commit: A;
+            onto: null;
+            log: { inode: "7"; end: 300 };
+          },
+          now: 2000,
+        ],
+        expected: [],
+      ],
+    ]
+  >;
+  /** where the word is in the log decides, never a clock: written before the signature (the
+   *  stale failure of the same move approved before), it ends nothing; after it, or in a log
+   *  begun since, it does; with no mark, or no place, nothing */
+  export type Order = Table<
+    typeof endedBy,
+    [
+      [
+        args: [
+          approvals: [Signed],
+          said: {
+            type: "push-failed";
+            repo: "acme/widgets";
+            branch: "main";
+            commit: A;
+            onto: B;
+            log: { inode: "7"; end: 100 };
+          },
+          now: 2000,
+        ],
+        expected: [],
+      ],
+      [
+        args: [
+          approvals: [Signed],
+          said: {
+            type: "push-failed";
+            repo: "acme/widgets";
+            branch: "main";
+            commit: A;
+            onto: B;
+            log: { inode: "7"; end: 101 };
+          },
+          now: 2000,
+        ],
+        expected: [0],
+      ],
+      [
+        args: [
+          approvals: [Signed],
+          said: {
+            type: "push-failed";
+            repo: "acme/widgets";
+            branch: "main";
+            commit: A;
+            onto: B;
+            log: { inode: "8"; end: 20 };
+          },
+          now: 2000,
+        ],
+        expected: [0],
+      ],
+      [args: [approvals: [Unmarked], said: Word, now: 2000], expected: []],
+      [
+        args: [
+          approvals: [Signed],
+          said: { type: "pushed"; repo: "acme/widgets"; branch: "main"; commit: A; onto: B },
           now: 2000,
         ],
         expected: [],
@@ -536,12 +674,28 @@ declare namespace endedBy {
     ]
   >;
   /** the same move approved twice (the first one's word missed, or still to come): "pushed"
-   *  ends both, in either order of the words; a refusal ends the oldest alone */
+   *  after both signatures ends both, in either order of the words; one between them, the
+   *  first alone; a refusal ends the older alone */
   export type Twice = Table<
     typeof endedBy,
     [
       [args: [approvals: [Signed, Again], said: Word, now: 2000], expected: [0, 1]],
       [args: [approvals: [Pushed, Again], said: Word, now: 2000], expected: [1]],
+      [
+        args: [
+          approvals: [Signed, Again],
+          said: {
+            type: "pushed";
+            repo: "acme/widgets";
+            branch: "main";
+            commit: A;
+            onto: B;
+            log: { inode: "7"; end: 150 };
+          },
+          now: 2000,
+        ],
+        expected: [0],
+      ],
       [args: [approvals: [Signed, Again], said: Refused, now: 2000], expected: [0]],
     ]
   >;
@@ -669,6 +823,8 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   // showed a push still waiting as approved when the keyring refused: the review of #283).
   const signing = new Set<Approved>();
   const told = () => approvals.filter((a) => !signing.has(a));
+  /** Where the pusher's log ended when each was signed: only a word after it ends it. */
+  const marks = new WeakMap<Approved, LogMark | null>();
   const unsaid = (a: Approved) =>
     !a.pushed && a.error === undefined && Date.now() - a.at < HEARD_MS;
   let pages = 0;
@@ -677,7 +833,11 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     const want = (pages > 0 && reviews.size > 0) || approvals.some(unsaid);
     if (want && !unhear)
       unhear = backend.pushes((said) => {
-        const ended = endedBy(approvals, said, Date.now());
+        const ended = endedBy(
+          approvals.map((a) => ({ ...a, after: marks.get(a) ?? null })),
+          said,
+          Date.now(),
+        );
         if (ended.length === 0) return;
         for (const at of ended) Object.assign(approvals[at]!, endOf(said, backend.github()));
         tell();
@@ -1344,6 +1504,9 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           approvals.push(approval);
           signing.add(approval);
           hearPusher();
+          // Where the log ends now, before the signature leaves: the push's word comes after.
+          // (Not said, the push is approved all the same, and its card says no word came.)
+          marks.set(approval, await backend.pusherMark().catch(() => null));
           // Not heard of by then: no longer listened for (the dashboard's activity says).
           setTimeout(hearPusher, HEARD_MS + 1000).unref();
           try {

@@ -69,7 +69,11 @@ type Said = {
   commit: string;
   onto: string | null;
   error?: string;
+  log?: { inode: string; end: number };
+  at?: string;
 };
+/** Where the stand-in pusher's log ends: each word is written at its end, unless it says. */
+let logEnd = 0;
 let pusherHeard: ((said: Said) => void) | null = null;
 const pusherSays = (said: Said) => pusherHeard!(said);
 /** The keyring's answer to the next approvals, when a test holds it: an error, or "" to take it. */
@@ -216,8 +220,9 @@ before(async () => {
           return `https://github.com/${issue.repo}/issues/7`;
         },
         refuseIssue: async (issue) => void notNow.push(issue.id),
+        pusherMark: async () => ({ inode: "1", offset: logEnd }),
         pushes: (heard) => {
-          pusherHeard = heard;
+          pusherHeard = (said) => heard({ log: { inode: "1", end: (logEnd += 100) }, ...said });
           return () => (pusherHeard = null);
         },
         github: () => true,
@@ -1167,6 +1172,36 @@ describe("T1 the approval page", () => {
     now = await states();
     assert.deepEqual([now.first?.error, now.again?.pushed], ["the forge refused", true]);
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+  });
+
+  it("a word is bound by where it is in the pusher's log, never by its time: one written before the signature ends nothing; one after does, its clock an hour off", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    await listedNow();
+    const move = { repo: push.repo, branch: push.branch, commit: push.commit, onto: null };
+    // A failure of the same move, written before this approval: the log ends after it.
+    pusherHeard?.({ type: "push-failed", ...move, error: "an earlier push's" });
+    const before = logEnd;
+    assert.equal((await approve(good())).status, 200);
+    const mine = async () =>
+      (
+        JSON.parse((await call("GET", "/pending", asPage())).body) as {
+          approved: { token: string; pushed: boolean; error?: string }[];
+        }
+      ).approved.at(-1)!;
+    // Read late (the daemon's first look came after the signature): still not this push's.
+    pusherSays({ type: "push-failed", ...move, error: "stale", log: { inode: "1", end: before } });
+    await moment();
+    assert.deepEqual([(await mine()).pushed, (await mine()).error], [false, undefined]);
+    // CONTROL: the same word written after the signature, its time an hour before the Mac's.
+    pusherSays({
+      type: "push-failed",
+      ...move,
+      error: "this push's",
+      at: new Date(Date.now() - 3_600_000).toISOString(),
+    });
+    await moment();
+    assert.equal((await mine()).error, "this push's");
   });
 
   it("a push the reviewer could not describe is not signed, though the page listed it", async () => {

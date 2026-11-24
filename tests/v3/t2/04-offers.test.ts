@@ -110,6 +110,10 @@ const armedPress = async (
   await page.until(`${button}?.disabled === false || ${decided}`, `${label} armed`, 10_000);
   if (!(await page.evaluate<boolean>(decided))) await page.pressHere();
 };
+/** A button pressable now: Approve by `disabled`, Refuse and Dismiss by aria-disabled (a key
+ *  still reaches them). */
+const pressable = (button: string) =>
+  `(${button}.disabled === false && ${button}.getAttribute('aria-disabled') !== 'true')`;
 type Hand = {
   moveTo: (x: number, y: number) => Promise<void>;
   until: (e: string, w: string, ms?: number) => Promise<unknown>;
@@ -122,7 +126,7 @@ const restOn = async (page: Hand, button: string, what: string) => {
     `(() => { const r = ${button}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
   await page.moveTo(at.x, at.y);
-  await page.until(`${button}.disabled === false`, `${what} armed`, 10_000);
+  await page.until(`${pressable(button)}`, `${what} armed`, 10_000);
 };
 /** Where a picture of the approval page goes, for a person to look at. */
 const shot = (name: string) =>
@@ -1821,7 +1825,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       await page.until(`${hintOf("web-held")} === ${JSON.stringify(pushing)}`, "being pushed");
       assert.deepEqual(
         await page.evaluate(
-          `[...${cardOf("web-held")}.querySelectorAll('.actions button')].filter((b) => b.offsetParent).map((b) => [b.textContent, b.disabled])`,
+          `[...${cardOf("web-held")}.querySelectorAll('.actions button')].filter((b) => b.offsetParent).map((b) => [b.textContent, b.disabled || b.getAttribute('aria-disabled') === 'true'])`,
         ),
         [
           ["Approve push", true],
@@ -1962,6 +1966,15 @@ echo "=====waits"; cat /tmp/waits.lines`,
       );
       assert.equal(forgeRefs("acme/widgets")["web-moved"], moved, "nothing was pushed");
       await page.shot(shot("failed"));
+      // Dismissed by keyboard: Tab to it, a second's rest, Enter.
+      const movedDismiss = `${cardOf("web-moved")}.querySelector('button.dismiss')`;
+      await page.tabTo(movedDismiss);
+      await page.until(pressable(movedDismiss), "Dismiss armed for a key", 10_000);
+      await page.key("Enter");
+      await page.until(
+        `!${cardOf("web-moved")} && [...document.querySelectorAll('.kept-note')].some((n) => n.textContent === 'Dismissed.')`,
+        "dismissed by Enter, its place kept",
+      );
     } finally {
       stack.forge("hold", "acme/widgets", "0");
       await browser.close();
@@ -2028,6 +2041,17 @@ echo "=====waits"; cat /tmp/waits.lines`,
       await page.pressHere();
       assert.deepEqual(await page.evaluate("posted"), ["/approve"], "nothing signed or refused");
       assert.doesNotMatch(await page.evaluate<string>(hintOf(b!)), /^(approving|Approved|refused)/);
+      // By keyboard: Tab brings the focus to B's Refuse, and a second later a key would refuse
+      // it. Then A's place goes (the pointer leaves the list): the cards move, and Enter on the
+      // Refuse that had the focus refuses nothing until the person's Tab comes to it again.
+      await page.tabTo(bRefuse);
+      await page.until(pressable(bRefuse), "B's Refuse armed for a key", 10_000);
+      await page.moveTo(4, 4);
+      await page.until("!document.querySelector('.card.kept')", "A's place gone");
+      await page.key("Enter");
+      await sleep(1000);
+      assert.deepEqual(await page.evaluate("posted"), ["/approve"], "Enter refused nothing");
+      assert.equal(await page.evaluate(`document.activeElement === ${bRefuse}`), true);
       // CONTROL: moving onto B's Approve and resting arms it.
       const armedB = `${bApprove}.disabled === false`;
       await restOn(page, bApprove, "B's Approve, once the pointer came to it");
@@ -2059,11 +2083,29 @@ echo "=====waits"; cat /tmp/waits.lines`,
         /^Not pushed/,
         "a press there dismissed nothing",
       );
+      // By keyboard: Tab to B's Dismiss; a push arrives (C's card, below: the cards change),
+      // and Enter dismisses nothing.
+      await page.tabTo(bDismiss);
+      await page.until(pressable(bDismiss), "B's Dismiss armed for a key", 10_000);
+      inRootClone(
+        `setsid nohup git push origin ${commit}:refs/heads/web-c >/tmp/web-c.log 2>&1 </dev/null & sleep 0.5`,
+      );
+      await page.until(
+        `${cardOf("web-c")} && !${cardOf("web-c")}.innerText.includes('working out')`,
+        "C's card, its account shown",
+      );
+      await page.key("Enter");
+      await sleep(1000);
+      assert.match(
+        await page.evaluate<string>(hintOf(b!)),
+        /^Not pushed/,
+        "Enter dismissed nothing",
+      );
       // Dismiss arms as Approve does: a press as the pointer arrives is not taken.
       await page.moveTo(dismissAt[0]! + dismissAt[2]! / 2, dismissAt[1]! + dismissAt[3]! / 2);
       await page.pressHere();
       assert.match(await page.evaluate<string>(hintOf(b!)), /^Not pushed/, "not at once");
-      await page.until(`${bDismiss}.disabled === false`, "Dismiss armed", 10_000);
+      await page.until(pressable(bDismiss), "Dismiss armed", 10_000);
       await page.pressHere();
       await page.until(
         `!${cardOf(b!)} && [...document.querySelectorAll('.kept-note')].some((n) => n.textContent === 'Dismissed.')`,
@@ -2075,6 +2117,16 @@ echo "=====waits"; cat /tmp/waits.lines`,
         "the places gone, the pointer off the list",
       );
       assert.deepEqual(await page.evaluate("posted"), ["/approve", "/approve"]);
+      // CONTROL, by keyboard: Tab to C's Refuse, a second's rest, Enter: refused.
+      const cRefuse = `${cardOf("web-c")}.querySelector('button.refuse')`;
+      await page.tabTo(cRefuse);
+      await page.until(pressable(cRefuse), "C's Refuse armed for a key", 10_000);
+      await page.key("Enter");
+      await page.until(
+        `${hintOf("web-c")} === "refused: the push that asked gives up"`,
+        "C refused by Enter",
+      );
+      assert.deepEqual(await page.evaluate("posted"), ["/approve", "/approve", "/refuse"]);
       assert.equal(forgeRefs("acme/widgets")[b!], moved);
     } finally {
       await browser.close();
