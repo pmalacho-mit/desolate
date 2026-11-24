@@ -532,7 +532,7 @@ declare namespace refusalFix {
 
 // The reason is in part the bundle's author's text: printable ASCII only, and short.
 export const noteRefusal = (domain: string, repo: string, why: string) =>
-  record.refuse(domain, repo, printable(why, WHY_MOST));
+  record.noteRefused(domain, repo, printable(why, WHY_MOST));
 export const clearRefusal = record.accept;
 
 declare namespace noteRefusal {

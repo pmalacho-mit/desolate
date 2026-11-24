@@ -16,7 +16,7 @@ import type { Pushed } from "./record.ts";
 import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aRepoWhere } from "../.harness/root-git.ts";
 import type { emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
-import type { afterPush, marked } from "./record.ts";
+import type { marked, recordPush } from "./record.ts";
 
 type Git = (args: string[]) => Promise<RunResult>;
 
@@ -132,7 +132,7 @@ declare namespace settle {
       Fresh,
       Squashed,
       Invoke<
-        typeof afterPush,
+        typeof recordPush,
         [
           p: {
             domain: null;
@@ -142,7 +142,6 @@ declare namespace settle {
             sent: Squashed["commit"];
             fallback: "main";
           },
-          warn: typeof console.error,
         ]
       >,
     ],
@@ -165,7 +164,7 @@ declare namespace settle {
       Fresh,
       Squashed,
       Invoke<
-        typeof afterPush,
+        typeof recordPush,
         [
           p: {
             domain: null;
@@ -175,7 +174,6 @@ declare namespace settle {
             sent: Squashed["commit"];
             fallback: "main";
           },
-          warn: typeof console.error,
         ]
       >,
     ],
@@ -236,7 +234,7 @@ declare namespace waiting {
         ]
       >,
       Invoke<
-        typeof afterPush,
+        typeof recordPush,
         [
           p: {
             domain: null;
@@ -246,11 +244,10 @@ declare namespace waiting {
             sent: "0123456789abcdef0123456789abcdef01234567";
             fallback: "main";
           },
-          warn: typeof console.error,
         ]
       >,
       Invoke<
-        typeof afterPush,
+        typeof recordPush,
         [
           p: {
             domain: null;
@@ -260,7 +257,6 @@ declare namespace waiting {
             sent: "0123456789abcdef0123456789abcdef01234567";
             fallback: "main";
           },
-          warn: typeof console.error,
         ]
       >,
     ],

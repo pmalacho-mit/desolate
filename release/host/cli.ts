@@ -458,7 +458,15 @@ const main = async (argv: string[]): Promise<number> => {
           EXIT.usage,
         );
       const { rootctl } = await import("./stack.ts");
-      await rootctl("offers.dismiss", { domain, repo, branch }, { quiet: true });
+      // The offer as it is now, by its commit: one made again meanwhile is not dismissed unseen.
+      const offered = (await rootctl("offers.list", { domain }, { quiet: true })).kept.find(
+        (o) => o.repo === repo && o.branch === branch,
+      );
+      await rootctl(
+        "offers.dismiss",
+        { domain, repo, branch, commit: offered?.commit ?? "" },
+        { quiet: true },
+      );
       out(
         `dismissed: ${domain} ${repo} ${branch} is no longer under "Needs you". The branch stays (desolate branches ${domain}); offering it again brings it back.`,
       );

@@ -43,6 +43,7 @@ export const pushCommit = async (
   from: string,
   say: (line: string) => void,
   signal?: AbortSignal,
+  domain: string | null = null,
 ): Promise<string | null> => {
   const name = repoId(repo);
   const clone = clonePath(repo);
@@ -150,7 +151,7 @@ export const pushCommit = async (
       say(`desolate: ${line}`),
     );
     if (failed) return failed.error.replace(/\n/g, " ");
-    return pushed(repo, commit, branch, approval.commit, say);
+    return pushed(repo, commit, branch, approval.commit, say, domain);
   } finally {
     await held.release();
   }
@@ -168,6 +169,7 @@ const pushed = async (
   branch: string,
   sent: string,
   say: (line: string) => void,
+  domain: string | null = null,
 ): Promise<null> => {
   const name = repoId(repo);
   if (sent !== commit) {
@@ -176,11 +178,12 @@ const pushed = async (
     );
     say(`desolate:   ${catchUp(branch, commit)}`);
   }
-  // Recorded, and every domain's offer of this commit withdrawn: the base a pull request goes
-  // into is what that offer named, else the default branch.
-  const { base, link } = await afterPush(
+  // Recorded beside the fetch (the push of `domain`, the dashboard's, else the root's own),
+  // and the offers it takes withdrawn: the base a pull request goes into is what the offer
+  // named, else the default branch.
+  const { base, link, recorded } = afterPush(
     {
-      domain: null,
+      domain,
       repo: name,
       branch,
       commit,
@@ -192,6 +195,7 @@ const pushed = async (
   await repos.fetch(repo).catch(() => {});
   if (link)
     say(`desolate: open a pull request into ${base}, in your browser, as yourself: ${link}`);
+  await recorded;
   return null;
 };
 
@@ -216,6 +220,7 @@ declare namespace pushed {
             lfs: 0;
             at: "2026-11-16T12:00:00.000Z";
           },
+          listed: {},
         ]
       >,
       Invoke<
@@ -230,6 +235,7 @@ declare namespace pushed {
             lfs: 0;
             at: "2026-11-16T12:00:00.000Z";
           },
+          listed: {},
         ]
       >,
     ],
@@ -248,10 +254,11 @@ declare namespace pushed {
         "=",
         null
       >,
+      Expect<Invoke<typeof offersOf, [domain: "acme"]>, "=", []>,
       Expect<
-        Invoke<typeof offersOf>,
+        Invoke<typeof offersOf, [domain: "beta"]>,
         "matches",
-        [{ domain: "beta"; commit: "89abcdef0123456789abcdef0123456789abcdef" }]
+        [{ commit: "89abcdef0123456789abcdef0123456789abcdef" }]
       >,
     ]
   >;

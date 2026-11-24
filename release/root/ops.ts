@@ -263,9 +263,12 @@ export const ops: Record<string, Op> = {
   },
 
   async "offers.list"(args) {
-    return record.offersOf(
-      typeof args.domain === "string" ? domains.slugOf(args.domain, "domain") : undefined,
-    );
+    const only =
+      typeof args.domain === "string" ? domains.slugOf(args.domain, "domain") : undefined;
+    return domains
+      .domains()
+      .filter((d) => !only || d.slug === only)
+      .flatMap((d) => record.offersOf(d.slug));
   },
   /** Every branch each domain has (by the domain's own list), which of them are offered,
    *  and which workspace has each checked out: `desolate branches`. */
@@ -298,7 +301,7 @@ export const ops: Record<string, Op> = {
       });
   },
   async "offers.dismiss"(args) {
-    const result = await offers.dismiss(args.domain, args.repo, args.branch);
+    const result = await offers.dismiss(args.domain, args.repo, args.branch, args.commit);
     if ("error" in result)
       refuse(result.error, "desolate offers   (what is offered, by domain, repository and branch)");
     return result;

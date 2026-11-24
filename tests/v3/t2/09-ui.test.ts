@@ -109,7 +109,7 @@ type State = {
   stack: { backend: string; isolated: boolean } | null;
   hostConnected: boolean;
   repos: { repo: string }[];
-  offers: { repo: string; branch: string; commit: string }[];
+  offers: { repo: string; branch: string; commit: string; now: string | null }[];
   approvals: { repo: string; branch: string; commit: string }[];
   domains: {
     slug: string;
@@ -1895,6 +1895,71 @@ describe("T2 section 4.8: the root UI", () => {
     } finally {
       await browser.close();
     }
+  });
+
+  it("an offer its branch has moved past: shown as moved and not pushed; offered again, or dismissed at the commit seen, it clears", async () => {
+    stack.step("an offer the branch moved past");
+    const git = "git -c user.name=t -c user.email=t@example.test";
+    const made = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      `git switch -q -c moved main && echo a > moved.txt && git add moved.txt && ${git} commit -qm a && desolate offer >/dev/null && git rev-parse HEAD && echo b >> moved.txt && ${git} commit -qam b && desolate sync >/dev/null && git rev-parse HEAD`,
+    );
+    assert.equal(made.code, 0, made.stderr);
+    const [offered, moved] = made.stdout.trim().split("\n").slice(-2) as [string, string];
+    const offerOf = async () =>
+      (await state()).offers.find((o) => o.repo === "acme/app" && o.branch === "moved");
+    assert.ok(
+      await until(async () => (await offerOf())?.now === moved),
+      "the offer, at the commit offered, says where its branch is now",
+    );
+    assert.equal((await offerOf())?.commit, offered);
+    const review = JSON.parse(
+      (await http("GET", "/review?domain=web&repo=acme%2Fapp&branch=moved")).body,
+    ) as { commit: string };
+    assert.equal(review.commit, moved, "reviewed as the branch is now, never at the old commit");
+    const push = (commit: string) =>
+      action("offer.push", { domain: "web", repo: "acme/app", branch: "moved", commit });
+    const old = await push(offered);
+    assert.equal(old.status, 400, "the old commit is not pushed from the dashboard");
+    assert.match(old.body, /moved has moved since it was offered/);
+    assert.equal((await push(moved)).status, 400, "nor the new one: it was not offered");
+    const dismiss = (commit: string) =>
+      http("POST", "/offer", {
+        headers: [
+          "X-Desolate-UI: 1",
+          "Sec-Fetch-Site: same-origin",
+          `Origin: http://${HOST}:${port}`,
+        ],
+        body: { domain: "web", repo: "acme/app", branch: "moved", commit, do: "dismiss" },
+      });
+    // Offered again: the offer is the branch as it is, with nothing left of the old one.
+    const again = stack.quiet(
+      "exec",
+      "web/one",
+      "--",
+      "sh",
+      "-c",
+      "git switch -q moved && desolate offer",
+    );
+    assert.equal(again.code, 0, again.stderr);
+    assert.ok(
+      await until(
+        async () => (await offerOf())?.commit === moved && (await offerOf())?.now === moved,
+      ),
+      "offered again: at its commit now",
+    );
+    assert.equal(
+      (await dismiss(offered)).status,
+      400,
+      "a dismiss of the old commit leaves the new offer",
+    );
+    assert.equal((await offerOf())?.commit, moved);
+    assert.equal((await dismiss(moved)).status, 200, "control: at the commit seen, it goes");
+    assert.equal(await offerOf(), undefined);
   });
 
   it("the transcript reads as reviewed", () => {

@@ -54,6 +54,17 @@ export const NAMES = {
   noteBytes: 16 * KiB,
 } as const;
 
+/** The root's record of one domain (root/record.ts): what it offered, had refused and had
+ *  pushed. Each is that domain's own file, read whole at every state the dashboard is sent.
+ *  `offers`: the branches one domain may have under "Needs you" at once. Past it an offer is
+ *  refused in words (dismiss some, or delete branches); 2,000 is far past what a person
+ *  reviews, and bounds the file near half a MiB. `pushes`: the pushes kept, newest last (a
+ *  branch list marks "merged" from the latest push of a branch). `bytes`: a file past this
+ *  is not one the root wrote, and is set aside unread. `lockWaitMs`: how long a change waits
+ *  for another process's (each takes moments) before it fails and says so, as pushed.json's
+ *  lock did. */
+export const RECORD = { offers: 2000, pushes: 500, bytes: 4 * MiB, lockWaitMs: 10_000 } as const;
+
 /** A terminal's size, in columns and rows, as a browser tab or an attached terminal asks
  *  for it: whole numbers from 1 to these. Past what a screen shows (a 4K display at an
  *  8-pixel font is 480 columns), and inside the unsigned 16-bit fields a pty's size is set

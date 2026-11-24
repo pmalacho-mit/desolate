@@ -13,7 +13,7 @@ import type { Repo } from "../shared/names.ts";
 import { domain as domainOf, workspaces } from "./domains.ts";
 import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
 import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
-import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
+import { dropLfs, refsOf, refusalsOf, takeLfs } from "./outbox.ts";
 import * as record from "./record.ts";
 import { recordOf } from "./repos.ts";
 import { lookalike } from "./reviewer-git.ts";
@@ -265,16 +265,30 @@ export const take = async (
     isSlug(request.workspace) && workspaces(domain).some((w) => w.workspace === request.workspace)
       ? request.workspace
       : "";
-  await record.offer({
-    domain,
-    repo: id,
-    branch: request.branch,
-    commit: request.commit,
-    workspace: from,
-    lfs: staged.length,
-    at: new Date().toISOString(),
-    ...(isBranch(request.base) ? { base: request.base } : {}),
-  });
+  // The domain's lists of branches, each that could be read: an offer of a branch no longer
+  // in its list goes as this one is taken.
+  const listed: Record<string, string[]> = {};
+  for (const r of d.repos) {
+    const refs = refsOf(domain, r);
+    if ("refs" in refs) listed[r] = Object.keys(refs.refs);
+  }
+  try {
+    await record.offer(
+      {
+        domain,
+        repo: id,
+        branch: request.branch,
+        commit: request.commit,
+        workspace: from,
+        lfs: staged.length,
+        at: new Date().toISOString(),
+        ...(isBranch(request.base) ? { base: request.base } : {}),
+      },
+      listed,
+    );
+  } catch (error) {
+    return { ok: false, error: (error as Error).message, fix: (error as { fix?: string }).fix };
+  }
   return { ok: true };
 };
 
@@ -368,14 +382,22 @@ export const dismiss = async (
   domainArg: unknown,
   repoArg: unknown,
   branchArg: unknown,
+  commitArg: unknown,
 ): Promise<{ ok: true } | { error: string }> => {
   const domain = typeof domainArg === "string" && isSlug(domainArg) ? domainArg : null;
   if (!domain || typeof repoArg !== "string" || typeof branchArg !== "string")
     return { error: "an offer is named by its domain, repository and branch" };
-  if (!record.offersOf(domain).some((o) => o.repo === repoArg && o.branch === branchArg))
-    return { error: `${domain} has offered no ${repoArg} ${branchArg}` };
-  await record.withdraw(domain, repoArg, branchArg);
-  return { ok: true };
+  if (isCommit(commitArg) && (await record.withdraw(domain, repoArg, branchArg, commitArg)))
+    return { ok: true };
+  const now = record.offersOf(domain).find((o) => o.repo === repoArg && o.branch === branchArg);
+  // Offered again meanwhile, or named without the commit it was seen at: not dismissed unseen.
+  return now
+    ? {
+        error: isCommit(commitArg)
+          ? `${domain} offered ${repoArg} ${branchArg} again, at ${now.commit.slice(0, 12)}: look at that offer, and dismiss it if it is not for pushing`
+          : `an offer is dismissed at the commit it was seen at (${repoArg} ${branchArg} is offered at ${now.commit.slice(0, 12)}): reload the dashboard`,
+      }
+    : { error: `${domain} has offered no ${repoArg} ${branchArg}` };
 };
 
 declare namespace dismiss {
@@ -412,31 +434,79 @@ declare namespace dismiss {
     [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>, Offered],
     [
       Expect<
-        Invoke<typeof dismiss, [domainArg: "acme", repoArg: "acme/app", branchArg: "fix"]>,
+        Invoke<
+          typeof dismiss,
+          [
+            domainArg: "acme",
+            repoArg: "acme/app",
+            branchArg: "fix",
+            commitArg: "0123456789abcdef0123456789abcdef01234567",
+          ]
+        >,
         "=",
         { ok: true }
       >,
       Expect<Invoke<typeof offersOf, [domain: "acme"]>, "matches", [{ branch: "feat" }]>,
     ]
   >;
-  /** an offer is named by its domain, repository and branch, and must be one that was made */
+  /** an offer is named by its domain, repository and branch, and must be one that was made at
+   *  the commit named: one offered again since, at another, is not dismissed unseen */
   export type Refuses = Given<
     [Fresh, Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>, Offered],
     [
       Expect<
-        Invoke<typeof dismiss, [domainArg: "acme", repoArg: "acme/app", branchArg: "gone"]>,
+        Invoke<
+          typeof dismiss,
+          [
+            domainArg: "acme",
+            repoArg: "acme/app",
+            branchArg: "gone",
+            commitArg: "0123456789abcdef0123456789abcdef01234567",
+          ]
+        >,
         "=",
         { error: "acme has offered no acme/app gone" }
       >,
       Expect<
-        Invoke<typeof dismiss, [domainArg: "../acme", repoArg: "acme/app", branchArg: "fix"]>,
+        Invoke<
+          typeof dismiss,
+          [
+            domainArg: "../acme",
+            repoArg: "acme/app",
+            branchArg: "fix",
+            commitArg: "0123456789abcdef0123456789abcdef01234567",
+          ]
+        >,
         "=",
         { error: "an offer is named by its domain, repository and branch" }
       >,
       Expect<
-        Invoke<typeof dismiss, [domainArg: "acme", repoArg: ["acme/app"], branchArg: "fix"]>,
+        Invoke<
+          typeof dismiss,
+          [
+            domainArg: "acme",
+            repoArg: ["acme/app"],
+            branchArg: "fix",
+            commitArg: "0123456789abcdef0123456789abcdef01234567",
+          ]
+        >,
         "=",
         { error: "an offer is named by its domain, repository and branch" }
+      >,
+      Expect<
+        Invoke<
+          typeof dismiss,
+          [
+            domainArg: "acme",
+            repoArg: "acme/app",
+            branchArg: "fix",
+            commitArg: "89abcdef0123456789abcdef0123456789abcdef",
+          ]
+        >,
+        "=",
+        {
+          error: "acme offered acme/app fix again, at 0123456789ab: look at that offer, and dismiss it if it is not for pushing";
+        }
       >,
       Expect<
         Invoke<typeof offersOf, [domain: "acme"]>,
@@ -762,7 +832,6 @@ const targetOf = async (
   againstArg: unknown,
   fetch: boolean,
   signal?: AbortSignal,
-  offered = false,
 ): Promise<Target> => {
   const against = againstOf(againstArg);
   const d = domainOf(domain);
@@ -776,20 +845,9 @@ const targetOf = async (
   const known = recordOf(repo);
   if (fetch) await fetchDomain(domain, repo);
   const clone = clonePath(repo);
-  // `offered` (the dashboard): an offered branch is reviewed at the commit offered, which is
-  // what its Push may send. Read at the branch, an offer the agent had committed past was
-  // reviewed at the new commit, which was not offered, so it could never be pushed from there,
-  // however often it was reviewed again (the review of 2026-11-22, A1). Elsewhere (`desolate
-  // review` and `desolate push`), the branch as it is now.
-  const asOffered = offered
-    ? record.offersOf(domain).find((o) => o.repo === id && o.branch === branch)?.commit
-    : undefined;
-  const commit =
-    asOffered && (await git(clone, ["cat-file", "-e", `${asOffered}^{commit}`])).code === 0
-      ? asOffered
-      : (
-          await git(clone, ["rev-parse", "--verify", "--quiet", `refs/remotes/${domain}/${branch}`])
-        ).stdout.trim();
+  const commit = (
+    await git(clone, ["rev-parse", "--verify", "--quiet", `refs/remotes/${domain}/${branch}`])
+  ).stdout.trim();
   if (!commit)
     refuse(
       `the domain '${domain}' has no branch '${branch}' of ${id}`,
@@ -883,9 +941,8 @@ export const review = async (
   branch: unknown,
   againstArg: unknown = "origin",
   signal?: AbortSignal,
-  offered = false,
 ): Promise<Review> => {
-  const t = await targetOf(domain, repoArg, branch, againstArg, true, signal, offered);
+  const t = await targetOf(domain, repoArg, branch, againstArg, true, signal);
   const { clone, commit, base, against } = t;
   const commits = await commitsIn(clone, base ? `${base}..${commit}` : commit, 0);
   const changes = await changesBetween(clone, base || EMPTY, commit, signal);
@@ -1037,12 +1094,11 @@ export const more = async (
   againstArg: unknown,
   ask: Ask,
   signal?: AbortSignal,
-  offered = false,
 ): Promise<
   | { commit: string; commits: Listed<Commit> }
   | { commit: string; changes: Listed<Change>; of: number; pick?: { from: string; to: string } }
 > => {
-  const t = await targetOf(domain, repoArg, branch, againstArg, false, signal, offered);
+  const t = await targetOf(domain, repoArg, branch, againstArg, false, signal);
   const from = placeOf(ask?.from);
   if (ask?.list === "commits")
     return {
@@ -1059,69 +1115,6 @@ export const more = async (
     ...(pick ? { pick } : {}),
   };
 };
-
-declare namespace more {
-  type Past = Invoke<typeof aBranchPastItsOffer, [repo: "acme/app"]>;
-  /** the dashboard (`offered`) reads an offered branch at the commit offered, which is what
-   *  its Push sends, though the agent has committed since: reviewed again, it is still the
-   *  offer. The control: elsewhere (`desolate review`), the branch as it is now */
-  export type AtTheOffer = Given<
-    [
-      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
-      Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>,
-      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
-      Past,
-      Invoke<
-        typeof offer,
-        [
-          o: {
-            domain: "acme";
-            repo: "acme/app";
-            branch: "fix";
-            commit: Past["offered"];
-            workspace: "w1";
-            lfs: 0;
-            at: "2026-11-16T12:00:00.000Z";
-          },
-        ]
-      >,
-    ],
-    [
-      Expect<
-        Invoke<
-          typeof more,
-          [
-            domain: "acme",
-            repoArg: "acme/app",
-            branch: "fix",
-            againstArg: "origin",
-            ask: { list: "commits" },
-            signal: undefined,
-            offered: true,
-          ]
-        >,
-        "matches",
-        { commit: Past["offered"] }
-      >,
-      Expect<
-        Invoke<
-          typeof more,
-          [
-            domain: "acme",
-            repoArg: "acme/app",
-            branch: "fix",
-            againstArg: "origin",
-            ask: { list: "commits" },
-            signal: undefined,
-            offered: false,
-          ]
-        >,
-        "matches",
-        { commit: Past["moved"] }
-      >,
-    ]
-  >;
-}
 
 /** A page of a diff, not a cap: the next is asked for. One answer between two layers, and
  *  what a page draws at once: 3,000 lines is where drawing a diff stopped being quick (a
@@ -1271,7 +1264,6 @@ export const diff = async (
   against: unknown = "origin",
   ask: Ask = null,
   signal?: AbortSignal,
-  offered = false,
 ): Promise<
   DiffPage & {
     repo: string;
@@ -1285,7 +1277,7 @@ export const diff = async (
   }
 > => {
   // Asked for whole (`desolate review --diff`, with nothing said): the branch as it is now.
-  const t = await targetOf(domain, repoArg, branch, against, ask === null, signal, offered);
+  const t = await targetOf(domain, repoArg, branch, against, ask === null, signal);
   const { left, right, pick } = await picked(t, ask?.pickFrom, ask?.pickTo);
   const paths = [ask?.file, ask?.was].map(textOf).filter(Boolean);
   if (paths.some((p) => p.includes("\0"))) refuse("that is not a file's path", "name a file");

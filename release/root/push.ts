@@ -521,8 +521,8 @@ const main = async () => {
     if (error.holder) refuse(error.message, "try again when it is done", EXIT.busy);
     throw error;
   });
-  // Recorded, and the domain's offer of the branch withdrawn.
-  const { base, link } = await afterPush(
+  // Recorded beside the fetch below, and the offers it takes withdrawn.
+  const { base, link, recorded } = afterPush(
     {
       domain,
       repo: r.repo,
@@ -535,6 +535,7 @@ const main = async () => {
   );
   // What the remote now has, the mirror has: origin/* in every clone follows.
   await repos.fetch(repo).catch(() => {});
+  await recorded;
   // How many went: those the remote's branch did not have (r.commits counts from the default
   // branch, more when part of the branch was pushed before), and the LFS objects the signed
   // text names: the counts the person was shown (the reviews of #169).

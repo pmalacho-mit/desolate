@@ -13,12 +13,9 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-pushed-"));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 process.env.DESOLATE_ROOT_STATE = path.join(dir, "state");
 const { landedIn, settle, waiting } = await import("../../../release/root/pushed.ts");
-const { afterPush, marked, pushes } = await import("../../../release/root/record.ts");
+const { marked, pushes, recordPush } = await import("../../../release/root/record.ts");
 const pushed = (branch: string, commit: string, base: string) =>
-  afterPush(
-    { domain: null, repo: "acme/app", branch, commit, sent: commit, fallback: base },
-    () => {},
-  );
+  recordPush({ domain: null, repo: "acme/app", branch, commit, sent: commit, fallback: base });
 const landedFor = async (branch: string, commit: string) =>
   marked("acme", [{ repo: "acme/app", branch, commit }])[0]!.landed;
 
