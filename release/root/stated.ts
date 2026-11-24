@@ -888,7 +888,7 @@ const watchDomains = () => {
   for (const dir of wanted) {
     if (watching.has(dir) || !fs.existsSync(dir)) continue;
     try {
-      const watcher = fs.watch(dir, changed);
+      const watcher = fs.watch(dir, nudged);
       watcher.on("error", (error) => {
         console.error(`stated: no longer watching ${dir}: ${String(error)}`);
         watcher.close();
@@ -903,21 +903,24 @@ const watchDomains = () => {
   }
 };
 const unwatched = new Set<string>();
-/** Something changed, or may have: look, soon, once. 40 ms after it, as the dashboard's
- *  budgets need (a click shown within 100 ms, a status within a second: T2 09-ui), and never
- *  more than once a second: a workspace writing its outbox in a loop is the host's nudges in
+const look = () => {
+  watchDomains();
+  takeQueue();
+  publish();
+};
+/** What this process did, or the host or a dashboard told it: looked at 40 ms after, once,
+ *  so that a click's action is on the dashboard at once (T2 09-ui reads it straight after). */
+let soon: NodeJS.Timeout | null = null;
+const changed = () => {
+  soon ??= setTimeout(() => {
+    soon = null;
+    look();
+  }, 40);
+};
+/** A file changed, or the host nudged (a workspace wrote): looked at 40 ms after, and never
+ *  more than once a second. A workspace writing its outbox in a loop is the host's nudges in
  *  a loop, and costs one look a second (it was the look every second, and one per nudge). */
-const pacer = paced(
-  async () => {
-    watchDomains();
-    takeQueue();
-    publish();
-  },
-  undefined,
-  undefined,
-  40,
-);
-const changed = pacer.poke;
+const nudged = paced(async () => look(), undefined, undefined, 40).poke;
 
 // ------------------------------------------------------------------ each domain's own view
 // Into each domain's inbox, which its workspaces read and cannot write: its stats
@@ -1088,7 +1091,8 @@ const takeQueue = () => {
         const action = act(item.kind, item.args, { signed: true });
         if ("id" in action) fromQueue.set(action.id, taken);
       }
-      changed();
+      // (A workspace's: at the pace of what workspaces write.)
+      nudged();
     } catch (error) {
       console.error(`stated: a workspace's request could not be taken: ${String(error)}`);
       fs.rmSync(file, { force: true });
@@ -1484,7 +1488,7 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/host/nudge") {
-      changed();
+      nudged();
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/host/progress") {
@@ -1841,8 +1845,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // state (ticket #258). What is counted in git (checkPushed) is looked at with it, and shown
   // when the count is done.
   setInterval(() => {
-    changed();
-    void checkPushed().then(changed);
+    nudged();
+    void checkPushed().then(nudged);
   }, 10_000);
   void checkPushed().then(changed);
   changed();
