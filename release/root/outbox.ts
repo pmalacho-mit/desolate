@@ -68,33 +68,29 @@ const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /** Open a directory under the domains' share and prove it is the one asked for; else why
  *  not, in a few words ("a link", "not there"), for a refusal and a log to say. Never throws.
- *  `settle`: the share may show a directory a moment before it lets it be opened, or still
- *  show a link the workspace has since replaced with one (T4, on vz, 2026-11-21: an honest
- *  offer refused as "a link, or not a directory", a moment after its workspace had put a
- *  directory where it had planted a link). So it is looked at again while every directory
- *  above is a plain one and `dir` itself one or a link, every check made again each time (a
- *  link is never opened: O_NOFOLLOW): a few tries, a second at most, blocking. Only for a
- *  process of one domain's own (git-remote-desolate), never rootd's or the state service's
- *  loop, which every domain waits on.
  *
- *  Not seen since: on 2026-11-23 a probe on real VMs (vz, virtiofs mounted rw,relatime in
- *  both VMs) opened, from the root VM, 2,400 directories a workspace VM had just made or
- *  just renamed a file into, every one at the first look (at most 12 ms after the
- *  workspace's mkdir returned), quiet and with a T2 suite loading the Mac, and watched
- *  sync/<repo> through two restarts of the workspace and 70 honest offers: no look at it
- *  failed while it was there; while 01-boundaries' first offer had failed so twice that day. So the refusal says
- *  what lstat saw at its last look (a link, or a directory that would not open as one):
- *  the next one tells which, and the wait is not lengthened on a guess. */
+ *  `settle`, for a process of one domain's own (git-remote-desolate), never rootd's or the
+ *  state service's loop, which every domain waits on. First, the host is asked what the name
+ *  is now (askHost): this VM's kernel answers a look at a name on the share from what it was
+ *  told when it last asked the host, for a second (vz's virtiofs, measured on real VMs on
+ *  2026-11-23, 100 of 100 times: a link the root had looked at, replaced by a directory, was
+ *  still a link to lstat and open until 1.00 to 1.03 s after the root's first look, however
+ *  often it looked meanwhile; T4's 01-boundaries refused an honest offer so, a moment after
+ *  its workspace had taken back a link it planted). With the host asked, a link is a link:
+ *  refused at once. A directory that will not open is looked at again while every directory
+ *  from the share down is a plain one, every check made again each time: a few tries, a
+ *  second at most, blocking (T4, 2026-11-21: the share showed a directory a moment before it
+ *  let it be opened). */
 export const openDir = (dir: string, settle = false): Dir | string => {
+  if (settle) askHost(dir);
   for (let tries = 1; ; tries++) {
     const opened = openOnce(dir);
     const unsettled =
       typeof opened === "string" &&
       [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
-    const seen = settle && unsettled ? settling(dir) : null;
-    if (!seen) return opened;
+    if (!settle || !unsettled || !plainWay(dir)) return opened;
     if (tries === OPEN_TRIES)
-      return `${opened}, at each of ${OPEN_TRIES} looks over a second; lstat saw ${seen}`;
+      return `${opened}, at each of ${OPEN_TRIES} looks over a second; lstat saw a directory`;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
   }
 };
@@ -106,22 +102,34 @@ const OPENED_GONE = "opened, and removed meanwhile";
 const OPENED_ELSEWHERE = "opened at another path than asked: a link on the way";
 const PAUSE = new Int32Array(new SharedArrayBuffer(4));
 
-/** Whether every directory from the domains' share down to `dir` is there and a plain one
- *  (no link), as lstat sees it now, but for `dir` itself, which may be a link: what `dir`
- *  is then ("a directory", "a link"); null on anything else, a failure too. */
-const settling = (dir: string): "a directory" | "a link" | null => {
-  const parts = ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)];
+/** Make this VM's kernel ask the host what `dir`'s last name is now, rather than answer from
+ *  what it last heard. Nothing else does it at once (measured on vz, 30 of 30 each: listing
+ *  the directory above, a stat of it, opening it and looking from there all still showed the
+ *  link). A name looked up to be created is always asked of the host (fuse revalidates an
+ *  exclusive lookup), and a hard link to it from `/` is a create that never makes anything:
+ *  EEXIST when the name is there, else EXDEV (`/` is not on the share) or EPERM (`/` is a
+ *  directory, which is never hard linked). Measured with mkdir, the same lookup: the truth at
+ *  the next look, 30 of 30, against 1 s later without. */
+const askHost = (dir: string) => {
+  try {
+    fs.linkSync("/", dir);
+  } catch {
+    /* always: see above */
+  }
+};
+
+/** Whether every directory from the domains' share down to `dir`, `dir` too, is there and a
+ *  plain one (no link), as lstat sees it now: false on anything else, a failure too. */
+const plainWay = (dir: string): boolean => {
   let at = ROOT.domains;
   try {
-    for (const [i, part] of parts.entries()) {
+    for (const part of ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)]) {
       at = path.join(at, part);
-      const stat = fs.lstatSync(at, { throwIfNoEntry: false });
-      if (stat?.isDirectory()) continue;
-      return i === parts.length - 1 && stat?.isSymbolicLink() ? "a link" : null;
+      if (!fs.lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) return false;
     }
-    return "a directory";
+    return true;
   } catch {
-    return null;
+    return false;
   }
 };
 
@@ -472,7 +480,7 @@ declare namespace refusalFix {
     [
       [
         args: [
-          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory, at each of 5 looks over a second; lstat saw a directory)",
+          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there, at each of 5 looks over a second; lstat saw a directory)",
         ],
         expected: "the share between the workspace's VM and the root's had not yet shown the root what the workspace wrote: offer again from the workspace (desolate offer)",
       ],
