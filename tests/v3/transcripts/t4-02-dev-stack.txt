@@ -96,6 +96,8 @@ next: desolate editor dev/w1 --open      its editor, in your browser
 
 ## a secret, from a container
 
+## channels
+
 ## resize, in a real VM
 
 $ desolate resize dev/w1 --cpus 2

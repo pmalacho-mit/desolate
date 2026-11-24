@@ -540,6 +540,25 @@ const pause = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", done, { once: true });
   });
 
+/** Who holds the machine lock at `dir` (withLock's, with the machine scope), if it is a live
+ *  process; else null: there is none, or its holder has gone (whose lock is nobody's). What
+ *  a command waits on while the holder it asked to end finishes. */
+export const machineHolder = (dir: string): Holder | null => {
+  const seen = read(dir);
+  if (!seen || running(seen.entry) !== "alive") return null;
+  const { pid, host, since } = seen.entry;
+  return { pid, host, since };
+};
+
+declare namespace machineHolder {
+  /** no lock there: nobody (a lock held by a live process names it: T1 daemon-single) */
+  export type None = Expect<
+    Invoke<typeof machineHolder, [dir: "/desolate-no-such-lock"]>,
+    "=",
+    null
+  >;
+}
+
 /** `work`, done while holding the lock `dir`, and its answer; the lock is left when the
  *  work ends, however it ends. `dir` is the lock's own name (`<state>/fetch.lock`): it is
  *  there while the lock is held, and its folder must be one every taker can write. Beside

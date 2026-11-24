@@ -62,6 +62,7 @@ import { retire, retiredAt } from "./retired.ts";
 import { opened as statedReply } from "./replies.ts";
 import type { Answer, Stated } from "./replies.ts";
 import { backend, config, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
+import { machineHolder, withLock } from "../shared/lock.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -125,6 +126,7 @@ import type { refusalOf } from "../.harness/refusal.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
 const PIDFILE = path.join(paths.state, "daemon.pid");
+const DAEMON_LOCK = path.join(paths.state, "daemon.lock");
 const LOG = path.join(paths.logs, "daemon.log");
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
@@ -224,8 +226,8 @@ const wsdReply = (line: string): Record<string, unknown> | Error => {
 
 /** How long to wait before a workspace's watch that ended is opened again: a second, doubling
  *  to 30 s while each lasts less than 30 s, and a second again after one that lasted. Each
- *  open is one ssh session into the VM (with commands over plain ssh, ticket #250 step 2:
- *  1.5 MB and 8 ms), so a daemon there that is gone costs one every 30 s, and a daemon that
+ *  open is one channel on the ssh connection to the VM (lima.ts, dial: no process), so a
+ *  daemon there that is gone costs one every 30 s, and a daemon that
  *  comes back is watched within 30 s. In the first minute after the workspace was
  *  registered, a second: it is registered before its services start (workspaces.ts,
  *  startServices), and what its daemon says then (its editor's token, its dev servers) is
@@ -525,20 +527,22 @@ export const LINK_CONNECTIONS = define({
   env: "DESOLATE_LINK_CONNECTIONS",
   side: "host",
   default: () => 256,
-  // Every session into the root VM is one of its sshd's, which allows 1000 on a connection
-  // (root/start.sh, MaxSessions): no workspace may have more than that.
+  // Every connection out is a channel on the one ssh connection to the root VM, whose sshd
+  // holds a file for each and may open 1024 (about 1017 channels: CONNECTIONS_MOST): no
+  // workspace may have more than 1000.
   parse: whole(1, 1000),
-  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; past it, one is refused at once. Each is a plain ssh session: about 1.5 MB of this Mac's memory and 1.2 MB of the VM's.",
+  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; past it, one is refused at once. Each is a channel on desolate's one ssh connection to the VM: about 35 KB of this Mac's memory, and no process.",
 });
 
 /** The most connections this Mac carries at once into and out of all its workspaces
- *  together. Each is a socket of this daemon's, which carries every workspace, and an ssh
- *  session: about 1.5 MB here, and 1.2 MB in the VM it reaches (200 held at once in the
- *  root VM, which has 3.9 GiB: measured on the M1, 2026-11-23). Every connection out is a
- *  session on the one control connection to the root VM as its login user, and so are the
- *  dashboard's pipes to the state service; sshd takes 1,000 sessions a connection, in the
- *  root VM and every workspace VM (root/start.sh, workspace/start.sh: MaxSessions). So this
- *  stays under 1,000, with room for the host's own sessions on that connection. */
+ *  together. Each is a socket of this daemon's, which carries every workspace, and a channel
+ *  on desolate's own ssh connection to the VM it reaches (lima.ts, dial): about 35 KB in
+ *  that ssh here, no process here or there. Every connection out rides the one connection
+ *  to the root VM, and so do the dashboard's pipes to the state service. sshd's MaxSessions
+ *  does not count channels; what bounds them is the files sshd's process for the connection
+ *  may hold, 1024 (measured in the root VM, Ubuntu 24.04, 2026-11-24: 1017 channels held at
+ *  once answered, and each past them was closed as soon as it opened). So this stays under
+ *  1,000, with room for the dashboard's own pipes on that connection. */
 const CONNECTIONS_MOST = 800;
 
 /** `n` connections, the word agreeing with the count. */
@@ -1748,8 +1752,13 @@ declare namespace pusherLogRead {
   >;
 }
 
-const serve = async () => {
+const serving = async () => {
   const b = backend();
+  // The connections for channels a daemon before this one left (one that did not stop, but
+  // ended), ended first, before this one dials anything or answers: so a daemon that answers
+  // has, and what it makes from then on is its own (T1 daemon-single made a connection the
+  // moment this one answered, and a busy Mac saw it ended by this, a moment late).
+  b.release?.();
   const entries = new Map<string, Entry>();
   /** A host listener per forwarded port. */
   const forwards = new Map<number, Server>();
@@ -1797,6 +1806,9 @@ const serve = async () => {
   // socket's handler, which would end the daemon and every workspace's link with it.
   const dial = (vm: string, target: number | string): Duplex => {
     try {
+      // Only a workspace this daemon carries: what a dial makes for one that has gone would
+      // be nobody's to let go.
+      if (vm !== ROOT_VM && !entries.has(vm)) throw new Error("it is not a workspace carried here");
       return b.dial(vm, target);
     } catch (error) {
       log(`could not reach ${vm}: ${error instanceof Error ? error.message : String(error)}`);
@@ -1873,7 +1885,7 @@ const serve = async () => {
     upstream.on("data", onGreeting);
     client.resume();
     // Among the silent, as every client is until it speaks: else each silent one held a
-    // session into the VM for ten minutes, past SILENT_MOST.
+    // channel into the VM for ten minutes, past SILENT_MOST.
     const first = await heard(silent, client, 600_000);
     if (client.destroyed) return void upstream.destroy();
     if (spokeAsBrowser(first)) return close();
@@ -2104,6 +2116,9 @@ const serve = async () => {
     const taken = listenersFrom(reply.listeners, ours);
     // What the VM itself left out, and what was cut here.
     const left = unforwardedOf(reply.unforwarded);
+    // A port no longer listened on: its channel from the Mac goes too (dial adds one at a
+    // port's first connection, and it would otherwise last as long as the VM's connection).
+    for (const port of entry.listeners) if (!taken.listeners.has(port)) b.release?.(entry.vm, port);
     entry.listeners = taken.listeners;
     entry.low = [...new Set([...left.low, ...taken.low])].sort((x, y) => x - y);
     entry.more = left.more;
@@ -2404,6 +2419,10 @@ const serve = async () => {
     entry.link?.();
     entry.watch?.close();
     for (const watcher of entry.watchers) watcher.close();
+    // Its channels: every one into its VM, with the connection they ride, and the one to its
+    // proxy on the root's.
+    b.release?.(vm);
+    if (entry.proxy) b.release?.(ROOT_VM, entry.proxy);
     entries.delete(vm);
     reconcile();
   };
@@ -2422,9 +2441,8 @@ const serve = async () => {
   // knows, nudges it when a share changed, and collects the dashboard's requests, which it
   // runs as desolate's own CLI, from the fixed list in shared/actions.ts.
   let rootUp = false;
-  // Dialed when asked: a session into the root VM opens in 8 ms (measured on the M1,
-  // 2026-11-23), against the dashboard's 300 ms for showing state. (A few were kept open
-  // ahead of need while one was a `limactl shell`, tens to hundreds of milliseconds.)
+  // Dialed when asked: a channel into the root VM opens in a few milliseconds (3 ms, on the
+  // M1, 2026-11-24), against the dashboard's 300 ms for showing state.
   const toStateService = () => dial(ROOT_VM, ROOT_UI.port);
   // The service's own questions, on one stream (heldAsker). A new stream is told the facts
   // at the next pass of the loop below (a second at most): a service started again has none.
@@ -2881,8 +2899,12 @@ const serve = async () => {
           editors6.close();
           for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
           for (const entry of entries.values()) entry.link?.();
+          b.release?.();
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });
+          // Its lock (serve) stays, naming this process: once it has exited that holder is
+          // gone, and a lock whose holder is gone is nobody's (shared/lock.ts), so the next
+          // daemon takes it and stopForwarder's wait ends.
           process.exit(0);
         }
       } catch (error) {
@@ -2978,15 +3000,41 @@ declare namespace announceApproved {
   >;
 }
 
-export const ensureDaemon = async () => {
+/** How long a command waits for the host daemon it asked to end, or found ending, to have let
+ *  go of the home (its lock: state/daemon.lock) before it says so. A stop is the daemon
+ *  closing its listeners and ending its connections for channels, well under a second; a
+ *  daemon still there a minute on is stuck. */
+const STOPPING_MS = 60_000;
+
+/** Until no live process holds the daemon's lock (the one asked to end has), or, with
+ *  `orUp`, until a daemon answers (another command started one meanwhile: it holds the lock
+ *  before it answers). Its holder gone is not an event any file shows (the lock stays, its
+ *  holder dead), so it is looked at four times a second, for at most STOPPING_MS. Past
+ *  that, refused, naming the pid that holds it. */
+const letGo = async (orUp = false) => {
+  const free = () => machineHolder(DAEMON_LOCK) === null;
+  if (await waitFor(async () => free() || (orUp && (await alive())), STOPPING_MS, 250)) return;
+  const holder = machineHolder(DAEMON_LOCK);
+  if (holder)
+    throw new Error(
+      `the host daemon for ${paths.home} (pid ${holder.pid}) has not ended ${STOPPING_MS / 1000} s after it was asked to: end it (kill ${holder.pid}) and run this again`,
+    );
+};
+
+export const ensureDaemon = async (again = true): Promise<void> => {
   if (await alive()) {
     const running = await ask({ op: "code" }).catch(() => ({}) as Record<string, unknown>);
-    if (running.code === CODE) return;
+    // (Once only after a wait: the one another command started is taken as it is.)
+    if (running.code === CODE || !again) return;
     // Started from other code: stopped, and started again below (it registers every
     // running workspace again as it starts).
     await stopForwarder();
-    await waitFor(async () => !(await alive()), 10_000, 100);
   }
+  // One still ending (asked by another command), or one another command is starting: waited
+  // for, so that the one started here is not refused the home and gone (it was started
+  // after 10 s whatever, and found the lock held).
+  await letGo(true);
+  if (await alive()) return ensureDaemon(false);
   fs.mkdirSync(paths.logs, { recursive: true });
   const log = fs.openSync(LOG, "a");
   const child = spawn(
@@ -3269,13 +3317,31 @@ export const followEvents = async (
   }
 };
 
+/** Ask the host daemon to end, and wait until it has let go of the home (letGo): what comes
+ *  next (a new daemon, VMs stopped or removed, the home removed) never meets it still there. */
 export const stopForwarder = async () => {
   if (await alive()) await ask({ op: "stop" }).catch(() => {});
+  await letGo();
 };
+
+/** The daemon, one a home: a lock held for its life, taken before it does anything (two
+ *  started at once, by two commands each finding none, or one started while another is still
+ *  stopping). The second ends at once, saying which holds it, and so never ends the first's
+ *  connections (backend.release, at a start) nor takes its ports. A lock whose holder is gone
+ *  is nobody's (shared/lock.ts): a daemon that died leaves its place to the next. */
+const serve = () =>
+  withLock(DAEMON_LOCK, serving, {
+    wait: false,
+    busy: (holder) =>
+      `the host daemon for ${paths.home} is already running (pid ${holder.pid}, since ${holder.since}): this one ends`,
+  });
 
 if (
   process.argv[2] === "serve" &&
   process.argv[1] &&
   fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 )
-  void serve();
+  serve().catch((error: unknown) => {
+    console.error(`desolate: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
