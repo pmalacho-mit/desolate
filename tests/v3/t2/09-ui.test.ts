@@ -713,7 +713,9 @@ describe("T2 section 4.8: the root UI", () => {
     );
     // A flood: the workspace's status rewritten every 20 ms for 3 s (here on the host's side
     // of the share, as a VM's writes are). The host nudges at most once a second, and the
-    // service looks on each nudge: five states at most in the 4.5 s from its start. CONTROL:
+    // service looks on each nudge: four from the flood (at once, then one a second until it
+    // stops), and the service's own look every 10 s if it falls in the window: five states at
+    // most in the 4.5 s from its start. CONTROL:
     // the flood is seen while it lasts, more than once, not held back until it stops.
     const file = path.join(
       stack.home,

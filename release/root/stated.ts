@@ -1854,10 +1854,8 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   // event lost. It was every second, for ever, though the Mac's daemon always waits on the
   // state (ticket #258). What is counted in git (checkPushed) is looked at with it, and shown
   // when the count is done.
-  setInterval(() => {
-    nudged();
-    void checkPushed().then(nudged);
-  }, 10_000);
+  // (One look, once the count is done: two, one before it, were two states in a second.)
+  setInterval(() => void checkPushed().then(nudged), 10_000);
   void checkPushed().then(changed);
   changed();
 }
