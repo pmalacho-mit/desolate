@@ -323,12 +323,13 @@ else {
     stack.step("a raw TCP port");
     serve("web/one", "one 5432 raw");
     // 5432 because it is one of the ports desolate knows a protocol with no name is spoken on
-    // (forward.ts, RAW_PORTS). When something on this machine holds it already, the failure
-    // says what, by its pid (twice, under the whole of T2: not found then).
+    // (forward.ts, RAW_PORTS). When something on this machine held it as the host bound it,
+    // the failure says what holds it now, by its pid. (Under the whole of T2, 2026-11-24:
+    // nothing did by then. The host tries a held port again after 10 s, past this 8 s wait.)
     if (!(await until(() => urlOf("web/one", 5432) !== undefined))) {
       const holder = spawnSync(
         "bash",
-        ["-c", "lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; ss -ltnp 'sport = :5432' 2>&1"],
+        ["-c", "lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; ss -tanp 'sport = :5432' 2>&1"],
         { encoding: "utf8" },
       ).stdout;
       assert.fail(
