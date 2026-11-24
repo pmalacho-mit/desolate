@@ -650,6 +650,76 @@ describe("T2 section 4.8: the root UI", () => {
     );
   });
 
+  it("the state service started again is noticed by the host within seconds: a click is taken, and `desolate events` goes on (control: the same before)", async () => {
+    stack.step("the state service started again");
+    // `desolate events`, as a script on the Mac follows it.
+    const heard: Record<string, unknown>[] = [];
+    const listener = spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["events"], {
+      env: stack.env,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let partial = "";
+    listener.stdout.on("data", (chunk: Buffer) => {
+      partial += chunk.toString();
+      for (let end = partial.indexOf("\n"); end >= 0; end = partial.indexOf("\n")) {
+        heard.push(JSON.parse(partial.slice(0, end)) as Record<string, unknown>);
+        partial = partial.slice(end + 1);
+      }
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      /** How long a click waits for the host to take it, and a status to reach the events. */
+      const round = async (tag: string) => {
+        const clicked = performance.now();
+        const id = (
+          JSON.parse((await action("repo.fetch", { repo: "acme/app" })).body) as { id: string }
+        ).id;
+        assert.ok(
+          await until(
+            async () => (await state()).actions.find((a) => a.id === id)?.state !== "queued",
+            90_000,
+          ),
+          `${tag}: the click was taken`,
+        );
+        const taken = performance.now() - clicked;
+        const message = `the state service, ${tag}`;
+        assert.equal(
+          stack.quiet("exec", "web/one", "--", "/desolate/status", "set", "green", message).code,
+          0,
+        );
+        const set = performance.now();
+        assert.ok(
+          await until(
+            async () => heard.some((e) => e.type === "status" && e.message === message),
+            90_000,
+          ),
+          `${tag}: the status reached \`desolate events\``,
+        );
+        return { taken: Math.round(taken), told: Math.round(performance.now() - set) };
+      };
+      const before = await round("before");
+      // Started again, as a bootstrap or an update does: ended, and its keeper starts it.
+      assert.equal(stack.inRoot(["bash", "-c", "pkill -f '^node .*stated\\.ts$'"]).code, 0);
+      assert.ok(
+        await until(async () => (await http("GET", "/state")).status === 200, 60_000),
+        "the state service is back",
+      );
+      const back = await round("after");
+      console.log(
+        `# a click taken after ${before.taken} ms, then ${back.taken} ms once the service was back; a status in the events after ${before.told}, then ${back.told} ms`,
+      );
+      // The host's held requests ended with the service: it asks the new one at once. (They
+      // waited out their 70 s.)
+      assert.ok(before.taken <= 3000 && before.told <= 3000, `control: ${JSON.stringify(before)}`);
+      assert.ok(
+        back.taken <= 5000 && back.told <= 5000,
+        `after a restart: ${JSON.stringify(back)}`,
+      );
+    } finally {
+      listener.kill();
+    }
+  });
+
   it("stop and start from the dashboard; its agents as they are after the start, at once", async () => {
     stack.step("stop and start");
     const sleeper = async () =>
