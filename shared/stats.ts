@@ -28,6 +28,9 @@ export type Stats = {
     checkouts: { repo: string; branch: string; head: string | null }[];
     status: { color: string; message: string } | null;
   }[];
+  /** This domain's offers of branches it still has, each of one commit (`desolate offer
+   *  --check`). As many as its lists of branches hold, which REFS_BYTES bounds (outbox.ts). */
+  offers: { repo: string; branch: string; commit: string }[];
 };
 
 const gib = (mib: number) => `${(mib / 1024).toFixed(mib % 1024 === 0 ? 0 : 1)} GiB`;

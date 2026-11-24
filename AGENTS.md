@@ -24,11 +24,11 @@ reach is unreachable on purpose, and is not a bug in the project.
   repository at once.)
 - **When your work is ready, offer it:** commit, then `desolate offer` (in the checkout, on
   the branch; `--base <branch>` for a pull request into another branch). That is how the
-  person learns it is ready, and the only way. **Offering is not pushing:** they review it and
-  push it; nothing here can push, so do not look for a token, install `gh`, or add a remote.
-  Offer nothing unready just to be safe: the offer is the signal.
+  person learns it is ready, and the only way: offer nothing unready just to be safe. They
+  review it and push it; nothing here can push, so do not look for a token, `gh` or a remote.
 - **An offer is of the commit offered.** Commit again, and the person sees "Moved since it
-  was offered" and cannot push it until you offer again.
+  was offered" and cannot push it until you offer again. Before you stop,
+  `desolate offer --check` says whether your branch as it is now is with the person.
 - **`git push origin <branch>` offers too, then git reports a rejection, on purpose**, so it
   records no remote branch that does not exist. The offer was taken when it says
   `Nothing more is needed now: do not retry the push or look for another way to push.` and `! [remote rejected] <branch> -> <branch> (offered for review, not pushed: this is the expected result, the person reviews and pushes it)`.
