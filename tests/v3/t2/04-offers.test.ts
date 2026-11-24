@@ -107,13 +107,13 @@ const armedPress = async (
     ? `/^(approving|Approved|Not pushed)/.test(${card}?.querySelector('.hint')?.textContent ?? '')`
     : "false";
   const button = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((b) => b.offsetParent && b.innerText.includes(${JSON.stringify(label)}))`;
-  await page.until(`${button}?.disabled === false || ${decided}`, `${label} armed`, 10_000);
+  await page.until(`${pressable(button)} || ${decided}`, `${label} armed`, 10_000);
   if (!(await page.evaluate<boolean>(decided))) await page.pressHere();
 };
 /** A button pressable now: Approve by `disabled`, Refuse and Dismiss by aria-disabled (a key
  *  still reaches them). */
 const pressable = (button: string) =>
-  `(${button}.disabled === false && ${button}.getAttribute('aria-disabled') !== 'true')`;
+  `((b) => !!b && b.disabled === false && b.getAttribute('aria-disabled') !== 'true')(${button})`;
 type Hand = {
   moveTo: (x: number, y: number) => Promise<void>;
   until: (e: string, w: string, ms?: number) => Promise<unknown>;
@@ -2133,8 +2133,10 @@ echo "=====waits"; cat /tmp/waits.lines`,
         /^Not pushed/,
         "Enter dismissed nothing",
       );
-      // Dismiss arms as Approve does: a press as the pointer arrives is not taken.
-      await page.moveTo(dismissAt[0]! + dismissAt[2]! / 2, dismissAt[1]! + dismissAt[3]! / 2);
+      // Dismiss arms as Approve does: a press as the pointer arrives is not taken. (Where it is
+      // now: Tab scrolled the page.)
+      const dismissNow = await page.evaluate<number[]>(rect(bDismiss));
+      await page.moveTo(dismissNow[0]! + dismissNow[2]! / 2, dismissNow[1]! + dismissNow[3]! / 2);
       await page.pressHere();
       assert.match(await page.evaluate<string>(hintOf(b!)), /^Not pushed/, "not at once");
       await page.until(pressable(bDismiss), "Dismiss armed", 10_000);
@@ -2268,7 +2270,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         /\n {4}notes: an ordinary change\n *\n {4}A body as written, with café and\ta tab\.\n/,
       );
       assert.equal(seen.wide, false);
-      await page.click(".card.asked button.refuse", "Refuse");
+      await armedPress(page, ".card.asked button.refuse", "Refuse");
       await page.until(`/refused/.test(${card}.querySelector('.hint').textContent)`, "refused");
 
       // The push: names that read as others (a right-to-left override, a zero-width space, a

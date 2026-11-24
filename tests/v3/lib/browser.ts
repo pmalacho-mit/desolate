@@ -425,9 +425,12 @@ export const openBrowser = async (
         await sleep(300);
       },
       key: pressKey,
-      /** Tab pressed until the focus is on `element` (an expression): at most 120 times. */
+      /** Tab pressed until the focus is on `element` (an expression), from the page's top (the
+       *  focus let go first: past the last element, Tab leaves a headless page): at most 200
+       *  times. */
       tabTo: async (element: string) => {
-        for (let i = 0; i < 120; i++) {
+        await evaluate("document.activeElement?.blur(); true");
+        for (let i = 0; i < 200; i++) {
           if (await evaluate<boolean>(`document.activeElement === ${element}`)) return;
           await pressKey("Tab");
         }
