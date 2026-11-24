@@ -2679,9 +2679,11 @@ const serve = async () => {
   /** Each request is run once, however many times the root hands it over. */
   const taken = new Set<string>();
   let lastFailure = "";
-  /** How long to wait before asking the root again after a failure: half a second the first
-   *  time (the service started again: it is back at once), then 3 s (the root is down). */
-  const again = (failures: number) => sleep(failures === 1 ? 500 : 3000);
+  /** How long to wait before asking the root again after a failure: half a second for the
+   *  first 3 s (the service started again is back within a second or two: its keeper starts
+   *  it after 1 s), then 3 s (the root is down). (Once at half a second and then 3 s, a click
+   *  waited 3.3 s after the service was back: T2 09-ui.) */
+  const again = (failures: number) => sleep(failures <= 6 ? 500 : 3000);
   const collect = async () => {
     for (let failures = 0; ;) {
       try {
