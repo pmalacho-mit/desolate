@@ -16,7 +16,7 @@ reach is unreachable on purpose, and is not a bug in the project.
 
 ## Git: commit freely; you cannot push, and need not try
 
-**No credential exists in this VM, and there is no route to use one.**
+**No key or token is in this VM, and desolate gives you no way to push.**
 
 - **Do:** commit, branch, rebase, stash, diff, log. `git fetch` and `git pull` get what the
   remote has now: the root refreshes its read-only mirror first, and `origin` is that mirror,
@@ -29,8 +29,8 @@ reach is unreachable on purpose, and is not a bug in the project.
   record a remote branch that does not exist. That error means the offer worked; the line
   `offered <repo> <branch> at <commit>` above it says so. Do not retry it or look for another
   way to push. Prefer `desolate offer`, which exits 0 when the offer is taken. **Offering is
-  not pushing, and nothing you do here pushes.** Do not look for a token, install `gh`, or
-  add a remote: there is nothing to find. If the pull request should go into a branch other
+  not pushing: the person pushes.** Do not look for a token, install `gh`, or add a
+  remote: there is nothing to find. If the pull request should go into a branch other
   than the default one, say which: `desolate offer --base <branch>`.
 - **If an offer is refused** with "the root refused this domain's bundle" and a reason that
   says its directory in the outbox "is not a plain one", the share between this VM and the
@@ -129,7 +129,7 @@ This VM has no route to anything. Its one way out is a proxy that belongs to thi
 
 - **What works:** `http://` and `https://` to a **hostname**, on ports 80 and 443. You need
   no proxy settings: connections are redirected for you. TLS is end to end with the real
-  server.
+  server, but for the hosts of the domain's secrets (below).
 - **What does not, by design:** any other port; SSH (no `git+ssh`, no `scp`); an address
   without a name (`curl https://1.2.3.4` is refused); the host machine, the LAN, the root,
   other workspaces; ICMP. Do not retry these or work around them: say what you needed.

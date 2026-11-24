@@ -361,8 +361,9 @@ command.
 
 - **git's own parsers** read a pack an agent wrote (`index-pack`, then `fetch`, `diff`,
   `log`). A memory-safety bug in git's pack or object parsing would be reachable. Keeping
-  the image's git current is the mitigation; desolate runs that parsing as the root's
-  ordinary user, never as root, and never as the keyring's user.
+  the image's git current would be the mitigation, and nothing of desolate's does it yet;
+  desolate runs that parsing as the root's ordinary user, never as root, and never as the
+  keyring's user.
 - **JSON.parse** on files up to 1 MiB, then field-by-field validation
   (`release/shared/names.ts`).
 - **The proxies** parse what workspaces send (HTTP CONNECT, TLS ClientHello in

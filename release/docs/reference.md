@@ -96,9 +96,12 @@ When its push lands, desolate gives GitHub's page for opening the pull request, 
 "Open pull request" on the dashboard (on the workspace's row and the branch's, until it is
 merged, and in its activity), a line after `desolate push`, and one in a raw `git push
 origin`'s output. It opens in your browser, where you are signed in as
-yourself, and you create the pull request there: desolate holds no forge token, and this
-needs none. The root keeps a record of what it pushed (`/var/lib/desolate/pushed.json`, kept
-across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
+yourself, and you create the pull request there: that needs no token. desolate keeps no
+forge token of its own. Your `gh` on the Mac registers the deploy keys (`clone`) and creates
+the issues you publish, and `desolate upstream` reads its token (`gh auth token`, unless
+`GH_TOKEN` or `GITHUB_TOKEN` is set) to ask api.github.com, from the Mac, for the pull request
+it waits for. No VM is given it. The root keeps a record of what it pushed
+(`/var/lib/desolate/pushed.json`, kept across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
 every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days; the dashboard's
@@ -123,8 +126,10 @@ them and the git VM has none yet. The
 git VM has no network, no key, and nothing of a project's that runs: no devcontainer, no
 direnv, no clone's hooks; `less` shows colour and nothing else raw, and vim reads no
 modelines. The root's clones and the mirrors are read-only to it. What it pushes, the root
-takes in like a domain's work: every object checked first. The terminal's address carries
-this stack's token, like the approval page's: treat it like a password. Once you have opened
+takes in like a domain's work: every object checked first. It reads every domain's branches
+and delivers into any domain without asking, so treat it as you treat the root: read and
+decide there, and do not build, install or run a branch's tests in it. The terminal's
+address carries this stack's token, like the approval page's: treat it like a password. Once you have opened
 it, **Open in git** in the dashboard's review opens a shell at that repository's clone (made
 on the way if it is not there yet), on the branch reviewed, as its domain has it: it fetches
 the domain, makes your branch of that name at the domain's commit or fast-forwards it (never
@@ -234,8 +239,10 @@ number, at the workspace's own name: `http://<domain>-<workspace>-<id>.localhost
 workspace's apps have an origin of their own, so their cookies and storage never mix with
 another workspace's, or with the editor's. Two workspaces can both serve 3000.
 - **A protocol with no hostname in it** (a database: 3306, 5432, 6379, 27017, 11211, 5672,
-  9092, 1433, 26257) reaches the one workspace that listened on that port first; the others
-  keep the number taken. Another port's protocol is routed by the name in its first bytes, or
+  9092, 1433, 26257) reaches one workspace at a time, whatever its domain: the first that
+  listened on the port, and the others keep the number taken. `desolate ports` says which has
+  it: look before a client on your Mac sends credentials on such a port while workspaces of
+  two domains serve it. Another port's protocol is routed by the name in its first bytes, or
   not at all: a server that speaks first, on a port not in that list, needs it added on your
   Mac (`DESOLATE_RAW_PORTS=7000,7001 desolate bootstrap`). Nothing learns a port is raw from
   traffic.
@@ -325,6 +332,17 @@ work with no credential, private repositories included. Only the `.git` spelling
   else leaves at all: a registry on another port (`:5000`), ssh to a forge, a database
   outside: none of it can be reached from a workspace. Fetch what needs those on the Mac or
   in the root, or serve it on 443.
+- **Any named host, until you list them.** A domain starts open: its workspaces reach every
+  host by its name, never by an address alone, and none that resolves to an internal address
+  (unless that one address was allowed for the domain). `desolate domain <d> net allow
+  <host>...` lists hosts, `net enforce` limits the domain to them, `net open` lifts that, and
+  `net show` says which it is. Enforced, a connection must be to a listed name, and must name
+  it again in its first bytes: the TLS server name, or plain HTTP's Host. That is all the
+  proxy reads. It does not look inside TLS, so a listed name that a shared CDN serves is as
+  wide as that CDN allows: list the origin's own name where there is one, and treat a
+  wildcard on a CDN's or a hosting service's domain (`*.cloudfront.net`, `*.github.io`) as
+  allowing everything hosted there. The list bounds which servers a workspace talks to, not
+  what it sends them: a listed host that takes uploads can carry data out.
 - **Connections out at once.** A workspace has 256 connections through its proxy carried at
   once. Past those, a connection is refused at once with the reason (a plain-HTTP program
   reads it; TLS is closed), the host's log says so, and `desolate ports` counts them. More:
@@ -443,7 +461,8 @@ addresses.
 
 **Secrets.** A workspace never holds a secret's value. It holds the name
 (`export OPENAI_API_KEY=MYAPP-OPENAI-KEY`), and the root puts the value in its place on the
-way out, only over TLS, only toward the hosts the secret names, only in the headers it names.
+way out, only over TLS, only toward the hosts the secret names, only in the headers it
+names (or anywhere in the request, for one set with `--anywhere`: below).
 Connections to those hosts are the only ones whose TLS the root terminates (the workspace
 trusts its domain's CA for that); everything else stays end to end.
 
@@ -697,7 +716,7 @@ last ran in the first pass's cloud sandbox.
 | Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T3; `clone --keys-by-hand` against github.com | |
 | P2: pushes only by a person (`--expect`, exit codes, LFS first, audit) | yes | T2 | |
 | P2: the approval is given on the host, outside every VM (a signed challenge; `desolate approve` for a raw `git push origin`) | yes | T2, with the `terminal` approver, which is the default | the opt-in Touch ID approver (`host/approver/touchid.swift`) has never been compiled or run |
-| P3: keys never leave the keyring; a secret's value never leaves the root | yes | T2 | |
+| P3: keys never leave the keyring; a secret's value never reaches a workspace (but one set `--anywhere` can come back changed from its host) | yes | T2 | |
 | P4: the root never runs git in a domain's clone | yes | T2 (a booby-trapped clone, a lying outbox) | |
 | What the root takes from a domain is checked data: bundles strictly checked in quarantine, a held and checked outbox directory, verified LFS, git settings that ignore what a tree asks for | yes | T1, T2 (`10-hostile-content`: dangerous objects, a planted repository, links in the outbox, hostile names; each beside a control), T3 (an offer, a dangerous tree and a linked outbox over a real VM's share) | a size quota for a domain's outbox; on the Mac, status files are checked by a second look, not by the kernel |
 | Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T3, T4 | |
@@ -728,7 +747,7 @@ last ran in the first pass's cloud sandbox.
 
 ```
 cli.sh             the launcher: finds node >= 22.18, runs host/cli.ts
-pins.env           every tool desolate downloads, by version and sha256
+pins.env           the tools the image downloads, by version and sha256 (its top says what is not)
 host/              runs on the host: the CLI, the daemon (forwarder, links), the VM layer
   vm/              one interface, three backends: fake, qemu, vz
   approver.ts      the key that approves pushes (approver/touchid.swift: opt-in, the Mac's Secure Enclave)

@@ -1,5 +1,5 @@
-// The desolate command, on the host. It drives everything, holds no key, and runs no git on
-// desolate's repositories (P4).
+// The desolate command, on the host. It drives everything, holds no deploy key, and runs no
+// git on desolate's repositories (P4).
 import { forTerminal } from "../shared/text.ts";
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
