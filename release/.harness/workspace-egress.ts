@@ -84,5 +84,3 @@ export const repeatedReason = (length: number) =>
     `HTTP/1.1 403 Forbidden\r\nX-Desolate-Reason: ${"x".repeat(length)}\r\n\r\n`,
     "latin1",
   );
-/** `length` x's. */
-export const xs = (length: number) => "x".repeat(length);

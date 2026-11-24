@@ -37,6 +37,7 @@ import { PORTS } from "./limits.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
+  Caught,
   Expect,
   Given,
   Invoke,
@@ -566,21 +567,29 @@ declare namespace valueOf {
    *  takes, and what it holds */
   export type Refuses = Given<
     Invoke<typeof setEnv, [name: "DESOLATE_GIT_SHELLS", value: "lots"]>,
-    Throws<
-      Invoke<
-        typeof valueOf,
-        [
-          setting: {
-            name: "git.shells";
-            env: "DESOLATE_GIT_SHELLS";
-            side: "host";
-            default: 6;
-            parse: Invoke<typeof whole, [min: 1, max: 64]>;
-            why: "";
-          },
-        ]
+    Expect<
+      Caught<
+        Invoke<
+          typeof valueOf,
+          [
+            setting: {
+              name: "git.shells";
+              env: "DESOLATE_GIT_SHELLS";
+              side: "host";
+              default: 6;
+              parse: Invoke<typeof whole, [min: 1, max: 64]>;
+              why: "";
+            },
+          ]
+        >,
+        Refusal
       >,
-      "DESOLATE_GIT_SHELLS must be a whole number from 1 to 64, not 'lots'"
+      "matches",
+      {
+        message: "DESOLATE_GIT_SHELLS must be a whole number from 1 to 64, not 'lots'";
+        fix: "unset DESOLATE_GIT_SHELLS (or set it to what it takes)";
+        code: 1;
+      }
     >
   >;
 }

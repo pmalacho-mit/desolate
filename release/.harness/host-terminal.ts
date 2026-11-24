@@ -15,6 +15,3 @@ export const byteByByte = (make: () => (chunk: Buffer) => Buffer, text: string):
     [...Buffer.from(text, "utf8")].map((byte) => filter(Buffer.from([byte]))),
   ).toString("utf8");
 };
-
-/** `count` copies of `text`: output that goes on. */
-export const repeat = (text: string, count: number) => text.repeat(count);

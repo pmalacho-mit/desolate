@@ -27,9 +27,14 @@ import {
 } from "../shared/names.ts";
 import { checkoutPath } from "../shared/plan.ts";
 import { INSTANCE } from "./paths.ts";
-import type { Expect, Invoke, Table, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Expect,
+  Invoke,
+  Repeat,
+  Table,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { answered, changed, cutOf } from "../.harness/host-replies.ts";
-import type { textOf } from "../.harness/shared-actions.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 /** Where in an answer a part is not in its form: the path to it from the top ("keys[0].role"),
@@ -853,12 +858,7 @@ declare namespace issue {
       [
         args: [
           op: "issue.list",
-          value: [
-            Invoke<
-              typeof changed,
-              [value: I, changes: { title: Invoke<typeof textOf, [length: 257]> }]
-            >,
-          ],
+          value: [Invoke<typeof changed, [value: I, changes: { title: Repeat<"t", 257> }]>],
           asked: {},
         ],
         expected: { kept: []; dropped: 1 },
@@ -1596,7 +1596,7 @@ declare namespace replyOf {
             domain: "acme";
             repo: "acme/web";
             added: true;
-            note: Invoke<typeof textOf, [length: 4001]>;
+            note: Repeat<"t", 4001>;
           },
           asked: {},
         ],

@@ -7,8 +7,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { RELEASE_DIR } from "./paths.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { releaseWith } from "../.harness/host-image.ts";
+import type { Expect, Invoke, Table, TempDir } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 const files = (dir: string): string[] =>
   fs
@@ -47,31 +46,18 @@ declare namespace imageFingerprint {
   };
   /** the same inputs, the same fingerprint, whatever else the release holds */
   export type OnlyItsInputs = [
-    Expect<
-      Invoke<
-        typeof imageFingerprint,
-        [release: Invoke<typeof releaseWith, [name: "one", files: Image]>]
-      >,
-      "=",
-      "92609fe7b3d94819"
-    >,
+    Expect<Invoke<typeof imageFingerprint, [release: TempDir<Image>]>, "=", "92609fe7b3d94819">,
     Expect<
       Invoke<
         typeof imageFingerprint,
         [
-          release: Invoke<
-            typeof releaseWith,
-            [
-              name: "two",
-              files: {
-                "image/provision.sh": "apt-get install git";
-                "pins.env": "NODE=24.1.0";
-                "image/locks/apt.lock": "git 1:2.47";
-                "README.md": "changed";
-                "root/state.ts": "changed";
-              },
-            ]
-          >,
+          release: TempDir<{
+            "image/provision.sh": "apt-get install git";
+            "pins.env": "NODE=24.1.0";
+            "image/locks/apt.lock": "git 1:2.47";
+            "README.md": "changed";
+            "root/state.ts": "changed";
+          }>,
         ]
       >,
       "=",
@@ -83,17 +69,11 @@ declare namespace imageFingerprint {
     Invoke<
       typeof imageFingerprint,
       [
-        release: Invoke<
-          typeof releaseWith,
-          [
-            name: "three",
-            files: {
-              "image/provision.sh": "apt-get install git";
-              "pins.env": "NODE=24.1.0";
-              "image/locks/apt.lock": "git 1:2.48";
-            },
-          ]
-        >,
+        release: TempDir<{
+          "image/provision.sh": "apt-get install git";
+          "pins.env": "NODE=24.1.0";
+          "image/locks/apt.lock": "git 1:2.48";
+        }>,
       ]
     >,
     "=",
@@ -154,19 +134,13 @@ declare namespace codeFiles {
     Invoke<
       typeof codeFiles,
       [
-        release: Invoke<
-          typeof releaseWith,
-          [
-            name: "code",
-            files: {
-              "root/a.ts": "a";
-              "shared/b.sh": "b";
-              "workspace/c.md": "c";
-              "git/d.py": "d";
-              "host/e.ts": "e";
-            },
-          ]
-        >,
+        release: TempDir<{
+          "root/a.ts": "a";
+          "shared/b.sh": "b";
+          "workspace/c.md": "c";
+          "git/d.py": "d";
+          "host/e.ts": "e";
+        }>,
       ]
     >,
     "=",
@@ -175,10 +149,7 @@ declare namespace codeFiles {
 }
 
 declare namespace differing {
-  type Release = Invoke<
-    typeof releaseWith,
-    [name: "sums", files: { "root/a.ts": "a"; "shared/b.sh": "b"; "git/d.py": "d" }]
-  >;
+  type Release = TempDir<{ "root/a.ts": "a"; "shared/b.sh": "b"; "git/d.py": "d" }>;
   /** a file whose sum is another, or that the VM has not got, differs; text or binary mode alike */
   export type Differs = Expect<
     Invoke<
