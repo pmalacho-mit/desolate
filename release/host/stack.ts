@@ -10,6 +10,8 @@ import { RUN_MAX } from "../shared/run.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { forTerminal } from "../shared/text.ts";
 import { because } from "./failures.ts";
+import { listsDomains, opened, refusalIn, unformedNotes } from "./replies.ts";
+import type { Answer, Op } from "./replies.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { limaBackend } from "./vm/lima.ts";
 import { vmSize } from "../shared/size.ts";
@@ -155,7 +157,8 @@ const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
 /** The CLI channel's service in the root (root/rootctl.ts serve): one request a connection. */
 const ROOTCTL_SOCKET = "/run/desolate/rootctl/rootctl.sock";
-type Reply<T> = { ok: boolean; result?: T; error?: string; fix?: string; code?: number };
+/** The service's envelope: `{ok, result}` or a refusal; replies.ts `opened` reads it. */
+type Reply = Record<string, unknown>;
 
 // How long a call to the root may take is not decided here (docs/v3/limits.md, R4): a fetch
 // of a large repository takes what it takes, and whoever asked for it is the one waiting,
@@ -314,11 +317,11 @@ const show = (line: string) => process.stderr.write(`${forTerminal(line)}\n`);
  *  ended with an end of input. (It was, and socat then needed `-t 86400`, a day standing for
  *  "no limit" on how long it would still wait for the answer.) socat stays for as long as
  *  both sides do, and its input is closed once the answer has come. */
-const viaService = <T>(
+const viaService = (
   op: string,
   args: Record<string, unknown>,
   asked: Asked,
-): Promise<Reply<T> | Stopped | null> =>
+): Promise<Reply | Stopped | null> =>
   new Promise((resolve) => {
     const child = backend().spawn(ROOT_VM, ["socat", "-", `UNIX-CONNECT:${ROOTCTL_SOCKET}`]);
     let buffer = "";
@@ -326,7 +329,7 @@ const viaService = <T>(
     let settled = false;
     // (Defined before `waiting`: a signal that has already fired settles while it is made.)
     let waiting: ReturnType<typeof patience> | undefined;
-    const settle = (answer: Reply<T> | Stopped | null) => {
+    const settle = (answer: Reply | Stopped | null) => {
       if (settled) return;
       settled = true;
       waiting?.done();
@@ -357,14 +360,17 @@ const viaService = <T>(
           const message = JSON.parse(line) as {
             accepted?: boolean;
             progress?: unknown;
-            reply?: Reply<T>;
+            reply?: Reply;
             stale?: boolean;
           };
           waiting!.heard();
           if (message.accepted) accepted = true;
           if (typeof message.progress === "string" && !asked.quiet && !settled)
             show(message.progress);
-          if (message.reply) settle(message.reply);
+          if (message.reply !== undefined)
+            settle(
+              typeof message.reply === "object" && message.reply !== null ? message.reply : {},
+            );
           else if (message.stale && !accepted) settle(null);
         } catch {
           /* not a line of the service's */
@@ -382,7 +388,7 @@ const viaService = <T>(
 
 /** The request, the old way: rootctl.ts run once in the root, the request its input, its
  *  progress on its stderr and its answer the last line it prints. */
-const viaExec = <T>(op: string, args: Record<string, unknown>, asked: Asked): Promise<Reply<T>> =>
+const viaExec = (op: string, args: Record<string, unknown>, asked: Asked): Promise<Reply> =>
   new Promise((resolve, reject) => {
     const child = backend().spawn(ROOT_VM, [...NODE, `${guest.release}/root/rootctl.ts`]);
     let stdout = "";
@@ -421,7 +427,7 @@ const viaExec = <T>(op: string, args: Record<string, unknown>, asked: Asked): Pr
       if (!asked.quiet && shown < stderr.length) show(stderr.slice(shown));
       shown = stderr.length;
       try {
-        resolve(JSON.parse(stdout.trim().split("\n").pop() ?? "") as Reply<T>);
+        resolve(JSON.parse(stdout.trim().split("\n").pop() ?? "") as Reply);
       } catch {
         reject(
           new Refusal(
@@ -436,20 +442,31 @@ const viaExec = <T>(op: string, args: Record<string, unknown>, asked: Asked): Pr
     child.stdin!.end(JSON.stringify({ op, args }));
   });
 
-const ask = async <T>(op: string, args: Record<string, unknown>, asked: Asked): Promise<T> => {
+const ask = async <O extends Op>(
+  op: O,
+  args: Record<string, unknown>,
+  asked: Asked,
+): Promise<Answer<O>> => {
   const began = Date.now();
-  const served =
-    process.env.DESOLATE_ROOTCTL === "exec" ? null : await viaService<T>(op, args, asked);
+  const served = process.env.DESOLATE_ROOTCTL === "exec" ? null : await viaService(op, args, asked);
   if (typeof served === "string") throw gaveUp(op, served, asked);
   // A total is the call's, not each way's: the old way gets what is left of it.
   const left = asked.totalMs === undefined ? undefined : asked.totalMs - (Date.now() - began);
   if (left !== undefined && left <= 0) throw gaveUp(op, "late", asked);
   const reply =
-    served ?? (await viaExec<T>(op, args, { ...asked, totalMs: left, wholeMs: asked.totalMs }));
-  if (!reply.ok)
-    throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "", reply.code ?? 1);
-  return reply.result as T;
+    served ?? (await viaExec(op, args, { ...asked, totalMs: left, wholeMs: asked.totalMs }));
+  // What the Mac takes of it is what replies.ts takes for this operation, and nothing else.
+  const answer = opened(op, reply, args);
+  if (listsDomains(op, answer))
+    for (const note of unformedNotes(answer))
+      if (!said.has(note)) {
+        said.add(note);
+        process.stderr.write(`desolate: ${note}\n`);
+      }
+  return answer;
 };
+/** What this process has said of records a list left out: each once. */
+const said = new Set<string>();
 
 /** One request over the CLI channel. The root's refusals arrive as Refusals, with their fix.
  *  Asked of the root's CLI service when it is up (a fraction of the time), else by running
@@ -458,12 +475,12 @@ const ask = async <T>(op: string, args: Record<string, unknown>, asked: Asked): 
  *  It is waited on for as long as the root keeps saying something, and for
  *  ROOT_SILENT_SECONDS of nothing; `signal` ends it when whoever asked goes away. A brief
  *  call names no number: `rootctlBrief`. */
-export const rootctl = <T = unknown>(
-  op: string,
+export const rootctl = <O extends Op>(
+  op: O,
   args: Record<string, unknown> = {},
   options: { quiet?: boolean; signal?: AbortSignal } = {},
-): Promise<T> =>
-  ask<T>(op, args, {
+): Promise<Answer<O>> =>
+  ask(op, args, {
     quiet: options.quiet,
     signal: options.signal,
     silenceMs: valueOf(ROOT_SILENT_SECONDS) * 1000,
@@ -471,12 +488,12 @@ export const rootctl = <T = unknown>(
 
 /** A brief call (BRIEF, above, says which operations and why): nothing of its progress is
  *  shown, and the root not answering it for its time is an answer. */
-export const rootctlBrief = <T = unknown>(
-  op: keyof typeof BRIEF,
+export const rootctlBrief = <O extends keyof typeof BRIEF>(
+  op: O,
   args: Record<string, unknown> = {},
   options: { signal?: AbortSignal } = {},
-): Promise<T> =>
-  ask<T>(op, args, {
+): Promise<Answer<O>> =>
+  ask(op, args, {
     quiet: true,
     signal: options.signal,
     silenceMs: BRIEF[op],
@@ -553,7 +570,7 @@ export const revealSecret = async (domain: string, name: string): Promise<string
     [...NODE, `${guest.release}/root/proxy/secret-store.ts`, domain, "reveal"],
     { root: true, input: JSON.stringify({ name }), timeoutMs: 60_000 },
   );
-  let reply: { ok: boolean; value?: string; error?: string; fix?: string };
+  let reply: Record<string, unknown>;
   try {
     reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   } catch {
@@ -568,23 +585,22 @@ export const revealSecret = async (domain: string, name: string): Promise<string
       "desolate doctor",
     );
   }
-  if (!reply.ok || typeof reply.value !== "string")
-    throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "");
+  if (reply?.ok !== true || typeof reply.value !== "string") throw refusalIn(reply);
   return reply.value;
 };
 
-export const changeSecrets = async <T>(
+export const changeSecrets = async (
   domain: string,
   op: "set" | "switch" | "remove" | "copy",
   input: Record<string, unknown>,
-): Promise<T> => {
+) => {
   await ensureProxyUser(domain);
   const result = await backend().exec(
     ROOT_VM,
     [...NODE, `${guest.release}/root/proxy/secret-store.ts`, domain, op],
     { root: true, input: JSON.stringify(input), timeoutMs: 60_000 },
   );
-  let reply: { ok: boolean; error?: string; fix?: string };
+  let reply: Record<string, unknown>;
   try {
     reply = JSON.parse(result.stdout.trim().split("\n").pop() ?? "");
   } catch {
@@ -597,6 +613,6 @@ export const changeSecrets = async <T>(
       "desolate doctor",
     );
   }
-  if (!reply.ok) throw new Refusal(reply.error ?? "the root refused", reply.fix ?? "");
-  return rootctl<T>("secret.apply", { domain }, { quiet: true });
+  if (reply?.ok !== true) throw refusalIn(reply);
+  return rootctl("secret.apply", { domain }, { quiet: true });
 };

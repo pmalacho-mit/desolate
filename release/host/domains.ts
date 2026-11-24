@@ -98,18 +98,13 @@ declare namespace askHeaders {
 /** A domain that has secrets has a CA its workspaces must trust: the running ones take it
  *  now, the others when they start. */
 const trustCa = async (domain: string) => {
-  const d = await rootctl<{ workspaces: { vm: string; workspace: string; domain?: string }[] }>(
-    "domain.show",
-    { slug: domain },
-    { quiet: true },
-  );
+  const d = await rootctl("domain.show", { slug: domain }, { quiet: true });
   const b = backend();
   const running = new Set(
     (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
   );
-  const { isOwnVm } = await import("./workspaces.ts");
   for (const w of d.workspaces)
-    if (running.has(w.vm) && isOwnVm(domain, w))
+    if (running.has(w.vm))
       await b.exec(w.vm, ["bash", `${guest.release}/workspace/net/trust-ca.sh`], {
         root: true,
         timeoutMs: 120_000,
@@ -133,21 +128,20 @@ export type SecretListed = {
  *  secret store, and nowhere else: not the dashboard, which the root's ordinary user serves. */
 export const secretOps = {
   domains: async () =>
-    (await rootctl<{ slug: string }[]>("domain.list", {}, { quiet: true })).map((d) => d.slug),
-  list: (domain: string) => rootctl<SecretListed[]>("secret.list", { domain }, { quiet: true }),
+    (await rootctl("domain.list", {}, { quiet: true })).domains.map((d) => d.slug),
+  list: (domain: string) => rootctl("secret.list", { domain }, { quiet: true }),
   set: async (
     domain: string,
     secret: { name: string; value: string; hosts: string[]; headers: string[] },
   ) => {
     await ensureProxyUser(domain);
-    const listed = await changeSecrets<SecretListed[]>(domain, "set", secret);
+    const listed = await changeSecrets(domain, "set", secret);
     await trustCa(domain);
     return listed;
   },
   switch: (domain: string, name: string, on: boolean) =>
-    changeSecrets<SecretListed[]>(domain, "switch", { name, on }),
-  remove: (domain: string, name: string) =>
-    changeSecrets<SecretListed[]>(domain, "remove", { name }),
+    changeSecrets(domain, "switch", { name, on }),
+  remove: (domain: string, name: string) => changeSecrets(domain, "remove", { name }),
 };
 export type SecretOps = typeof secretOps;
 
@@ -170,7 +164,7 @@ export const netRecommend = async (
   values: Record<string, unknown>,
   out: Out,
 ): Promise<void> => {
-  const r = await rootctl<Recommended>("net.recommend", { domain }, { quiet: true });
+  const r = await rootctl("net.recommend", { domain }, { quiet: true });
   if (values.json === true) return out(JSON.stringify(r));
   const every = `desolate domain ${domain} net recommend --all`;
   const shown = (list: Listed<Ranked>): Listed<Ranked> => ({
@@ -291,7 +285,9 @@ export const netLog = async (
       `desolate net log${domain ? ` ${domain}` : ""} --last 500`,
       EXIT.usage,
     );
-  const log = await rootctl<Listed<Entry>>("net.log", { domain, last }, { quiet: true });
+  const answer = await rootctl("net.log", { domain, last }, { quiet: true });
+  const log = { ...answer, items: answer.items.kept };
+  (await import("./push.ts")).left(answer.items.dropped, out, values.json === true);
   if (values.json === true) return out(JSON.stringify(log));
   if (log.from > 0)
     out(
@@ -299,7 +295,7 @@ export const netLog = async (
     );
   for (const e of log.items)
     out(
-      `${e.time}  domain=${e.domain} workspace=${e.workspace}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
+      `${e.time}  domain=${e.domain} workspace=${e.workspace ?? "?"}  ${e.verdict}  ${String(e.host).replace(/[^\x21-\x7e]/g, "?")}:${e.port ?? "?"}${Array.isArray(e.secrets) ? `  [${e.secrets.join(", ").replace(/[^\x21-\x7e ]/g, "?")}]` : ""}${e.reason ? `  (${printable(e.reason)})` : ""}`,
     );
 };
 
@@ -391,7 +387,7 @@ export const domainCommand = async (
         'desolate domain create <slug> [--title "..."] [--repo <owner>/<repo>]...',
         EXIT.usage,
       );
-    const made = await rootctl<{ slug: string; title: string }>(
+    const made = await rootctl(
       "domain.create",
       { slug: second, title: values.title },
       { quiet: true },
@@ -403,7 +399,7 @@ export const domainCommand = async (
       await rootctl("domain.add-repo", { slug: made.slug, repo }, { quiet: true });
     if (json) return out(JSON.stringify({ ...made, repos }));
     return out(
-      `created the domain ${made.slug} ("${made.title}")${repos.length ? ` with ${repos.join(", ")}` : ""}.\nnext: ${repos.length ? `desolate up ${made.slug} --branch <branch>` : `desolate domain ${made.slug} add --repo <owner>/<repo>`}`,
+      `created the domain ${made.slug} ("${printable(made.title, Infinity)}")${repos.length ? ` with ${repos.join(", ")}` : ""}.\nnext: ${repos.length ? `desolate up ${made.slug} --branch <branch>` : `desolate domain ${made.slug} add --repo <owner>/<repo>`}`,
     );
   }
   if (!first)
@@ -416,11 +412,7 @@ export const domainCommand = async (
     if (repoList(values.repo).length) {
       const all = [];
       for (const repo of repoList(values.repo)) {
-        const added = await rootctl<{ repo: string; added: boolean; note: string }>(
-          "domain.add-repo",
-          { slug: first, repo },
-          { quiet: true },
-        );
+        const added = await rootctl("domain.add-repo", { slug: first, repo }, { quiet: true });
         all.push(added);
         if (json) continue;
         out(
@@ -498,10 +490,7 @@ export const domainCommand = async (
         : values.cpus !== undefined || values.memory !== undefined || values.disk !== undefined
           ? sizeFlags(values)
           : undefined;
-    const set = await rootctl<{
-      domain: string;
-      size: Partial<import("../shared/size.ts").Size> | null;
-    }>("domain.size", { slug: first, size: given }, { quiet: true });
+    const set = await rootctl("domain.size", { slug: first, size: given }, { quiet: true });
     if (json) return out(JSON.stringify({ ...set, effective: merge(set.size, stackDefaults()) }));
     return out(
       `${first}: new workspaces get ${describe(merge(set.size, stackDefaults()))}${set.size ? "" : " (the stack's defaults, from this Mac)"}. Existing ones keep what they were made with.`,
@@ -514,7 +503,7 @@ export const domainCommand = async (
         "composing one environment from several specs is not built yet",
         `choose one repository's: desolate domain ${first} env --from <owner>/<repo>`,
       );
-    const env = await rootctl<{ env: string | null; repos: string[] }>(
+    const env = await rootctl(
       "domain.env",
       { slug: first, repo: typeof values.from === "string" ? values.from : undefined },
       { quiet: true },
@@ -549,7 +538,7 @@ export const domainCommand = async (
         `desolate domain ${first} net show | open | enforce | allow <host>... | deny <host>... | allow-internal <address> | hold <size>|default | recommend [--all]`,
         EXIT.usage,
       );
-    const policy = await rootctl<Policy>(
+    const policy = await rootctl(
       "net.policy",
       { domain: first, change: change ?? undefined },
       { quiet: true },
@@ -595,6 +584,14 @@ export const domainCommand = async (
             .map((part) => part.trim())
             .filter(Boolean)
         : [];
+    // The secret just changed, in the root's list after the change: one that is not there is
+    // said, not taken for one that is.
+    const named = <S extends { name: string }>(listed: S[]): S =>
+      listed.find((s) => s.name === name) ??
+      refuse(
+        `the root's list of ${first}'s secrets after the change does not hold ${name}`,
+        `desolate domain ${first} secret list`,
+      );
     if (action === "import") {
       // desolate domain <d> secret import <file> [--dry-run] [--print-env | --in-place]
       //   [--choose KEY=secret:host[,host][@header[,header]] | KEY=value | KEY=local]...
@@ -716,9 +713,9 @@ export const domainCommand = async (
           Number(match![1]) *
           { s: 1, m: 60, h: 3600, d: 86400 }[match![2] as "s" | "m" | "h" | "d"];
       }
-      const switched = (
-        await changeSecrets<Listed[]>(first, "switch", { name, on: action === "on", ttlSeconds })
-      ).find((s) => s.name === name)!;
+      const switched = named(
+        await changeSecrets(first, "switch", { name, on: action === "on", ttlSeconds }),
+      );
       if (json) return out(JSON.stringify(switched));
       return out(
         switched.on
@@ -747,9 +744,7 @@ export const domainCommand = async (
           `desolate domain ${first} secret copy <NAME> --from <domain>`,
           EXIT.usage,
         );
-      const copied = (
-        await changeSecrets<Listed[]>(first, "copy", { name, from: values.from })
-      ).find((s) => s.name === name)!;
+      const copied = named(await changeSecrets(first, "copy", { name, from: values.from }));
       await trustCa(first);
       if (json) return out(JSON.stringify(copied));
       return out(
@@ -776,14 +771,9 @@ export const domainCommand = async (
         if (process.stdin.isTTY)
           process.stderr.write(`Paste the value of ${name} and press Enter (it is not shown): `);
         const value = await readSecretLine();
-        const set = (
-          await changeSecrets<Listed[]>(first, "set", {
-            name,
-            value,
-            hosts: csv(values.hosts),
-            headers,
-          })
-        ).find((s) => s.name === name)!;
+        const set = named(
+          await changeSecrets(first, "set", { name, value, hosts: csv(values.hosts), headers }),
+        );
         await trustCa(first);
         if (json) return out(JSON.stringify(set));
         out(
@@ -792,10 +782,10 @@ export const domainCommand = async (
         if (!set.headers) out(`note: with --anywhere, ${ANYWHERE_COST}. Prefer --headers.`);
         return out(`in a workspace: export SOME_API_KEY=${set.name}   (the name is not a secret)`);
       }
-      const existed = (
-        await rootctl<Listed[]>("secret.list", { domain: first }, { quiet: true })
-      ).some((s) => s.name === name);
-      await changeSecrets<Listed[]>(first, "remove", { name });
+      const existed = (await rootctl("secret.list", { domain: first }, { quiet: true })).some(
+        (s) => s.name === name,
+      );
+      await changeSecrets(first, "remove", { name });
       return out(
         json
           ? JSON.stringify({ existed })
@@ -806,7 +796,7 @@ export const domainCommand = async (
     }
     if (action && action !== "list")
       refuse(`'secret ${action}' is not understood`, usage, EXIT.usage);
-    const listed = await rootctl<Listed[]>("secret.list", { domain: first }, { quiet: true });
+    const listed = await rootctl("secret.list", { domain: first }, { quiet: true });
     if (json) return out(JSON.stringify(listed));
     if (listed.length === 0)
       return out(`the domain ${first} has no secrets. To add one: ${usage.split(" | ")[1]}`);
@@ -817,14 +807,9 @@ export const domainCommand = async (
     return;
   }
   if (second === "show" || second === undefined) {
-    const d = await rootctl<{
-      slug: string;
-      title: string;
-      repos: string[];
-      workspaces: { workspace: string; state: string }[];
-    }>("domain.show", { slug: first }, { quiet: true });
+    const d = await rootctl("domain.show", { slug: first }, { quiet: true });
     if (json) return out(JSON.stringify(d));
-    out(`${d.slug}  "${d.title}"`);
+    out(`${d.slug}  "${printable(d.title, Infinity)}"`);
     out(`  repositories: ${d.repos.join(", ") || "none"}`);
     return out(
       `  workspaces: ${d.workspaces.map((w) => `${w.workspace} (${w.state})`).join(", ") || "none"}`,
@@ -902,7 +887,17 @@ declare namespace domainCommand {
       Mock<"./stack.ts", typeof fakeStack>,
       Invoke<
         typeof rootAnswers,
-        [answers: { "domain.create": { slug: "acme"; title: "Acme" }; "domain.add-repo": {} }]
+        [
+          answers: {
+            "domain.create": {
+              slug: "acme";
+              title: "Acme";
+              repos: [];
+              createdAt: "2026-11-16T09:00:00Z";
+            };
+            "domain.add-repo": { domain: "acme"; repo: "acme/web"; added: true; note: "" };
+          },
+        ]
       >,
       Invoke<
         typeof domainCommand,
@@ -939,7 +934,21 @@ declare namespace domainCommand {
     [
       Invoke<typeof emptyHome>,
       Mock<"./stack.ts", typeof fakeStack>,
-      Invoke<typeof rootAnswers, [answers: { "domain.spawn": {}; "domain.show": {} }]>,
+      Invoke<
+        typeof rootAnswers,
+        [
+          answers: {
+            "domain.spawn": {};
+            "domain.show": {
+              slug: "acme";
+              title: "acme";
+              repos: [];
+              createdAt: "2026-11-16T09:00:00Z";
+              workspaces: [];
+            };
+          },
+        ]
+      >,
     ],
     [
       Given<
@@ -1055,9 +1064,15 @@ declare namespace domainCommand {
         typeof rootAnswers,
         [
           answers: {
-            "domain.show": { workspaces: [] };
+            "domain.show": {
+              slug: "acme";
+              title: "acme";
+              repos: [];
+              createdAt: "2026-11-16T09:00:00Z";
+              workspaces: [];
+            };
             "secret.set": [
-              { name: "ACME-KEY"; hosts: ["api.example.com"]; on: true },
+              { name: "ACME-KEY"; hosts: ["api.example.com"]; headers: null; on: true },
               {
                 name: "ACME-OPENAI-KEY";
                 hosts: ["api.openai.com"];
@@ -1157,6 +1172,29 @@ declare namespace domainCommand {
             "ACME-OPENAI-KEY is held in the root for the domain acme. Its workspaces send the name; the value is put in its place on the way to: api.openai.com (in the header authorization only).",
             "in a workspace: export SOME_API_KEY=ACME-OPENAI-KEY   (the name is not a secret)",
           ]
+        >
+      >,
+      /** a list after the change that does not hold the secret is said, in words */
+      Given<
+        Invoke<typeof stdinGives, [text: "sk-3"]>,
+        Expect<
+          Invoke<
+            typeof refusalOf,
+            [
+              run: typeof domainCommand,
+              args: [
+                args: ["acme", "secret", "set", "ACME-OTHER-KEY"],
+                values: { hosts: "api.example.com"; headers: "authorization" },
+                out: typeof collect,
+              ],
+            ]
+          >,
+          "=",
+          {
+            message: "the root's list of acme's secrets after the change does not hold ACME-OTHER-KEY";
+            fix: "desolate domain acme secret list";
+            code: 1;
+          }
         >
       >,
     ]

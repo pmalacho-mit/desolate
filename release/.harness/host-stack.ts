@@ -2,8 +2,8 @@
 // rootctl) and print lines. It stands in for two things:
 //
 //   - the root: `fakeStack` replaces host/stack.ts (with the DSL's Mock). Its rootctl answers
-//     each op with what `rootAnswers` left for it, as the root's CLI service would, and keeps
-//     a list of what it was asked. Both are files under the test file's home, so the copy of
+//     each op with what `rootAnswers` left for it, as the root's CLI service would, taken as
+//     the real one takes it (host/replies.ts), and keeps a list of what it was asked. Both are files under the test file's home, so the copy of
 //     this module the mock is made from and the copy the test reads agree. An op with no
 //     answer is refused as the real channel refuses a root that does not answer. Its backend
 //     has no VM: it lists and runs only what `vmAnswers` left (after `rootAnswers`).
@@ -13,6 +13,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { Refusal } from "../shared/exit.ts";
+import { replyOf } from "../host/replies.ts";
+import type { Op } from "../host/replies.ts";
 
 const file = (name: string) => path.join(process.env.DESOLATE_HOME!, `nests-${name}.json`);
 const read = <T>(name: string, fallback: T): T => {
@@ -33,12 +35,15 @@ export const rootAnswers = (answers: Record<string, unknown>) => {
 /** The ops the root was asked, in order, with their arguments. */
 export const rootAsked = (): { op: string; args: Record<string, unknown> }[] => read("asked", []);
 
-const rootctl = async (op: string, args: Record<string, unknown> = {}) => {
-  fs.writeFileSync(file("asked"), JSON.stringify([...rootAsked(), { op, args }]));
+/** What the root answers `op` (asked as `as`, which is the op a stand-in's answer is left
+ *  under), as the Mac takes an answer to `op`. */
+const answer = (op: Op, args: Record<string, unknown>, as: string = op) => {
+  fs.writeFileSync(file("asked"), JSON.stringify([...rootAsked(), { op: as, args }]));
   const answers = read<Record<string, unknown>>("answers", {});
-  if (!(op in answers)) throw new Refusal(`the root did not answer '${op}'`, "desolate doctor");
-  return answers[op];
+  if (!(as in answers)) throw new Refusal(`the root did not answer '${as}'`, "desolate doctor");
+  return replyOf(op, answers[as], args);
 };
+const rootctl = async (op: Op, args: Record<string, unknown> = {}) => answer(op, args);
 
 type VmAnswers = {
   list?: { name: string; status: string; labels: Record<string, string> }[];
@@ -88,9 +93,10 @@ export const fakeStack = {
   ROOT_VM: "dsl-main-root",
   config: () => null,
   ensureProxyUser: async () => {},
-  // A change to the secrets is asked of the root as `secret.<action>`, with the domain.
-  changeSecrets: (domain: string, action: string, args: Record<string, unknown>) =>
-    rootctl(`secret.${action}`, { domain, ...args }),
+  // A change to the secrets is asked of the root as `secret.<action>`, with the domain, and
+  // answered as the real one is, by secret.apply's list.
+  changeSecrets: async (domain: string, action: string, args: Record<string, unknown>) =>
+    answer("secret.apply", { domain, ...args }, `secret.${action}`),
 };
 
 /** What stdin gives from now on in this test: `text`, then its end (not a terminal). */

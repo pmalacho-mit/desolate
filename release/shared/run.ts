@@ -5,6 +5,7 @@
 // asked for it goes away; and, for a program that talks to a peer which is remote or not
 // trusted (the forge, a VM), `idleMs`: ended when nothing has arrived for that long, however
 // long it has run. `timeoutMs`, a total, is for the callers not yet moved to those.
+import { StringDecoder } from "node:string_decoder";
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -25,7 +26,7 @@ import type {
   outlivesItsRunner,
   pacedLooks,
 } from "../.harness/shared-run.ts";
-import type { toFile } from "../.harness/shared-run-output.ts";
+import type { stderrSaid, toFile } from "../.harness/shared-run-output.ts";
 
 export type RunResult = { code: number; stdout: string; stderr: string };
 export type RunOptions = {
@@ -39,11 +40,11 @@ export type RunOptions = {
    *  fires, the program is ended, and so is everything it started. */
   signal?: AbortSignal;
   /** The program is ended, with everything it started, when neither of its streams has
-   *  produced anything for this long: "nothing arrived", not "it took too long". (With
-   *  `inheritStderr`, stdout alone is watched: its stderr is not ours to see.) */
+   *  produced anything for this long: "nothing arrived", not "it took too long". */
   idleMs?: number;
-  /** Echo the child's stderr to ours as it arrives (progress for a person). */
-  inheritStderr?: boolean;
+  /** Given each whole line of the child's stderr as it arrives (progress for a person, which
+   *  the caller shows as it shows text another wrote); the answer's stderr still holds it. */
+  stderrLines?: (line: string) => void;
   /** The most of each stream kept, in bytes (default RUN_MAX): past it, the program is
    *  stopped. A caller whose program runs in a VM (whose output is not trusted) and that
    *  needs a line or a page of it should pass far less. */
@@ -188,7 +189,7 @@ export const run = (
       child = spawn(command, args, {
         env: options.env ?? process.env,
         cwd: options.cwd,
-        stdio: ["pipe", file ?? "pipe", options.inheritStderr ? "inherit" : "pipe"],
+        stdio: ["pipe", file ?? "pipe", "pipe"],
         detached: grouped,
       });
     } catch (error) {
@@ -255,6 +256,21 @@ export const run = (
     };
     child.stdout?.on("data", keep(out));
     child.stderr?.on("data", keep(err));
+    if (options.stderrLines) {
+      const say = options.stderrLines;
+      const decoder = new StringDecoder("utf8");
+      let partial = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        if (over) return;
+        const lines = (partial + decoder.write(chunk)).split("\n");
+        partial = lines.pop()!;
+        for (const line of lines) say(line);
+      });
+      child.stderr?.on("end", () => {
+        const rest = partial + decoder.end();
+        if (rest && !over) say(rest);
+      });
+    }
     child.on("error", (error) => {
       done();
       const { stdout, stderr } = text();
@@ -291,6 +307,15 @@ declare namespace run {
     Invoke<typeof run, [command: "printf", args: ["%s|", "$(touch x); rm -rf ~", "*"]]>,
     "=",
     { code: 0; stdout: "$(touch x); rm -rf ~|*|"; stderr: "" }
+  >;
+  /** stderr's lines given as they come, whole (the last one too, with no newline); and kept */
+  export type StderrLines = Expect<
+    Invoke<
+      typeof stderrSaid,
+      [command: "sh", args: ["-c", "printf 'one\\ntw' >&2; sleep 0.1; printf 'o\\nthree' >&2"]]
+    >,
+    "=",
+    { lines: ["one", "two", "three"]; stderr: "one\ntwo\nthree" }
   >;
   /** what `input` holds is the child's stdin */
   export type Input = Expect<

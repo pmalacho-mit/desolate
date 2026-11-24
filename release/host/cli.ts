@@ -742,9 +742,7 @@ const main = async (argv: string[]): Promise<number> => {
   if (verb === "suede" && rest[0] === "changed") {
     const { values, positionals } = flags(rest.slice(1), { from: { type: "string" } });
     const { rootctl } = await import("./stack.ts");
-    const changed = await rootctl<
-      { dir: string; remote: string | null; branch: string; files: string[] }[]
-    >(
+    const changed = await rootctl(
       "suede.changed",
       { repo: positionals[0], to: positionals[1], from: values.from ?? null },
       { quiet: true },

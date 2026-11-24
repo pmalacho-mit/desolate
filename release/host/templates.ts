@@ -212,7 +212,7 @@ const ensureOrThrow = async (
   size?: Size,
 ): Promise<string | null> => {
   const b = backend();
-  const env = await rootctl<EnvKey | null>(
+  const env = await rootctl(
     "domain.env-key",
     { slug: domain, ...(envRepo ? { repo: envRepo } : {}) },
     { quiet: true },
@@ -239,7 +239,7 @@ const ensureOrThrow = async (
   say(
     `  building ${domain}'s environment once (${env.repo}, ${env.spec} ${env.id.slice(0, 12)}): later workspaces start from it`,
   );
-  const plan = await rootctl<WorkspacePlan>(
+  const plan = await rootctl(
     "workspace.plan",
     {
       instance: INSTANCE,

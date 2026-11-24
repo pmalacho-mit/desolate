@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { workspaceVmName } from "../shared/names.ts";
 import { INSTANCE } from "../host/paths.ts";
+import { checkoutPath } from "../shared/plan.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import type { status } from "../host/status.ts";
 
@@ -17,21 +18,26 @@ export const rootRecord = (
   repo: string,
   branch: string,
   vmOf = domain,
-): WorkspacePlan => ({
+): WorkspacePlan & { state: string } => ({
   domain,
   workspace,
   vm: workspaceVmName(INSTANCE, vmOf, workspace),
   title: workspace,
   fetch: false,
   createdAt: "2026-11-16T09:00:00Z",
+  state: "up",
   checkouts: [
     {
       repo,
       kind: branch === "main" ? "main" : "worktree",
-      name: branch,
+      name: branch === "main" ? "" : branch,
       branch,
-      base: "origin/main",
-      path: `/workspaces/${repo}`,
+      base: "main",
+      path: checkoutPath(
+        repo,
+        branch === "main" ? "main" : "worktree",
+        branch === "main" ? "" : branch,
+      ),
     },
   ],
 });
