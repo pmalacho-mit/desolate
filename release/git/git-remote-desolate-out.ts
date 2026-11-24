@@ -23,11 +23,10 @@ import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
 import { named, newId, requester, requestRefusal } from "../shared/git-out-box.ts";
+import { lfsPointer } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
-const POINTER =
-  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
 const fail = (message: string): never => {
   process.stderr.write(`git-remote-desolate-out: ${message}\n`);
   process.exit(1);
@@ -163,7 +162,7 @@ const lfsOf = async (commit: string, have: string[]): Promise<string[]> => {
       if (end < 0) break;
       const size = Number(/ blob (\d+)$/.exec(held.subarray(0, end).toString("latin1"))?.[1]);
       if (!Number.isInteger(size) || held.length < end + 1 + size + 1) break;
-      const oid = pointerOid(held.subarray(end + 1, end + 1 + size).toString("utf8"));
+      const oid = lfsPointer(held.subarray(end + 1, end + 1 + size).toString("utf8"))?.oid;
       if (oid) oids.add(oid);
       held = held.subarray(end + 1 + size + 1);
     }
@@ -186,52 +185,6 @@ const sha256Of = (file: string) => {
   }
   return hash.digest("hex");
 };
-
-/** The LFS object a blob points to, when the blob is git-lfs's pointer exactly. */
-export const pointerOid = (blob: string): string | null => POINTER.exec(blob)?.[1] ?? null;
-
-declare namespace pointerOid {
-  export type Pointer = Expect<
-    Invoke<
-      typeof pointerOid,
-      [
-        blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
-      ]
-    >,
-    "=",
-    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-  >;
-  /** a file that only looks like one: its object is not looked for, nor copied out */
-  export type NotPointers = Table<
-    typeof pointerOid,
-    [
-      [
-        args: [
-          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12",
-        ],
-        expected: null,
-      ],
-      [
-        args: [
-          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:../../../../etc/passwd\nsize 12\n",
-        ],
-        expected: null,
-      ],
-      [
-        args: [
-          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
-        ],
-        expected: null,
-      ],
-      [
-        args: [
-          blob: "# notes\nversion https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
-        ],
-        expected: null,
-      ],
-    ]
-  >;
-}
 
 /** What git asks to push (`push <src>:<dst>`, `+` when forced): a branch, from a commit. The
  *  branch's name is not judged here: the host refuses one desolate does not carry

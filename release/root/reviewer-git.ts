@@ -174,10 +174,6 @@ declare namespace lookalike {
   >;
 }
 
-/** An LFS pointer, in git-lfs's own form: a version line, the oid, the size, nothing else. */
-export const POINTER =
-  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
-
 export const repoDir = (repo: Repo) =>
   path.join(REVIEWER.home, "repos", repo.owner, `${repo.name}.git`);
 const CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n";

@@ -372,6 +372,126 @@ declare namespace isLfsOid {
   >;
 }
 
+/** An LFS pointer's object, when a blob is git-lfs's three lines exactly; else null, and it is
+ *  an ordinary file. (A pointer with an extension line, which the spec allows, is taken as a
+ *  file too: the forge then refuses the push that names its object.) */
+export const lfsPointer = (blob: string): { oid: string; size: number } | null => {
+  const m =
+    /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/.exec(
+      blob,
+    );
+  return m ? { oid: m[1]!, size: Number(m[2]) } : null;
+};
+
+declare namespace lfsPointer {
+  /** the pointer, exactly: its oid and the size it says (an empty object's is 0) */
+  export type Pointers = Table<
+    typeof lfsPointer,
+    [
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: {
+          oid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+          size: 12;
+        },
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nsize 0\n",
+        ],
+        expected: {
+          oid: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+          size: 0;
+        },
+      ],
+    ]
+  >;
+  /** at each edge of the form, a file that only looks like one */
+  export type NotPointers = Table<
+    typeof lfsPointer,
+    [
+      /** its last newline missing, a line before it, a line after it, CR LF line ends */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "# notes\nversion https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\r\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\nsize 12\r\n",
+        ],
+        expected: null,
+      ],
+      /** another spec, an extension line (which the spec allows: see above) */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\next-0-foo sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      /** an oid of 63 or 65 digits, in upper case, or a path: never a file name */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:../../../../etc/passwd\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      /** a size that is not a number of bytes */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize \n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize -12\n",
+        ],
+        expected: null,
+      ],
+    ]
+  >;
+}
+
 const hex = (text: string, length: number) =>
   createHash("sha256").update(text).digest("hex").slice(0, length);
 
