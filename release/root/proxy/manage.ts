@@ -97,6 +97,13 @@ declare namespace start {
     >,
     Throws<Invoke<typeof start, [vm: "dsl-T-1", domain: "acme", workspace: "w1"]>, "not a VM name">,
   ];
+  /** a VM's name passes, and the next check is the one that refuses: no proxies' user for
+   *  the domain yet (none in a test)
+   *  @control */
+  export type AVm = Throws<
+    Invoke<typeof start, [vm: "dsl-t-1", domain: "acme", workspace: "w1"]>,
+    "the domain acme has no proxies' user yet"
+  >;
 }
 
 export const stop = (vm: string) => {
