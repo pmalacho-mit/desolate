@@ -408,16 +408,10 @@ export const importDeliveries = async (repo: string): Promise<string[]> => {
 // ends when whoever asked stops waiting. What else ends it is the root being gone, said as
 // such: its beat stopped (BEAT's 10 s of nothing: the root is on the same Mac, and a thread
 // that does nothing but write a small file is never that late), before it took the request
-// or after; or a beat from another start of rootd than the one that took it.
-//
-// Both ends change apart. A root from before the beat (its VM not restarted since) writes none:
-// the wait is then the old one, 2 minutes, in the old words. A workspace from before (its VM
-// not restarted) reads only the reply, which is where it always was, and waits its old 2 min.
+// or after; or a beat from another start of rootd than the one that took it. No beat file at
+// all is a beat that never moves: rootd writes one into every domain's inbox as it starts.
 
 const BEAT_FILE = path.join(INBOX, "rootd.beat");
-/** How long a request waits on a root that writes no beat: one from before the beat, as it
- *  always waited. */
-const LEGACY_MS = 120_000;
 /** How often a waiter looks: three small reads. */
 const POLL_MS = 150;
 /** How often a long wait says again what the root is doing, when that has not changed. */
@@ -497,8 +491,8 @@ export type Look = {
   /** The request is still in the outbox: the root has not taken it. */
   asked: boolean;
   taken: { boot?: unknown; doing?: unknown } | null;
-  /** The beat's text; null while there has never been one (a root from before the beat). */
-  beat: string | null;
+  /** The beat's text; "" while there has never been one. */
+  beat: string;
   /** The beat has stopped, as watchBeat says. */
   stopped: boolean;
   /** How long it has waited, and how long the request has been neither in the outbox nor
@@ -515,15 +509,6 @@ export type Verdict =
 
 export const verdict = (look: Look, window = BEAT.beatMs * BEAT.missed): Verdict => {
   if (look.reply) return { answer: look.reply };
-  if (look.beat === null)
-    return look.waited < LEGACY_MS
-      ? { wait: "waiting for the root to answer" }
-      : {
-          answer: {
-            ok: false,
-            error: "the root did not answer. Is it running? On the host: desolate doctor",
-          },
-        };
   const quiet = `${window / 1000} s`;
   if (look.stopped)
     return look.asked
@@ -639,8 +624,27 @@ declare namespace verdict {
     >,
   ];
   /** a root that is gone is said to be, in 10 s: before it took the request (which is then
-   *  withdrawn, so it is not done later unasked), or after */
+   *  withdrawn, so it is not done later unasked), or after; and a domain with no beat file
+   *  at all, watched for as long (its root is not running) */
   export type Gone = [
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            beat: "";
+            stopped: true;
+            waited: 10000;
+            lost: 0;
+          },
+        ]
+      >,
+      "matches",
+      { withdraw: { ok: false; fix: "on the host: desolate doctor" } }
+    >,
     Expect<
       Invoke<
         typeof verdict,
@@ -738,50 +742,6 @@ declare namespace verdict {
       }
     >,
   ];
-  /** a root from before the beat: the old wait, two minutes, in the old words */
-  export type OldRoot = [
-    Expect<
-      Invoke<
-        typeof verdict,
-        [
-          look: {
-            reply: null;
-            asked: true;
-            taken: null;
-            beat: null;
-            stopped: false;
-            waited: 119000;
-            lost: 0;
-          },
-        ]
-      >,
-      "=",
-      { wait: "waiting for the root to answer" }
-    >,
-    Expect<
-      Invoke<
-        typeof verdict,
-        [
-          look: {
-            reply: null;
-            asked: true;
-            taken: null;
-            beat: null;
-            stopped: false;
-            waited: 120000;
-            lost: 0;
-          },
-        ]
-      >,
-      "=",
-      {
-        answer: {
-          ok: false;
-          error: "the root did not answer. Is it running? On the host: desolate doctor";
-        };
-      }
-    >,
-  ];
 }
 
 /** The beat's text, or null when there is no beat file (or none could be read just now). */
@@ -810,7 +770,7 @@ export const request = async (
   const started = performance.now();
   // Once a beat has been read, a beat file that cannot be read is the same beat: one that
   // does not move.
-  let heard: string | null = null;
+  let heard = "";
   let seen: Watched | null = null;
   let lostSince: number | null = null;
   let said = "";
@@ -826,9 +786,8 @@ export const request = async (
       null,
     );
     heard = readBeat() ?? heard;
-    const watched: ReturnType<typeof watchBeat> | null =
-      heard === null ? null : watchBeat(seen, heard, now);
-    seen = watched?.seen ?? null;
+    const watched = watchBeat(seen, heard, now);
+    seen = watched.seen;
     lostSince = reply || waiting || taken ? null : (lostSince ?? now);
     const next = verdict(
       {
@@ -836,7 +795,7 @@ export const request = async (
         asked: waiting,
         taken,
         beat: heard,
-        stopped: watched?.stopped ?? false,
+        stopped: watched.stopped,
         waited: now - started,
         lost: now - (lostSince ?? now),
       },

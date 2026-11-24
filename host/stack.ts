@@ -11,7 +11,6 @@ import { define, valueOf, whole } from "../shared/settings.ts";
 import { forTerminal } from "../shared/text.ts";
 import { because } from "./failures.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
-import { fakeBackend } from "./vm/fake.ts";
 import { limaBackend } from "./vm/lima.ts";
 import { vmSize } from "../shared/size.ts";
 import type { Backend, VmSpec } from "./vm/types.ts";
@@ -34,25 +33,33 @@ export const saveConfig = (value: Config) => writeJson(CONFIG, value);
 export const defaultBackend = (): Config["backend"] =>
   process.platform === "darwin" ? "vz" : "qemu";
 
-/** Which backend this invocation uses. `fake` is never remembered and never a default: it
- *  runs only when DESOLATE_BACKEND=fake is in the environment of this very command
- *  (section 13.2), so a stack cannot quietly be the unisolated kind. */
-export const backendKind = (): Config["backend"] => {
+/** The backend a test run loaded into this process before any command ran: the tests'
+ *  stand-in for VMs (tests/v3/lib/fake-backend.ts, by `node --import`). Not in release/,
+ *  so nothing an install has, and nothing a person sets, selects it. */
+let loaded: Backend | null = null;
+export const useBackend = (b: Backend) => {
+  loaded = b;
+};
+
+/** Which backend this invocation uses. `fake` is never remembered as a default: it is the
+ *  backend only when a test run loaded it into this very command (section 13.2), so a stack
+ *  cannot quietly be the unisolated kind. */
+export const backendKind = (testsLoaded = loaded?.kind): Config["backend"] => {
   const env = process.env.DESOLATE_BACKEND;
   const stored = config()?.backend;
-  if (env !== undefined && env !== "fake" && env !== "qemu" && env !== "vz")
-    refuse(`DESOLATE_BACKEND is '${env}'`, "use fake, qemu or vz");
-  if (stored === "fake" && env !== "fake")
+  if (env !== undefined && env !== "qemu" && env !== "vz")
+    refuse(`DESOLATE_BACKEND is '${env}'`, "use qemu or vz");
+  if (stored === "fake" && testsLoaded !== "fake")
     refuse(
-      "this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name",
-      "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend",
+      "this stack was bootstrapped on the tests' fake backend, which gives no isolation and runs only when a test run loads it",
+      "run each command as the tests do, with NODE_OPTIONS=--import=<checkout>/tests/v3/lib/fake-backend.ts, or `desolate destroy --all` that way and bootstrap a real backend",
     );
-  if (env === "fake" && stored && stored !== "fake")
+  if (testsLoaded === "fake" && stored && stored !== "fake")
     refuse(
-      `DESOLATE_BACKEND=fake, but this stack was bootstrapped on ${stored}`,
-      "unset DESOLATE_BACKEND",
+      `the tests' fake backend is loaded, but this stack was bootstrapped on ${stored}`,
+      "unset NODE_OPTIONS",
     );
-  return (env as Config["backend"] | undefined) ?? stored ?? defaultBackend();
+  return testsLoaded ?? (env as Config["backend"] | undefined) ?? stored ?? defaultBackend();
 };
 
 declare namespace backendKind {
@@ -65,11 +72,11 @@ declare namespace backendKind {
     ],
     Expect<Invoke<typeof backendKind>, "=", "qemu">
   >;
-  /** the fake backend (no isolation at all) only when this very command asks for it by name */
-  export type FakeOnlyByName = [
+  /** the fake backend (no isolation at all) only when a test run loaded it into this command */
+  export type FakeOnlyLoaded = [
     Given<
-      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
-      Expect<Invoke<typeof backendKind>, "=", "fake">
+      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>],
+      Expect<Invoke<typeof backendKind, [testsLoaded: "fake"]>, "=", "fake">
     >,
     Given<
       [
@@ -81,10 +88,19 @@ declare namespace backendKind {
         Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
         "=",
         {
-          message: "this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name";
-          fix: "set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend";
+          message: "this stack was bootstrapped on the tests' fake backend, which gives no isolation and runs only when a test run loads it";
+          fix: "run each command as the tests do, with NODE_OPTIONS=--import=<checkout>/tests/v3/lib/fake-backend.ts, or `desolate destroy --all` that way and bootstrap a real backend";
           code: 1;
         }
+      >
+    >,
+    /** no variable selects it: the name is not a backend's */
+    Given<
+      [Invoke<typeof emptyHome>, Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>],
+      Expect<
+        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
+        "=",
+        { message: "DESOLATE_BACKEND is 'fake'"; fix: "use qemu or vz"; code: 1 }
       >
     >,
   ];
@@ -94,14 +110,14 @@ declare namespace backendKind {
       [
         Invoke<typeof emptyHome>,
         Invoke<typeof writeState, [name: "config.json", text: '{"backend":"vz"}']>,
-        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: "fake"]>,
+        Invoke<typeof setEnv, [name: "DESOLATE_BACKEND", value: null]>,
       ],
       Expect<
-        Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
+        Invoke<typeof refusalOf, [run: typeof backendKind, args: [testsLoaded: "fake"]]>,
         "=",
         {
-          message: "DESOLATE_BACKEND=fake, but this stack was bootstrapped on vz";
-          fix: "unset DESOLATE_BACKEND";
+          message: "the tests' fake backend is loaded, but this stack was bootstrapped on vz";
+          fix: "unset NODE_OPTIONS";
           code: 1;
         }
       >
@@ -114,7 +130,7 @@ declare namespace backendKind {
       Expect<
         Invoke<typeof refusalOf, [run: typeof backendKind, args: []]>,
         "=",
-        { message: "DESOLATE_BACKEND is 'docker'"; fix: "use fake, qemu or vz"; code: 1 }
+        { message: "DESOLATE_BACKEND is 'docker'"; fix: "use qemu or vz"; code: 1 }
       >
     >,
   ];
@@ -124,7 +140,7 @@ let cached: Backend | null = null;
 export const backend = (): Backend => {
   if (cached) return cached;
   const kind = backendKind();
-  cached = kind === "fake" ? fakeBackend() : limaBackend(kind);
+  cached = kind === "fake" ? loaded! : limaBackend(kind);
   return cached;
 };
 

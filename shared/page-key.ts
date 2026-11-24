@@ -118,7 +118,3 @@ declare namespace carriesCredential {
  *  cookie. Nothing in it runs but desolate's own script (the pages' CSP: script-src 'self'). */
 export const signedInPage = (token: string, next: string) =>
   `<!doctype html><meta charset="utf-8"><meta name="desolate-key" content="${pageKey(token)}"><meta name="desolate-next" content="${next.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;")}"><title>desolate</title><script src="/page-key.js"></script><p>Signed in.</p>\n`;
-
-/** The script that page loads: served at /page-key.js by each page, with no credential (it holds
- *  none). */
-export const PAGE_KEY_SCRIPT = ["shared", "ui", "page-key.js"] as const;

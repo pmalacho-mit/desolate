@@ -74,9 +74,7 @@ id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx desolate-reviewer && gpasswd -d "$U
 # Each domain's proxies' user (proxy/as-proxy.ts) is made by proxy-user.sh: for every domain
 # there is, here, and for a new one when the host first wants its proxies. None of them is
 # in a group of the root's user (the keyring's sockets are not theirs), and the root's user
-# is in none of theirs. (Layout 2 had one proxies' user for every domain: gone, with the
-# root's user's membership of its group.)
-id -nG "$USER_NAME" | tr ' ' '\n' | grep -qx desolate-proxy && gpasswd -d "$USER_NAME" desolate-proxy >/dev/null
+# is in none of theirs.
 for domain_dir in /desolate/domains/*/; do
   [ -d "$domain_dir" ] || continue   # no domains: the pattern itself
   domain=$(basename "$domain_dir")
@@ -108,15 +106,11 @@ install -d -m 0755 -o root -g root "$SYS" "$RUN"
 for dir in /usr/local/bin /usr/local/lib /usr/local/include /usr/local/share; do
   [ -d "$dir" ] && find "$dir" -xdev \( ! -uid 0 -o ! -gid 0 \) -exec chown -h 0:0 {} +
 done
-# The places above are layout 2. Services an older desolate started use the old places
-# (a keyring that went on making keys in the user's directory): stopped here, and started
-# again below.
-LAYOUT=2
-# And services started from other code: desolate was updated under them, and a fix (to the
+# Services started from other code: desolate was updated under them, and a fix (to the
 # state service's checks, say) means nothing until what runs is the fixed code. The code is
 # the release's, which only the host can change (a read-only share).
 CODE=$(cd "$HERE/.." && find root shared -type f \( -name '*.ts' -o -name '*.py' -o -name '*.sh' \) -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16)
-if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2>/dev/null)" != "$CODE" ]; then
+if [ "$(cat "$SYS/code" 2>/dev/null)" != "$CODE" ]; then
   groups=()
   for svc in rootd stated rootctl pusher reviewer; do
     [ -f "$RUN/$svc.pid" ] && { groups+=("$(cat "$RUN/$svc.pid")"); kill -- "-$(cat "$RUN/$svc.pid")" 2>/dev/null || true; }
@@ -128,12 +122,11 @@ if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2
   rm -rf "$RUN/pusher" "$RUN/pusher.pid" "$RUN/pusher.ended"
   pkill -KILL -u desolate-reviewer 2>/dev/null || true
   rm -rf "$RUN/reviewer" "$RUN/reviewer.pid" "$RUN/reviewer.ended" "$RUN/keyring-review"
-  # The proxies too (rootd started them; bootstrap gives each running workspace a new one).
-  # (By where they run from now, root's copy, and where they once did: an audit found that
-  # matching only the old place left updated proxies running their old code.)
-  proxies=("/opt/desolate/proxy-code/root/proxy/proxy.ts" "$HERE/proxy/proxy.ts" /opt/desolate/proxy-venv/bin/mitmdump)
+  # The proxies too (rootd started them; bootstrap gives each running workspace a new one),
+  # by where they run from: root's copy.
+  proxies=("/opt/desolate/proxy-code/root/proxy/proxy.ts" /opt/desolate/proxy-venv/bin/mitmdump)
   for proxy in "${proxies[@]}"; do pkill -f "$proxy" 2>/dev/null || true; done
-  [ -d "$STATE" ] && as_user bash -c 'rm -f "$1"/proxy/running/*.json "$1"/proxy/secrets/*.json' _ "$STATE" 2>/dev/null || true
+  [ -d "$STATE" ] && as_user bash -c 'rm -f "$1"/proxy/running/*.json' _ "$STATE" 2>/dev/null || true
   rm -f /var/lib/desolate-proxies/domains/*/secrets-proxy.json
   # Nothing new starts until every one of them is gone: what was told to end is waited for,
   # by its processes. (Before: one second, and then on, whether or
@@ -168,17 +161,16 @@ if [ "$(cat "$SYS/layout" 2>/dev/null)" != "$LAYOUT" ] || [ "$(cat "$SYS/code" 2
   done
 fi
 install -d -m 0755 -o "$USER_NAME" -g "$USER_GROUP" "$STATE"
-# Keys made before the keyring moved out of $STATE: taken across once, and only if what is
-# there is the keyring's own directory (the user could have swapped it for one of its own).
-if [ ! -e "$SYS/keyring" ] && [ -d "$STATE/keyring" ] && [ ! -L "$STATE/keyring" ]; then
-  mv "$STATE/keyring" "$SYS/keyring.moving"
-  if [ "$(stat -c %U "$SYS/keyring.moving")" = desolate-keyring ] && [ ! -L "$SYS/keyring.moving" ]; then
-    mv "$SYS/keyring.moving" "$SYS/keyring"
-  else
-    echo "start.sh: $STATE/keyring was not the keyring's own directory; set aside in $SYS, not used" >&2
-    mv "$SYS/keyring.moving" "$SYS/keyring.refused-$(date +%s)"
-  fi
-fi
+# A root from before the layouts of 2026-11-11 and 2026-11-12 kept the keys, each domain's
+# policy and its secret values where the root's user writes. They are not moved across any
+# more: refused, rather than read as none (a domain with no policy file is open, and one
+# with no store has no secrets). Nothing writes these places now.
+for old in "$STATE/keyring" "$STATE/proxy/policy" "$STATE/secrets" /var/lib/desolate-proxies/domains/*/secrets.json; do
+  [ -e "$old" ] || [ -L "$old" ] || continue
+  echo "start.sh: $old is from a desolate before 2026-11-13, whose root state this one no longer converts" >&2
+  echo "  fix: convert it once with the last desolate that did: git -C <your desolate> checkout d54984e && desolate bootstrap, then check out main again and run desolate bootstrap; or desolate destroy --all and begin again (its keys and secrets are lost)" >&2
+  exit 1
+done
 install -d -m 0700 -o desolate-keyring -g "$USER_GROUP" "$SYS/keyring"
 install -d -m 0750 -o desolate-keyring -g "$USER_GROUP" "$RUN/keyring"
 # The write agent's relay and the pusher's questions to the keyring: a directory the root's
@@ -198,51 +190,16 @@ install -m 0755 -o root -g root "$HERE/hooks/pre-push" "$SYS/hooks/pre-push"
 install -d -m 0755 -o root -g root "$SYS/mirror-hooks"
 printf '#!/bin/sh\necho "desolate: the mirror holds only what the remote published; nothing is pushed into it." >&2\nexit 1\n' >"$SYS/mirror-hooks/pre-receive"
 chmod 0755 "$SYS/mirror-hooks/pre-receive"
-# The old places of the above, in the user's directory: not used any more. (rm does not
-# follow a link it is given.)
-rm -rf "$STATE/hooks" "$STATE/mirror-hooks"
 as_user bash -c '
   set -eu; cd "$1"
   for f in registry.json forge.json known_hosts; do [ -e "$f" ] || : >"$f"; done
   [ -s registry.json ] || echo "{\"repos\":{}}" >registry.json
-  # Layout 1 left these: gitconfig is root'"'"'s now, and the logs were opened by root.
-  rm -f gitconfig keyring.log
-  for log in rootd.log stated.log rootctl.log; do [ -O "$log" ] || { [ -f "$log" ] && cat "$log" >"$log.mine" && mv -f "$log.mine" "$log"; } || rm -f "$log"; done
   mkdir -p -m 0700 approvals proxy/running
   mkdir -p -m 0755 push-locks
   chmod 0700 approvals proxy/running
-  chmod 0700 proxy
-  # Layout 2 kept every domain'"'"'s policy and secret values here, for one proxies'"'"' user:
-  # each goes to its domain'"'"'s own directory (proxy-user.sh made them above), once, and
-  # the old copies go.
-  for old in proxy/policy/*.json secrets/*.json; do
-    [ -f "$old" ] && [ ! -L "$old" ] || continue
-    domain=$(basename "$old" .json)
-    case $old in proxy/policy/*) new=policy.json ;; *) new=secrets.json ;; esac
-    dir=/var/lib/desolate-proxies/domains/$domain
-    [ -d "$dir" ] && [ -O "$dir" ] || continue
-    [ -e "$dir/$new" ] || { cat "$old" >"$dir/$new.tmp" && chmod 0640 "$dir/$new.tmp" && mv "$dir/$new.tmp" "$dir/$new"; }
-    rm -f "$old"
-  done
-  rmdir proxy/policy proxy/secrets secrets 2>/dev/null || true
-  # And its shared proxy-out. (Not carried over: a domain'"'"'s secrets proxy makes a new CA,
-  # which its workspaces trust at their next start. Root copying from this directory, which
-  # is the user'"'"'s to swap, could be made to copy anything root can read.)
-  rm -rf proxy-out' _ "$STATE"
-# Secret values are root's (proxy/secret-store.ts). A domain's store kept by the root's user
-# (layout of 2026-11-12, before) is read BY THAT USER and handed to root as data, then goes.
+  chmod 0700 proxy' _ "$STATE"
+# Secret values are root's (proxy/secret-store.ts).
 install -d -m 0755 -o root -g root /var/lib/desolate-proxies/secrets
-for old in /var/lib/desolate-proxies/domains/*/secrets.json; do
-  [ -f "$old" ] || continue
-  domain=$(basename "$(dirname "$old")")
-  is_slug "$domain" || { printf 'start.sh: %q is not a domain: its secrets were not taken over, and are still in %q\n' "$domain" "$old" >&2; continue; }
-  if [ ! -e "/var/lib/desolate-proxies/secrets/$domain.json" ]; then
-    as_user cat "$old" | $NODE "$HERE/proxy/secret-store.ts" "$domain" import >/dev/null \
-      || { echo "start.sh: the domain $domain's secrets could not be taken over; they are still in $old" >&2; exit 1; }
-  fi
-  as_user rm -f "$old"
-done
-id desolate-proxy >/dev/null 2>&1 && { pkill -u desolate-proxy 2>/dev/null; userdel desolate-proxy 2>/dev/null; groupdel desolate-proxy 2>/dev/null; } || true
 # The root's git settings, for desolate's own commands and for the person's shell alike.
 # The root's clones hold commits that agents wrote. Nothing here trusts what a commit
 # contains:
@@ -320,7 +277,6 @@ P
 # No sudo rule: nothing in this VM can approve a push. An approval is a signature by the
 # approver on the HOST, checked against the public key the host installs here (a directory
 # and file only root writes; keyring.ts refuses a key anyone else could have replaced).
-rm -f /etc/sudoers.d/desolate-keyring
 install -d -m 0755 -o root -g root /etc/desolate
 # ($STATE/approvals, where a raw `git push` in the root's terminal leaves its request for
 # `desolate approve`, was made above, by the user.)
@@ -404,6 +360,5 @@ alive "$RUN/stated.pid" || kept stated stated.ts
 # code each time. Its socket's directory is the user's alone; the host asks as that user.
 install -d -m 0700 -o "$USER_NAME" "$RUN/rootctl"
 alive "$RUN/rootctl.pid" || kept rootctl rootctl.ts serve
-echo "$LAYOUT" >"$SYS/layout"
 echo "$CODE" >"$SYS/code"
 echo "root services: keyring, pusher, reviewer, rootd, the state service and the CLI channel up"

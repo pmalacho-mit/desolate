@@ -1772,7 +1772,6 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     ROOT.state,
     APPROVALS,
     path.join(ROOT.state, "refused"),
-    path.join(ROOT.state, "secrets"),
     path.join(ROOT.state, "issues"),
     ROOT.domains,
     HOST_QUEUE,

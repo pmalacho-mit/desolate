@@ -225,14 +225,13 @@ const ensureOrThrow = async (
     return name;
   // A template of this domain for this environment, made from an older spec, is stale; one
   // half made is no use. Another environment's is not: a domain with a python repository and a
-  // node one keeps a template for each (one made before templates were labelled with their
-  // environment counts as stale).
+  // node one keeps a template for each.
   for (const vm of await b.list())
     if (
       vm.labels.domain === domain &&
       vm.labels.template &&
       vm.name !== name &&
-      (vm.labels.env ?? env.repo) === env.repo
+      vm.labels.env === env.repo
     )
       await b.destroy(vm.name);
   if (info.status !== "missing") await b.destroy(name);

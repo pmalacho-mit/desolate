@@ -99,7 +99,7 @@ Suede dependencies:
                                                                  VM); you approve the push; waits for the pull request
 
 The stack itself:
-  desolate bootstrap [--backend vz|qemu|fake] [--forge github]   from nothing to a working stack
+  desolate bootstrap [--backend vz|qemu] [--forge github]   from nothing to a working stack
   desolate doctor [--json]                                       check it; every failure names its fix
   desolate down                                                  stop every VM and the daemon; remove nothing
   desolate destroy [--all]                                       remove the VMs (--all: and ~/.desolate)

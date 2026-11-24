@@ -7,13 +7,16 @@
 // whoever is waiting stops it. It stays in this process's group, so a terminal's Ctrl-C
 // reaches it as it reaches desolate.
 import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
+import { Duplex } from "node:stream";
 import { RUN_MAX } from "../../shared/run.ts";
 import type { RunResult } from "../../shared/run.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyScratch, scratch } from "../../.harness/shared-files.ts";
 import type { hexOf, streamed } from "../../.harness/host-stream.ts";
+import type { endOf, spawnFailed } from "../../.harness/host-vm.ts";
 
 export type StreamOptions = {
   env?: NodeJS.ProcessEnv;
@@ -190,5 +193,51 @@ declare namespace runStreamed {
     Invoke<typeof runStreamed, [command: "desolate-no-such-program", args: []]>,
     "matches",
     { code: 127; stderr: "spawn desolate-no-such-program ENOENT" }
+  >;
+}
+
+/** A child process's stdio as one Duplex stream. */
+export const duplexOf = (child: ChildProcess): Duplex => {
+  const { stdin, stdout } = child;
+  // No pipes: the spawn failed before it made them (EMFILE, ENFILE: this process holds too
+  // many files). Its error comes on the next tick and ends the stream, which is not thrown.
+  if (!stdin || !stdout) {
+    const failed = new Duplex({ read() {}, write: (_chunk, _encoding, done) => done() });
+    child.once("error", (error) => failed.destroy(error));
+    return failed;
+  }
+  const stream = new Duplex({
+    read() {
+      stdout.resume();
+    },
+    write(chunk, encoding, callback) {
+      stdin.write(chunk, encoding, callback);
+    },
+    final(callback) {
+      stdin.end(callback);
+    },
+    destroy(error, callback) {
+      child.kill();
+      callback(error);
+    },
+  });
+  stdout.on("data", (chunk) => {
+    if (!stream.push(chunk)) stdout.pause();
+  });
+  stdout.on("end", () => stream.push(null));
+  stdin.on("error", () => {});
+  child.on("error", (error) => stream.destroy(error));
+  return stream;
+};
+
+declare namespace duplexOf {
+  /** a spawn that could not make its pipes gives a stream ended by its error, not a throw */
+  export type NoPipes = Expect<
+    Invoke<
+      typeof endOf,
+      [stream: Invoke<typeof duplexOf, [child: Invoke<typeof spawnFailed, [code: "EMFILE"]>]>]
+    >,
+    "=",
+    "spawn socat EMFILE"
   >;
 }
