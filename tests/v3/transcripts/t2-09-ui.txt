@@ -50,6 +50,8 @@ doctor: all checks passed.
 
 ## the dashboard in a browser
 
+## the state service started again
+
 ## stop and start
 
 ## new workspace in another repository's environment
