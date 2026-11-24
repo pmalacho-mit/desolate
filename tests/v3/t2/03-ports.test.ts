@@ -1,7 +1,7 @@
 // T2 (fake backend). Section 4.4: ports keep their numbers, nothing is declared, several
 // workspaces share a number by name, and what has no name is reserved instead.
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -43,6 +43,9 @@ const serve = (target: string, args: string, root = false) =>
     { root },
   );
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** How long the host's forwarder waits before it tries again to bind a port something else
+ *  held (host/daemon.ts, `hostHeld`). */
+const HELD_AGAIN_MS = 10_000;
 const until = async (probe: () => boolean | Promise<boolean>, ms = 8000) => {
   for (const deadline = Date.now() + ms; Date.now() < deadline;) {
     if (await probe()) return true;
@@ -322,7 +325,27 @@ else {
   it("a protocol with no name reaches the first workspace that had the port; the others keep the number taken", async () => {
     stack.step("a raw TCP port");
     serve("web/one", "one 5432 raw");
-    assert.ok(await until(() => urlOf("web/one", 5432) !== undefined), JSON.stringify(ports()));
+    // 5432 because it is one of the ports desolate knows a protocol with no name is spoken on
+    // (forward.ts, RAW_PORTS). Something on this machine may hold it for a moment as the host
+    // binds it: the host then says it is held and tries again after 10 s (daemon.ts, its
+    // forwarder: `hostHeld`, a number not exported), so the wait is that and the time to say
+    // so (under the whole of T2, 2026-11-24, the 8 s it was failed with nothing holding the
+    // port by then). One still held after it is said, with what holds it, by its pid.
+    if (!(await until(() => urlOf("web/one", 5432) !== undefined, HELD_AGAIN_MS + 5000))) {
+      const holder = spawnSync(
+        "bash",
+        [
+          "-c",
+          // As root where the test may (its processes are another user's, or a container's),
+          // and the containers alive with their age: a holder from an earlier stack shows.
+          "S=; sudo -n true 2>/dev/null && S='sudo -n'; $S lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; $S ss -tanp 'sport = :5432' 2>&1; for p in $($S ss -tlnpH 'sport = :5432' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2); do $S ps -o pid,ppid,user,etime,args -p $p; $S cat /proc/$p/cgroup 2>/dev/null | head -3; done; docker ps --format '{{.Names}} {{.RunningFor}} {{.Label \"desolate.instance\"}}' 2>&1",
+        ],
+        { encoding: "utf8" },
+      ).stdout;
+      assert.fail(
+        `5432 is not forwarded: ${JSON.stringify(ports())}\nwhat holds 5432 here:\n${holder}`,
+      );
+    }
     const raw = await new Promise<string>((resolve) => {
       const socket = net.connect(5432, "127.0.0.1");
       let data = "";
