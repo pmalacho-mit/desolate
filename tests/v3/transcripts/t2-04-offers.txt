@@ -283,6 +283,12 @@ $ desolate approve --web
 approvals    http://desolate-approve.localhost:31591/?tkn=<token>
 [exit 0]
 
+## the approval page: nothing comes under a still pointer
+
+$ desolate approve --web
+approvals    http://desolate-approve.localhost:31591/?tkn=<token>
+[exit 0]
+
 ## the approval page, an adversarial push
 
 $ desolate approve --web

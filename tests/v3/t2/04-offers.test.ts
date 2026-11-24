@@ -1889,11 +1889,12 @@ echo "=====waits"; cat /tmp/waits.lines`,
       }>(
         `({ held, quote: ${quoteOf("web-held")}, caption: ${cardOf("web-held")}.querySelector('figcaption').textContent, markup: ${cardOf("web-held")}.querySelectorAll('b, img').length, records: records.length })`,
       );
-      // The flood was read before it (the log is read in order): it showed nothing.
+      // The flood was read before it (the log is read in order): it showed nothing. (The
+      // sampler looks every 50 ms: it may not have seen this word yet, never another.)
       assert.deepEqual(
-        seen.held,
-        [JSON.stringify([null, false]), JSON.stringify([failed, false])],
-        "nothing came between the card dismissed and this word",
+        seen.held.filter((h) => h !== JSON.stringify([failed, false])),
+        [JSON.stringify([null, false])],
+        `nothing came between the card dismissed and this word: ${JSON.stringify(seen.held)}`,
       );
       assert.equal(
         seen.quote,
