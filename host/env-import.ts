@@ -1,4 +1,4 @@
-// A project's .env into a domain's secrets, on the Mac (shared/envfile.ts judges each entry):
+// A project's .env into a domain's secrets, on the Mac (host/envfile.ts judges each entry):
 // `desolate domain <d> secret import <file>`, and the secrets page's Import (approve-web.ts).
 // The values are read here, on the host, and go to the root's secret store as `secret set`'s
 // do (domains.ts secretOps); none is ever printed or sent to a page. What the person decides
@@ -8,15 +8,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXIT, refuse } from "../shared/exit.ts";
 import { readJson } from "../shared/json.ts";
-import {
-  ANYWHERE_COST,
-  keepApart,
-  parseEnv,
-  planEnv,
-  rewriteEnv,
-  secretName,
-} from "../shared/envfile.ts";
-import type { Decision, PlanRow } from "../shared/envfile.ts";
+import { ANYWHERE_COST, keepApart, parseEnv, planEnv, rewriteEnv, secretName } from "./envfile.ts";
+import type { Decision, PlanRow } from "./envfile.ts";
 import { paths } from "./paths.ts";
 import type { SecretListed, SecretOps } from "./domains.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -194,7 +187,7 @@ export const decide = (
             warnings: row.warnings.filter((w) => !/^(only if|its value)/.test(w)),
           };
   }
-  // Names apart from each other and from the domain's other secrets (shared/envfile.ts).
+  // Names apart from each other and from the domain's other secrets (host/envfile.ts).
   const apart = keepApart(rows, others);
   const names = apart.filter((r) => r.kind === "secret").map((r) => r.name!);
   const twice = names.find((n, i) => names.indexOf(n) !== i);

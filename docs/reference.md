@@ -226,7 +226,7 @@ in text, control characters, bidirectional overrides and invisible formatting be
 a JSON line (`--json`, `desolate events`) they are kept as `\u` escapes, exact and still JSON,
 so a script's `jq -r` decides what to print. A terminal session in a VM (`desolate exec`,
 `root shell`, `agent attach`, a push's run, `upstream`) is passed through
-`shared/terminal-filter.ts`, which keeps what a screen needs (colour, cursor movement, the
+`host/terminal-filter.ts`, which keeps what a screen needs (colour, cursor movement, the
 alternate screen) and drops every OSC, DCS and other string sequence (the clipboard, files,
 the title, window operations); the root's shell and the git VM's page through `less`, which
 shows any other control as text. The recipes print text from a repository or GitHub through
