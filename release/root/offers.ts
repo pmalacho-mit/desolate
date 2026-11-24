@@ -7,13 +7,15 @@ import * as path from "node:path";
 import { refuse } from "../shared/exit.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { LFS_POINTER_BYTES } from "../shared/limits.ts";
+import { withLock } from "../shared/lock.ts";
+import type { Holder } from "../shared/lock.ts";
 import { listed, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
 import { isBranch, isCommit, isLfsOid, isSlug, lfsPointer, parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { domain as domainOf, domains, workspaces } from "./domains.ts";
 import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
-import { clonePath, domainPath, GITCONFIG, mirrorPath } from "./layout.ts";
+import { clonePath, domainPath, GITCONFIG, mirrorPath, ROOT } from "./layout.ts";
 import { dropLfs, refusalsOf, takeLfs } from "./outbox.ts";
 import { recordOf } from "./repos.ts";
 import { lookalike } from "./reviewer-git.ts";
@@ -31,6 +33,7 @@ import type {
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { aDomain, emptyRoot, writeJsonIn } from "../.harness/root-state.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
+import type { withdrawnAtOnce } from "../.harness/root-offers.ts";
 
 /** `base`: the branch a pull request of this one would go into, as the workspace said
  *  (`desolate offer --base`); without it, the repository's default branch. */
@@ -45,6 +48,25 @@ export type Offer = {
   base?: string;
 };
 const file = (domain: string) => path.join(domainPath(domain), "offers.json");
+/** A change to a domain's offers, under its lock (shared/lock.ts): rootd takes offers, the
+ *  state service, the CLI channel and pushes withdraw them, and two at once lost one (eight
+ *  processes withdrawing 25 offers each left 154 of 200 behind). Waited for 10 s at most, as
+ *  pushed.json's lock is, then refused saying who holds it. */
+const changing = async (domain: string, change: (offers: Offer[]) => Offer[]) => {
+  let holder: Holder | null = null;
+  const waited = AbortSignal.timeout(10_000);
+  await withLock(
+    path.join(ROOT.state, "offer-locks", domain),
+    async () => writeJson(file(domain), change(offersOf(domain))),
+    { waiting: (h) => (holder = h), signal: waited },
+  ).catch((error: Error) => {
+    if (!waited.aborted) throw error;
+    const h = holder as Holder | null;
+    throw new Error(
+      `${domain}'s offers stayed locked for 10 s${h ? ` (by process ${h.pid}, since ${h.since})` : ""}`,
+    );
+  });
+};
 export const offersOf = (domain: string): Offer[] => readJson<Offer[]>(file(domain), []);
 export const allOffers = (only?: string): Offer[] =>
   domains()
@@ -327,28 +349,32 @@ export const take = async (
       fix: "offer again from the workspace that made them",
     };
 
-  // An offer again without --base (a `git push`) keeps the base the branch was offered for.
-  const before = offersOf(domain).find((o) => o.repo === id && o.branch === request.branch);
-  const base = isBranch(request.base) ? request.base : before?.base;
-  const offers = offersOf(domain).filter((o) => !(o.repo === id && o.branch === request.branch));
   // Which workspace offered it, as the workspace says: kept only when it names one of this
   // domain's own (it is shown, and a domain could name another, or write escapes into it).
   const from =
     isSlug(request.workspace) && workspaces(domain).some((w) => w.workspace === request.workspace)
       ? request.workspace
       : "";
-  offers.push({
-    domain,
-    repo: id,
-    branch: request.branch,
-    commit: request.commit,
-    workspace: from,
-    lfs: staged.length,
-    at: new Date().toISOString(),
-    ...(base ? { base } : {}),
+  const offered = { domain, repo: id, branch: request.branch, commit: request.commit };
+  const taken = changing(domain, (offers) => {
+    // An offer again without --base (a `git push`) keeps the base the branch was offered for.
+    const before = offers.find((o) => o.repo === id && o.branch === offered.branch);
+    const base = isBranch(request.base) ? request.base : before?.base;
+    return [
+      ...offers.filter((o) => !(o.repo === id && o.branch === offered.branch)),
+      {
+        ...offered,
+        workspace: from,
+        lfs: staged.length,
+        at: new Date().toISOString(),
+        ...(base ? { base } : {}),
+      },
+    ];
   });
-  writeJson(file(domain), offers);
-  return { ok: true };
+  return taken.then(
+    () => ({ ok: true }),
+    (error: Error) => ({ ok: false, error: error.message, fix: "offer again" }),
+  );
 };
 
 declare namespace take {
@@ -434,26 +460,52 @@ declare namespace take {
   >;
 }
 
-export const withdraw = (domain: string, repo: string, branch: string) => {
-  writeJson(
-    file(domain),
-    offersOf(domain).filter((o) => !(o.repo === repo && o.branch === branch)),
+/** The offer of a branch leaves "Needs you": only the one at `commit`, when it is named (one
+ *  offered again meanwhile, at another, stays). */
+export const withdraw = (domain: string, repo: string, branch: string, commit?: string) =>
+  changing(domain, (offers) =>
+    offers.filter(
+      (o) => !(o.repo === repo && o.branch === branch && (!commit || o.commit === commit)),
+    ),
   );
-};
+declare namespace withdraw {
+  /** eight processes withdrawing 25 offers each at once leave none behind: one change at a
+   *  time (main had 154 of 200 left) */
+  export type AtOnce = Given<
+    Invoke<typeof emptyRoot>,
+    Expect<Invoke<typeof withdrawnAtOnce, [takers: 8, each: 25, locked: true]>, "=", 0>
+  >;
+  /** the control: the same with no lock, as offers.json was written, leaves some */
+  export type Unlocked = Given<
+    Invoke<typeof emptyRoot>,
+    Expect<Invoke<typeof withdrawnAtOnce, [takers: 8, each: 25, locked: false]>, ">", 0>
+  >;
+}
+
 /** The person's "not this one": the offer leaves "Needs you"; the branch stays in the domain
  *  (`desolate branches`), and offering it again brings it back. Before, an offer left only by
  *  being pushed: one from a removed workspace, or a stand-in agent's, stayed there for good. */
-export const dismiss = (
+export const dismiss = async (
   domainArg: unknown,
   repoArg: unknown,
   branchArg: unknown,
-): { ok: true } | { error: string } => {
+  commitArg?: unknown,
+): Promise<{ ok: true } | { error: string }> => {
   const domain = typeof domainArg === "string" && isSlug(domainArg) ? domainArg : null;
   if (!domain || typeof repoArg !== "string" || typeof branchArg !== "string")
     return { error: "an offer is named by its domain, repository and branch" };
-  if (!offersOf(domain).some((o) => o.repo === repoArg && o.branch === branchArg))
-    return { error: `${domain} has offered no ${repoArg} ${branchArg}` };
-  withdraw(domain, repoArg, branchArg);
+  // The dashboard names the commit its card showed: a click on a card gone stale does not
+  // dismiss the offer made since.
+  const commit = isCommit(commitArg) ? commitArg : undefined;
+  const offered = () =>
+    offersOf(domain).some(
+      (o) => o.repo === repoArg && o.branch === branchArg && (!commit || o.commit === commit),
+    );
+  if (!offered())
+    return {
+      error: `${domain} has offered no ${repoArg} ${branchArg}${commit ? ` at ${commit.slice(0, 12)}` : ""}`,
+    };
+  await withdraw(domain, repoArg, branchArg, commit);
   return { ok: true };
 };
 
