@@ -33,7 +33,7 @@ import { printable } from "../shared/text.ts";
 import { domain as domainOf, domains, workspaces } from "./domains.ts";
 import { HOST_QUEUE } from "./layout.ts";
 import { fetchDomain, take } from "./offers.ts";
-import { drain, inbox, outbox } from "./outbox.ts";
+import { drain, inbox, outbox, REQUEST_NAMES_READ } from "./outbox.ts";
 import { waiting } from "./pushed.ts";
 import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
@@ -1185,6 +1185,27 @@ const sweep = (domain: string) => {
   }
 };
 
+/** Whether a domain's outbox holds more names in requests/ than the root reads at a look
+ *  (outbox.ts, REQUEST_NAMES_READ), said in its inbox (`requests.crowded`) while it does, for
+ *  a workspace waiting on a request not yet taken to say why it may never be: the names read
+ *  first are the file system's choice, and a request past them waits until others go. Written
+ *  only when that changes (and once at a start, over whatever an earlier rootd left). */
+const said = new Map<string, boolean>();
+const crowded = (domain: string, now: boolean) => {
+  if (said.get(domain) === now) return;
+  const file = path.join(inbox(domain), "requests.crowded");
+  try {
+    if (now)
+      writeJson(file, {
+        said: `this domain's outbox holds more than ${REQUEST_NAMES_READ} names in requests/, the most the root reads at a time, so it may not come to this one: remove what is not a request there (each is <id>.json; ls -f /desolate/outbox/requests | head)`,
+      });
+    else fs.rmSync(file, { force: true });
+    said.set(domain, now);
+  } catch (error) {
+    log(`${domain}: cannot say its outbox is crowded: ${printable((error as Error).message)}`);
+  }
+};
+
 /** The beat, from a thread of its own: a count, after this start's `boot`, into each file it
  *  is given (the main loop gives it every domain's), each beat, whole (written beside and
  *  renamed over, so a reader never sees half of one). If the thread ends, rootd ends: a root
@@ -1240,13 +1261,15 @@ const main = async () => {
       // Each request is read once and removed, by name, in a directory that was checked to be
       // the outbox's own (outbox.ts): never through a path a workspace could have redirected.
       const room = MOST_HELD - heldBy(d.slug, false);
-      if (room > 0)
-        for (const { name, data } of drain<unknown>(
+      if (room > 0) {
+        const { requests, more } = drain<unknown>(
           path.join(outbox(d.slug), "requests"),
           /^[0-9a-z-]{1,60}\.json$/,
           room,
-        ))
-          taken(d.slug, d.repos, name, data);
+        );
+        for (const { name, data } of requests) taken(d.slug, d.repos, name, data);
+        crowded(d.slug, more);
+      }
       sweep(d.slug);
     }
     await sleep(250);

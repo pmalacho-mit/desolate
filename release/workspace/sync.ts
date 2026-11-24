@@ -497,6 +497,9 @@ export type Look = {
   /** The request is still in the outbox: the root has not taken it. */
   asked: boolean;
   taken: { boot?: unknown; doing?: unknown } | null;
+  /** What the root says of the domain's requests/ while it holds more names than the root
+   *  reads at a time (rootd.ts, crowded); null or absent when it does not. */
+  crowded?: string | null;
   /** The beat's text; null while there has never been one (a root from before the beat). */
   beat: string | null;
   /** The beat has stopped, as watchBeat says. */
@@ -543,7 +546,9 @@ export const verdict = (look: Look, window = BEAT.beatMs * BEAT.missed): Verdict
         };
   if (look.asked)
     return {
-      wait: "the root has not taken it yet (it takes each domain's requests in turn)",
+      wait: look.crowded
+        ? `the root has not taken it yet: ${look.crowded}`
+        : "the root has not taken it yet (it takes each domain's requests in turn)",
     };
   const boot = look.beat.split(" ")[0];
   if (look.taken ? look.taken.boot !== boot : look.lost >= window)
@@ -618,6 +623,29 @@ declare namespace verdict {
       >,
       "=",
       { wait: "the root has not taken it yet (it takes each domain's requests in turn)" }
+    >,
+    /** and why it may never be, when the root says the domain's requests/ holds more names
+     *  than it reads at a time */
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            crowded: "this domain's outbox holds more than 1000 names in requests/";
+            beat: "b0 7";
+            stopped: false;
+            waited: 30000;
+            lost: 0;
+          },
+        ]
+      >,
+      "=",
+      {
+        wait: "the root has not taken it yet: this domain's outbox holds more than 1000 names in requests/";
+      }
     >,
     Expect<
       Invoke<
@@ -825,6 +853,10 @@ export const request = async (
       path.join(replies, `${id}.taken`),
       null,
     );
+    // (Only while it waits to be taken: what the root says when it cannot read them all.)
+    const crowded = waiting
+      ? readJson<{ said?: unknown } | null>(path.join(INBOX, "requests.crowded"), null)
+      : null;
     heard = readBeat() ?? heard;
     const watched: ReturnType<typeof watchBeat> | null =
       heard === null ? null : watchBeat(seen, heard, now);
@@ -835,6 +867,7 @@ export const request = async (
         reply,
         asked: waiting,
         taken,
+        crowded: typeof crowded?.said === "string" ? crowded.said : null,
         beat: heard,
         stopped: watched?.stopped ?? false,
         waited: now - started,

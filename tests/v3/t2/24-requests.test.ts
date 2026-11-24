@@ -16,6 +16,9 @@
 // - A domain's spawn and close requests waiting for the host are at most 8: a flood of 200
 //   that the host refuses each of is refused past 8 by the root, in words, and another
 //   domain's spawn is answered and made as fast as before the flood (the control).
+// - A domain's requests folder holding 100,000 names that are not requests costs the root's
+//   loop a look at 1,000: another domain's round trip is as fast as without it (the
+//   control), and the domain is told why its own request may wait.
 // - A root that is down is said to be down within the beat's 10 s, and the request is
 //   withdrawn; the same offer once it runs again is answered (the control).
 import assert from "node:assert/strict";
@@ -280,6 +283,68 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
       `beta's spawn: answered in ${control.asked} ms, made in ${control.made} ms; during alpha's flood ${during.asked} ms and ${during.made} ms; alpha's waiting at most ${looked.stdout.trim()}`,
     );
     await closed("b3");
+  });
+
+  it("a domain's requests folder holding 100,000 names that are not requests does not slow another domain's requests (the control: the same requests without it), and the domain is told why its own may wait", async () => {
+    // beta's round trip to the root, ten times: a close of a workspace it does not have,
+    // which the root answers at once. The middle of the ten, in ms.
+    const roundTrip = () => {
+      const ran = inside(
+        "beta/b1",
+        "for i in $(seq 1 10); do s=$(date +%s%N); desolate close nobody-$i >/dev/null 2>&1; echo $(( ($(date +%s%N) - s) / 1000000 )); done",
+      );
+      assert.equal(ran.code, 0, ran.stderr);
+      const ms = ran.stdout
+        .trim()
+        .split("\n")
+        .map(Number)
+        .sort((a, b) => a - b);
+      return ms[5]!;
+    };
+    assert.match(
+      inside("beta/b1", "desolate close nobody 2>&1").stdout,
+      /beta has no workspace 'nobody'/,
+      "the round trip is the root's answer",
+    );
+    const control = roundTrip();
+    const filled = inside(
+      "alpha/a1",
+      "cd /desolate/outbox/requests && seq 1 100000 | sed 's/^/x/' | xargs touch && ls -f | wc -l",
+    );
+    assert.equal(filled.code, 0, filled.stderr);
+    assert.ok(Number(filled.stdout.trim()) >= 100_000, filled.stdout);
+    // alpha asks too: its request is taken if it is among the names the root reads, and
+    // waits, saying why, if not.
+    started("alpha/a1", "crowded", "desolate fetch --mirror-only acme/widgets");
+    const during = roundTrip();
+    console.log(`beta's round trip: ${control} ms, and ${during} ms beside alpha's 100,000 names`);
+    assert.ok(
+      during < control + 250,
+      `beta's round trip took ${during} ms beside alpha's 100,000 names, ${control} ms without`,
+    );
+    assert.match(
+      inside("alpha/a1", "cat /desolate/inbox/requests.crowded").stdout,
+      /this domain's outbox holds more than 1000 names in requests\/, the most the root reads at a time/,
+    );
+    await sleep(12_000);
+    const early = ended("alpha/a1", "crowded");
+    if (early === null)
+      assert.match(
+        inside("alpha/a1", "cat /tmp/crowded.err").stdout,
+        /desolate: the root has not taken it yet: this domain's outbox holds more than 1000 names in requests\//,
+      );
+    // The workspace removes what is not a request: its own is then taken, and the note goes.
+    assert.equal(inside("alpha/a1", "find /desolate/outbox/requests -name 'x*' -delete").code, 0);
+    let fetched: ReturnType<typeof ended> = early;
+    assert.ok(await until(() => (fetched = ended("alpha/a1", "crowded")) !== null, 60_000));
+    assert.equal(fetched!.code, 0, fetched!.err);
+    assert.ok(
+      await until(
+        () => inside("alpha/a1", "test -e /desolate/inbox/requests.crowded").code !== 0,
+        10_000,
+      ),
+      "the note went with the names",
+    );
   });
 
   it("a root that is down is said to be within the beat's 10 s, and the request withdrawn (the control: answered once it runs)", () => {
