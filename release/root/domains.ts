@@ -7,6 +7,7 @@ import { printable } from "../shared/text.ts";
 import { readJson, writeJson } from "../shared/json.ts";
 import { isBranch, isSlug, parseRepo, repoId, workspaceVmName } from "../shared/names.ts";
 import { checkoutPath } from "../shared/plan.ts";
+import { refCommit } from "../shared/status.ts";
 import { checkSize, projectSize } from "../shared/size.ts";
 import type { ProjectSize, Size } from "../shared/size.ts";
 import { parse as parseJsonc } from "../shared/jsonc.ts";
@@ -19,15 +20,19 @@ import type {
   Expect,
   Given,
   Invoke,
+  Mock,
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
+import type { aMirrorCommit, countingGit, gitStarts } from "../.harness/root-mirrors.ts";
 import type { repeat } from "../.harness/shared-text.ts";
 import type {
   aDomain,
+  aRegistry,
   aWorkspace,
   emptyRoot,
+  mirrorsAndClonesHere,
   namesIn,
   readJsonIn,
   writeVmIn,
@@ -1269,8 +1274,8 @@ export const remove = async (slugArg: unknown) => {
 
 /** What the domain's environment asks for (shared/size.ts projectSize): its devcontainer.json
  *  as the remote published it, read in the MIRROR (P4), as data. Remembered by the blob's id,
- *  so asking again costs one rev-parse. null: no repository of the domain has a spec, or its
- *  spec is a folder with no devcontainer.json at its top. */
+ *  so asking again while the branch has not moved starts no git. null: no repository of the
+ *  domain has a spec, or its spec is a folder with no devcontainer.json at its top. */
 export type ProjectAsk = ProjectSize & { repo: string; path: string };
 const asked = new Map<string, ProjectSize>();
 const SPEC_MAX = 256 * 1024;
@@ -1281,18 +1286,11 @@ export const projectSizeOf = async (
   const env = await envKey(slugArg, preferred);
   if (!env) return null;
   const repo = parseRepo(env.repo)!;
-  const branch = registry().repos[env.repo]?.defaultBranch;
-  if (!branch || !isBranch(branch)) return null;
   const file =
     env.spec === ".devcontainer" ? ".devcontainer/devcontainer.json" : ".devcontainer.json";
-  const found = await git(mirrorPath(repo), [
-    "rev-parse",
-    "--verify",
-    "--quiet",
-    `refs/heads/${branch}:${file}`,
-  ]);
-  const blob = found.stdout.trim();
-  if (found.code !== 0 || !/^[0-9a-f]{40}$/.test(blob)) return null;
+  // (`.devcontainer.json` is the spec itself: envKey's id is its blob.)
+  const blob = env.spec === ".devcontainer" ? await objectOnDefault(env.repo, file) : env.id;
+  if (!blob) return null;
   let known = asked.get(blob);
   if (!known) {
     const bytes = Number((await git(mirrorPath(repo), ["cat-file", "-s", blob])).stdout.trim());
@@ -1310,6 +1308,104 @@ export const projectSizeOf = async (
   return { repo: env.repo, path: file, ...known };
 };
 
+declare namespace projectSizeOf {
+  /** asked again and again while nothing moved (the state service asks every 10 s): the same
+   *  answer, and no git started after the first */
+  export type Remembered = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof emptyRoot>,
+      Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>,
+      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
+      Invoke<
+        typeof aMirrorCommit,
+        [
+          repo: "acme/app",
+          files: {
+            ".devcontainer/devcontainer.json": '{ "customizations": { "desolate": { "cpus": 2 } } }';
+          },
+        ]
+      >,
+      Invoke<typeof projectSizeOf, [slugArg: "acme"]>,
+      Invoke<typeof countingGit>,
+      Invoke<typeof projectSizeOf, [slugArg: "acme"]>,
+      Invoke<typeof projectSizeOf, [slugArg: "acme"]>,
+    ],
+    [
+      Expect<
+        Invoke<typeof projectSizeOf, [slugArg: "acme"]>,
+        "matches",
+        { repo: "acme/app"; path: ".devcontainer/devcontainer.json"; size: { cpus: 2 } }
+      >,
+      Expect<Invoke<typeof gitStarts>, "=", 0>,
+    ]
+  >;
+  /** the control: the remote publishes a new spec, and the next ask has it (git, once each to
+   *  find the folder and its file, and twice to read the new file) */
+  export type Moved = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof emptyRoot>,
+      Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>,
+      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
+      Invoke<
+        typeof aMirrorCommit,
+        [
+          repo: "acme/app",
+          files: {
+            ".devcontainer/devcontainer.json": '{ "customizations": { "desolate": { "cpus": 2 } } }';
+          },
+        ]
+      >,
+      Invoke<typeof projectSizeOf, [slugArg: "acme"]>,
+      Invoke<
+        typeof aMirrorCommit,
+        [
+          repo: "acme/app",
+          files: {
+            ".devcontainer/devcontainer.json": '{ "customizations": { "desolate": { "cpus": 4 } } }';
+          },
+        ]
+      >,
+      Invoke<typeof countingGit>,
+    ],
+    [
+      Expect<Invoke<typeof projectSizeOf, [slugArg: "acme"]>, "matches", { size: { cpus: 4 } }>,
+      Expect<Invoke<typeof gitStarts>, "=", 4>,
+    ]
+  >;
+}
+
+/** The id git gives `file` on a repository's default branch in its mirror, or null (not
+ *  there, or no default branch known). Remembered for as long as the branch names the same
+ *  commit, read from its ref as a checkout's is read (shared/status.ts refCommit): the state
+ *  service asks for every workspace's environment every 10 s, and each answer was a git
+ *  process or three. An idle stack of eleven repositories started about 100 in 30 s
+ *  (measured on 2026-11-23); now none while no branch moves. */
+const objects = new Map<string, { commit: string; id: string | null }>();
+const objectOnDefault = async (id: string, file: string): Promise<string | null> => {
+  const repo = parseRepo(id);
+  const branch = registry().repos[id]?.defaultBranch;
+  if (!repo || !branch || !isBranch(branch)) return null;
+  const mirror = mirrorPath(repo);
+  const commit = refCommit(mirror, mirror, branch);
+  const key = `${id}\0${file}`;
+  const known = objects.get(key);
+  if (commit && known?.commit === commit) return known.id;
+  // Asked of that commit, not of the branch: the answer is the commit's, whatever moves since.
+  const found = await git(mirror, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `${commit ?? `refs/heads/${branch}`}:${file}`,
+  ]);
+  const object = found.stdout.trim();
+  const answer = found.code === 0 && /^[0-9a-f]{40}$/.test(object) ? object : null;
+  // (Kept when git answered, found or not: a git that failed is asked again.)
+  if (commit && found.code <= 1) objects.set(key, { commit, id: answer });
+  return answer;
+};
+
 /** The domain's environment as the remote published it, for its template (section 4.7, C3):
  *  the environment repository (the one `env --from` names, else the first whose default
  *  branch has a spec) and the id git gives the spec there: the tree of `.devcontainer/`, or
@@ -1325,21 +1421,10 @@ export const envKey = async (
   // domain with a python API and a node front end: the front end's workspace gets node).
   const first = typeof preferred === "string" && d.repos.includes(preferred) ? [preferred] : [];
   const candidates = [...first, ...(d.env ? [d.env] : d.repos)];
-  for (const id of candidates) {
-    const repo = parseRepo(id);
-    if (!repo) continue;
-    const branch = registry().repos[id]?.defaultBranch;
-    if (!branch || !isBranch(branch)) continue;
+  for (const id of candidates)
     for (const spec of [".devcontainer", ".devcontainer.json"]) {
-      const found = await git(mirrorPath(repo), [
-        "rev-parse",
-        "--verify",
-        "--quiet",
-        `refs/heads/${branch}:${spec}`,
-      ]);
-      const object = found.stdout.trim();
-      if (found.code === 0 && /^[0-9a-f]{40}$/.test(object)) return { repo: id, spec, id: object };
+      const object = await objectOnDefault(id, spec);
+      if (object) return { repo: id, spec, id: object };
     }
-  }
   return null;
 };

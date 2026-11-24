@@ -594,21 +594,18 @@ const squashOf = async (u: Unpushed): Promise<Counted> => {
   return squashed ? { ...u, carryOn: catchUp(u.branch, squashed, u.branch) } : u;
 };
 // What each workspace's project asks for (its devcontainer.json in the mirror: domains.ts
-// projectSizeOf), for the dashboard's Resize. Read in the same loop: one rev-parse when the
-// spec has not changed.
+// projectSizeOf), for the dashboard's Resize. Read in the same loop: no git while the
+// mirror's default branch has not moved.
 const asksOf = new Map<string, domains.ProjectAsk | null>();
 /** Each domain's environments, for New workspace (domains.ts envKey): the one its workspaces
- *  get unless another is chosen, and the repositories that have one. Read again when the
- *  domain's choice or a mirror changes. */
-const envsOf = new Map<string, { key: string; used: string | null; choices: string[] }>();
+ *  get unless another is chosen, and the repositories that have one. */
+const envsOf = new Map<string, { used: string | null; choices: string[] }>();
 const checkEnvs = async (d: { slug: string; repos: string[]; env?: string }) => {
-  const key = JSON.stringify([d.env, repos.list().filter((r) => d.repos.includes(r.repo))]);
-  if (envsOf.get(d.slug)?.key === key) return;
   const choices: string[] = [];
   if (d.repos.length > 1)
     for (const repo of d.repos)
       if ((await domains.envKey(d.slug, repo))?.repo === repo) choices.push(repo);
-  envsOf.set(d.slug, { key, used: (await domains.envKey(d.slug))?.repo ?? null, choices });
+  envsOf.set(d.slug, { used: (await domains.envKey(d.slug))?.repo ?? null, choices });
 };
 let checkingPushed = false;
 const checkPushed = async () => {
@@ -717,9 +714,7 @@ const snapshot = () => {
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
     // Whose devcontainer New workspace runs, and which it may choose instead (null: not read yet).
-    env: envsOf.has(d.slug)
-      ? { used: envsOf.get(d.slug)!.used, choices: envsOf.get(d.slug)!.choices }
-      : null,
+    env: envsOf.get(d.slug) ?? null,
     // The domain's environment, while it is built for its first workspace: shown as that,
     // not as a workspace named "template" with a Start button (dogfooding, 2026-11-17).
     building: domains.workspaces(d.slug).some((w) => w.workspace === TEMPLATE_BUILD)
