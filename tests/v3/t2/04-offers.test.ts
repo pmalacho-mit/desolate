@@ -84,9 +84,10 @@ const forgeHasLfs = (repo: string, id: string) => {
   }
 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-/** The approval page's line under "Pushed" for a branch of acme/widgets, as an expression. */
-const pushedLine = (branch: string) =>
-  `[...document.querySelectorAll('#pushed li')].find((li) => li.textContent.startsWith(${JSON.stringify(`acme/widgets ${branch} `)}))`;
+/** The approval page's line under "Pushed" for a branch of acme/widgets (and that commit, if
+ *  given: a branch pushed twice has two lines), as an expression. */
+const pushedLine = (branch: string, commit = "") =>
+  `[...document.querySelectorAll('#pushed li')].find((li) => li.textContent.startsWith(${JSON.stringify(`acme/widgets ${branch} ${commit.slice(0, 12)}`)}))`;
 /** The tab's card is still there to approve: the first click came as the pointer arrived (too
  *  soon, said), not approved, and the card not gone (pushed). */
 const undecided = `(() => { const c = document.querySelector('.card.asked'); return !!c && !/^(approving|Approved|Not pushed)/.test(c.querySelector('.hint').textContent); })()`;
@@ -2195,7 +2196,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         await page.click(".card.asked button.approve", label);
         await sleep(500);
         if (await page.evaluate(undecided)) await page.click(".card.asked button.approve", label);
-        await page.until(pushedLine(branch), "its line under Pushed", 60_000);
+        await page.until(pushedLine(branch, id), "its line under Pushed", 60_000);
         assert.equal(forgeRefs("acme/widgets")[branch], id);
         return page.evaluate<{ commit: string; squash: boolean; replace: boolean }[]>(
           "window.posted",
