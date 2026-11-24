@@ -13,7 +13,7 @@
 // THE LINK. Each workspace's only way out is one stream to its own proxy in the root. The
 // daemon owns the host end of it and carries each connection to that workspace's proxy and
 // nowhere else: which link a connection arrived on is what attributes it.
-import { formatBytes, over } from "../shared/limits.ts";
+import { formatBytes } from "../shared/limits.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { CUT, failure, printable } from "../shared/text.ts";
 import { execFile, spawn } from "node:child_process";
@@ -59,6 +59,8 @@ import { sniffSocket } from "../shared/sniff.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { portHolder } from "./held-ports.ts";
 import { retire, retiredAt } from "./retired.ts";
+import { opened as statedReply } from "./replies.ts";
+import type { Answer, Stated } from "./replies.ts";
 import { backend, config, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
 import {
   editorAddress,
@@ -97,6 +99,7 @@ import type {
 import type {
   answerOf,
   answers,
+  askedOver,
   daemonAnswering,
   failsAtOnce,
   failsHalfway,
@@ -108,12 +111,10 @@ import type {
   opened,
   pipeEnds,
   refusedAs,
-  readInPieces,
   setOf,
   shown,
   silentClients,
   sixGiB,
-  wire,
 } from "../.harness/host-daemon.ts";
 import type { emptyHome, writeState } from "../.harness/home.ts";
 import type { firstOf, spawnedAs, stillRunning, vmRunning } from "../.harness/host-web.ts";
@@ -138,20 +139,26 @@ const WSD_MOST = 64 * 1024;
 
 /** Lines as they come, in chunks cut anywhere: hand it each chunk, and it gives the whole
  *  lines that chunk ended, or an Error once a line is longer than `most` bytes. Never more
- *  than `most` bytes of an unfinished line are kept: what the VM sends past that is not read. */
-export const lineReader = (most = WSD_MOST) => {
-  let kept = Buffer.alloc(0);
-  const tooLong = () => new Error(`the workspace's daemon sent a line of more than ${most} bytes`);
+ *  than `most` bytes of an unfinished line are kept: what the VM sends past that is not read.
+ *  The pieces of a line are joined once, when it ends: the root's state is one line of up to
+ *  16 MiB (STATE_ANSWER_BYTES), and joined at every chunk, reading it was quadratic in its
+ *  size. `who`: what sent the lines, as a refusal names it. */
+export const lineReader = (most = WSD_MOST, who = "the workspace's daemon") => {
+  let kept: Buffer[] = [];
+  let size = 0;
+  const tooLong = () => new Error(`${who} sent a line of more than ${most} bytes`);
   return (chunk: Buffer): string[] | Error => {
     const lines: string[] = [];
-    let data = Buffer.concat([kept, chunk]);
-    for (let end = data.indexOf(10); end >= 0; end = data.indexOf(10)) {
-      if (end > most) return tooLong();
-      lines.push(data.subarray(0, end).toString("utf8"));
-      data = data.subarray(end + 1);
+    for (let end = chunk.indexOf(10); end >= 0; end = chunk.indexOf(10)) {
+      if (size + end > most) return tooLong();
+      lines.push(Buffer.concat([...kept, chunk.subarray(0, end)]).toString("utf8"));
+      kept = [];
+      size = 0;
+      chunk = chunk.subarray(end + 1);
     }
-    if (data.length > most) return tooLong();
-    kept = Buffer.from(data);
+    if (size + chunk.length > most) return tooLong();
+    if (chunk.length > 0) kept.push(Buffer.from(chunk));
+    size += chunk.length;
     return lines;
   };
 };
@@ -505,9 +512,10 @@ const PROVING_MOST = 1024;
 
 /** The most of one answer from the root's state service this host reads: a hard bound
  *  against the root's user, whose service parses what domains send (decisions.md, "the
- *  root's user's service is bounded"). The whole state is one answer (/host/state), and it
+ *  root's user's service is bounded"). The whole state is one line (heldAsker), and it
  *  grows with domains, offers and issues, so how near it is is said (`desolate doctor`,
- *  stateRoom): a state past it stops `desolate events` and the dashboard's actions. */
+ *  stateRoom): a state past it ends the stream it came on, and so stops `desolate events`
+ *  and the dashboard's actions. */
 const STATE_ANSWER_BYTES = 16 * 1024 * 1024;
 
 /** How many connections out of one workspace are carried to its proxy at once; past it, one
@@ -1368,194 +1376,233 @@ declare namespace roomVerdict {
   >;
 }
 
-/** The root's state service's answer, once it is all there: complete when its Content-Length
- *  has arrived, not when the stream closes (what carries the connection, ssh or an exec, may
- *  hold it open until this side closes, which it does not do first: measured, a relay that
- *  sees its input end drops the answer). null: its head has not all come; a number: it has,
- *  and the whole answer is that many bytes. */
-const stateAnswer = (data: Buffer): { status: number; body: string } | Error | number | null => {
-  const split = data.indexOf("\r\n\r\n");
-  if (split < 0) return null;
-  const head = data.subarray(0, split).toString("latin1");
-  const status = Number(/^HTTP\/1\.1 (\d+)/.exec(head)?.[1] ?? 0);
-  const length = Number(/\r\ncontent-length: (\d+)/i.exec(head)?.[1] ?? -1);
-  if (status === 0 || length < 0)
-    return new Error("the root's state service sent something that is not an answer");
-  const whole = split + 4 + length;
-  if (data.length >= whole)
-    return { status, body: data.subarray(split + 4, whole).toString("utf8") };
-  return whole;
-};
+/** The root's state service's own socket (root/stated.ts HOST_SOCKET): only the root's user,
+ *  whom a dial reaches the VM as, can open it. */
+const STATED_SOCKET = "/run/desolate/stated/host.sock";
 
-declare namespace stateAnswer {
-  /** an answer, once its body has all arrived, and no more of it than it said */
-  export type Answers = [
-    Expect<
-      Invoke<
-        typeof stateAnswer,
-        [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}"]>]
-      >,
-      "=",
-      { status: 200; body: "{}" }
-    >,
-    Expect<
-      Invoke<
-        typeof stateAnswer,
-        [
-          data: Invoke<
-            typeof wire,
-            [text: "HTTP/1.1 401 Unauthorized\r\ncontent-length: 3\r\n\r\nno!and more"]
-          >,
-        ]
-      >,
-      "=",
-      { status: 401; body: "no!" }
-    >,
-  ];
-  /** not all there yet: its head, or the size its head says it is */
-  export type Incomplete = [
-    Expect<
-      Invoke<
-        typeof stateAnswer,
-        [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"]>]
-      >,
-      "=",
-      null
-    >,
-    Expect<
-      Invoke<
-        typeof stateAnswer,
-        [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\nContent-Length: 20\r\n\r\n{}"]>]
-      >,
-      "=",
-      59
-    >,
-  ];
-  /** a head without its length, or not HTTP/1.1's, is not an answer, and waiting will not make it one */
-  export type NotAnAnswer = [
-    Expect<
-      Invoke<
-        typeof shown,
-        [
-          value: Invoke<
-            typeof stateAnswer,
-            [data: Invoke<typeof wire, [text: "HTTP/1.1 200 OK\r\n\r\n{}"]>]
-          >,
-        ]
-      >,
-      "=",
-      { error: "the root's state service sent something that is not an answer" }
-    >,
-    Expect<
-      Invoke<
-        typeof shown,
-        [
-          value: Invoke<
-            typeof stateAnswer,
-            [data: Invoke<typeof wire, [text: "HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\n{}"]>]
-          >,
-        ]
-      >,
-      "=",
-      { error: "the root's state service sent something that is not an answer" }
-    >,
-  ];
-}
-
-/** The root's state service's answer, read as it comes in chunks cut anywhere: `take` each,
- *  and it gives what stateAnswer does once that is whole (else null), or the bound's error
- *  past `most` bytes. Chunks are kept and joined only when the answer can be whole: when its
- *  head ends in one (looked for with the three bytes before it), then when all the head
- *  says has come. (Joined at every chunk, reading it was quadratic in its size.) */
-const stateReader = (most = STATE_ANSWER_BYTES) => {
-  const chunks: Buffer[] = [];
-  let size = 0;
-  let tail = Buffer.alloc(0);
-  let whole = Infinity;
+/** Questions to the root's state service, all on one stream: dialed by the first, held, and
+ *  dialed again by the next once it ends. A question is a line, `{n, op, args}`; a line back,
+ *  `{n, reply}`, answers the question of that number, in rootctl's envelope, and the Mac takes
+ *  of it what host/replies.ts takes for `stated.<op>`.
+ *
+ *  WHY ONE HELD STREAM. Two questions are held by the service until it has something to say
+ *  (the state once it is not the one the Mac has; the dashboard's requests once there are
+ *  some); the rest (facts, a nudge, a request's progress, a sign-in code) want their answer at
+ *  once. rootctl's channel is one question to a connection, and its service is another
+ *  process, without the state; HTTP was a client of its own, with a token, on a port every
+ *  process in the root VM can open. So: one stream to the service's own socket, each question
+ *  waiting on its number, as a workspace's watch is held (holdWatch).
+ *
+ *  A line that answers no question waiting, one past `most`, the stream's end, and a question
+ *  not answered in its time each end the stream and refuse every question on it at once. An
+ *  answer not in its form refuses its own question only. `ended`: told when a stream ends. */
+export const heldAsker = (open: () => Duplex, ended = () => {}, most = STATE_ANSWER_BYTES) => {
+  type Waiting = {
+    op: Stated;
+    asked: Record<string, unknown>;
+    timer: NodeJS.Timeout;
+    resolve: (answer: unknown) => void;
+    reject: (error: Error) => void;
+  };
+  const waiting = new Map<number, Waiting>();
+  let stream: Duplex | null = null;
+  let n = 0;
+  let largest = 0;
+  const end = (held: Duplex, why: Error) => {
+    if (stream !== held) return;
+    stream = null;
+    held.destroy();
+    for (const question of waiting.values()) {
+      clearTimeout(question.timer);
+      question.reject(why);
+    }
+    waiting.clear();
+    ended();
+  };
+  const start = () => {
+    const held = open();
+    const read = lineReader(most, "the root's state service");
+    held.on("data", (chunk: Buffer) => {
+      const lines = read(chunk);
+      if (lines instanceof Error) return end(held, lines);
+      for (const line of lines) {
+        largest = Math.max(largest, Buffer.byteLength(line));
+        let answer: { n?: unknown; reply?: unknown } = {};
+        try {
+          answer = Object(JSON.parse(line));
+        } catch {
+          /* answers nothing: said below */
+        }
+        const question = typeof answer.n === "number" ? waiting.get(answer.n) : undefined;
+        if (!question)
+          return end(
+            held,
+            new Error(
+              "the root's state service sent a line that answers no question of this Mac's (n)",
+            ),
+          );
+        waiting.delete(answer.n as number);
+        clearTimeout(question.timer);
+        try {
+          question.resolve(statedReply(`stated.${question.op}`, answer.reply, question.asked));
+        } catch (error) {
+          question.reject(error as Error);
+        }
+      }
+    });
+    held.on("error", (error) => end(held, error));
+    // Its end, not only its close: a dial is a program (ssh, socat) whose output ends when the
+    // service's side does, and a stream left open for writing is never closed. (A question
+    // held while the service was started again waited out its whole time, 70 s, with nothing
+    // said on the dashboard's clicks or `desolate events` meanwhile: T2 09-ui, 2026-11-23.)
+    for (const event of ["end", "close"])
+      held.on(event, () => end(held, new Error("the root's state service is not there")));
+    return held;
+  };
   return {
-    size: () => size,
-    take: (chunk: Buffer): { status: number; body: string } | Error | null => {
-      chunks.push(chunk);
-      size += chunk.length;
-      if (size > most)
-        return new Error(
-          `${over("the root's state service's answer", most, size, "bytes", "this host reads of one")} (desolate doctor says how near the state is to it)`,
+    ask: <O extends Stated>(
+      op: O,
+      asked: Record<string, unknown> = {},
+      timeoutMs = 15_000,
+    ): Promise<Answer<`stated.${O}`>> =>
+      new Promise((resolve, reject) => {
+        const held = (stream ??= start());
+        const timer = setTimeout(
+          () => end(held, new Error("the root's state service did not answer")),
+          timeoutMs,
         );
-      if (whole === Infinity) {
-        const seen = Buffer.concat([tail, chunk]);
-        tail = seen.subarray(-3);
-        if (!seen.includes("\r\n\r\n")) return null;
-      } else if (size < whole) return null;
-      const data = Buffer.concat(chunks, size);
-      chunks.splice(0, chunks.length, data);
-      const answer = stateAnswer(data);
-      if (typeof answer !== "number") return answer;
-      whole = answer;
-      return null;
-    },
+        waiting.set(++n, {
+          op,
+          asked,
+          timer,
+          resolve: resolve as (answer: unknown) => void,
+          reject,
+        });
+        held.write(`${JSON.stringify({ n, op, args: asked })}\n`);
+      }),
+    /** The longest line the service has sent, in bytes: for doctor, to say how near
+     *  STATE_ANSWER_BYTES the state is. */
+    largest: () => largest,
   };
 };
 
-declare namespace stateReader {
-  /** an answer cut anywhere, its head's end among the cuts, is read whole, once */
-  export type Pieces = [
-    Expect<
-      Invoke<
-        typeof readInPieces,
-        [
-          reader: typeof stateReader,
-          text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
-          piece: 1,
-        ]
-      >,
-      "=",
-      { status: 200; body: '{"a":"bcd"}' }
-    >,
-    Expect<
-      Invoke<
-        typeof readInPieces,
-        [
-          reader: typeof stateReader,
-          text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
-          piece: 7,
-        ]
-      >,
-      "=",
-      { status: 200; body: '{"a":"bcd"}' }
-    >,
-  ];
-  /** past its bound, it says the bound and the size that met it */
-  export type Over = Expect<
+declare namespace heldAsker {
+  type State = '{"tag":"0123456789abcdef","state":{"lookAsked":2,"bounds":{"slug":40}}}';
+  /** answers in another order than the questions: each question gets its own, as its table
+   *  takes it (what the Mac does not read is dropped), on one stream */
+  export type ByNumber = Expect<
     Invoke<
-      typeof readInPieces,
+      typeof askedOver,
       [
-        reader: typeof stateReader,
-        text: 'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\n{"a":"bcd"}',
-        piece: 16,
-        most: 40,
+        asker: typeof heldAsker,
+        rounds: [[["state", { since: "" }], ["nudge", {}]]],
+        streams: [
+          {
+            replies: [
+              [],
+              [
+                '{"n":2,"reply":{"ok":true,"result":null}}\n',
+                `{"n":1,"reply":{"ok":true,"result":${State}}}\n`,
+              ],
+            ];
+          },
+        ],
       ]
     >,
     "=",
     {
-      error: "the root's state service's answer is 48 bytes, over the 40 this host reads of one (desolate doctor says how near the state is to it)";
+      answers: [{ tag: "0123456789abcdef"; state: { lookAsked: 2 } }, undefined];
+      opened: 1;
+      ended: 0;
     }
   >;
-}
-
-/** The state's tag, as the root's user's service gave it, to ask for what changed since:
- *  16 hex, or none (it goes into a request line). */
-const sinceTag = (next: string) => (/^[0-9a-f]{16}$/.test(next) ? next : "");
-
-declare namespace sinceTag {
-  /** 16 hex, or none: nothing else of the root's user's word goes into the request line */
-  export type Tags = Table<
-    typeof sinceTag,
-    [
-      [args: [next: "0123456789abcdef"], expected: "0123456789abcdef"],
-      [args: [next: "0123456789ABCDEF"], expected: ""],
-      [args: [next: "0123456789abcdef HTTP/1.1\r\nX: y"], expected: ""],
-      [args: [next: ""], expected: ""],
-    ]
+  /** an answer not in its form refuses its own question, in words that name the question and
+   *  the field, never what it held; the stream stays (the control: the next question is
+   *  answered on it) */
+  export type NotInForm = Expect<
+    Invoke<
+      typeof askedOver,
+      [
+        asker: typeof heldAsker,
+        rounds: [[["state", { since: "" }]], [["nudge", {}]]],
+        streams: [
+          {
+            replies: [
+              ['{"n":1,"reply":{"ok":true,"result":{"tag":"\\u001b[2J","state":{}}}}\n'],
+              ['{"n":2,"reply":{"ok":true,"result":null}}\n'],
+            ];
+          },
+        ],
+      ]
+    >,
+    "=",
+    {
+      answers: [
+        "the root's answer to 'stated.state' is not in the form this Mac takes (tag)",
+        undefined,
+      ];
+      opened: 1;
+      ended: 0;
+    }
+  >;
+  /** a line that answers no question waiting, one that is not JSON, and the stream's end:
+   *  each refuses every question waiting at once, and the next question dials again and is
+   *  answered (the control) */
+  export type Ends = Expect<
+    Invoke<
+      typeof askedOver,
+      [
+        asker: typeof heldAsker,
+        rounds: [
+          [["requests", {}], ["nudge", {}]],
+          [["nudge", {}]],
+          [["nudge", {}]],
+          [["nudge", {}]],
+        ],
+        streams: [
+          { replies: [[], ['{"n":9,"reply":{"ok":true,"result":null}}\n']] },
+          { replies: [["not json\n"]] },
+          { replies: [[]]; endAfter: 1 },
+          { replies: [['{"n":5,"reply":{"ok":true,"result":null}}\n']] },
+        ],
+      ]
+    >,
+    "=",
+    {
+      answers: [
+        "the root's state service sent a line that answers no question of this Mac's (n)",
+        "the root's state service sent a line that answers no question of this Mac's (n)",
+        "the root's state service sent a line that answers no question of this Mac's (n)",
+        "the root's state service is not there",
+        undefined,
+      ];
+      opened: 4;
+      ended: 3;
+    }
+  >;
+  /** a line past the bound, and a question not answered in its time, end the stream */
+  export type Bounds = Expect<
+    Invoke<
+      typeof askedOver,
+      [
+        asker: typeof heldAsker,
+        rounds: [[["nudge", {}]], [["nudge", {}]]],
+        streams: [
+          { replies: [[Invoke<typeof repeated, [text: "x", count: 65]>]] },
+          { replies: [[]] },
+        ],
+        most: 64,
+      ]
+    >,
+    "=",
+    {
+      answers: [
+        "the root's state service sent a line of more than 64 bytes",
+        "the root's state service did not answer",
+      ];
+      opened: 2;
+      ended: 2;
+    }
   >;
 }
 
@@ -2363,66 +2410,18 @@ const serve = async () => {
   // connection to the host. So this dials in: it tells the service what only the host
   // knows, nudges it when a share changed, and collects the dashboard's requests, which it
   // runs as desolate's own CLI, from the fixed list in shared/actions.ts.
-  const TOKEN_FILE = path.join(paths.state, "host-token");
-  /** The largest answer the state service has given (the whole state, for /host/state), in
-   *  bytes: for doctor, to say how near STATE_ANSWER_BYTES it is. */
-  let stateLargest = 0;
   let rootUp = false;
   // Dialed when asked: a session into the root VM opens in 8 ms (measured on the M1,
   // 2026-11-23), against the dashboard's 300 ms for showing state. (A few were kept open
   // ahead of need while one was a `limactl shell`, tens to hundreds of milliseconds.)
   const toStateService = () => dial(ROOT_VM, ROOT_UI.port);
-  const rootHttp = (
-    method: string,
-    pathname: string,
-    body?: unknown,
-    timeoutMs = 15_000,
-  ): Promise<{ status: number; body: string }> =>
-    new Promise((resolve, reject) => {
-      let token = "";
-      try {
-        token = fs.readFileSync(TOKEN_FILE, "utf8").trim();
-      } catch {
-        return reject(new Error("no host token"));
-      }
-      const payload = body === undefined ? "" : JSON.stringify(body);
-      const stream = toStateService();
-      const timer = setTimeout(
-        () => settle(new Error("the root's state service did not answer")),
-        timeoutMs,
-      );
-      let settled = false;
-      const settle = (result: { status: number; body: string } | Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        stream.destroy();
-        if (result instanceof Error) reject(result);
-        else resolve(result);
-      };
-      const reader = stateReader();
-      stream.on("data", (chunk: Buffer) => {
-        const answer = reader.take(chunk);
-        if (answer === null) return;
-        stateLargest = Math.max(
-          stateLargest,
-          answer instanceof Error ? reader.size() : Buffer.byteLength(answer.body),
-        );
-        settle(answer);
-      });
-      stream.on("error", (error) => settle(error));
-      // Its end, not only its close: a dial is a program (ssh, socat) whose output ends when
-      // the service's side does, and a stream left open for writing is never closed. A
-      // request held while the service was started again (a bootstrap, an update) waited out
-      // its whole timeout, 70 s for the state and the dashboard's requests, with nothing
-      // said on the dashboard's clicks or `desolate events` meanwhile (T2 09-ui, traced on
-      // 2026-11-23: 44 s without a state after a restart).
-      for (const ended of ["end", "close"])
-        stream.on(ended, () => settle(new Error("the root's state service is not there")));
-      stream.write(
-        `${method} ${pathname} HTTP/1.1\r\nHost: root\r\nAuthorization: Bearer ${token}\r\nConnection: close\r\n${payload ? `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n` : ""}\r\n${payload}`,
-      );
-    });
+  // The service's own questions, on one stream (heldAsker). A new stream is told the facts
+  // at the next pass of the loop below (a second at most): a service started again has none.
+  let sentFacts = "";
+  const toState = heldAsker(
+    () => dial(ROOT_VM, STATED_SOCKET),
+    () => void (sentFacts = ""),
+  );
 
   let nudging: NodeJS.Timeout | null = null;
   // At most one a second: a workspace touching its refs in a loop costs the state service
@@ -2439,14 +2438,12 @@ const serve = async () => {
       () => {
         nudging = null;
         nudgedAt = Date.now();
-        rootHttp("POST", "/host/nudge", {}).catch(() => {});
+        toState.ask("nudge").catch(() => {});
       },
       Math.max(60, 1000 - (Date.now() - nudgedAt)),
     );
   };
 
-  let sentFacts = "";
-  let sentAt = 0;
   const tellRoot = async () => {
     const vms = await b.list();
     rootUp = vms.find((vm) => vm.name === ROOT_VM)?.status === "running";
@@ -2512,11 +2509,11 @@ const serve = async () => {
     if (JSON.stringify(facts).length > FACTS_MOST)
       for (const w of Object.values(workspaces) as { agents?: unknown }[]) delete w.agents;
     const text = JSON.stringify(facts);
-    // Said when it changes, and now and then regardless, so the service knows the host is there.
-    if (text === sentFacts && Date.now() - sentAt < 45_000) return;
-    await rootHttp("PUT", "/host/facts", facts);
+    // Said when it changes. (The service knows the host is there by its held questions, asked
+    // again at least every 50 s.)
+    if (text === sentFacts) return;
+    await toState.ask("facts", facts);
     sentFacts = text;
-    sentAt = Date.now();
   };
 
   /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
@@ -2562,7 +2559,7 @@ const serve = async () => {
           lines: lines.splice(0),
           ...(end === undefined ? {} : { done: true, code: end }),
         };
-        const heard = await rootHttp("POST", "/host/progress", body).then(
+        const heard = await toState.ask("progress", body).then(
           () => true,
           () => false,
         );
@@ -2673,14 +2670,10 @@ const serve = async () => {
   const collect = async () => {
     for (let failures = 0; ;) {
       try {
-        const reply = await rootHttp("GET", "/host/requests", undefined, 70_000);
-        if (reply.status !== 200) throw new Error(`status ${reply.status}`);
-        for (const action of JSON.parse(reply.body) as {
-          id: string;
-          kind: unknown;
-          args: unknown;
-        }[]) {
-          if (typeof action.id !== "string" || taken.has(action.id)) continue;
+        // (Held by the service until there are some, and answered within 50 s regardless.)
+        const requests = await toState.ask("requests", {}, 70_000);
+        for (const action of requests.kept) {
+          if (taken.has(action.id)) continue;
           taken.add(action.id);
           void runAction(action).catch((error: Error) => log(`a request failed: ${error.message}`));
         }
@@ -2700,24 +2693,18 @@ const serve = async () => {
   // pusher's log, read as root (a log only root writes, of what the forge answered).
   const followState = async () => {
     let tag = "";
-    let before: Parameters<typeof stateEvents>[0] = null;
+    let before: Answer<"stated.state">["state"] | null = null;
     for (let failures = 0; ;) {
       try {
-        const reply = await rootHttp("GET", `/host/state?since=${tag}`, undefined, 70_000);
-        if (reply.status !== 200) throw new Error(`status ${reply.status}`);
-        const { tag: next, state } = JSON.parse(reply.body) as {
-          tag: string;
-          state: Parameters<typeof stateEvents>[1];
-        };
+        const { tag: next, state } = await toState.ask("state", { since: tag }, 70_000);
         // The first state is where things stand, not news.
         if (before) for (const e of stateEvents(before, state)) events.publish(e);
         // A dashboard opened: each workspace's daemon is asked to look now (its watch line
         // again), so Delete shows what is there and not what was at its last event.
-        const asked = (state as { lookAsked?: unknown } | null)?.lookAsked;
-        if (before && asked !== (before as { lookAsked?: unknown }).lookAsked)
+        if (before && state.lookAsked !== before.lookAsked)
           for (const entry of entries.values()) entry.watch?.write(watchLine(entry));
         before = state;
-        tag = sinceTag(next);
+        tag = next;
         // At most four looks a second, whatever the root's user's service answers.
         await sleep(250);
         failures = 0;
@@ -2804,7 +2791,7 @@ const serve = async () => {
           reply = {
             ok: true,
             editor: { port: editorHostPort(), error: editorError },
-            state: { largest: stateLargest, most: STATE_ANSWER_BYTES },
+            state: { largest: toState.largest(), most: STATE_ANSWER_BYTES },
           };
         } else if (request.op === "ports") {
           // As the watches last said. A listen that fails says so a moment later: one more
@@ -2859,13 +2846,16 @@ const serve = async () => {
           // would be refused is not handed out.
           const port = editorHostPort();
           const dashboard = randomBytes(24).toString("hex");
-          const told = await rootHttp("POST", "/host/signin", {
-            digest: createHash("sha256").update(dashboard).digest("hex"),
-          }).catch((error: Error) => ({ status: 0, body: error.message }));
-          if (told.status !== 200)
+          const refused = await toState
+            .ask("signin", { digest: createHash("sha256").update(dashboard).digest("hex") })
+            .then(
+              () => null,
+              (error: Error) => error.message,
+            );
+          if (refused !== null)
             reply = {
               ok: false,
-              error: `the dashboard did not take its sign-in code (${told.status || told.body})`,
+              error: `the dashboard did not take its sign-in code (${refused})`,
             };
           else {
             const git = mint("git", `http://${ROOT_HOSTNAME}:${port}/?signin=${dashboard}`);

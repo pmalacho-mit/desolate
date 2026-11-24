@@ -134,7 +134,6 @@ Only the Mac sees these.
   - `daemon.pid`, `daemon.sock`: the host daemon, and the socket the CLI talks to it on.
   - `ui-token`, `approve-token`, `git-token`: the credentials in the addresses `desolate ui`,
     `desolate approve --web` and `desolate git` print. Anyone with one can open that page.
-  - `host-token`: what the daemon presents to the root's state service.
   - `workspace-keys/<vm>`: each workspace's key, made here and written onto that VM's own
     disk, so the Mac can tell a request from a workspace that starts workspaces is really
     its own. `spawn.json`: each domain's limit on that, and which workspace started which.

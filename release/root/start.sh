@@ -362,7 +362,9 @@ kept() { # kept <name> <script>
   echo $! >"$RUN/$1.pid"
 }
 alive "$RUN/rootd.pid" || kept rootd rootd.ts
-# The state service: what the dashboard draws from (stated.ts).
+# The state service: what the dashboard draws from (stated.ts). The host's socket's directory
+# is the user's alone, as the CLI channel's is: the host asks as that user.
+install -d -m 0700 -o "$USER_NAME" "$RUN/stated"
 alive "$RUN/stated.pid" || kept stated stated.ts
 # The CLI channel, kept running (rootctl.ts serve): the host's calls skip loading the root's
 # code each time. Its socket's directory is the user's alone; the host asks as that user.
