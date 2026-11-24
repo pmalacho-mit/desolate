@@ -6,7 +6,6 @@ import { once } from "node:events";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { paced } from "../workspace/wsd.ts";
 
 let made = 0;
 const settled = () => new Promise((resolve) => setTimeout(resolve, 30));
@@ -70,53 +69,4 @@ export const watching = async (
     server.close();
     fs.rmSync(file, { force: true });
   }
-};
-
-/** When `paced` starts its looks, on a clock of the test's own: events poked in `bursts`
- *  (each from, to, every ms), each look taking `lookMs`, closed at `closeAt`. Timers due by
- *  an event's time run before it. */
-export const pacedLooks = async (
-  bursts: [from: number, to: number, every: number][],
-  lookMs = 0,
-  closeAt = Infinity,
-): Promise<number[]> => {
-  let now = 0;
-  let made = 0;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  const later = (fn: () => void, ms: number) => {
-    const id = ++made;
-    timers.set(id, { at: now + ms, fn });
-    return () => void timers.delete(id);
-  };
-  const looks: number[] = [];
-  const pacer = paced(
-    async () => {
-      looks.push(now);
-      if (lookMs > 0) await new Promise<void>((resolve) => later(resolve, lookMs));
-    },
-    () => now,
-    later,
-  );
-  const events: [at: number, act: () => void][] = [[closeAt, pacer.close]];
-  for (const [from, to, every] of bursts)
-    for (let at = from; at <= to; at += every) events.push([at, pacer.poke]);
-  events.sort((a, b) => a[0] - b[0]);
-  const settle = async () => {
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-  };
-  for (;;) {
-    const [id, due] = [...timers].sort((a, b) => a[1].at - b[1].at)[0] ?? [];
-    const event = events[0];
-    if (due && id !== undefined && (!event || due.at <= event[0])) {
-      timers.delete(id);
-      now = Math.max(now, due.at);
-      due.fn();
-    } else if (event && event[0] !== Infinity) {
-      events.shift();
-      now = event[0];
-      event[1]();
-    } else break;
-    await settle();
-  }
-  return looks;
 };

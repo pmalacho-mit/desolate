@@ -73,7 +73,10 @@ case "${1:-}" in
     message="$*"
     n=$(chars "$message")
     [ "$n" -le "$STATUS_MAX" ] || echo "desolate-status: the message is $n characters, over the $STATUS_MAX allowed; it is shown cut" >&2
-    tmp="$FILE.$$"
+    # Written beside it under a name the host does not watch for, then moved: one event,
+    # the move, so the dashboard is told once, of the whole file (it was told of the
+    # half-written one too, and its second nudge waited out the host's pace).
+    tmp="$GIT_DIR_/.desolate-status.json.$$"
     printf '{"color":"%s","message":%s,"updated":"%s"}\n' \
       "$color" "$(json_str "$message")" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$tmp"
     mv -f "$tmp" "$FILE" ;;
@@ -86,7 +89,7 @@ case "${1:-}" in
   note)
     shift
     if [ "${1:-}" = --clear ]; then rm -f "$NOTE"; exit 0; fi
-    tmp="$NOTE.$$"
+    tmp="$GIT_DIR_/.desolate-note.md.$$"
     if [ $# -gt 0 ]; then printf '%s\n' "$*" > "$tmp"; else cat > "$tmp"; fi
     n=$(wc -c < "$tmp" | tr -d ' ')
     if [ "$n" -gt "$NOTE_MAX" ]; then
