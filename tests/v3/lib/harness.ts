@@ -6,18 +6,19 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, "../../..");
 const CLI = path.join(REPO_ROOT, "release", "cli.sh");
+const FAKE_BACKEND = path.join(HERE, "fake-backend.ts");
 const FORGE_SRC = path.join(REPO_ROOT, "tests", "v3", "forge");
 const TRANSCRIPTS = path.join(REPO_ROOT, "tests", "v3", "transcripts");
 
 export type Result = { code: number; stdout: string; stderr: string; ms: number };
 export type Stack = {
-  tier: "T2" | "T3" | "T4";
-  backend: "fake" | "qemu" | "vz";
+  tier: "T2" | "T4";
+  backend: "fake" | "vz";
   instance: string;
   home: string;
   work: string;
@@ -120,9 +121,9 @@ export const outboxSaid = (stack: Stack) => {
   };
 };
 
-/** T2: the fake backend. T3: real VMs on Linux (qemu). T4: the product backend on a Mac (vz). */
-export const backendOfTier = (): "fake" | "qemu" | "vz" =>
-  process.env.DESOLATE_TIER === "T3" ? "qemu" : process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
+/** T2: the fake backend. T4: the product backend on a Mac (vz). */
+export const backendOfTier = (): "fake" | "vz" =>
+  process.env.DESOLATE_TIER === "T4" ? "vz" : "fake";
 
 export const newStack = (label: string): Stack => {
   const backend = backendOfTier();
@@ -239,7 +240,8 @@ export const newStack = (label: string): Stack => {
     ...process.env,
     DESOLATE_HOME: home,
     DESOLATE_INSTANCE: instance,
-    DESOLATE_BACKEND: backend,
+    // The fake backend is not in release/: each command loads it (lib/fake-backend.ts).
+    ...(backend === "fake" ? { NODE_OPTIONS: `--import=${pathToFileURL(FAKE_BACKEND).href}` } : {}),
     DESOLATE_TEST_RUN: "1",
     // Beside a real stack, and beside other test stacks: the editors on a port of this
     // stack's own (doctor fails a daemon that could not take its port).
@@ -290,6 +292,9 @@ export const newStack = (label: string): Stack => {
       .replace(/ssh-ed25519 [A-Za-z0-9+/=]+/g, "ssh-ed25519 <key>")
       .replace(/tkn=[0-9a-f]{48}/g, "tkn=<token>")
       .replace(/docker daemon: docker \d+\.\d+\.\d+/g, "docker daemon: docker <version>")
+      // (The image's fingerprint changes with any edit to what provisions it, a comment too:
+      // the transcript is of the message, not of the image.)
+      .replace(/(desolate's image \()[0-9a-f]{16}(\))/g, "$1<image>$2")
       .replace(/\b[0-9a-f]{40}\b/g, "<commit>")
       .replace(/\b[0-9a-f]{64}\b/g, "<oid>")
       .replace(/sha256:[0-9a-f]{12}|\b[0-9a-f]{12}\b/g, "<id>")
@@ -358,7 +363,7 @@ export const newStack = (label: string): Stack => {
           );
 
   const stack: Stack = {
-    tier: backend === "fake" ? "T2" : backend === "qemu" ? "T3" : "T4",
+    tier: backend === "fake" ? "T2" : "T4",
     backend,
     instance,
     home,

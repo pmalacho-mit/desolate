@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
 import { LFS_POINTER_BYTES } from "../shared/limits.ts";
 import { BEAT } from "../shared/lock.ts";
-import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
+import { isBranch, isCommit, lfsPointer, parseRepo } from "../shared/names.ts";
 import { run, sleep } from "../shared/run.ts";
 import { failure, printable } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -188,9 +188,6 @@ export const syncRepo = async (repo: string): Promise<{ branches: number; bundle
   return { branches: names.length, bundled };
 };
 
-const POINTER =
-  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
-
 /** The LFS objects that `branch`'s commits reference and the mirror does not hold, copied to
  *  the outbox by oid. Pointers are found in every new commit, not only at the tip: the
  *  remote refuses a push that references an object it was never sent. */
@@ -224,9 +221,9 @@ export const stageLfs = async (
   const mirror = `/desolate/mirrors/${repo}.git/lfs/objects`;
   for (const id of small) {
     const blob = await git(repo, ["cat-file", "blob", id]);
-    const match = POINTER.exec(blob.out + "\n");
-    if (!match) continue;
-    const [, oid, size] = match as unknown as [string, string, string];
+    const pointer = lfsPointer(blob.out + "\n");
+    if (!pointer) continue;
+    const { oid, size } = pointer;
     const where = path.join(oid.slice(0, 2), oid.slice(2, 4), oid);
     if (fs.existsSync(path.join(mirror, where)) || staged.some((s) => s.oid === oid)) continue;
     const local = path.join(clone(repo), ".git", "lfs", "objects", where);
@@ -237,7 +234,7 @@ export const stageLfs = async (
     const target = path.join(OUTBOX, "lfs", repo, oid);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(local, target);
-    staged.push({ oid, size: Number(size) });
+    staged.push({ oid, size });
   }
   return staged;
 };
@@ -269,41 +266,6 @@ declare namespace stageLfs {
               "1111111111111111111111111111111111111111 commit 200\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 120\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 5000\n",
             ],
             ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "# app\nA small file.\n"],
-          ],
-        ]
-      >,
-    ],
-    Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
-  >;
-  /** a pointer is exactly git-lfs's three lines: another spec, an id that is not sha256 hex
-   *  in lower case, or a line more is a file that happens to look like one */
-  export type NotQuitePointers = Given<
-    [
-      Mock<"../shared/run.ts", typeof scriptedGit>,
-      Invoke<
-        typeof gitAnswers,
-        [
-          answers: [
-            [
-              "rev-list",
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb b\ndddddddddddddddddddddddddddddddddddddddd d\n",
-            ],
-            [
-              "cat-file --batch-check",
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 130\ndddddddddddddddddddddddddddddddddddddddd blob 140\n",
-            ],
-            [
-              "cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
-            ],
-            [
-              "cat-file blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\nsize 12\n",
-            ],
-            [
-              "cat-file blob dddddddddddddddddddddddddddddddddddddddd",
-              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n",
-            ],
           ],
         ]
       >,
@@ -408,16 +370,10 @@ export const importDeliveries = async (repo: string): Promise<string[]> => {
 // ends when whoever asked stops waiting. What else ends it is the root being gone, said as
 // such: its beat stopped (BEAT's 10 s of nothing: the root is on the same Mac, and a thread
 // that does nothing but write a small file is never that late), before it took the request
-// or after; or a beat from another start of rootd than the one that took it.
-//
-// Both ends change apart. A root from before the beat (its VM not restarted since) writes none:
-// the wait is then the old one, 2 minutes, in the old words. A workspace from before (its VM
-// not restarted) reads only the reply, which is where it always was, and waits its old 2 min.
+// or after; or a beat from another start of rootd than the one that took it. No beat file at
+// all is a beat that never moves: rootd writes one into every domain's inbox as it starts.
 
 const BEAT_FILE = path.join(INBOX, "rootd.beat");
-/** How long a request waits on a root that writes no beat: one from before the beat, as it
- *  always waited. */
-const LEGACY_MS = 120_000;
 /** How often a waiter looks: three small reads. */
 const POLL_MS = 150;
 /** How often a long wait says again what the root is doing, when that has not changed. */
@@ -500,8 +456,8 @@ export type Look = {
   /** What the root says of the domain's requests/ while it holds more names than the root
    *  reads at a time (rootd.ts, crowded); null or absent when it does not. */
   crowded?: string | null;
-  /** The beat's text; null while there has never been one (a root from before the beat). */
-  beat: string | null;
+  /** The beat's text; "" while there has never been one. */
+  beat: string;
   /** The beat has stopped, as watchBeat says. */
   stopped: boolean;
   /** How long it has waited, and how long the request has been neither in the outbox nor
@@ -518,15 +474,6 @@ export type Verdict =
 
 export const verdict = (look: Look, window = BEAT.beatMs * BEAT.missed): Verdict => {
   if (look.reply) return { answer: look.reply };
-  if (look.beat === null)
-    return look.waited < LEGACY_MS
-      ? { wait: "waiting for the root to answer" }
-      : {
-          answer: {
-            ok: false,
-            error: "the root did not answer. Is it running? On the host: desolate doctor",
-          },
-        };
   const quiet = `${window / 1000} s`;
   if (look.stopped)
     return look.asked
@@ -667,8 +614,27 @@ declare namespace verdict {
     >,
   ];
   /** a root that is gone is said to be, in 10 s: before it took the request (which is then
-   *  withdrawn, so it is not done later unasked), or after */
+   *  withdrawn, so it is not done later unasked), or after; and a domain with no beat file
+   *  at all, watched for as long (its root is not running) */
   export type Gone = [
+    Expect<
+      Invoke<
+        typeof verdict,
+        [
+          look: {
+            reply: null;
+            asked: true;
+            taken: null;
+            beat: "";
+            stopped: true;
+            waited: 10000;
+            lost: 0;
+          },
+        ]
+      >,
+      "matches",
+      { withdraw: { ok: false; fix: "on the host: desolate doctor" } }
+    >,
     Expect<
       Invoke<
         typeof verdict,
@@ -766,50 +732,6 @@ declare namespace verdict {
       }
     >,
   ];
-  /** a root from before the beat: the old wait, two minutes, in the old words */
-  export type OldRoot = [
-    Expect<
-      Invoke<
-        typeof verdict,
-        [
-          look: {
-            reply: null;
-            asked: true;
-            taken: null;
-            beat: null;
-            stopped: false;
-            waited: 119000;
-            lost: 0;
-          },
-        ]
-      >,
-      "=",
-      { wait: "waiting for the root to answer" }
-    >,
-    Expect<
-      Invoke<
-        typeof verdict,
-        [
-          look: {
-            reply: null;
-            asked: true;
-            taken: null;
-            beat: null;
-            stopped: false;
-            waited: 120000;
-            lost: 0;
-          },
-        ]
-      >,
-      "=",
-      {
-        answer: {
-          ok: false;
-          error: "the root did not answer. Is it running? On the host: desolate doctor";
-        };
-      }
-    >,
-  ];
 }
 
 /** The beat's text, or null when there is no beat file (or none could be read just now). */
@@ -838,7 +760,7 @@ export const request = async (
   const started = performance.now();
   // Once a beat has been read, a beat file that cannot be read is the same beat: one that
   // does not move.
-  let heard: string | null = null;
+  let heard = "";
   let seen: Watched | null = null;
   let lostSince: number | null = null;
   let said = "";
@@ -858,9 +780,8 @@ export const request = async (
       ? readJson<{ said?: unknown } | null>(path.join(INBOX, "requests.crowded"), null)
       : null;
     heard = readBeat() ?? heard;
-    const watched: ReturnType<typeof watchBeat> | null =
-      heard === null ? null : watchBeat(seen, heard, now);
-    seen = watched?.seen ?? null;
+    const watched = watchBeat(seen, heard, now);
+    seen = watched.seen;
     lostSince = reply || waiting || taken ? null : (lostSince ?? now);
     const next = verdict(
       {
@@ -869,7 +790,7 @@ export const request = async (
         taken,
         crowded: typeof crowded?.said === "string" ? crowded.said : null,
         beat: heard,
-        stopped: watched?.stopped ?? false,
+        stopped: watched.stopped,
         waited: now - started,
         lost: now - (lostSince ?? now),
       },

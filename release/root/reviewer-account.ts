@@ -44,7 +44,6 @@ import {
   named,
   pathspec,
   SENSITIVE,
-  shown,
 } from "./reviewer-git.ts";
 import { PACKS, prepare, prunePacks, storedPack, touchPack } from "./reviewer-packs.ts";
 import type { Say } from "./reviewer-packs.ts";
@@ -164,7 +163,7 @@ const squashOf = async (
     // (An empty message is a commit too: left out, the count and the first subject were wrong.)
     // A subject is one line of the forge's history: past 200 characters it is cut, and the
     // cut is marked there.
-    .map((subject) => shown(subject, 200) || "(no message)");
+    .map((subject) => printable(subject, 200) || "(no message)");
   const list = subjects.slice(0, SQUASH_LISTED).map((s) => `- ${s}`);
   if (subjects.length > SQUASH_LISTED) list.push(`- and ${subjects.length - SQUASH_LISTED} more`);
   // Titled by the last commit's subject: where the branch ended up, which reads as its
@@ -186,7 +185,7 @@ const squashOf = async (
   // copied as they were, an agent's 100 KB "email" would ride along unseen in a commit the
   // reviewer itself made). Dates as git keeps them, or no squash.
   const named = (text: string | undefined) =>
-    shown(text ?? "", Infinity)
+    printable(text ?? "", Infinity)
       .replace(/[<>\n]/g, "?")
       .trim();
   // A committer git cannot read (a line continuing it, which fsck lets by: the review of the
@@ -255,9 +254,9 @@ const squashOf = async (
     parent: parent || null,
     count,
     message,
-    author: shown(author ?? ""),
-    committer: shown(committer ?? ""),
-    dates: `authored ${shown(authored ?? "")}, committed ${shown(committed ?? "")}`,
+    author: printable(author ?? ""),
+    committer: printable(committer ?? ""),
+    dates: `authored ${printable(authored ?? "")}, committed ${printable(committed ?? "")}`,
   };
 };
 
@@ -308,7 +307,7 @@ const headerWarnings = async (dir: string, order: string[], say: Say): Promise<s
         else {
           const space = line.indexOf(" ");
           current = {
-            name: shown(space < 0 ? line : line.slice(0, space), 40) || "(a line with no name)",
+            name: printable(space < 0 ? line : line.slice(0, space), 40) || "(a line with no name)",
             bytes: line.length + 1,
             value: space < 0 ? "" : line.slice(space + 1),
           };
@@ -317,7 +316,7 @@ const headerWarnings = async (dir: string, order: string[], say: Say): Promise<s
       }
       const said = extra.map((h) =>
         h.name === "encoding" && h.bytes < 60
-          ? `encoding "${shown(h.value, 40)}"`
+          ? `encoding "${printable(h.value, 40)}"`
           : `${h.name} (${h.bytes} bytes${h.name.startsWith("gpgsig") ? ", a signature" : ""})`,
       );
       if (said.length) odd.push(`${String(id).slice(0, 12)}: ${[...new Set(said)].join(", ")}`);
@@ -354,8 +353,8 @@ const commitsOf = async (dir: string, ids: string[]): Promise<AccountCommit[]> =
     .map((entry) => entry.replace(/^\n/, "").split("\x00"))
     .map(([id, author, subject]) => ({
       commit: id!,
-      author: shown(author ?? ""),
-      subject: shown(subject ?? ""),
+      author: printable(author ?? ""),
+      subject: printable(subject ?? ""),
     }));
 };
 
@@ -373,8 +372,6 @@ const namesOf = async (dir: string, args: string[]): Promise<string[]> => {
 /** An account as the reviewer keeps it, for `page` and `diff`: the account, and the whole of
  *  each list it pages. `raw`: a file's path as git has it, a character a byte (namesOf). */
 type Kept = {
-  /** (An account kept before names were read as bytes is made again.) */
-  names: "bytes";
   repo: string;
   commit: string;
   base: string | null;
@@ -399,8 +396,7 @@ const keptOf = (key: string): Kept | null => {
   try {
     const file = keptFile(key);
     if (Date.now() - fs.statSync(file).mtimeMs > PACKS.keptMs) return null;
-    const kept = JSON.parse(fs.readFileSync(file, "utf8")) as Kept;
-    return kept.names === "bytes" ? kept : null;
+    return JSON.parse(fs.readFileSync(file, "utf8")) as Kept;
   } catch {
     return null;
   }
@@ -657,7 +653,6 @@ const account = async (
       remote: now,
     };
     keep({
-      names: "bytes",
       repo: repoId(repo),
       commit,
       base,

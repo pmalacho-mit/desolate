@@ -8,8 +8,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
 
 const RELEASE = path.resolve(import.meta.dirname, "../../../release");
+// The tests' stand-in for VMs, loaded as every test run loads it: no real VM is touched.
+const FAKE = `--import=${pathToFileURL(path.resolve(import.meta.dirname, "../lib/fake-backend.ts")).href}`;
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-flags-"));
 after(() => fs.rmSync(home, { recursive: true, force: true }));
 // No stack: a verb that went past its flags would fail some other way (or take its time).
@@ -22,7 +25,7 @@ const run = (...args: string[]) =>
       HOME: home,
       DESOLATE_HOME: home,
       DESOLATE_INSTANCE: "flagtest",
-      DESOLATE_BACKEND: "fake",
+      NODE_OPTIONS: FAKE,
     },
   });
 
@@ -73,7 +76,7 @@ describe("T1 the CLI's flags", () => {
       HOME: stack,
       DESOLATE_HOME: stack,
       DESOLATE_INSTANCE: "helptest",
-      DESOLATE_BACKEND: "fake",
+      NODE_OPTIONS: FAKE,
     };
     const destroy = (...args: string[]) =>
       spawnSync(path.join(RELEASE, "cli.sh"), ["destroy", "--all", ...args], {

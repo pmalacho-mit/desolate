@@ -3,10 +3,10 @@
 // to it, but what it prints is not passed through raw. The root's shell shows commit
 // messages and file names an agent wrote, and a terminal acts on some escape sequences beyond
 // the screen (the clipboard, files, the title). On a terminal, its output is kept to what a
-// screen needs (shared/terminal-filter.ts), as `desolate exec` and `desolate agent attach`
+// screen needs (host/terminal-filter.ts), as `desolate exec` and `desolate agent attach`
 // already did; to a pipe or a file, it is passed as it is.
 import { spawn } from "node:child_process";
-import { terminalFilter } from "../../shared/terminal-filter.ts";
+import { terminalFilter } from "../terminal-filter.ts";
 import type { Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** The child's stdio: the terminal (stdin) always its own; stdout and stderr piped here, to be

@@ -28,7 +28,7 @@ import {
 import { embedAddress } from "./approve-web.ts";
 import { TERMINAL } from "../shared/limits.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
-import { terminalFilter } from "../shared/terminal-filter.ts";
+import { terminalFilter } from "./terminal-filter.ts";
 import { refusal, sameSecret } from "../shared/gate.ts";
 import { carriesCredential, cookieValue, signedInPage } from "../shared/page-key.ts";
 import { guest, paths, RELEASE_DIR } from "./paths.ts";

@@ -9,7 +9,7 @@ import { readJson, writeJson } from "../shared/json.ts";
 import { LFS_POINTER_BYTES } from "../shared/limits.ts";
 import { listed, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
-import { isBranch, isCommit, isLfsOid, isSlug, parseRepo } from "../shared/names.ts";
+import { isBranch, isCommit, isLfsOid, isSlug, lfsPointer, parseRepo } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { domain as domainOf, domains, workspaces } from "./domains.ts";
 import { git, gitOk, ownedByRoot, safeIn } from "./git.ts";
@@ -526,9 +526,6 @@ declare namespace dismiss {
   >;
 }
 
-const POINTER =
-  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
-
 /** The empty tree: what a branch with nothing before it is compared with. */
 const EMPTY = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
@@ -605,8 +602,8 @@ export const lfsOf = async (repo: Repo, commit: string): Promise<string[]> => {
     for await (const chunk of child.stdout) chunks.push(chunk as Buffer);
     await ended;
     for (const blob of blobsOf(Buffer.concat(chunks))) {
-      const match = POINTER.exec(blob);
-      if (match) oids.add(match[1]!);
+      const pointer = lfsPointer(blob);
+      if (pointer) oids.add(pointer.oid);
     }
   }
   return [...oids];

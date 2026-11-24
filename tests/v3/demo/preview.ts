@@ -95,6 +95,7 @@ const dashboard = (req: IncomingMessage, res: ServerResponse, url: URL) => {
     case "/highlight-worker.js":
     case "/markdown.js":
     case "/page-key.js":
+    case "/shown-text.js":
       return file(res, path.join(shared, url.pathname.slice(1)));
     case "/preview-review.js":
       return send(
@@ -145,6 +146,7 @@ const approvals = (req: IncomingMessage, res: ServerResponse, url: URL) => {
     case "/highlight.js":
     case "/highlight-worker.js":
     case "/page-key.js":
+    case "/shown-text.js":
       return file(res, path.join(RELEASE, "shared/ui", url.pathname.slice(1)));
     case "/secrets":
       return page(res, url, theme, path.join(ui, "secrets.html"));

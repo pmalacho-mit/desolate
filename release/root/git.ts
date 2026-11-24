@@ -323,21 +323,6 @@ declare namespace safeIn {
   >;
 }
 
-/** For a git whose output is bytes (a pack): its leading arguments and environment, with
- *  the same check as `git`. */
-export const gitInvocation = (dir: string): { args: string[]; env: NodeJS.ProcessEnv } => {
-  if (!ownedByRoot(dir))
-    throw new Error(`the root does not run git in ${dir}: it is not a mirror or a root clone (P4)`);
-  const real = fs.realpathSync(dir);
-  return {
-    args: [
-      ...safeIn(real),
-      ...(real.startsWith(`${ROOT.mirrors}/`) ? ["--git-dir", dir] : ["-C", dir]),
-    ],
-    env: baseEnv(),
-  };
-};
-
 /** How long git may say nothing while it talks to the forge before it is taken to have
  *  stalled (limits.md, R4: an idle bound against a peer that is remote, never a total). A
  *  fetch is run with `--progress`, so git says something at least once a second while bytes

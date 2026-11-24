@@ -1359,6 +1359,8 @@ const STATIC: Record<string, [string, string]> = {
   // Syntax colour for the diff (shared/ui/highlight.js says how it is kept to colour).
   "/highlight.js": ["../../shared/ui/highlight.js", "text/javascript; charset=utf-8"],
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],
+  // Text a repository wrote, shown as itself (the approval page's rule too).
+  "/shown-text.js": ["../../shared/ui/shown-text.js", "text/javascript; charset=utf-8"],
   // An offered issue's preview: Markdown built as elements, never as HTML.
   "/markdown.js": ["../../shared/ui/markdown.js", "text/javascript; charset=utf-8"],
 };
@@ -1772,7 +1774,6 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     ROOT.state,
     APPROVALS,
     path.join(ROOT.state, "refused"),
-    path.join(ROOT.state, "secrets"),
     path.join(ROOT.state, "issues"),
     ROOT.domains,
     HOST_QUEUE,

@@ -2,7 +2,7 @@
 # Build desolate's base image from the Ubuntu archive alone (debootstrap), on a Linux host.
 #
 #   sudo image/build.sh --out <dir> [--node-from <dir>] [--subrepo-from <dir>] [--editor-from <dir>]
-#                       [--no-editor] [--build-ca <bundle.pem>] [--disk-gb <n>]
+#                       [--no-editor] [--build-ca <bundle.pem>]
 #
 # --no-editor: an image without the editor server (P1's editor), for a builder that cannot
 # reach GitHub's releases and has none to give with --editor-from. The image says so
@@ -13,13 +13,7 @@
 #
 # Writes into <dir>:
 #   rootfs.tar        the provisioned root filesystem
-#   disk.raw          the same as a bootable ext4 disk (label desolate-root), for the qemu backend:
-#                     --disk-gb big (8 unless said): room for what is provisioned (the
-#                     container image, without a kernel, is 2.0 GB), not a VM's size. Lima grows it to the base VM's disk
-#                     (host/vm/lima.ts, BASE_DISK_GIB) when it makes the base, and every VM
-#                     is a clone of that base (shared/size.ts).
-#   vmlinuz, initrd   its kernel, booted directly (no bootloader on the disk)
-#   manifest.json     sha256 of each, and the versions inside
+#   manifest.json     its sha256, and the versions inside
 # and, with docker on PATH, imports rootfs.tar as the image desolate/base:<sha12> for the
 # fake backend.
 #
@@ -29,7 +23,7 @@
 # backend provisions a pinned Ubuntu cloud image with the same image/provision.sh instead.
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-OUT="" NODE_FROM="" SUBREPO_FROM="" EDITOR_FROM="" EDITOR_SERVER="" BUILD_CA="" DISK_GB=8
+OUT="" NODE_FROM="" SUBREPO_FROM="" EDITOR_FROM="" EDITOR_SERVER="" BUILD_CA=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --out) OUT=$2; shift ;;
@@ -37,18 +31,16 @@ while [ $# -gt 0 ]; do
     --subrepo-from) SUBREPO_FROM=$2; shift ;;
     --editor-from) EDITOR_FROM=$2; shift ;;
     --no-editor) EDITOR_SERVER=none ;;
-    --disk-gb) DISK_GB=$2; shift ;;
     --build-ca) BUILD_CA=$2; shift ;;
     *) echo "build.sh: unknown flag $1" >&2; exit 64 ;;
   esac
   shift
 done
 [ -n "$OUT" ] || { echo "build.sh: --out <dir> is required" >&2; exit 64; }
-[[ $DISK_GB =~ ^[1-9][0-9]*$ ]] || { echo "build.sh: --disk-gb is a whole number of GiB, not '$DISK_GB'" >&2; exit 64; }
 [ -z "$EDITOR_SERVER" ] || [ -z "$EDITOR_FROM" ] || { echo "build.sh: --no-editor or --editor-from, not both" >&2; exit 64; }
 [ "$(id -u)" = 0 ] || { echo "build.sh: needs root (debootstrap, chroot). Run it with sudo." >&2; exit 1; }
-for t in debootstrap mkfs.ext4 chroot; do
-  command -v "$t" >/dev/null || { echo "build.sh: '$t' is missing. Install it: apt-get install debootstrap e2fsprogs" >&2; exit 1; }
+for t in debootstrap chroot; do
+  command -v "$t" >/dev/null || { echo "build.sh: '$t' is missing. Install it: apt-get install debootstrap" >&2; exit 1; }
 done
 # shellcheck disable=SC1091
 . "$HERE/../pins.env"
@@ -101,32 +93,13 @@ chroot "$R" env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:
   "${CA_ENV[@]}" DESOLATE_IMAGE_KIND=vm DESOLATE_IMAGE_EDITOR="$EDITOR_SERVER" bash /opt/desolate-build/image/provision.sh 2>&1 | tee "$OUT/provision.log" | grep -E '^(==>|    |provision: )' || true
 grep -q '^==> done' "$OUT/provision.log" || { echo "build.sh: provisioning did not finish; see $OUT/provision.log" >&2; tail -15 "$OUT/provision.log" >&2; exit 1; }
 
-echo "==> guest settings for a directly booted disk"
-echo "LABEL=desolate-root / ext4 defaults,discard 0 1" >"$R/etc/fstab"
-echo desolate >"$R/etc/hostname"
-# cloud-init: the NoCloud seed Lima attaches, and nothing that waits on a network.
-mkdir -p "$R/etc/cloud/cloud.cfg.d"
-printf 'datasource_list: [ NoCloud, None ]\n' >"$R/etc/cloud/cloud.cfg.d/90-desolate.cfg"
-chroot "$R" systemctl enable ssh.service systemd-networkd.service >/dev/null 2>&1 || true
-chroot "$R" systemctl mask systemd-networkd-wait-online.service >/dev/null 2>&1 || true
-# An initrd that can find a virtio disk and mount 9p/virtiofs shares, whatever the builder runs.
-printf 'virtio_blk\nvirtio_pci\nvirtio_net\nvirtio_scsi\n9p\n9pnet_virtio\nvirtiofs\niso9660\next4\n' >>"$R/etc/initramfs-tools/modules"
-sed -i 's/^MODULES=.*/MODULES=most/' "$R/etc/initramfs-tools/initramfs.conf"
-KVER=$(ls "$R/lib/modules" | sort -V | tail -1)
-chroot "$R" update-initramfs -c -k "$KVER" >>"$OUT/provision.log" 2>&1 || chroot "$R" update-initramfs -u -k "$KVER" >>"$OUT/provision.log" 2>&1
-cp "$R/boot/vmlinuz-$KVER" "$OUT/vmlinuz"; cp "$R/boot/initrd.img-$KVER" "$OUT/initrd"
-chmod 0644 "$OUT/vmlinuz" "$OUT/initrd"
-
 rm -f "$R/usr/sbin/policy-rc.d" "$R/etc/resolv.conf"
 rm -rf "$R/opt/desolate-build" "$R/var/lib/apt/lists"/* "$R/var/cache/apt"/*.bin "$R/root/.npm" "$R/root/.cache"
 ln -sf ../run/systemd/resolve/stub-resolv.conf "$R/etc/resolv.conf"
 umount_all; trap - EXIT
 
-echo "==> rootfs.tar, disk.raw"
+echo "==> rootfs.tar"
 tar -C "$R" --numeric-owner --xattrs -cf "$OUT/rootfs.tar" .
-rm -f "$OUT/disk.raw"
-truncate -s "${DISK_GB}G" "$OUT/disk.raw"
-mkfs.ext4 -q -F -L desolate-root -d "$R" "$OUT/disk.raw"
 rm -rf "$R"
 
 sha() { sha256sum "$1" | cut -d' ' -f1; }
@@ -135,13 +108,9 @@ cat >"$OUT/manifest.json" <<M
 {
   "arch": "$DEB_ARCH",
   "suite": "$UBUNTU_SUITE",
-  "kernel": "$KVER",
   "built": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "sha256": {
-    "rootfs.tar": "$ROOTFS_SHA",
-    "disk.raw": "$(sha "$OUT/disk.raw")",
-    "vmlinuz": "$(sha "$OUT/vmlinuz")",
-    "initrd": "$(sha "$OUT/initrd")"
+    "rootfs.tar": "$ROOTFS_SHA"
   }
 }
 M
