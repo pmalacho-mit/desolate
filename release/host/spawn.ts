@@ -17,9 +17,16 @@ import type { Signed } from "../shared/spawn.ts";
 import { because } from "./failures.ts";
 import { INSTANCE, paths } from "./paths.ts";
 import type { Backend } from "./vm/types.ts";
-import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { emptyHome, readState, writeState } from "../.harness/home.ts";
-import type { everyVmExists, giveKey, noVmExists, signed } from "../.harness/host-spawn.ts";
+import type {
+  everyVmExists,
+  giveKey,
+  neverListed,
+  noVmExists,
+  noVms,
+  signed,
+} from "../.harness/host-spawn.ts";
 
 const KEYS = () => path.join(paths.state, "workspace-keys");
 const LEDGER = () => path.join(paths.state, "spawn.json");
@@ -34,16 +41,11 @@ type Ledger = {
 };
 const ledger = (): Ledger => {
   const value = readJson<Partial<Ledger>>(LEDGER(), {});
-  // (Signatures an older desolate kept in spawn.json still count, once: a request run just
-  // before an upgrade is not run again after it.)
-  const used = { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) };
-  // Moved to their own file at once: the next write of spawn.json, by the CLI too, leaves
-  // them out (final review).
-  if (value.used && Object.keys(value.used).length > 0) {
-    saveUsed(used);
-    save({ max: value.max ?? {}, started: value.started ?? {}, used });
-  }
-  return { max: value.max ?? {}, started: value.started ?? {}, used };
+  return {
+    max: value.max ?? {},
+    started: value.started ?? {},
+    used: readJson<Record<string, number>>(USED(), {}),
+  };
 };
 /** The requests run, in a file of their own that only the daemon writes: spawn.json is also
  *  written by the CLI (a started record, a limit), and one whole-file write must not undo
@@ -194,6 +196,13 @@ export const startedIn = (domain: string, exists: (vm: string) => boolean) =>
       exists(workspaceVmName(INSTANCE, domain, key.slice(domain.length + 1))),
   );
 
+/** Whether a request is signed by the workspace it names, and fresh: its names, then an HMAC
+ *  with the key the host gave that workspace (one small file read). Why not, or null. */
+const verified = (r: Signed & { mac: string }, now: number): string | null =>
+  !isSlug(r.domain) || !isSlug(r.parent) || !isSlug(r.name)
+    ? "not a request desolate makes"
+    : verify(keyOf(workspaceVmName(INSTANCE, r.domain, r.parent)), r, now);
+
 /** Whether the host runs this request: the signature, freshness and once only, then the
  *  domain's limit (spawn) or the parent (close). Returns why not, or null. */
 export const check = (
@@ -201,9 +210,7 @@ export const check = (
   exists: (vm: string) => boolean,
   now = Date.now(),
 ): string | null => {
-  if (!isSlug(r.domain) || !isSlug(r.parent) || !isSlug(r.name))
-    return "not a request desolate makes";
-  const why = verify(keyOf(workspaceVmName(INSTANCE, r.domain, r.parent)), r, now);
+  const why = verified(r, now);
   if (why) return why;
   const value = ledger();
   if (value.used[r.mac] !== undefined) return "that request was already run";
@@ -450,41 +457,6 @@ declare namespace check {
       >,
     ]
   >;
-  /** a request an older desolate ran (it kept them in spawn.json) is not run again after the
-   *  upgrade, and spawn.json, which the CLI also writes, no longer holds it */
-  export type RanBeforeTheUpgrade = Given<
-    [
-      Empty,
-      LeadsKey,
-      Invoke<
-        typeof writeState,
-        [
-          name: "spawn.json",
-          text: '{"max":{},"started":{},"used":{"2c83209c4fc7a4f3d1947e14da1b18bc73f6e57935e015a4e353df39e2c42039":1794823200000}}',
-        ]
-      >,
-    ],
-    [
-      Expect<
-        Invoke<
-          typeof check,
-          [
-            r: Invoke<typeof signed, [key: Lead, request: Spawn]>,
-            exists: typeof noVmExists,
-            now: Now,
-          ]
-        >,
-        "=",
-        "that request was already run"
-      >,
-      Expect<
-        Invoke<typeof readState, [name: "spawn.json"]>,
-        "=",
-        '{\n  "max": {},\n  "started": {}\n}\n'
-      >,
-    ]
-  >;
-
   /** the person's limit: 0 turns spawning off; at the limit, those still there count */
   export type Off = Given<
     [Empty, LeadsKey, Invoke<typeof setMax, [domain: "acme", max: 0]>],
@@ -628,6 +600,130 @@ declare namespace check {
       >,
       "=",
       "acme/helper was started by an earlier workspace named lead, since removed: only a person removes it now"
+    >
+  >;
+}
+
+/** check(), with the backend's list of VMs asked for only once the request is known to be
+ *  signed by the workspace it names, and fresh, and only for a spawn (its limit counts the
+ *  started workspaces whose VMs exist; a close needs none). So a request that is not one
+ *  desolate makes, or not signed, costs the host a small file read and an HMAC, however many
+ *  come. (It listed every VM first, for each.) */
+export const admit = async (
+  r: (Signed & { mac: string }) | null,
+  vms: () => Promise<string[]>,
+  now = Date.now(),
+): Promise<string | null> => {
+  if (!r) return "not a request desolate makes";
+  const why = verified(r, now);
+  if (why) return why;
+  const known = new Set(r.op === "spawn" ? await vms() : []);
+  return check(r, (vm) => known.has(vm), now);
+};
+
+declare namespace admit {
+  type Lead = "1111111111111111111111111111111111111111111111111111111111111111";
+  type Other = "2222222222222222222222222222222222222222222222222222222222222222";
+  type Spawn = {
+    op: "spawn";
+    domain: "acme";
+    parent: "lead";
+    name: "helper";
+    branch: "task/docs";
+    checkouts: [];
+    command: ["claude", "-p", "fix the docs"];
+    at: "2026-11-16T10:00:00.000Z";
+    nonce: "00000000000000000000000000000001";
+  };
+  type Close = {
+    op: "close";
+    domain: "acme";
+    parent: "lead";
+    name: "helper";
+    at: "2026-11-16T10:00:00.000Z";
+    nonce: "00000000000000000000000000000002";
+  };
+  type Now = 1794823260000;
+  type Keyed = [
+    Invoke<typeof emptyHome>,
+    Invoke<typeof giveKey, [domain: "acme", workspace: "lead", key: Lead]>,
+  ];
+  /** what is not signed by the workspace it names is refused before any VM is listed (a list
+   *  asked for would fail these) */
+  export type ListsNothingFirst = Given<
+    Keyed,
+    [
+      Expect<
+        Invoke<typeof admit, [r: null, vms: typeof neverListed, now: Now]>,
+        "=",
+        "not a request desolate makes"
+      >,
+      Expect<
+        Invoke<
+          typeof admit,
+          [
+            r: Invoke<typeof signed, [key: Other, request: Spawn]>,
+            vms: typeof neverListed,
+            now: Now,
+          ]
+        >,
+        "=",
+        "the request is not signed by acme/lead"
+      >,
+      /** an hour old */
+      Expect<
+        Invoke<
+          typeof admit,
+          [
+            r: Invoke<typeof signed, [key: Lead, request: Spawn]>,
+            vms: typeof neverListed,
+            now: 1794826800000,
+          ]
+        >,
+        "=",
+        "the request is too old (or from the future): ask again"
+      >,
+    ]
+  >;
+  /** the control: a signed spawn does ask for the list, so the tests above would have
+   *  noticed one; with it, it is run */
+  export type ListsForASignedSpawn = [
+    Given<
+      Keyed,
+      Throws<
+        Invoke<
+          typeof admit,
+          [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, vms: typeof neverListed, now: Now]
+        >,
+        "the VMs were listed"
+      >
+    >,
+    Given<
+      Keyed,
+      Expect<
+        Invoke<
+          typeof admit,
+          [r: Invoke<typeof signed, [key: Lead, request: Spawn]>, vms: typeof noVms, now: Now]
+        >,
+        "=",
+        null
+      >
+    >,
+  ];
+  /** a signed close lists nothing: what it checks is who started the child */
+  export type CloseListsNothing = Given<
+    [
+      Invoke<typeof emptyHome>,
+      Invoke<typeof giveKey, [domain: "acme", workspace: "lead", key: Lead]>,
+      Invoke<typeof recordStarted, [domain: "acme", workspace: "helper", parent: "lead"]>,
+    ],
+    Expect<
+      Invoke<
+        typeof admit,
+        [r: Invoke<typeof signed, [key: Lead, request: Close]>, vms: typeof neverListed, now: Now]
+      >,
+      "=",
+      null
     >
   >;
 }

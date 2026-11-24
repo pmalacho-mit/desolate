@@ -53,7 +53,7 @@ import { over } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
 import type { Account, AccountLine, AccountRequest, DiffPage } from "../shared/review-account.ts";
 import type { Listed } from "../shared/listed.ts";
-import type { PlanRow } from "../shared/envfile.ts";
+import type { PlanRow } from "./envfile.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
 import type { mint } from "./signin.ts";
@@ -185,6 +185,8 @@ const STATIC: Record<string, [string, string]> = {
   "/editor-defaults.js": ["editor-defaults.js", "text/javascript; charset=utf-8"],
   // Syntax colour for the diff (shared/ui/highlight.js says how it is kept to colour).
   "/highlight.js": ["../../shared/ui/highlight.js", "text/javascript; charset=utf-8"],
+  // Text a repository wrote, shown as itself (the dashboard's rule too).
+  "/shown-text.js": ["../../shared/ui/shown-text.js", "text/javascript; charset=utf-8"],
   // The page key's keeper (shared/page-key.ts): every page here loads it first.
   "/page-key.js": ["../../shared/ui/page-key.js", "text/javascript; charset=utf-8"],
   "/highlight-worker.js": ["../../shared/ui/highlight-worker.js", "text/javascript; charset=utf-8"],

@@ -10,12 +10,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
+import { lfsPointer } from "../shared/names.ts";
 import type { Repo } from "../shared/names.ts";
 import { lfsDigest } from "../shared/approval.ts";
 import type { Sends } from "../shared/review-account.ts";
 import { startOf } from "../shared/lock.ts";
 import { define, mebibytes, valueOf, whole } from "../shared/settings.ts";
-import { atomically, env, gitBytes, gitOk, hardened, POINTER, shown } from "./reviewer-git.ts";
+import { printable } from "../shared/text.ts";
+import { atomically, env, gitBytes, gitOk, hardened } from "./reviewer-git.ts";
 import { REVIEWER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -234,7 +236,7 @@ export const prepare = async (
   if (packed.code !== 0) {
     fs.rmSync(temporary, { force: true });
     throw new Error(
-      `cannot pack the push: ${shown(packed.said.trim().split("\n").slice(-1)[0] ?? "", 300)}`,
+      `cannot pack the push: ${printable(packed.said.trim().split("\n").slice(-1)[0] ?? "", 300)}`,
     );
   }
   say({ phase: "listing the push's LFS objects" });
@@ -432,20 +434,20 @@ const readPointers = (bytes: Buffer | null, oids: Set<string>) => {
     const content = bytes.subarray(end + 1, end + 1 + size).toString("utf8");
     // By its oid AND the size its pointer says: the pusher sends an object only of that size
     // (the third independent review: a pointer saying 12 bytes could carry gigabytes).
-    const match = POINTER.exec(content);
+    const pointer = lfsPointer(content);
     // Over the forge's largest, the pusher takes none (pusher.ts): said, not left out, or the
     // remote would get the pointer without its object.
-    if (match && Number(match[2]) > FORGE.lfsObjectBytes)
+    if (pointer && pointer.size > FORGE.lfsObjectBytes)
       throw new Error(
         over(
           "the object an LFS pointer names",
           FORGE.lfsObjectBytes,
-          Number(match[2]),
+          pointer.size,
           "bytes",
           "the forge stores of one",
         ),
       );
-    if (match) oids.add(`${match[1]} ${Number(match[2])}`);
+    if (pointer) oids.add(`${pointer.oid} ${pointer.size}`);
     at = end + 1 + size + 1;
   }
 };

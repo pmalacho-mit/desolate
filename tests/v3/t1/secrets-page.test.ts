@@ -1,7 +1,7 @@
 // T1. The secrets page's copies of bounds the TypeScript holds (R3): a page cannot import
 // them, so each is written again in host/approve-ui/, and this checks they still agree with
 // their source. The .env size is host/env-import.ts's ENV_MAX; a secret's name is
-// shared/envfile.ts's SECRET_NAME_RULE, which the root also writes (root/proxy/secret-store.ts,
+// host/envfile.ts's SECRET_NAME_RULE, which the root also writes (root/proxy/secret-store.ts,
 // root/proxy/secrets_addon.py).
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
@@ -12,7 +12,7 @@ import { describe, it } from "node:test";
 process.env.DESOLATE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-secrets-page-"));
 const { ENV_MAX } = await import("../../../release/host/env-import.ts");
 const { ANYWHERE_COST, SECRET_NAME, SECRET_NAME_RULE, secretName } =
-  await import("../../../release/shared/envfile.ts");
+  await import("../../../release/host/envfile.ts");
 
 const RELEASE = path.resolve(import.meta.dirname, "../../../release");
 const read = (file: string) => fs.readFileSync(path.join(RELEASE, file), "utf8");

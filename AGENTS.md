@@ -210,8 +210,6 @@ table, feature by feature.
   - the root's fetch every 15 minutes, of a repository with a push waiting to land, has not
     been watched happen;
   - a merge-commit or rebase merge on a real forge has not been tried.
-- **T3** (QEMU) on this Mac, or inside a workspace. It last ran in the first pass's cloud
-  sandbox.
 - **The Touch ID approver** (`host/approver/touchid.swift`): it has never been compiled or run.
   The terminal approver and the approval page are what is tested.
 - **A real Claude subscription token** in `recipes/claude.sh`.

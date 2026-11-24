@@ -13,7 +13,6 @@ on the M1 Max on 2026-11-13, with a private copy of this repository standing in 
 | **T1** (tsc, node tests, in-source tests) | yes: everything passes, in 24 s | yes |
 | **T2** (the fake backend: the whole stack in containers) | yes: 142 of 142 in 13 min on 2026-11-17, on the workspace VM's own Docker | in a workspace, as here ([how](https://github.com/pmalacho-mit/desolate/blob/main/tests/v3/README.md#t2-from-a-mac-run-it-in-a-desolate-workspace)); under Colima, 123 of 142 (`05`, `07` and `08` cannot pass there) |
 | **An inner stack** (`desolate bootstrap` on the fake backend) | yes, and its dashboard, approval page and editors open in your Mac's browser | n/a |
-| **T3** (real VMs, QEMU) | in principle, under software emulation (the M1 has no nested virtualization): hours. Not tried | n/a |
 | **T4** (real VMs, vz) | no: it needs the Mac's hypervisor | yes, from your checkout |
 | **An agent on it** | yes, as for any repository (`recipes/claude.sh`, or any other) | |
 
@@ -158,11 +157,12 @@ the second one.
 ## An inner stack, and its pages in your browser
 
 To work on the dashboard, the approval page or anything else a browser shows, run a stack
-inside the workspace (on the fake backend, which isolates nothing; it is for development):
+inside the workspace (on the tests' fake backend, which isolates nothing; it is for development,
+and is loaded from this checkout's `tests/`, which an install does not have):
 
 ```bash
 # in the workspace (desolate exec desolate/<w> -- bash, or its editor's terminal)
-export DESOLATE_BACKEND=fake DESOLATE_TEST_RUN=1 DESOLATE_INSTANCE=inner \
+export NODE_OPTIONS=--import=$PWD/tests/v3/lib/fake-backend.ts DESOLATE_TEST_RUN=1 DESOLATE_INSTANCE=inner \
        DESOLATE_HOME=/desolate/scratch/inner DESOLATE_EDITOR_PORT=32581 \
        DESOLATE_HOSTNAME_SUFFIX=$DESOLATE_DEV_HOSTNAME
 release/cli.sh bootstrap
@@ -191,7 +191,5 @@ reload.
 - **Approve a real push of desolate's own repository.** The copy's push stopped where it
   should, at the approval, which is yours. Its pull and restart were done by applying the
   reviewed diff to the Mac checkout instead.
-- **T3 inside a workspace.** Software emulation, and the base image built with debootstrap
-  as root in the VM rather than the container.
 - **The workspace's own editor on desolate's code** was not opened in a browser in this run;
   it is the same editor as any project's.

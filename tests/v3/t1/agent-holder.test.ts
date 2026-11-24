@@ -135,17 +135,21 @@ describe("T1 the agent holder: its log, reads of it, and stop", () => {
     assert.equal(fs.existsSync(path.join(state, "notwords.json")), false);
   });
 
-  it("a log from a holder before segments is read, and a new start carries on after it", async () => {
+  it("a holder from before segments is refused by name; the control, a current one, is read", async () => {
     fs.writeFileSync(path.join(state, "old.log"), "from the old holder\n");
-    assert.equal(read("old").text, "from the old holder\n");
+    for (const asked of [
+      ["log", "old"],
+      ["stop", "old", "--kill"],
+    ]) {
+      const refused = holder(...asked);
+      assert.equal(refused.code, 1);
+      assert.match(refused.stderr, /'old' was started by a holder from before 2026-11-21/);
+      assert.match(refused.stderr, /desolate stop <domain>\/<workspace>/);
+    }
+    fs.rmSync(path.join(state, "old.log"));
     assert.equal(holder("start", "old", root, "--", "echo", "new").code, 0);
     await ended("old");
-    assert.match(read("old").text, /^from the old holder\nnew\n/);
-    assert.deepEqual(
-      fs.readdirSync(state).filter((f) => f.startsWith("old.log")),
-      ["old.log.0"],
-      "the old file is the first segment, carried on",
-    );
+    assert.match(read("old").text, /^new\n/);
   });
 
   it("stop is Ctrl-C, and nothing is killed until asked: --kill kills", async () => {

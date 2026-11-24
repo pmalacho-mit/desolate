@@ -55,15 +55,10 @@ const isGzip = (file: string) => {
 };
 
 /** The root's own directories that hold what must survive. Not kept: what start.sh makes
- *  again (its code and layout stamps, so the services restart on what was put back),
+ *  again (its code stamp, so the services restart on what was put back),
  *  sockets, and the list of proxies that were running (rootd starts them again). */
 const DIRS = ["var/lib/desolate-root", "var/lib/desolate", "var/lib/desolate-proxies"];
-const EXCLUDE = [
-  "var/lib/desolate-root/code",
-  "var/lib/desolate-root/layout",
-  "var/lib/desolate/proxy/running",
-  "*.sock",
-];
+const EXCLUDE = ["var/lib/desolate-root/code", "var/lib/desolate/proxy/running", "*.sock"];
 
 /** Take the root's state out, before its VM is removed. Returns false when there is no root
  *  VM (nothing to keep). Throws when there is one and its state could not be read: the

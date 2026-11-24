@@ -144,8 +144,8 @@ const startRootServices = async () => {
     ["bash", `${guest.release}/root/start.sh`, String(uid)],
     { root: true, timeoutMs: 120_000 },
   );
-  // start.sh changes the root's user's groups (in desolate-proxy's, out of any that could
-  // become root): what the host runs as that user next must have the groups it now has.
+  // start.sh changes the root's user's groups (out of any that could become root): what the
+  // host runs as that user next must have the groups it now has.
   if (result.code === 0)
     await backend().refreshSessions?.(ROOT_VM, result.stdout.includes("desolate: sessions raised"));
   if (result.code !== 0)
@@ -476,7 +476,7 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
     detail: b.isolated
       ? kind
       : `${kind}: containers stand in for VMs. NOTHING here is isolated${process.env.DESOLATE_TEST_RUN === "1" ? " (allowed: DESOLATE_TEST_RUN=1)" : ""}`,
-    fix: "use a real backend: `desolate destroy --all`, then `desolate bootstrap --backend qemu` (Linux) or `--backend vz` (macOS)",
+    fix: "use the real backend: `desolate destroy --all`, then `desolate bootstrap`",
   });
   try {
     checks.push(...(await b.check()));

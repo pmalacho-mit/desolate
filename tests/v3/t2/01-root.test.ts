@@ -68,12 +68,12 @@ describe("T2 phase 1: the root VM", () => {
     assert.match(result.stdout, /fix: /);
   });
 
-  it("the fake backend runs only when named in this command's environment", () => {
+  it("the fake backend runs only when the test run loads it into this command", () => {
     stack.step("the fake backend is never a default");
-    const saved = stack.env.DESOLATE_BACKEND;
-    delete stack.env.DESOLATE_BACKEND;
+    const saved = stack.env.NODE_OPTIONS;
+    delete stack.env.NODE_OPTIONS;
     const result = stack.desolate("repos");
-    stack.env.DESOLATE_BACKEND = saved;
+    stack.env.NODE_OPTIONS = saved;
     assert.notEqual(result.code, 0);
     assert.match(result.stderr, /gives no isolation/);
   });

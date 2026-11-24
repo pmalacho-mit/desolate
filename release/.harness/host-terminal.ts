@@ -1,4 +1,4 @@
-// Harness for the in-source tests of shared/terminal-filter.ts: an agent's output as it
+// Harness for the in-source tests of host/terminal-filter.ts: an agent's output as it
 // arrives, in reads that split it wherever they happen to (a socket's chunks), through one
 // filter.
 

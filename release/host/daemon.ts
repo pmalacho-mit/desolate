@@ -2544,9 +2544,8 @@ const serve = async () => {
         action.kind === "workspace.spawn" ? "spawn" : "close",
         action.args as Record<string, string>,
       );
-      const { check } = await import("./spawn.ts");
-      const vms = new Set((await b.list()).map((vm) => vm.name));
-      const why = signed ? check(signed, (vm) => vms.has(vm)) : "not a request desolate makes";
+      const { admit } = await import("./spawn.ts");
+      const why = await admit(signed, async () => (await b.list()).map((vm) => vm.name));
       if (why) {
         log(`refused a workspace's request (${String(action.kind)}): ${why}`);
         return void report([`refused: ${why}`], 77);

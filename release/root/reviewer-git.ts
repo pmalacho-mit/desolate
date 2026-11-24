@@ -18,55 +18,11 @@ export const log = (message: string) =>
   console.error(`${new Date().toISOString()} reviewer: ${message}`);
 export const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
-/** Variation selectors (and the Mongolian vowel separator): invisible, and able to carry
- *  data inside text that reads as something else. printable leaves them (they are marks,
- *  not controls); the approval page is shown text an agent wrote, so they go too. */
-const INVISIBLE = /[\u{fe00}-\u{fe0f}\u{e0100}-\u{e01ef}\u{180e}]/gu;
-
-/** Text an agent wrote, made safe to show (shared/text.ts's printable: no control
- *  characters, no bidirectional overrides, which make a name read as another), and no
- *  variation selectors. Cut only at `max` (printable's bound against a flood unless said),
- *  and then with the mark: making it fit a line is the display's (R1). */
-export const shown = (text: string, max?: number) => printable(text.replace(INVISIBLE, "?"), max);
-
-declare namespace shown {
-  /** what an agent wrote, as the approval page may show it: as written, unless it would
-   *  read as something else */
-  export type AsWritten = Table<
-    typeof shown,
-    [
-      [args: [text: "Fix the login loop"], expected: "Fix the login loop"],
-      [args: [text: "café"], expected: "café"],
-    ]
-  >;
-  /** controls, a right-to-left override that makes a name read backwards, invisible spaces
-   *  and variation selectors: each one a question mark */
-  export type Hides = Table<
-    typeof shown,
-    [
-      [args: [text: "evil\u001b[31m red"], expected: "evil?[31m red"],
-      [args: [text: "invoice‮fdp.exe"], expected: "invoice?fdp.exe"],
-      [args: [text: "pay​pal"], expected: "pay?pal"],
-      [args: [text: "ok️"], expected: "ok?"],
-      [args: [text: "line break"], expected: "line?break"],
-    ]
-  >;
-  /** cut only where it is asked to be, never inside a character, and never silently */
-  export type Cut = Table<
-    typeof shown,
-    [
-      [args: [text: "abcdef", max: 3], expected: "ab…"],
-      [args: [text: "\u{1f600}\u{1f600}\u{1f600}", max: 2], expected: "\u{1f600}…"],
-      [args: [text: "abc", max: 3], expected: "abc"],
-    ]
-  >;
-}
-
 /** A path as git has it (`raw`: its bytes, a character a byte), as the account shows it: as
  *  text when it is UTF-8, and when it is not, as git quotes it (each byte past ASCII as
  *  `\ooo`), so that it does not read as another name. A UTF-8 name with a quote or a
  *  backslash is quoted too, as git does, so that none reads as a quoted one; and one that
- *  starts or ends in a space (or the blank Braille pattern, which printable keeps), which on
+ *  starts or ends in a space (or the blank Braille pattern), which on
  *  a page reads as the name without it; and one NFC changes (printable shows text in NFC: a
  *  Kelvin sign would read as K). */
 export const named = (raw: string): string => {
@@ -77,11 +33,11 @@ export const named = (raw: string): string => {
     !/["\\]|^[\s\u2800]|[\s\u2800]$/u.test(text) &&
     text.normalize("NFC") === text
   )
-    return shown(text);
+    return printable(text);
   const quoted = [...raw].map((c) =>
     c >= "\x80" ? `\\${c.charCodeAt(0).toString(8)}` : c === '"' || c === "\\" ? `\\${c}` : c,
   );
-  return shown(`"${quoted.join("")}"`);
+  return printable(`"${quoted.join("")}"`);
 };
 
 declare namespace named {
@@ -218,10 +174,6 @@ declare namespace lookalike {
   >;
 }
 
-/** An LFS pointer, in git-lfs's own form: a version line, the oid, the size, nothing else. */
-export const POINTER =
-  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
-
 export const repoDir = (repo: Repo) =>
   path.join(REVIEWER.home, "repos", repo.owner, `${repo.name}.git`);
 const CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n";
@@ -289,7 +241,9 @@ export const gitOk = async (
     // (Its end: what git says last is why. A bounded log: the root's user can make git fail
     // at will, and the log is root's.)
     log(`git ${args[0]} failed:\n${said.slice(-16 * 1024)}`);
-    throw new Error(`git ${args[0]} failed: ${shown(said.split("\n").slice(-2).join(" | "), 300)}`);
+    throw new Error(
+      `git ${args[0]} failed: ${printable(said.split("\n").slice(-2).join(" | "), 300)}`,
+    );
   }
   return result.stdout;
 };

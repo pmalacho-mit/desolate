@@ -16,21 +16,18 @@ import type {
 import type { setEnv } from "../.harness/env.ts";
 import type { branchOf } from "../.harness/shared-names.ts";
 
-/** A domain's or a workspace's name: limits.ts's NAMES.slug says how long and why. */
-export const SLUG = new RegExp(`^[a-z0-9][a-z0-9-]{0,${NAMES.slug - 1}}$`);
+/** A domain's, a workspace's or an agent's name (limits.ts NAMES.slug: how long, and why). At
+ *  most one `--`: the separator in a domain named `owner--repo`, which clone makes. Never
+ *  `xn--` first: punycode to a browser. One pattern, its length checked first, which the
+ *  Python copies repeat text for text (tests/v3/t1/scripts.test.ts). */
+export const SLUG = new RegExp(
+  `^(?=[a-z0-9][a-z0-9-]{0,${NAMES.slug - 1}}$)(?!xn--)(?!.*---)(?!.*--.*--)(?!.*-$)[a-z0-9-]+$`,
+);
 /** GitHub's own rules, narrowed: no leading dot or dash, no "..", no ".git" suffix. */
 const REPO_PART = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/;
 
-/** At most one `--`: it is the separator in a domain named `owner--repo`, which clone makes,
- *  and a slug's single dashes collapse runs, so it is never ambiguous. Never `xn--` first: a
- *  hostname label that starts so is punycode to a browser. */
 export const isSlug = (value: unknown): value is string =>
-  typeof value === "string" &&
-  SLUG.test(value) &&
-  !value.endsWith("-") &&
-  value.split("--").length <= 2 &&
-  !value.startsWith("xn--") &&
-  !/-{3}/.test(value);
+  typeof value === "string" && SLUG.test(value);
 
 /** How many characters (code points: R8) a text is; `length` counts UTF-16 units, and an
  *  emoji is two of those. */
@@ -114,6 +111,12 @@ declare namespace isSlug {
       [args: [value: "a.b"], expected: false],
       [args: [value: "x234567890123456789012345678901234567890"], expected: true],
       [args: [value: "x2345678901234567890123456789012345678901"], expected: false],
+      /** a newline after a name is not a name (a pattern's end is the text's end) */
+      [args: [value: "acme\n"], expected: false],
+      [args: [value: "0"], expected: true],
+      [args: [value: "a--b-c"], expected: true],
+      [args: [value: "xn-widgets"], expected: true],
+      [args: [value: "axn--b"], expected: true],
     ]
   >;
 }
@@ -139,6 +142,10 @@ declare namespace parseRepo {
       [args: [value: "acme/a..b"], expected: null],
       [args: [value: "acme/my widgets"], expected: null],
       [args: [value: 42], expected: null],
+      /** GitHub allows a name that starts with a dot (an owner's `.github`), and this refuses
+       *  it: every copy of this rule now refuses it too (the git VM's and the recipes' took it,
+       *  though the host refused it before they were reached) */
+      [args: [value: "acme/.github"], expected: null],
     ]
   >;
 }
@@ -367,6 +374,126 @@ declare namespace isLfsOid {
       [
         args: [value: "../../2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b98"],
         expected: false,
+      ],
+    ]
+  >;
+}
+
+/** An LFS pointer's object, when a blob is git-lfs's three lines exactly; else null, and it is
+ *  an ordinary file. (A pointer with an extension line, which the spec allows, is taken as a
+ *  file too: the forge then refuses the push that names its object.) */
+export const lfsPointer = (blob: string): { oid: string; size: number } | null => {
+  const m =
+    /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/.exec(
+      blob,
+    );
+  return m ? { oid: m[1]!, size: Number(m[2]) } : null;
+};
+
+declare namespace lfsPointer {
+  /** the pointer, exactly: its oid and the size it says (an empty object's is 0) */
+  export type Pointers = Table<
+    typeof lfsPointer,
+    [
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: {
+          oid: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+          size: 12;
+        },
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nsize 0\n",
+        ],
+        expected: {
+          oid: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+          size: 0;
+        },
+      ],
+    ]
+  >;
+  /** at each edge of the form, a file that only looks like one */
+  export type NotPointers = Table<
+    typeof lfsPointer,
+    [
+      /** its last newline missing, a line before it, a line after it, CR LF line ends */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "# notes\nversion https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\r\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\r\nsize 12\r\n",
+        ],
+        expected: null,
+      ],
+      /** another spec, an extension line (which the spec allows: see above) */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\next-0-foo sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      /** an oid of 63 or 65 digits, in upper case, or a path: never a file name */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:../../../../etc/passwd\nsize 12\n",
+        ],
+        expected: null,
+      ],
+      /** a size that is not a number of bytes */
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize \n",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          blob: "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize -12\n",
+        ],
+        expected: null,
       ],
     ]
   >;
