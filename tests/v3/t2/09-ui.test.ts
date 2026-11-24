@@ -1465,6 +1465,13 @@ describe("T2 section 4.8: the root UI", () => {
           shown.some(([n, l]) => n === name && l === looks),
           `${JSON.stringify(name)} in ${JSON.stringify(shown)}`,
         );
+      // In the diff's side-by-side header, a name's trailing space is laid out, as in the
+      // unified header's: run together (white-space: normal), it measured 0 px wide.
+      const trailing = await page.until<number>(
+        `(() => { const b = [...document.querySelectorAll('#review .sbs-file button.collapse')].find((n) => n.parentElement.dataset.file === "package.json "); if (!b) return 0; const t = b.firstChild; const r = document.createRange(); r.setStart(t, 0); r.setEnd(t, t.length); const all = r.getBoundingClientRect().width; r.setEnd(t, t.length - 1); return all - r.getBoundingClientRect().width; })()`,
+        "package.json's header, its trailing space laid out",
+      );
+      assert.ok(trailing > 0, String(trailing));
       // The subject as now; who wrote it and the whole message when asked for.
       assert.equal(await page.evaluate("document.querySelector('[data-message-text]')"), null);
       await page.click(`[data-message="${tip}"]`, "Message");
