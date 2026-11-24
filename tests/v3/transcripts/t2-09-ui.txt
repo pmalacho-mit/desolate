@@ -53,6 +53,8 @@ doctor: all checks passed.
 
 ## events, not a timer
 
+## the look on git's events
+
 ## the state service started again
 
 ## stop and start

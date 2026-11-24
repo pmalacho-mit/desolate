@@ -13,7 +13,7 @@ import {
   isSlug,
   parseRepo,
 } from "../shared/names.ts";
-import { outlived } from "../shared/plan.ts";
+import { LOOK_EACH, lostIn, outlived } from "../shared/plan.ts";
 import type { WorkspacePlan } from "../shared/plan.ts";
 import { readHead } from "../shared/status.ts";
 import {
@@ -1160,7 +1160,7 @@ export const stop = async (target: string | undefined, out: Out) => {
   if ((await b.info(w.vm)).status === "running") {
     // What it holds, seen once more before it stops: what the dashboard's Delete goes by
     // while it is stopped. A look that fails says so, and Delete stays off.
-    await look(w, true).catch(() => {});
+    await lookAtStop(w).catch(() => {});
     await b.stop(w.vm);
   }
   await disconnectWorkspace(w.vm);
@@ -1223,30 +1223,13 @@ export const start = async (target: string | undefined, out: Out) => {
   else if (editorStarting) out(`  editor${STILL_STARTING}`);
 };
 
-/** The look at each checkout (its paths are the script's arguments). The host runs it by
- *  itself every workspace.lookSeconds, beside whatever a person or an agent is doing in the
- *  same repository, so it must take no lock there: a plain \`git status\` refreshes the index
- *  under .git/index.lock, and a \`git checkout\` or \`git commit\` that began in that moment
- *  failed with "Unable to create .git/index.lock: File exists" (seen on the M1, 2026-11-23:
- *  a test run's checkout, as its workspace started). */
-export const LOOK_EACH = `for p in "$@"; do
-  s=$(git --no-optional-locks -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
-  [ -z "$s" ] || echo "UNCOMMITTED $p"
-  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
-done`;
-
 /** What would be lost: each checkout's uncommitted changes, untracked files and stashes,
  *  looked at in the workspace itself (git runs in its own VM, never on the host: P4), after
  *  its branches are written out for the root. What the VM says is its word about itself. */
 const unsaved = async (
   w: Workspace,
   sync = true,
-  // Never fewer than the Mac made it with (guardedCheckouts), whatever the root says now.
-  checkouts = guardedCheckouts(
-    w.checkouts.map((c) => c.path),
-    recordedCheckouts(w.vm),
-    () => checkoutsOnMac(w.domain),
-  ),
+  checkouts = lookedCheckouts(w),
 ): Promise<string[]> => {
   const b = backend();
   if ((await b.info(w.vm)).status !== "running")
@@ -1265,79 +1248,9 @@ ${LOOK_EACH}`;
   return lostIn(looked.stdout, checkouts);
 };
 
-/** What the VM's look (above) says would be lost, in words: each line names what, and the
- *  checkout (one of `checkouts`, the paths the host asked about). A line that is not one of those
- *  is not passed over: a remove must not read as safe because of what it could not read. */
-export const lostIn = (stdout: string, checkouts: readonly string[]): string[] => {
-  const say: Record<string, string> = {
-    UNSYNCED: "its branches could not be written out for the root",
-    UNCOMMITTED: "uncommitted changes or untracked files in",
-    STASHED: "stashed changes in",
-    UNREADABLE: "a checkout git could not read:",
-  };
-  const lost: string[] = [];
-  let unread = 0;
-  for (const line of stdout.split("\n").map((l) => l.trim())) {
-    if (!line) continue;
-    const [word, ...rest] = line.split(" ");
-    const where = rest.join(" ");
-    if (word === "UNSYNCED" && !where) lost.push(say.UNSYNCED!);
-    else if (word && word !== "UNSYNCED" && say[word] && checkouts.includes(where))
-      lost.push(`${say[word]} ${where}`);
-    else unread++;
-  }
-  if (unread)
-    lost.push(
-      `${unread} line${unread === 1 ? "" : "s"} of its answer could not be read, so something may be lost that is not named here`,
-    );
-  return lost;
-};
-
-declare namespace lostIn {
-  /** each line read, against the checkouts asked about */
-  export type Read = Expect<
-    Invoke<
-      typeof lostIn,
-      [
-        stdout: "UNSYNCED\nUNCOMMITTED /workspaces/acme/app\nSTASHED /workspaces/acme/app\n",
-        checkouts: ["/workspaces/acme/app"],
-      ]
-    >,
-    "=",
-    [
-      "its branches could not be written out for the root",
-      "uncommitted changes or untracked files in /workspaces/acme/app",
-      "stashed changes in /workspaces/acme/app",
-    ]
-  >;
-  /** nothing said: nothing lost */
-  export type Clean = Expect<
-    Invoke<typeof lostIn, [stdout: "\n", checkouts: ["/workspaces/a"]]>,
-    "=",
-    []
-  >;
-  /** a line that is not one of them, or names a checkout not asked about, is counted, not
-   *  dropped: the answer then never reads as clean */
-  export type Unread = Expect<
-    Invoke<
-      typeof lostIn,
-      [
-        stdout: "UNCOMMITTED /workspaces/other\nwhat is this\nUNCOMMITTED /workspaces/a\n",
-        checkouts: ["/workspaces/a"],
-      ]
-    >,
-    "=",
-    [
-      "uncommitted changes or untracked files in /workspaces/a",
-      "2 lines of its answer could not be read, so something may be lost that is not named here",
-    ]
-  >;
-}
-
-/** What a workspace held that a remove would lose, as last looked at, kept on the host for the
- *  dashboard's Delete: the daemon looks while the workspace runs, and `stop` looks once more
- *  just before its VM stops, so a stopped workspace's answer is the one from its stop (its
- *  files change only while it runs). `start` forgets it. */
+/** What a workspace held that a remove would lose, for the dashboard's Delete: while it runs,
+ *  as its VM's daemon says (host/daemon.ts); stopped, as `stop` looked just before its VM
+ *  stopped, kept here (its files change only while it runs). `start` forgets it. */
 export type Looked = { at: string; atStop: boolean; lost: string[] };
 const lookedFile = (vm: string) => path.join(paths.state, "unsaved", `${vm}.json`);
 export const lookedAt = (vm: string): Looked | null => {
@@ -1348,13 +1261,31 @@ export const lookedAt = (vm: string): Looked | null => {
     return null;
   }
 };
-export const look = async (w: Workspace, atStop = false): Promise<Looked> => {
-  const looked: Looked = { at: new Date().toISOString(), atStop, lost: await unsaved(w, false) };
+const lookAtStop = async (w: Workspace) => {
+  const looked: Looked = {
+    at: new Date().toISOString(),
+    atStop: true,
+    lost: await unsaved(w, false),
+  };
   fs.mkdirSync(path.dirname(lookedFile(w.vm)), { recursive: true, mode: 0o700 });
   fs.writeFileSync(lookedFile(w.vm), JSON.stringify(looked));
   return looked;
 };
 const forget = (vm: string) => fs.rmSync(lookedFile(vm), { force: true });
+
+/** The checkouts a look at a workspace covers, and the only ones its answer may name: never
+ *  fewer than the Mac made it with (guardedCheckouts), whatever the root says now. The
+ *  host's own look (`--if-clean`, a stop) and its VM's daemon's (host/daemon.ts) alike. */
+export const lookedCheckouts = (w: {
+  vm: string;
+  domain: string;
+  checkouts: readonly { path?: string }[];
+}): string[] =>
+  guardedCheckouts(
+    w.checkouts.flatMap((c) => (typeof c.path === "string" ? [c.path] : [])),
+    recordedCheckouts(w.vm),
+    () => checkoutsOnMac(w.domain),
+  );
 
 /** The checkouts a workspace was made with, as this Mac planned it, kept on the Mac: what
  *  `--if-clean` looks at is never fewer than these, whatever the root later says. */

@@ -80,6 +80,9 @@ import {
   unforwardedOf,
 } from "./forward.ts";
 import type { Checkouts, PortView } from "./forward.ts";
+import type { Listed } from "../shared/listed.ts";
+import type { Row } from "./agent.ts";
+import type { Looked } from "./workspaces.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
   Call,
@@ -345,6 +348,12 @@ type Entry = Registered & {
   /** Its watch (a dial to its daemon, held: holdWatch), and the reserve last sent on it. */
   watch: ReturnType<typeof holdWatch> | null;
   watchSent: string;
+  /** Its checkouts' paths, as this host knows them: what its daemon is asked to look at, and
+   *  the only ones an answer may name (lostIn). */
+  paths: string[];
+  /** What a remove would lose, as its daemon last said, and its agents (null: not said). */
+  looked: Looked | null;
+  agents: Listed<Row> | null;
   /** What was last logged of it not answering, so a daemon that is gone is said once. */
   missSaid: string;
   editorToken: string;
@@ -1294,17 +1303,6 @@ const memoryGiven = (
       if (running.has(w.vm)) given += Number(w.size?.memoryMiB ?? defaultMiB()) || 0;
   return given;
 };
-/** How often the daemon looks in each running workspace for what a remove would lose, for the
- *  dashboard's Delete. A timer, not an event: what changes it is the workspace's own files,
- *  written inside its VM, where the host sees nothing happen. */
-const LOOK_SECONDS = define({
-  name: "workspace.lookSeconds",
-  env: "DESOLATE_WORKSPACE_LOOK_SECONDS",
-  side: "host",
-  default: 30,
-  parse: whole(1, 60 * 60),
-  why: "How often the host looks in each running workspace (a git status in its VM) for what a remove would lose, which the dashboard's Delete shows: longer for fewer looks on a Mac with many workspaces.",
-});
 /** How much of this Mac's memory running workspaces may be given, for a workspace's own
  *  request for another (a spawn). A person may knowingly give more than the Mac has. */
 const SPAWN_ROOM = define({
@@ -1992,6 +1990,26 @@ const serve = async () => {
       }
     }
   };
+  /** A watch's first line: what to hold, and the checkouts to look at. Sent again, it asks
+   *  for a look now (the dashboard opened). */
+  const watchLine = (entry: Entry) =>
+    `${JSON.stringify({ op: "watch", reserve: [...entry.reserved].sort((x, y) => x - y), look: entry.paths })}\n`;
+  /** What its daemon said of what a remove would lose and of its agents: read as data from a
+   *  side not trusted, as the host's own look is (lostIn: a line naming a checkout this host
+   *  did not ask about is not passed over; rowsOf: rows of the known shape). Not said (its
+   *  daemon is from before, until it is replaced): not known, and Delete says so. */
+  const toldOf = async (entry: Entry, reply: Record<string, unknown>) => {
+    const { lostIn } = await import("../shared/plan.ts");
+    const { agentsFrom } = await import("./agent.ts");
+    const lost = typeof reply.looked === "string" ? lostIn(reply.looked, entry.paths) : null;
+    if (lost === null) entry.looked = null;
+    else if (JSON.stringify(lost) !== JSON.stringify(entry.looked?.lost))
+      entry.looked = { at: new Date().toISOString(), atStop: false, lost };
+    entry.agents =
+      reply.agents === undefined
+        ? null
+        : agentsFrom(reply.agents, `${entry.domain}/${entry.workspace}`);
+  };
   const reserveLine = (entry: Entry) =>
     `${JSON.stringify({ op: "reserve", reserve: [...entry.reserved].sort((x, y) => x - y) })}\n`;
 
@@ -2063,10 +2081,11 @@ const serve = async () => {
       open: () => dial(entry.vm, WSD_SOCKET),
       first: () => {
         entry.watchSent = reserveLine(entry);
-        return `${JSON.stringify({ op: "watch", reserve: [...entry.reserved].sort((x, y) => x - y) })}\n`;
+        return watchLine(entry);
       },
       line: async (reply) => {
         apply(entry, reply);
+        await toldOf(entry, reply);
         reconcile();
         tellRoot().catch(() => {});
       },
@@ -2184,6 +2203,9 @@ const serve = async () => {
       registeredAt: Date.now(),
       watch: null,
       watchSent: "",
+      paths: [],
+      looked: null,
+      agents: null,
       missSaid: "",
       editorToken: "",
       editorTokenEpoch: 0,
@@ -2207,6 +2229,7 @@ const serve = async () => {
     // The folder the editor opens: the first checkout (as `desolate editor` prints it).
     // More than one checkout: the workspace file with all of them (workspace/init.ts).
     entry.folder = folderFor(checkouts, r.workspace);
+
     const base = paths.domainRepos(r.domain);
     const domainDir = paths.domain(r.domain);
     /** A watch of `dir`, calling `then` with each event's file name; null when `dir` is not
@@ -2294,7 +2317,22 @@ const serve = async () => {
     };
     hold(true);
     openLink(entry);
-    entry.watch = watchOf(entry);
+    // The checkouts its daemon is asked about, and the only ones its answer may name: the
+    // Mac's own set (workspaces.ts lookedCheckouts: what it recorded making the workspace, or
+    // every checkout in the domain's folder, never fewer for what the root says), as a remove
+    // looks at. Its watch is opened once that is known.
+    void import("./workspaces.ts").then(
+      (ws) => {
+        if (entries.get(r.vm) !== entry) return;
+        entry.paths = ws.lookedCheckouts({ vm: r.vm, domain: r.domain, checkouts });
+        entry.watch = watchOf(entry);
+      },
+      (error: unknown) => {
+        // (Its ports are on the same watch: opened, asking about no checkout.)
+        log(`${r.vm}: its checkouts could not be worked out: ${String(error)}`);
+        if (entries.get(r.vm) === entry) entry.watch = watchOf(entry);
+      },
+    );
     events.publish(
       events.host("workspace-up", { domain: r.domain, workspace: r.workspace, vm: r.vm }),
     );
@@ -2409,17 +2447,6 @@ const serve = async () => {
 
   let sentFacts = "";
   let sentAt = 0;
-  // Each running workspace's agents, as last listed (the look below): the dashboard showed
-  // none, and a person found them only with `desolate agent list` (dogfooding, 2026-11-21).
-  const agentsOf = new Map<string, Awaited<ReturnType<typeof import("./agent.ts").agentsIn>>>();
-  const listAgents = async (entry: Entry) => {
-    try {
-      const { agentsIn } = await import("./agent.ts");
-      agentsOf.set(entry.vm, await agentsIn(entry.vm, `${entry.domain}/${entry.workspace}`));
-    } catch {
-      agentsOf.delete(entry.vm); // not answering: none shown, rather than old ones
-    }
-  };
   const tellRoot = async () => {
     const vms = await b.list();
     rootUp = vms.find((vm) => vm.name === ROOT_VM)?.status === "running";
@@ -2429,8 +2456,9 @@ const serve = async () => {
     for (const vm of vms) {
       if (vm.name === ROOT_VM) continue;
       const entry = entries.get(vm.name);
-      // What a remove would lose, as last looked at (workspaces.ts look): for Delete.
-      const looked = (await import("./workspaces.ts")).lookedAt(vm.name);
+      // What a remove would lose, for Delete: as its daemon says while it runs, else as the
+      // host looked as it stopped (workspaces.ts look).
+      const looked = entry?.looked ?? (await import("./workspaces.ts")).lookedAt(vm.name);
       workspaces[vm.name] = {
         status: vm.status,
         ...(looked ? { looked } : {}),
@@ -2451,8 +2479,8 @@ const serve = async () => {
                 .sort((x, y) => x - y)
                 .filter((p) => hostHeld.has(p))
                 .map((p) => ({ port: p, by: holderOf(p) })),
-              ...(vm.status === "running" && agentsOf.has(vm.name)
-                ? { agents: shownAgents(agentsOf.get(vm.name)!) }
+              ...(vm.status === "running" && entry.agents
+                ? { agents: shownAgents(entry.agents) }
                 : {}),
               // What only the host knows of it, in sentences: listeners cut here, connections
               // refused. (What the VM left out is in its devcontainer line already.)
@@ -2490,40 +2518,6 @@ const serve = async () => {
     sentFacts = text;
     sentAt = Date.now();
   };
-
-  // What each running workspace holds that a remove would lose (uncommitted changes,
-  // untracked files, stashes), looked at in its own VM every LOOK_SECONDS, for the
-  // dashboard's Delete (workspaces.ts look). One at a time, and never two rounds at once.
-  let looking = false;
-  const lookMs = valueOf(LOOK_SECONDS) * 1000;
-  setInterval(async () => {
-    if (looking || !rootUp) return;
-    looking = true;
-    try {
-      const ws = await import("./workspaces.ts");
-      const running = new Set(
-        (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
-      );
-      // (A VM stopped since is not shown with the agents it had.)
-      for (const vm of agentsOf.keys()) if (!running.has(vm)) agentsOf.delete(vm);
-      for (const entry of entries.values()) {
-        if (!running.has(entry.vm)) continue;
-        try {
-          const w = await rootctlBrief("workspace.get", {
-            domain: entry.domain,
-            name: entry.workspace,
-          });
-          await ws.look(w);
-        } catch {
-          /* gone meanwhile, or not answering: looked at next time */
-        }
-        await listAgents(entry);
-      }
-      void tellRoot().catch(() => {});
-    } finally {
-      looking = false;
-    }
-  }, lookMs).unref();
 
   /** Why a workspace's spawn would not fit on this Mac now, or null: the memory given to the
    *  running workspaces, with the new one's (its domain's size, else the stack's), within
@@ -2717,6 +2711,11 @@ const serve = async () => {
         };
         // The first state is where things stand, not news.
         if (before) for (const e of stateEvents(before, state)) events.publish(e);
+        // A dashboard opened: each workspace's daemon is asked to look now (its watch line
+        // again), so Delete shows what is there and not what was at its last event.
+        const asked = (state as { lookAsked?: unknown } | null)?.lookAsked;
+        if (before && asked !== (before as { lookAsked?: unknown }).lookAsked)
+          for (const entry of entries.values()) entry.watch?.write(watchLine(entry));
         before = state;
         tag = sinceTag(next);
         // At most four looks a second, whatever the root's user's service answers.
@@ -2788,11 +2787,12 @@ const serve = async () => {
           register(request as Registered);
           const entry = entries.get(request.vm!)!;
           // Started (again): its agents as they are now, not as before it stopped (they were
-          // shown running for a look's while after a restart: dogfooding, 2026-11-22).
-          agentsOf.delete(entry.vm);
+          // shown running for a look's while after a restart: dogfooding, 2026-11-22). Its
+          // daemon says them on its watch.
+          entry.agents = null;
+          entry.looked = null;
           reconcile();
           tellRoot().catch(() => {});
-          void listAgents(entry).then(() => tellRoot().catch(() => {}));
           reply = { ok: true };
         } else if (request.op === "unregister") {
           unregister(request.vm!);

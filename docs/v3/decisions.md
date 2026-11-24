@@ -1755,3 +1755,30 @@ never left out (a domain had been made without its title). `keepApart` no longer
 ever on `MY_API_TOKEN`, `MY_API_TOKEN_2`, `API_TOKEN`. Left: two keys can still make one
 secret name against secrets the domain already has (`DB` and `DB_SECRET`); fixing it renames
 existing secrets on re-import.
+
+## The last two timers become events: the state's snapshot, and the look in each workspace (#258; tested on T1 and T2)
+
+**The state service** (`root/stated.ts`) rebuilt and compared the whole snapshot every second,
+for ever: the Mac's daemon always waits on it. It now looks when an input changes, 40 ms
+after, at most once a second, and every 10 s for what raises no event (the host going quiet,
+a secret's end, a raw push killed outright) and for an event lost. The list of its inputs and
+what says each changed is at `watchDomains` in stated.ts. The root watches what its own
+processes write, each directory by itself (a domain's record, offers, workspaces' records and
+network policy were in no watched directory, and the secrets' watch was on a directory nothing
+writes). What workspaces write is the host's nudge, which carries nothing: the host also
+watches each repository's `sync/<owner>/<repo>` in the outbox, by the names it knows. Its
+recursive watch of `refs/heads` (macOS only) went: the snapshot does read a checkout's HEAD
+commit from the refs (`readHead`), so that watch showed a commit about 0.5 s sooner, but the
+outbox's list follows every commit made in a VM.
+
+Found doing it: node's recursive watch on Linux watches each file, and a ref git renames over
+is never heard of again, so a workspace's branch watch (#260) heard a branch's first two moves
+and then waited for its minute. Each directory is watched by itself now.
+
+**The look in each workspace** (what a remove would lose, its agents) was the host's, every
+30 s: a session, a login shell, git per checkout and another session for the agents, about 19
+processes in the VM. The workspace's daemon (`wsd`) now looks on what git records (the index,
+HEAD, refs/stash, packed-refs) and when a dashboard opens, and every minute for what raises no
+event (an edit not staged, a new file, an agent's holder that died), and says it on the watch
+the host holds. The host reads it as it read its own look (`lostIn`, `rowsOf`), and still
+looks itself before a remove and at a stop. The setting `workspace.lookSeconds` is gone.

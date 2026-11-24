@@ -1,7 +1,8 @@
 // What the root tells a workspace VM to be: written by the root into the domain's inbox
 // (read-only to the domain), read by the workspace's init. Frozen when the workspace is made.
+// And what a workspace holds that a remove would lose: looked at in its VM, read on the host.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 export type Checkout = {
   repo: string;
@@ -111,6 +112,88 @@ declare namespace outlived {
         ],
         expected: true,
       ],
+    ]
+  >;
+}
+
+/** The look at each checkout (its paths are the script's arguments). The host runs it by
+ *  in the workspace's own VM (workspace/wsd.ts, when git records a change and once a minute;
+ *  host/workspaces.ts, before a remove and at a stop), beside whatever a person or an agent is
+ *  doing in the same repository, so it must take no lock there: a plain \`git status\` refreshes the index
+ *  under .git/index.lock, and a \`git checkout\` or \`git commit\` that began in that moment
+ *  failed with "Unable to create .git/index.lock: File exists" (seen on the M1, 2026-11-23:
+ *  a test run's checkout, as its workspace started). */
+export const LOOK_EACH = `for p in "$@"; do
+  s=$(git --no-optional-locks -C "$p" status --porcelain --untracked-files=normal 2>/dev/null) || { echo "UNREADABLE $p"; continue; }
+  [ -z "$s" ] || echo "UNCOMMITTED $p"
+  [ -z "$(git -C "$p" stash list 2>/dev/null)" ] || echo "STASHED $p"
+done`;
+
+/** What a look (LOOK_EACH, run in the VM) says would be lost, in words: each line names what, and the
+ *  checkout (one of `checkouts`, the paths the host asked about). A line that is not one of those
+ *  is not passed over: a remove must not read as safe because of what it could not read. */
+export const lostIn = (stdout: string, checkouts: readonly string[]): string[] => {
+  const say: Record<string, string> = {
+    UNSYNCED: "its branches could not be written out for the root",
+    UNCOMMITTED: "uncommitted changes or untracked files in",
+    STASHED: "stashed changes in",
+    UNREADABLE: "a checkout git could not read:",
+  };
+  const lost: string[] = [];
+  let unread = 0;
+  for (const line of stdout.split("\n").map((l) => l.trim())) {
+    if (!line) continue;
+    const [word, ...rest] = line.split(" ");
+    const where = rest.join(" ");
+    if (word === "UNSYNCED" && !where) lost.push(say.UNSYNCED!);
+    else if (word && word !== "UNSYNCED" && say[word] && checkouts.includes(where))
+      lost.push(`${say[word]} ${where}`);
+    else unread++;
+  }
+  if (unread)
+    lost.push(
+      `${unread} line${unread === 1 ? "" : "s"} of its answer could not be read, so something may be lost that is not named here`,
+    );
+  return lost;
+};
+
+declare namespace lostIn {
+  /** each line read, against the checkouts asked about */
+  export type Read = Expect<
+    Invoke<
+      typeof lostIn,
+      [
+        stdout: "UNSYNCED\nUNCOMMITTED /workspaces/acme/app\nSTASHED /workspaces/acme/app\n",
+        checkouts: ["/workspaces/acme/app"],
+      ]
+    >,
+    "=",
+    [
+      "its branches could not be written out for the root",
+      "uncommitted changes or untracked files in /workspaces/acme/app",
+      "stashed changes in /workspaces/acme/app",
+    ]
+  >;
+  /** nothing said: nothing lost */
+  export type Clean = Expect<
+    Invoke<typeof lostIn, [stdout: "\n", checkouts: ["/workspaces/a"]]>,
+    "=",
+    []
+  >;
+  /** a line that is not one of them, or names a checkout not asked about, is counted, not
+   *  dropped: the answer then never reads as clean */
+  export type Unread = Expect<
+    Invoke<
+      typeof lostIn,
+      [
+        stdout: "UNCOMMITTED /workspaces/other\nwhat is this\nUNCOMMITTED /workspaces/a\n",
+        checkouts: ["/workspaces/a"],
+      ]
+    >,
+    "=",
+    [
+      "uncommitted changes or untracked files in /workspaces/a",
+      "2 lines of its answer could not be read, so something may be lost that is not named here",
     ]
   >;
 }
