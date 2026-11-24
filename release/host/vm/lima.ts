@@ -46,6 +46,7 @@ import type {
   cloneCall,
   confinement,
   madeWithoutLinkToken,
+  lineRan,
   sessionOf,
   sharesWaited,
   statusOf,
@@ -680,6 +681,95 @@ declare namespace vmStatus {
   >;
 }
 
+/** One argument for a remote shell, quoted so that it stays one argument. */
+const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
+/** The one line a session hands the shell sshd starts in the VM: in `cwd` (/ unless said),
+ *  with `env` set, `argv` exactly as given (after `sudo`, for root), every word quoted so
+ *  that it arrives as the one word it was, whatever it holds. ssh passes a command as one
+ *  string, where `limactl shell` took words and quoted them itself. */
+const commandLine = (argv: string[], options: ExecOptions, sudo: boolean, totalMs?: number) => {
+  const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
+  const words = [...(sudo ? ["sudo"] : []), ...bounded(totalMs), "env", ...vars, ...argv];
+  return `cd ${quote(options.cwd ?? "/")} && exec ${words.map(quote).join(" ")}`;
+};
+/** A command exec runs with a total (`timeoutMs`, `totalMs` here) is held to it in the VM too: ending the ssh on this
+ *  side leaves the program in the VM running (measured on the M1, 2026-11-23, for ssh and
+ *  `limactl shell` alike, with no terminal), so a call made on a timer into a VM that is
+ *  stuck would pile its programs up there. coreutils' `timeout`, in every VM's image: the
+ *  whole second past the Mac's bound, so the Mac's says why first (and a 124 or 137 of its
+ *  own reaches no caller then, which none reads apart from any other failure); TERM, then
+ *  KILL five seconds on, to the command's process group, which is what it started. As root
+ *  it runs under sudo, so that it may end what it runs. Its command reads stdin as before:
+ *  it is in a group of its own, which matters only to a terminal, and these have none. A
+ *  call with no total (streamed, held, dial's socat, attach) is meant to last as long as it
+ *  is wanted; socat ends when its stdin closes. */
+const bounded = (totalMs?: number) =>
+  totalMs
+    ? ["timeout", "--signal=TERM", "--kill-after=5", String(Math.ceil(totalMs / 1000) + 1)]
+    : [];
+/** What a session hands sshd in the VM, which runs it with the login user's shell and `-c`:
+ *  `commandLine` in a login shell (`login`, as limactl ran every command), or as it is. A
+ *  login shell runs the profile, which holds what the VMs' commands rely on (the git VM's
+ *  GIT_NO_LAZY_FETCH, the root's git config for its login user, a person's PATH for node);
+ *  as it is, the line runs with sshd's own PATH and no profile. Measured in the root VM
+ *  (2026-11-24, Ubuntu 24.04): a session's line ran in a login shell started 4 processes
+ *  there, and as it is 1 (bash, which execs `env`, which execs the command). */
+export const sessionLine = (
+  argv: string[],
+  options: ExecOptions,
+  { sudo = false, totalMs, login = true }: { sudo?: boolean; totalMs?: number; login?: boolean },
+) => {
+  const line = commandLine(argv, options, sudo, totalMs);
+  return login ? `exec "$SHELL" -l -c ${quote(line)}` : line;
+};
+
+declare namespace sessionLine {
+  /** Either form, run by a real `sh` as sshd's `-c` would: each word arrives as the one word
+   *  it was, and nothing in it is expanded or run. The login form starts the login user's
+   *  shell (a stand-in that notes it) and the plain one does not; the first two rows are the
+   *  controls, the same word through both forms. */
+  export type Words = Table<
+    typeof lineRan,
+    [
+      [
+        args: [argv: ["printf", "%s\\0", "plain"], form: "login"],
+        expected: { said: ["plain"]; code: 0; shell: true },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "plain"], form: "plain"],
+        expected: { said: ["plain"]; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "two words"], form: "plain"],
+        expected: { said: ["two words"]; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", 'it\'s "quoted"'], form: "plain"],
+        expected: { said: ['it\'s "quoted"']; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "$(echo injected)", "`echo injected`"], form: "plain"],
+        expected: { said: ["$(echo injected)", "`echo injected`"]; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "; echo injected", "&& echo injected"], form: "plain"],
+        expected: { said: ["; echo injected", "&& echo injected"]; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "line\necho injected"], form: "plain"],
+        expected: { said: ["line\necho injected"]; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "-n", "", "*", "~"], form: "plain"],
+        expected: { said: ["-n", "", "*", "~"]; code: 0; shell: false },
+      ],
+      [
+        args: [argv: ["printf", "%s\\0", "$(echo injected)", "line\necho injected"], form: "login"],
+        expected: { said: ["$(echo injected)", "line\necho injected"]; code: 0; shell: true },
+      ],
+    ]
+  >;
+}
 /** The one backend, and so the one place desolate is refused on a host that is not a Mac:
  *  its VMs are Apple's hypervisor's, run by Lima (vz), and every command that makes or starts
  *  one asks for this first (stack.ts, `backend`). */
@@ -862,32 +952,6 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     );
   };
 
-  /** One argument for a remote shell, quoted so that it stays one argument. */
-  const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
-  /** The one line a session hands the shell sshd starts in the VM: in `cwd` (/ unless said),
-   *  with `env` set, `argv` exactly as given (after `sudo`, for root), every word quoted so
-   *  that it arrives as the one word it was, whatever it holds. ssh passes a command as one
-   *  string, where `limactl shell` took words and quoted them itself. */
-  const commandLine = (argv: string[], options: ExecOptions, sudo: boolean, totalMs?: number) => {
-    const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
-    const words = [...(sudo ? ["sudo"] : []), ...bounded(totalMs), "env", ...vars, ...argv];
-    return `cd ${quote(options.cwd ?? "/")} && exec ${words.map(quote).join(" ")}`;
-  };
-  /** A command exec runs with a total (`timeoutMs`, `totalMs` here) is held to it in the VM too: ending the ssh on this
-   *  side leaves the program in the VM running (measured on the M1, 2026-11-23, for ssh and
-   *  `limactl shell` alike, with no terminal), so a call made on a timer into a VM that is
-   *  stuck would pile its programs up there. coreutils' `timeout`, in every VM's image: the
-   *  whole second past the Mac's bound, so the Mac's says why first (and a 124 or 137 of its
-   *  own reaches no caller then, which none reads apart from any other failure); TERM, then
-   *  KILL five seconds on, to the command's process group, which is what it started. As root
-   *  it runs under sudo, so that it may end what it runs. Its command reads stdin as before:
-   *  it is in a group of its own, which matters only to a terminal, and these have none. A
-   *  call with no total (streamed, held, dial's socat, attach) is meant to last as long as it
-   *  is wanted; socat ends when its stdin closes. */
-  const bounded = (totalMs?: number) =>
-    totalMs
-      ? ["timeout", "--signal=TERM", "--kill-after=5", String(Math.ceil(totalMs / 1000) + 1)]
-      : [];
   /** Root in the ROOT VM is reached by ssh as root, with Lima's key for this home (on the
    *  host only), on its own control socket: never through the VM's login user, which runs
    *  everything there that reads a domain's data and has no sudo (root/start.sh). */
@@ -955,7 +1019,8 @@ export const limaBackend = (platform: string = process.platform): Backend => {
    *  waited on it (measured on the M1, 2026-11-23, Lima 2.3.0: `limactl shell <vm> true`
    *  77 ms and 87 MB at its peak; the same command over ssh 8 ms and 1.5 MB).
    *
-   *  - The command runs in a login shell, `"$SHELL" -l -c`, as limactl ran it: the VMs'
+   *  - The command runs in a login shell, `"$SHELL" -l -c`, as limactl ran it, unless
+   *    `login` is false (dial's socat, which needs nothing of a login: sessionLine): the VMs'
    *    profiles hold what their commands rely on. The git VM's (git/provision.sh) sets
    *    GIT_NO_LAZY_FETCH, so that a fetch from a mirror or a root's clone, whose config is
    *    the root's user's, fetches nothing further; the root's (root/start.sh) gives its login
@@ -973,7 +1038,11 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     name: string,
     argv: string[],
     options: ExecOptions = {},
-    { terminal = false, totalMs }: { terminal?: boolean; totalMs?: number } = {},
+    {
+      terminal = false,
+      totalMs,
+      login = true,
+    }: { terminal?: boolean; totalMs?: number; login?: boolean } = {},
   ): string[] => [
     "-F",
     path.join(LIMA_HOME, name, "ssh.config"),
@@ -982,7 +1051,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     terminal ? "-t" : "-T",
     `lima-${name}`,
     "--",
-    `exec "$SHELL" -l -c ${quote(commandLine(argv, options, options.root === true, totalMs))}`,
+    sessionLine(argv, options, { sudo: options.root === true, totalMs, login }),
   ];
   /** `name`, if it is one of this stack's VMs' names (`PREFIX`, then a VM's own part, as
    *  shared/names.ts and templates.ts make them): else a refusal, before it is used. */
@@ -1472,14 +1541,20 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       // forwarding (`ssh -W`) through Lima's control connection was refused when first tried
       // and worked on Lima 2.3.0 in a workspace VM (2026-11-23), but reaches TCP only, and a
       // target may be a unix socket in the VM (a workspace's proxy). Refused by the VM's
-      // processes alone, as spawn is: a connection is answered at once.
+      // processes alone, as spawn is: a connection is answered at once. No login shell:
+      // socat needs no profile, which was 3 of the 4 processes a connection started in the
+      // root VM (sessionLine).
       const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name)));
       if (why) throw new Error(why);
       return duplexOf(
-        spawn("ssh", sessionArgs(name, ["socat", "STDIO", socatAddress(target)]), {
-          stdio: ["pipe", "pipe", "ignore"],
-          env: env(),
-        }),
+        spawn(
+          "ssh",
+          sessionArgs(name, ["socat", "STDIO", socatAddress(target)], {}, { login: false }),
+          {
+            stdio: ["pipe", "pipe", "ignore"],
+            env: env(),
+          },
+        ),
       );
     },
 
@@ -2351,7 +2426,7 @@ declare namespace limaBackend {
           stderr: "";
         },
       ],
-      /** dial: socat in a session, to the VM's loopback port */
+      /** dial: socat in a session, to the VM's loopback port, in no login shell (sshd runs the line in the user's shell, with no profile) */
       [
         args: [backend: Vz, call: "dial", name: "dsl-main-w1", argv: ["8080"], options: {}],
         expected: {
@@ -2364,7 +2439,7 @@ declare namespace limaBackend {
               "-T",
               "lima-dsl-main-w1",
               "--",
-              "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''socat'\\'' '\\''STDIO'\\'' '\\''TCP:127.0.0.1:8080'\\'''",
+              "cd '/' && exec 'env' 'socat' 'STDIO' 'TCP:127.0.0.1:8080'",
             ],
           ];
           said: [];
