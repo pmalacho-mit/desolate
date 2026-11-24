@@ -43,6 +43,9 @@ const serve = (target: string, args: string, root = false) =>
     { root },
   );
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/** How long the host's forwarder waits before it tries again to bind a port something else
+ *  held (host/daemon.ts, `hostHeld`). */
+const HELD_AGAIN_MS = 10_000;
 const until = async (probe: () => boolean | Promise<boolean>, ms = 8000) => {
   for (const deadline = Date.now() + ms; Date.now() < deadline;) {
     if (await probe()) return true;
@@ -323,10 +326,12 @@ else {
     stack.step("a raw TCP port");
     serve("web/one", "one 5432 raw");
     // 5432 because it is one of the ports desolate knows a protocol with no name is spoken on
-    // (forward.ts, RAW_PORTS). When something on this machine held it as the host bound it,
-    // the failure says what holds it now, by its pid. (Under the whole of T2, 2026-11-24:
-    // nothing did by then. The host tries a held port again after 10 s, past this 8 s wait.)
-    if (!(await until(() => urlOf("web/one", 5432) !== undefined))) {
+    // (forward.ts, RAW_PORTS). Something on this machine may hold it for a moment as the host
+    // binds it: the host then says it is held and tries again after 10 s (daemon.ts, its
+    // forwarder: `hostHeld`, a number not exported), so the wait is that and the time to say
+    // so (under the whole of T2, 2026-11-24, the 8 s it was failed with nothing holding the
+    // port by then). One still held after it is said, with what holds it, by its pid.
+    if (!(await until(() => urlOf("web/one", 5432) !== undefined, HELD_AGAIN_MS + 5000))) {
       const holder = spawnSync(
         "bash",
         ["-c", "lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; ss -tanp 'sport = :5432' 2>&1"],
