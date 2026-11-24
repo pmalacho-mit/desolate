@@ -17,7 +17,9 @@ const ENV = [
 /** Runs waitForPull against an API that answers each route starting with a key of `routes`
  *  with its JSON, and every other with 404. Waits up to `waitS` seconds, asking every 10 ms.
  *  No token is in the environment: none is the person's to send. What it returned, the
- *  lines it said, and each route it asked with whether it sent a token. */
+ *  lines it said, and each route it asked with whether it sent a token.
+ *  @standsIn GitHub's API (the pull request and Actions routes)
+ *  @realIn T2 13-upstream (a stand-in forge), and by hand against github.com (reference.md, "What works today") */
 export const pullWaitedFor = async (
   wait: typeof waitForPull,
   dependency: Repo,

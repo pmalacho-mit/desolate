@@ -64,7 +64,8 @@ declare namespace forge {
     ],
     Expect<Invoke<typeof forge>, "matches", { kind: "github"; ssh: { host: "github.com" } }>
   >;
-  /** none on record is a refusal that says what to run, never a default forge */
+  /** none on record is a refusal that says what to run, never a default forge
+   *  @principle P6 */
   export type None = Given<
     Fresh,
     Throws<Invoke<typeof forge>, "the root has no forge configured; run `desolate bootstrap` again">
@@ -150,13 +151,15 @@ declare namespace sshCommand {
     >,
   ];
   /** a forge that does not answer is not waited on for ever: twenty seconds to connect, and
-   *  a connection silent for a minute (four questions, fifteen seconds apart) is ended */
+   *  a connection silent for a minute (four questions, fifteen seconds apart) is ended
+   *  @requirement R4 */
   export type NotForEver = Expect<
     Read,
     "endsWith",
     " -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
   >;
-  /** the write role names the write agent and the write key, which only the pusher reaches */
+  /** the write role names the write agent and the write key, which only the pusher reaches
+   *  @principle P3 */
   export type Write = [
     Expect<
       Invoke<typeof sshCommand, [repo: { owner: "acme"; name: "app" }, role: "write"]>,
@@ -200,7 +203,8 @@ declare namespace ownedByRoot {
   // The mirrors and root clones are /desolate/mirrors and /desolate/root, which only the root
   // VM has: these tests put them under the test's own root instead.
   type Fresh = Invoke<typeof emptyRoot>;
-  /** a mirror and a root clone are the root's to run git in */
+  /** a mirror and a root clone are the root's to run git in
+   *  @principle P4 */
   export type Owned = Given<
     [
       Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
@@ -228,7 +232,10 @@ declare namespace ownedByRoot {
     ]
   >;
   /** anything else is not: a domain's directory, a path that climbs out, a link under the
-   *  clones that leads into a domain (the real path is what counts), nothing at all */
+   *  clones that leads into a domain (the real path is what counts), nothing at all
+   *  @principle P4
+   *  @standsIn release/root/layout.ts (mirrorsAndClonesHere)
+   *  @realIn T2 04-offers, "the root never runs git in a domain's repository: a booby-trapped clone and a lying outbox" */
   export type NotOwned = Given<
     [
       Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
@@ -307,7 +314,24 @@ export const git = (dir: string, args: string[], options: RunOptions = {}): Prom
 };
 
 declare namespace git {
-  /** git is never run anywhere but a mirror or a root clone: refused before anything runs */
+  /** in a root clone, git runs: the control for the refusal below */
+  export type InARootClone = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof emptyRoot>,
+      Invoke<typeof makeDirIn, [where: "clones", name: "acme/app"]>,
+    ],
+    Expect<
+      Invoke<
+        typeof git,
+        [dir: Invoke<typeof pathIn, [where: "clones", name: "acme/app"]>, args: ["init", "-q"]]
+      >,
+      "matches",
+      { code: 0 }
+    >
+  >;
+  /** git is never run anywhere but a mirror or a root clone: refused before anything runs
+   *  @principle P4 */
   export type Refuses = Throws<
     Invoke<typeof git, [dir: "/tmp", args: ["status"]]>,
     "the root does not run git in /tmp: it is not a mirror or a root clone (P4)"

@@ -135,7 +135,8 @@ declare namespace readPlain {
       >,
     ]
   >;
-  /** the file is a link to the root's own: not read */
+  /** the file is a link to the root's own: not read
+   *  @principle P4 */
   export type LinkAtTheName = Given<
     [
       Invoke<typeof emptyScratch>,
@@ -157,7 +158,8 @@ declare namespace readPlain {
     >
   >;
   /** a directory on the way is a link elsewhere: not walked through, though the path does
-   *  lead to a file (the control) */
+   *  lead to a file (the control)
+   *  @principle P4 */
   export type LinkOnTheWay = Given<
     [
       Invoke<typeof emptyScratch>,
@@ -182,7 +184,8 @@ declare namespace readPlain {
       >,
     ]
   >;
-  /** a FIFO is not waited on, and a directory is not a file */
+  /** a FIFO is not waited on, and a directory is not a file
+   *  @principle P4 */
   export type NotAFile = Given<
     [
       Invoke<typeof emptyScratch>,
@@ -542,7 +545,8 @@ export const readHead = (
 };
 
 declare namespace readHead {
-  /** a branch, and the commit its loose ref names */
+  /** a branch, and the commit its loose ref names
+   *  @principle P4 */
   export type Loose = Given<
     [
       Invoke<typeof emptyScratch>,
@@ -634,7 +638,8 @@ declare namespace readHead {
     ]
   >;
   /** caught half written (no newline yet): unsettled, null; a name desolate would not carry
-   *  as an argument: no branch and no commit */
+   *  as an argument: no branch and no commit
+   *  @principle P4 */
   export type Unsettled = Given<
     [
       Invoke<typeof emptyScratch>,

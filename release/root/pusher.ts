@@ -152,7 +152,7 @@ type Approved = {
 };
 
 /** The forge's address, from root's own copy (the host writes it, as root): the root's user
- *  cannot aim a push elsewhere. */
+ *  cannot aim a push elsewhere. {@link forgeAddress.Reads} {@link forgeAddress.Refuses} */
 export const forgeAddress = (): { user: string; host: string; port: number } => {
   const f = JSON.parse(fs.readFileSync(PINNED_FORGE.config, "utf8")) as {
     ssh?: { user?: string; host?: string; port?: number };
@@ -169,7 +169,8 @@ export const forgeAddress = (): { user: string; host: string; port: number } => 
 
 declare namespace forgeAddress {
   type Fresh = Invoke<typeof emptyRoot>;
-  /** where a push goes is root's copy of the forge (forge-pin.ts), read as three checked words */
+  /** where a push goes is root's copy of the forge (forge-pin.ts), read as three checked words
+   *  @incident 2026-11-12-pusher-parsed-nothing */
   export type Reads = Given<
     [
       Fresh,
@@ -403,7 +404,8 @@ declare namespace advertised {
   ];
 }
 
-/** The forge's report: did it take the one update asked for? */
+/** The forge's report: did it take the one update asked for? {@link reported.Took}
+ *  {@link reported.DidNot} */
 export const reported = (
   lines: string[],
   ref: string,
@@ -462,8 +464,9 @@ declare namespace reported {
 }
 
 /** The whole conversation with the forge's receive-pack: read its ref list; if the branch is
- *  not exactly `onto`, stop; else ask for the one update `<onto> <commit> refs/heads/<branch>`,
- *  let `sendPack` put the pack on the wire, and read the forge's report. */
+ *  not exactly `onto`, stop; {@link updateRef.RemoteMoved} else ask for the one update `<onto>
+ *  <commit> refs/heads/<branch>`, {@link updateRef.Updates} let `sendPack` put the pack on the
+ *  wire, and read the forge's report. */
 export const updateRef = async (
   forge: { stdin: Writable; stdout: Readable },
   branch: string,
@@ -565,7 +568,8 @@ declare namespace updateRef {
     ]
   >;
   /** the branch is where the approval says: one update is asked for, from exactly it to the
-   *  approved commit, and the pack follows as it came */
+   *  approved commit, and the pack follows as it came
+   *  @principle P2 */
   export type Updates = Given<
     Takes,
     [
@@ -618,7 +622,11 @@ declare namespace updateRef {
     typeof forgeSaying,
     [refs: ["cccccccccccccccccccccccccccccccccccccccc refs/heads/main\0report-status ofs-delta\n"]]
   >;
-  /** the remote moved since the person approved: nothing is asked for, no pack is sent */
+  /** the remote moved since the person approved: nothing is asked for, no pack is sent
+   *  @principle P2
+   *  @incident 2026-11-12-pusher-parsed-nothing
+   *  @standsIn the forge's receive-pack (forgeSaying)
+   *  @realIn tests/v3/t1/pusher.test.ts, "the branch moves only from the commit the approval names: a stale onto, or none for a branch that exists, pushes nothing" */
   export type RemoteMoved = Given<
     Moved,
     [
@@ -643,7 +651,8 @@ declare namespace updateRef {
       Expect<Call<Moved, "asked">, "=", "0000">,
     ]
   >;
-  /** a branch the approval names as new that the remote has by now is not overwritten */
+  /** a branch the approval names as new that the remote has by now is not overwritten
+   *  @principle P2 */
   export type NotNewAnyMore = Expect<
     Invoke<
       typeof updateRef,

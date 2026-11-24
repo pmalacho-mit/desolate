@@ -149,7 +149,8 @@ declare namespace define {
       "'GIT_SHELLS' is not a setting's variable"
     >,
   ];
-  /** one definition each: a second with the same name, or the same variable, is refused */
+  /** one definition each: a second with the same name, or the same variable, is refused
+   *  @requirement R6 */
   export type Twice = Given<
     Invoke<
       typeof define,
@@ -345,7 +346,8 @@ export const lookup = <T>(setting: Setting<T>): { value: T; from: From } => {
 };
 
 declare namespace lookup {
-  /** the variable comes first, then what was stored, then the default */
+  /** the variable comes first, then what was stored, then the default
+   *  @requirement R6 */
   export type Order = [
     Given<
       [
@@ -418,7 +420,8 @@ declare namespace lookup {
     >,
   ];
   /** a stored value the setting does not take (the file edited by hand, or a range that
-   *  changed since) is refused in the setting's own words, with how to put it right */
+   *  changed since) is refused in the setting's own words, with how to put it right
+   *  @principle P6 */
   export type StoredWrong = Given<
     [
       Invoke<typeof storeText, [text: '{"git.shells":{"value":"lots","side":"host"}}']>,
@@ -476,7 +479,17 @@ declare namespace lookup {
 }
 
 declare namespace storedIn {
-  /** a file that is not one desolate wrote is refused, not read as nothing */
+  /** what `desolate settings` writes is read, by name: the control for the refusal below */
+  export type Ours = Given<
+    Invoke<typeof storeText, [text: '{"git.shells":{"value":"9","side":"host"}}']>,
+    Expect<
+      Invoke<typeof storedIn, [file: Invoke<typeof storeFile, [side: "host"]>]>,
+      "matches",
+      { "git.shells": { value: "9"; side: "host" } }
+    >
+  >;
+  /** a file that is not one desolate wrote is refused, not read as nothing
+   *  @principle P6 */
   export type NotOurs = Given<
     Invoke<typeof storeText, [text: '{"git.shells":9}']>,
     Throws<
@@ -554,7 +567,8 @@ declare namespace valueOf {
     >
   >;
   /** a value that is not one is refused, never taken as the default: the variable, what it
-   *  takes, and what it holds */
+   *  takes, and what it holds
+   *  @principle P6 */
   export type Refuses = Given<
     Invoke<typeof setEnv, [name: "DESOLATE_GIT_SHELLS", value: "lots"]>,
     Throws<

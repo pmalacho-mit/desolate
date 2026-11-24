@@ -21,7 +21,9 @@ export type Seen = { proxyAsked: string | null; destinationGot: string | null; c
 let made = 0;
 
 /** `sent`: an HTTP request as text, or a TLS ClientHello naming that server (null: none).
- *  `proxy`: its answer to the CONNECT, or null for no proxy at all. */
+ *  `proxy`: its answer to the CONNECT, or null for no proxy at all.
+ *  @standsIn release/root/proxy/proxy.ts (the workspace's proxy, at the link's other end)
+ *  @realIn T2 05-egress, "the relay inside the workspace is not the boundary: without it, the proxy still decides" */
 export const throughEgress = async (
   serve: Serve,
   scheme: "http" | "https",
