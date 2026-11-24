@@ -87,6 +87,9 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 /** The approval page's line under "Pushed" for a branch of acme/widgets, as an expression. */
 const pushedLine = (branch: string) =>
   `[...document.querySelectorAll('#pushed li')].find((li) => li.textContent.startsWith(${JSON.stringify(`acme/widgets ${branch} `)}))`;
+/** The tab's card is still there to approve: the first click came as the pointer arrived (too
+ *  soon, said), not approved, and the card not gone (pushed). */
+const undecided = `(() => { const c = document.querySelector('.card.asked'); return !!c && !/^(approving|Approved|Not pushed)/.test(c.querySelector('.hint').textContent); })()`;
 /** Where a picture of the approval page goes, for a person to look at. */
 const shot = (name: string) =>
   path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), `approve-283-${name}.png`);
@@ -1766,7 +1769,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       await page.until(`${hintOf("web-held")} === ${JSON.stringify(pushing)}`, "being pushed");
       assert.deepEqual(
         await page.evaluate(
-          `[...${cardOf("web-held")}.querySelectorAll('button')].filter((b) => b.offsetParent).map((b) => [b.textContent, b.disabled])`,
+          `[...${cardOf("web-held")}.querySelectorAll('.actions button')].filter((b) => b.offsetParent).map((b) => [b.textContent, b.disabled])`,
         ),
         [
           ["Approve push", true],
@@ -1784,7 +1787,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       );
       assert.deepEqual(
         await page.evaluate(
-          `[...${cardOf("web-held")}.querySelectorAll('button')].filter((b) => b.offsetParent).map((b) => b.textContent)`,
+          `[...${cardOf("web-held")}.querySelectorAll('.actions button')].filter((b) => b.offsetParent).map((b) => b.textContent)`,
         ),
         [],
       );
@@ -1894,7 +1897,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
       assert.equal(await page.evaluate(hintOf("web-moved")), refusal, "it stays");
       assert.deepEqual(
         await page.evaluate(
-          `[...${cardOf("web-moved")}.querySelectorAll('button')].filter((b) => b.offsetParent).map((b) => b.textContent)`,
+          `[...${cardOf("web-moved")}.querySelectorAll('.actions button')].filter((b) => b.offsetParent).map((b) => b.textContent)`,
         ),
         ["Dismiss"],
       );
@@ -2091,7 +2094,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
       await sleep(1500);
       await page.click(".card.asked button.approve", "Approve push");
       await sleep(500);
-      await page.click(".card.asked button.approve", "Approve push");
+      if (await page.evaluate(undecided))
+        await page.click(".card.asked button.approve", "Approve push");
       await page.until(pushedLine("web-adversarial"), "its line under Pushed", 60_000);
       const posted = await page.evaluate<{ commit: string; squash: boolean }[]>("window.posted");
       assert.deepEqual(
@@ -2190,7 +2194,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         await sleep(1500);
         await page.click(".card.asked button.approve", label);
         await sleep(500);
-        await page.click(".card.asked button.approve", label);
+        if (await page.evaluate(undecided)) await page.click(".card.asked button.approve", label);
         await page.until(pushedLine(branch), "its line under Pushed", 60_000);
         assert.equal(forgeRefs("acme/widgets")[branch], id);
         return page.evaluate<{ commit: string; squash: boolean; replace: boolean }[]>(

@@ -489,7 +489,8 @@ const carryOn = (branch, squashes) => squashes ? ` Then, to carry on from the sq
 // again, and a record names only an approval the host signed.
 /** How long a push approved here may go unheard of before its card says so. The approval
  *  lasts two minutes unless the pusher takes it (root/keyring.ts, APPROVAL); an ordinary push
- *  is then said to have landed within seconds (T2 04). A large one can take longer to upload:
+ *  is then said to have landed within seconds (T2 04, 2026-11-24: the page heard it 5.5 s
+ *  after the click, the pusher's log read every 2 s). A large one can take longer to upload:
  *  its card changes whenever word comes. */
 const NO_WORD_MS = 3 * 60_000;
 /** The host's record of each approval signed here, as its last answer gave it. */

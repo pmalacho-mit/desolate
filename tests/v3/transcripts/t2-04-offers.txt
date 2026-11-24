@@ -277,6 +277,12 @@ $ desolate approve --web
 approvals    http://desolate-approve.localhost:31591/?tkn=<token>
 [exit 0]
 
+## the approval page after Approve: being pushed, not pushed, no word
+
+$ desolate approve --web
+approvals    http://desolate-approve.localhost:31591/?tkn=<token>
+[exit 0]
+
 ## the approval page, an adversarial push
 
 $ desolate approve --web
