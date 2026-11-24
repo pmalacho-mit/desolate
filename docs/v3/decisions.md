@@ -731,7 +731,7 @@ recursive FSEvents watch per repository on `refs/heads` and one on `packed-refs`
 there that is a link, or resolves outside the domain's tree, is not watched (a recursive watch
 would follow it). Measured on the M1: a `git switch` or a commit in a workspace is on the
 dashboard, and a `head` event in `desolate events`, about 200 ms later. The state service's
-look every second stays, for a missed event. The git VM's outbox is taken the same way (a
+look every second stayed, for a missed event (every 10 s since #258: below). The git VM's outbox is taken the same way (a
 watch, with a look every 5 s behind it). The workspace's own refs watch (`wsd`, every 3 s)
 and the root's outbox look (`rootd`) still poll: those run inside VMs.
 
@@ -1283,7 +1283,9 @@ Section 4.8's requirements, and how each came out:
   writer's changes). A status set in a workspace is a file changing in a share. The host
   does get events for it, so the host's daemon watches the status files' directories and
   nudges the service. The service also looks once a second, which costs a few small reads,
-  so that a missed event is late and not lost. "Not by polling" is therefore true of the
+  so that a missed event is late and not lost. (Since #258: every 10 s, and each input has
+  its event, listed in stated.ts; the host also watches each repository's list of branches
+  in the outbox.) "Not by polling" is therefore true of the
   path that meets the budget, with a slow net under it.
 - **Actions.** The dashboard queues a request; the host's daemon collects it and runs
   desolate's own CLI with arguments it builds itself from a fixed list

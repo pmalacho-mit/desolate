@@ -10,7 +10,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import { watchRefs } from "../../../release/workspace/sync.ts";
-import { paced } from "../../../release/workspace/wsd.ts";
+import { paced } from "../../../release/shared/run.ts";
 
 const git = (repo: string, ...args: string[]) =>
   execFileSync("git", ["-C", repo, ...args], {

@@ -47,6 +47,7 @@ import { formatBytes, NAMES } from "../shared/limits.ts";
 import { listed, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
 import { outlived } from "../shared/plan.ts";
+import { paced } from "../shared/run.ts";
 import type { Unpushed } from "../shared/plan.ts";
 import type { Stats } from "../shared/stats.ts";
 import {
@@ -74,6 +75,8 @@ import * as issues from "./issues.ts";
 import { issueUrl } from "../shared/issues.ts";
 import * as offers from "./offers.ts";
 import * as proxy from "./proxy/manage.ts";
+import { proxyDomainDir } from "./proxy/as-proxy.ts";
+import { SECRETS_DIR } from "./proxy/secret-store.ts";
 import { landedFor, pushedList } from "./pushed.ts";
 import type { Pushed } from "./pushed.ts";
 import { pushCommit } from "./raw-push.ts";
@@ -254,6 +257,8 @@ type Action = {
 };
 let facts: HostFacts = {};
 let hostSeen = 0;
+/** How long the host may say nothing before the page says it is not connected. */
+const HOST_QUIET = 150_000;
 const actions: Action[] = [];
 /** What an action printed is kept whole, in a file of the root's own, and the page shows
  *  its last lines and says how many came before them and where they are (docs/v3/limits.md,
@@ -757,7 +762,7 @@ const snapshot = () => {
     stack: facts.stack ?? null,
     // The host's daemon tells this service what only the host knows. If it has gone quiet,
     // what is shown about VMs is stale, and the page says so.
-    hostConnected: Date.now() - hostSeen < 150_000,
+    hostConnected: Date.now() - hostSeen < HOST_QUIET,
     repos: repos.list().map((r) => ({
       repo: r.repo,
       pushable: r.pushable,
@@ -829,16 +834,90 @@ const publish = () => {
 /** The host's `GET /host/state` (host/events.ts), held until the state changes. */
 const stateWaiters = new Set<() => void>();
 const stateTag = () => createHash("sha256").update(last).digest("hex").slice(0, 16);
-let scheduled: NodeJS.Timeout | null = null;
-/** Something changed, or may have: look, soon, once. */
-const changed = () => {
-  if (scheduled) return;
-  scheduled = setTimeout(() => {
-    scheduled = null;
+// WHAT THE STATE IS MADE OF, AND WHAT SAYS IT CHANGED (snapshot, above). Each input, and its event:
+//   this process's own memory: the host's facts, the actions and what they printed, offers
+//     dismissed and issues edited here   each change calls `changed` where it is made
+//   what is counted in git (checkPushed: commits against the remote, a project's size, a
+//     domain's environments)            `changed` when a count is done
+//   the root's own files, written by its own processes (rootd, rootctl, the pusher):
+//     /var/lib/desolate: the registry, what was pushed, the forge; approvals; refusals;
+//     issues; the host queue. The secrets' index, each domain's network policy. On the
+//     domains' share: a domain's record and offers, its workspaces' records
+//                                       a watch on each directory (watchDomains): a VM's own
+//                                       writes to a share are its events, another's are not
+//   what workspaces write (their checkouts' statuses, notes and HEADs; each repository's list
+//     of branches in the outbox)        the host's nudge: their VMs' writes are the Mac's file
+//                                       events (host/daemon.ts, register)
+//   time: whether the host has gone quiet (hostConnected), a secret's end, a raw push whose
+//     process was killed (its approval file stays, its pid does not)
+//                                       the slow look, every 10 s
+// The slow look also answers for a lost event, as the look every second did.
+/** The directories watched, each by itself (never a tree: see below), and what watches it. */
+const watching = new Map<string, fs.FSWatcher>();
+/** Watch what the root's processes write: the fixed directories, and each domain's, as
+ *  domains come and go. One that cannot be watched yet (not made) is tried at the next look.
+ *
+ *  EACH DIRECTORY BY ITSELF, NEVER A TREE. node's recursive watch on Linux scans every
+ *  directory that appears under the tree. One that is gone again by then (git's quarantine,
+ *  while a bundle is checked) is an error it raises on the watcher, and with nobody
+ *  listening that ended this process: the dashboard died the first time a domain sent work,
+ *  on real VMs only, where the timing allows it (found by tier T3). So: no recursion, and
+ *  every watcher has a listener. One that fails is dropped, and tried again at the next look. */
+const watchDomains = () => {
+  const wanted = new Set([
+    ROOT.state,
+    APPROVALS,
+    path.join(ROOT.state, "refused"),
+    path.join(ROOT.state, "issues"),
+    HOST_QUEUE,
+    SECRETS_DIR,
+    ROOT.domains,
+    ...domains
+      .domains()
+      .flatMap((d) => [
+        domainPath(d.slug),
+        path.join(domainPath(d.slug), "workspaces"),
+        proxyDomainDir(d.slug),
+      ]),
+  ]);
+  for (const [dir, watcher] of watching)
+    if (!wanted.has(dir)) {
+      watcher.close();
+      watching.delete(dir);
+    }
+  for (const dir of wanted) {
+    if (watching.has(dir) || !fs.existsSync(dir)) continue;
+    try {
+      const watcher = fs.watch(dir, changed);
+      watcher.on("error", (error) => {
+        console.error(`stated: no longer watching ${dir}: ${String(error)}`);
+        watcher.close();
+        watching.delete(dir);
+      });
+      watching.set(dir, watcher);
+    } catch (error) {
+      // (Said once: it is tried again at every look.)
+      if (!unwatched.has(dir)) console.error(`stated: cannot watch ${dir}: ${String(error)}`);
+      unwatched.add(dir);
+    }
+  }
+};
+const unwatched = new Set<string>();
+/** Something changed, or may have: look, soon, once. 40 ms after it, as the dashboard's
+ *  budgets need (a click shown within 100 ms, a status within a second: T2 09-ui), and never
+ *  more than once a second: a workspace writing its outbox in a loop is the host's nudges in
+ *  a loop, and costs one look a second (it was the look every second, and one per nudge). */
+const pacer = paced(
+  async () => {
+    watchDomains();
     takeQueue();
     publish();
-  }, 40);
-};
+  },
+  undefined,
+  undefined,
+  40,
+);
+const changed = pacer.poke;
 
 // ------------------------------------------------------------------ each domain's own view
 // Into each domain's inbox, which its workspaces read and cannot write: its stats
@@ -1388,6 +1467,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
   const url = new URL(req.url ?? "/", "http://x");
   if (url.pathname.startsWith("/host/")) {
     if (!fromHost(req)) return json(res, 403, { error: "this is the host daemon's side" });
+    // The host back after a silence is a change: the page said it was not connected.
+    if (Date.now() - hostSeen >= HOST_QUIET) changed();
     hostSeen = Date.now();
     if (req.method === "PUT" && url.pathname === "/host/facts") {
       facts = (await body(req)) as HostFacts;
@@ -1752,44 +1833,17 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
   );
   // The actions of a process before this one are not remembered: nor is what they printed.
   fs.rmSync(LOGS, { recursive: true, force: true });
-  // The root's own files: looked at when one changes. (The shares cannot be watched from
-  // inside a VM; the host's daemon watches those and nudges.) And a look every second
-  // regardless, which costs a few small files read, so that a missed event is a second
-  // late and not lost.
-  //
-  // EACH DIRECTORY BY ITSELF, NEVER A TREE. node's recursive watch on Linux scans every
-  // directory that appears under the tree. One that is gone again by then (git's
-  // quarantine, while a bundle is checked) is an error it raises on the watcher, and with
-  // nobody listening that ended this process: the dashboard died the first time a domain
-  // sent work, on real VMs only, where the timing allows it (found by tier T3). So: no
-  // recursion, and every watcher has a listener. One that fails is dropped; the look
-  // every second remains.
-  //
-  // A workspace's request (rootd queues it here) is taken on its event, and every 10 s
-  // besides, which also sweeps what was taken long ago. It was read every 500 ms.
+  // A workspace's request (rootd queues it here) is taken on its event (watchDomains), and
+  // at each slow look besides, which also sweeps what was taken long ago.
   fs.mkdirSync(HOST_QUEUE, { recursive: true });
-  for (const dir of [
-    ROOT.state,
-    APPROVALS,
-    path.join(ROOT.state, "refused"),
-    path.join(ROOT.state, "secrets"),
-    path.join(ROOT.state, "issues"),
-    ROOT.domains,
-    HOST_QUEUE,
-  ])
-    try {
-      if (!fs.existsSync(dir)) continue;
-      const watcher = fs.watch(dir, changed);
-      watcher.on("error", (error) => {
-        console.error(`stated: no longer watching ${dir}: ${String(error)}`);
-        watcher.close();
-      });
-    } catch (error) {
-      console.error(`stated: cannot watch ${dir}: ${String(error)}`);
-    }
-  setInterval(publish, 1000);
-  setInterval(takeQueue, 10_000);
-  setInterval(() => void checkPushed(), 10_000);
-  void checkPushed();
-  publish();
+  // The slow look: every 10 s, for what raises no event (above, at watchDomains), and for an
+  // event lost. It was every second, for ever, though the Mac's daemon always waits on the
+  // state (ticket #258). What is counted in git (checkPushed) is looked at with it, and shown
+  // when the count is done.
+  setInterval(() => {
+    changed();
+    void checkPushed().then(changed);
+  }, 10_000);
+  void checkPushed().then(changed);
+  changed();
 }

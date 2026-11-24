@@ -2210,6 +2210,8 @@ const serve = async () => {
     // More than one checkout: the workspace file with all of them (workspace/init.ts).
     entry.folder = folderFor(checkouts, r.workspace);
     const base = paths.domainRepos(r.domain);
+    const domainDir = paths.domain(r.domain);
+    /** Whether `dir` is watched now. */
     const watch = (dir: string, recursive: boolean, wanted: (file: string | null) => boolean) => {
       try {
         // The domain's own tree: a directory there may be a link anywhere on the Mac, which
@@ -2217,9 +2219,10 @@ const serve = async () => {
         // only a real directory inside the domain's tree is watched.
         if (
           !fs.lstatSync(dir).isDirectory() ||
-          fs.realpathSync(dir) !== path.join(fs.realpathSync(base), path.relative(base, dir))
+          fs.realpathSync(dir) !==
+            path.join(fs.realpathSync(domainDir), path.relative(domainDir, dir))
         )
-          return;
+          return false;
         const watcher = fs.watch(dir, { recursive }, (_event, file) => {
           if (wanted(file === null ? null : String(file))) nudge();
         });
@@ -2228,8 +2231,9 @@ const serve = async () => {
         // which would end this daemon and with it every workspace's link.
         watcher.on("error", () => watcher.close());
         entry.watchers.push(watcher);
+        return true;
       } catch {
-        /* no such checkout yet: the state service's own slow look covers it */
+        return false; // no such checkout yet: the state service's own slow look covers it
       }
     };
     const repos = new Set<string>();
@@ -2254,6 +2258,31 @@ const serve = async () => {
         watch(path.join(common, "refs", "heads"), true, () => true);
         watch(common, false, (file) => file === null || file === "packed-refs");
       }
+    // Each repository's list of branches, which the dashboard lists: the outbox's
+    // sync/<owner>/<repo>/, where the workspace's daemon writes refs.json after a branch moves
+    // (workspace/wsd.ts). The root cannot watch it (a VM sees no events for a share); the
+    // workspace's VM writes it, so it is the Mac's file event, and nudged. Not a tree: the
+    // outbox is the workspace's to fill, and on Linux a recursive watch is one per directory
+    // in it, however many it makes. So only these directories, by the names of the
+    // repositories this host knows the workspace has, each by itself (on macOS a watch is one
+    // FSEvents stream whatever is below it, but the same three suffice there). Nothing in
+    // them is read or listed, and an event's file name is not looked at: any event is a
+    // nudge, which the state service paces. One not made yet (before the first sync) is
+    // watched once its parent changes.
+    const sync = path.join(paths.outbox(r.domain), "sync");
+    const outbox = [
+      ...new Set(
+        [...repos]
+          .filter((repo) => typeof repo === "string" && parseRepo(repo))
+          .flatMap((repo) => [path.join(sync, repo.split("/")[0]!), path.join(sync, repo)]),
+      ),
+    ];
+    const held = new Set<string>();
+    const hold = () => {
+      for (const dir of [sync, ...outbox])
+        if (!held.has(dir) && watch(dir, false, () => (hold(), true))) held.add(dir);
+    };
+    hold();
     openLink(entry);
     entry.watch = watchOf(entry);
     events.publish(
