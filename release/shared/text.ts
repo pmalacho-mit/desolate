@@ -8,8 +8,8 @@
 // The last lines of a program's output (`tail`, `failure`) are a cut too, and say so: how
 // much was left out, and where the whole of it is.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { keptAt, newlinesThen, notKept, repeat } from "../.harness/shared-text.ts";
+import type { Expect, Invoke, Repeat, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { keptAt, notKept } from "../.harness/shared-text.ts";
 
 /** What hides or reorders text: the one rule wherever desolate shows text another wrote.
  *  Controls, format characters (bidirectional overrides, zero-width), private-use and
@@ -97,7 +97,8 @@ declare namespace printable {
     ]
   >;
   /** a cut is said: text over the bound ends in the mark, which counts toward the bound;
-   *  text that fits exactly is whole, and carries no mark */
+   *  text that fits exactly is whole, and carries no mark
+   *  @requirement R1 */
   export type Cut = Table<
     typeof printable,
     [
@@ -114,13 +115,14 @@ declare namespace printable {
   >;
   /** with no bound named, the bound is the one against a flood: a long reason arrives whole */
   export type Whole = Expect<
-    Invoke<typeof printable, [value: Invoke<typeof repeat, [text: "x", count: 4000]>]>,
+    Invoke<typeof printable, [value: Repeat<"x", 4000>]>,
     "matches",
     "^x{4000}$"
   >;
-  /** and a flood does not: 4,000 characters, the last of them the mark */
+  /** and a flood does not: 4,000 characters, the last of them the mark
+   *  @requirement R7 */
   export type Flood = Expect<
-    Invoke<typeof printable, [value: Invoke<typeof repeat, [text: "x", count: 1000000]>]>,
+    Invoke<typeof printable, [value: Repeat<"x", 1000000>]>,
     "matches",
     "^x{3999}…$"
   >;
@@ -190,10 +192,7 @@ declare namespace tail {
   /** in time that grows with the output, not its square: a long run of blank lines that
    *  something follows (a quadratic trim took minutes on a megabyte of them) */
   export type Linear = Expect<
-    Invoke<
-      typeof tail,
-      [text: Invoke<typeof newlinesThen, [count: 1000000, text: "fatal"]>, lines: 1]
-    >,
+    Invoke<typeof tail, [text: `${Repeat<"\n", 1000000>}fatal`, lines: 1]>,
     "=",
     { text: "fatal"; before: 1000000 }
   >;
@@ -229,7 +228,8 @@ export const failure = (
 };
 
 declare namespace failure {
-  /** what a person is shown of a failure: its end, how much came before, where all of it is */
+  /** what a person is shown of a failure: its end, how much came before, where all of it is
+   *  @requirement R1 */
   export type Shown = Expect<
     Invoke<
       typeof failure,
@@ -263,12 +263,13 @@ declare namespace failure {
     "=",
     "(3 earlier lines not shown)\nd"
   >;
-  /** one line that is a flood is cut at the bound against one, and says so */
+  /** one line that is a flood is cut at the bound against one, and says so
+   *  @requirement R1 */
   export type LongLine = Expect<
     Invoke<
       typeof failure,
       [
-        output: Invoke<typeof repeat, [text: "x", count: 5000]>,
+        output: Repeat<"x", 5000>,
         lines: 3,
         keep: Invoke<typeof keptAt, [path: "/var/lib/desolate/failures/1.txt"]>,
       ]

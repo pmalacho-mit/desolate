@@ -28,6 +28,7 @@ import type {
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { attemptsThat } from "../.harness/root-retry.ts";
+import type { onFakeTime } from "../.harness/time.ts";
 
 type Failed = { error: string; moved: boolean };
 
@@ -115,7 +116,10 @@ declare namespace withPusher {
     Starting,
     [
       Expect<
-        Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Starting["attempt"]]>,
+        Invoke<
+          typeof onFakeTime,
+          [run: typeof withPusher<Record<string, unknown>>, attempt: Starting["attempt"]]
+        >,
         "=",
         { ok: true }
       >,
@@ -131,7 +135,10 @@ declare namespace withPusher {
     Occupied,
     [
       Expect<
-        Invoke<typeof withPusher<Record<string, unknown>>, [attempt: Occupied["attempt"]]>,
+        Invoke<
+          typeof onFakeTime,
+          [run: typeof withPusher<Record<string, unknown>>, attempt: Occupied["attempt"]]
+        >,
         "=",
         { ok: true }
       >,

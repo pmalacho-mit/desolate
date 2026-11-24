@@ -13,11 +13,15 @@ import { onTestFinished } from "./vitest.ts";
 
 const file = (name: string) => path.join(process.env.DESOLATE_HOME!, `nests-repos-${name}`);
 
-/** What the keyring's files hold, by their path in the root VM, from now on in this test. */
+/** What the keyring's files hold, by their path in the root VM, from now on in this test.
+ *  @standsIn release/root/keyring.ts (its files, read as root reads them)
+ *  @realIn T2 01-root, "keys: which the root holds, and public halves only" */
 export const keyringHolds = (files: Record<string, string>) =>
   fs.writeFileSync(file("keyring.json"), JSON.stringify(files));
 
-/** host/stack.ts for a stack on the stand-in forge, whose root VM has only the keyring above. */
+/** host/stack.ts for a stack on the stand-in forge, whose root VM has only the keyring above.
+ *  @standsIn release/host/stack.ts
+ *  @realIn T2 01-root, "clone: a read key, a write key, the mirror with its LFS object, the root clone" */
 export const standInStack = {
   ...fakeStack,
   config: () => ({ backend: "fake", forge: { kind: "stand-in" } }),
@@ -42,7 +46,9 @@ export const standInStack = {
   }),
 };
 
-/** The stand-in forge's admin, for this test: it takes every call and writes it down. */
+/** The stand-in forge's admin, for this test: it takes every call and writes it down.
+ *  @standsIn the forge's admin (deploy keys, through gh)
+ *  @realIn by hand against github.com (`desolate clone --keys-by-hand`, AGENTS.md "What has been tested") */
 export const forgeAdmin = () => {
   fs.writeFileSync(file("forge-calls"), "");
   fs.writeFileSync(file("forge"), `#!/bin/sh\nprintf '%s\\n' "$*" >>'${file("forge-calls")}'\n`, {

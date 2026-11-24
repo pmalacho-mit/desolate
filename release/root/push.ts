@@ -211,7 +211,8 @@ declare namespace refusePush {
     "=",
     null
   >;
-  /** each refusal says what to run, with the exit code a script tells apart */
+  /** each refusal says what to run, with the exit code a script tells apart
+   *  @principle P6 */
   export type Refuses = [
     Expect<
       Invoke<
@@ -355,7 +356,8 @@ export const refuseOtherApproval = (
 
 declare namespace refuseOtherApproval {
   type Reviewed = { repo: "acme/app"; commit: "0123456789abcdef0123456789abcdef01234567" };
-  /** the approval names this repository, this branch and this commit */
+  /** the approval names this repository, this branch and this commit
+   *  @principle P2 */
   export type Ours = Expect<
     Invoke<
       typeof refusalOf,
@@ -372,7 +374,8 @@ declare namespace refuseOtherApproval {
     "=",
     null
   >;
-  /** one signed for another branch, another commit, or text that is no approval, pushes nothing */
+  /** one signed for another branch, another commit, or text that is no approval, pushes nothing
+   *  @principle P2 */
   export type Others = [
     Expect<
       Invoke<

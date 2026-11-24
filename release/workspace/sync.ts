@@ -76,7 +76,8 @@ export const branches = async (repo: string): Promise<Record<string, string>> =>
 declare namespace branches {
   /** what is synced: each branch at its full commit id. The root reads this list as data, so
    *  a ref an agent wrote by hand into .git/refs/heads under a name no branch may have (an
-   *  option, a range, a short id) is left out here, before it is ever written down */
+   *  option, a range, a short id) is left out here, before it is ever written down
+   *  @principle P4 */
   export type OnlyWhatTheRootCarries = Given<
     [
       Mock<"../shared/run.ts", typeof scriptedGit>,

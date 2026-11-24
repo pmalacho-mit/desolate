@@ -114,8 +114,8 @@ export const parseApproval = (text: unknown): PushApproval | null => {
  *    into one: `commit` is then the reviewer's squash of it (its tree, on the commit it leaves
  *    the remote's history at). Either way the keyring checks the text answers its challenge
  *    (`answers`): the same repository, branch, onto and nonce, and `squashes`, or else
- *    `commit`, the challenge's commit. That `commit` is a squash of it the keyring cannot
- *    check: the host's signature vouches for it, made from the reviewer's account.
+ *    `commit`, the challenge's commit. {@link answers.Cases} That `commit` is a squash of it the
+ *    keyring cannot check: the host's signature vouches for it, made from the reviewer's account.
  */
 export type SignedApproval = PushApproval & {
   squashes: string | null;
@@ -174,8 +174,8 @@ export const parseSigned = (text: unknown): SignedApproval | null => {
 };
 
 /** The digest the text carries for a push's LFS objects: sha256 over their entries (each
- *  `<oid> <size>`), sorted and unique, one a line. The pusher computes it of the list it is
- *  sent, and uploads only what is on it, at that size. */
+ *  `<oid> <size>`), sorted and unique, one a line. {@link lfsDigest.Digests} The pusher computes it
+ *  of the list it is sent, and uploads only what is on it, at that size. */
 export const lfsDigest = (oids: readonly string[]): string =>
   createHash("sha256")
     .update(
@@ -273,7 +273,7 @@ export const squashedFrom = async (
 };
 
 /** Is a signed text about this challenge: the same repository, branch, onto and nonce, and
- *  the challenge's commit as it is, or (`squashes`) squashed? */
+ *  the challenge's commit as it is, or (`squashes`) squashed? {@link answers.Cases} */
 export const answers = (signed: SignedApproval, challenge: PushApproval): boolean =>
   signed.repo === challenge.repo &&
   signed.branch === challenge.branch &&
@@ -310,7 +310,8 @@ declare namespace formatSigned {
 }
 
 declare namespace parseSigned {
-  /** what formatSigned wrote comes back as it was */
+  /** what formatSigned wrote comes back as it was
+   *  @principle P2 */
   export type RoundTrip = Expect<
     Invoke<
       typeof parseSigned,
@@ -335,7 +336,8 @@ declare namespace parseSigned {
   >;
   /** anything but that exact text approves nothing. The first row is the control; each other
    *  is it changed once: the challenge's own text (v2), no pack, a short pack, an lfs line
-   *  with no digest, a commit that squashes itself, a line more */
+   *  with no digest, a commit that squashes itself, a line more
+   *  @principle P2 */
   export type Refuses = Table<
     typeof parseSigned,
     [
@@ -423,7 +425,8 @@ declare namespace lfsDigest {
 
 declare namespace answers {
   /** the challenge's commit as it is, or another commit that squashes it, under its nonce;
-   *  never another commit alone, a squash of another, another branch or another onto */
+   *  never another commit alone, a squash of another, another branch or another onto
+   *  @principle P2 */
   export type Cases = Table<
     typeof answers,
     [
@@ -582,7 +585,8 @@ declare namespace answers {
 }
 
 declare namespace parseApproval {
-  /** what formatApproval wrote comes back as it was, for a branch that moves and for a new one */
+  /** what formatApproval wrote comes back as it was, for a branch that moves and for a new one
+   *  @principle P2 */
   export type RoundTrip = [
     Expect<
       Invoke<
@@ -642,7 +646,8 @@ declare namespace parseApproval {
   /** anything but that exact text approves nothing. The first row is the control; each other
    *  is it changed once: another version, a line more, no final newline, CRLF, a branch that
    *  climbs or carries an escape, a repository that is a path, a short commit, an upper-case
-   *  nonce, two fields swapped */
+   *  nonce, two fields swapped
+   *  @principle P2 */
   export type Refuses = Table<
     typeof parseApproval,
     [
@@ -722,7 +727,8 @@ declare namespace parseApproval {
     ]
   >;
   /** the protocol's zero id means "no such ref": as the commit it would delete the branch, as
-   *  `onto` it would stand in for `none`. Neither is approved */
+   *  `onto` it would stand in for `none`. Neither is approved
+   *  @principle P2 */
   export type ZeroId = Table<
     typeof parseApproval,
     [

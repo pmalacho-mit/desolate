@@ -144,7 +144,8 @@ export const open = async (
 
 declare namespace open {
   /** the program holding the port does not know the token: the guest refuses it, and all it
-   *  was ever sent is the guest's first line, a nonce and no token */
+   *  was ever sent is the guest's first line, a nonce and no token
+   *  @incident 2026-11-12-link-impostor */
   export type Impostor = [
     Expect<
       Invoke<
@@ -221,7 +222,8 @@ declare namespace accept {
     "=",
     { guest: true; host: "hello" }
   >;
-  /** another token: neither end lets the other in */
+  /** another token: neither end lets the other in
+   *  @incident 2026-11-12-link-impostor */
   export type OtherToken = Expect<
     Invoke<
       typeof handshake,

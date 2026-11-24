@@ -15,8 +15,7 @@ import { over } from "./limits.ts";
 import type { Listed } from "./listed.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { repeat } from "../.harness/shared-text.ts";
+import type { Expect, Invoke, Repeat, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { all, chunks, failsAfter, longLine } from "../.harness/shared-review-account.ts";
 
 /** What a push sends: the pack the reviewer made and keeps (its sha256, and its size in
@@ -148,10 +147,7 @@ declare namespace accountLine {
   >;
   /** a line its reader would refuse is not sent: what is, says why */
   export type TooLong = Expect<
-    Invoke<
-      typeof accountLine,
-      [line: { error: Invoke<typeof repeat, [text: "x", count: 9000000]> }]
-    >,
+    Invoke<typeof accountLine, [line: { error: Repeat<"x", 9000000> }]>,
     "=",
     '{"error":"the reviewer\'s error could not be sent: it is 8.6 MiB, over the 8 MiB one line may be"}\n'
   >;
@@ -340,7 +336,8 @@ declare namespace accountLines {
     [{ diff: { text: "+a\n"; from: 0; next: null; total: 3 } }]
   >;
   /** a reviewer that stopped before its answer (killed, crashed, cancelled) is said so, as
-   *  the answer: its reader never waits for one that will not come, or takes progress for it */
+   *  the answer: its reader never waits for one that will not come, or takes progress for it
+   *  @requirement R4 */
   export type EndedEarly = [
     Expect<
       Invoke<
@@ -457,7 +454,8 @@ declare namespace accountLines {
     >,
   ];
   /** a line with no end is not held without end: past the bound it is refused, as that
-   *  bound, when the bound is passed and not when the stream ends */
+   *  bound, when the bound is passed and not when the stream ends
+   *  @requirement R7 */
   export type TooLong = Expect<
     Invoke<
       typeof all,
