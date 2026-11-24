@@ -993,6 +993,12 @@ const forDomains = (state: Snapshot) => {
             }
           : null,
       })),
+      // Of a branch it still has (`now`): an offer of a deleted one is kept, for the person,
+      // but is no answer to `desolate offer --check`, and this way the list is as bounded as
+      // the domain's lists of branches are.
+      offers: state.offers
+        .filter((o) => o.domain === d.slug && o.now !== null)
+        .map((o) => ({ repo: o.repo, branch: o.branch, commit: o.commit })),
     };
     const text = JSON.stringify(stats);
     if (written.get(d.slug) !== text) {
