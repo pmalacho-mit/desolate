@@ -10,7 +10,9 @@ import { workspaceVmName } from "../shared/names.ts";
 import { sign } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
 
-/** The host made this workspace's VM, with this key. */
+/** The host made this workspace's VM, with this key.
+ *  @standsIn the host's record of a workspace's key (made with its VM)
+ *  @realIn T2 16-spawn, "the root's ordinary user cannot make one: a request without the workspace's key is refused by the host" */
 export const giveKey = (domain: string, workspace: string, key: string) => {
   const dir = path.join(process.env.DESOLATE_HOME!, "state", "workspace-keys");
   fs.mkdirSync(dir, { recursive: true });

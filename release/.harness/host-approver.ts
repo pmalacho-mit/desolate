@@ -7,7 +7,9 @@ import * as path from "node:path";
 
 const inHome = (name: string) => path.join(process.env.DESOLATE_HOME!, name);
 
-/** Whether the keyring would take `signature` as the approver's, over exactly `message`. */
+/** Whether the keyring would take `signature` as the approver's, over exactly `message`.
+ *  @standsIn release/root/keyring.ts (its check of the approver's signature)
+ *  @realIn T2 04-offers, "a person pushes: the prompt names repository, branch and commit; LFS objects go first" */
 export const keyringTakes = (message: string, signature: string): boolean =>
   verify(
     "sha256",

@@ -142,7 +142,8 @@ declare namespace isInternal {
     ]
   >;
   /** this machine, the LAN, link-local and cloud metadata, carrier NAT, the proxies' own
-   *  placeholder range, multicast, and anything that is not IPv4 */
+   *  placeholder range, multicast, and anything that is not IPv4
+   *  @principle P5 */
   export type Internal = Table<
     typeof isInternal,
     [
@@ -241,7 +242,8 @@ export const handoff = (
   `CONNECT ${address}:443 HTTP/1.1\r\nHost: ${address}:443\r\nX-Desolate-Workspace: ${workspace}\r\nX-Desolate-Host: ${host}\r\nX-Desolate-Token: ${token}\r\n\r\n`;
 
 declare namespace destinationOf {
-  /** a hostname, lowercased, to 443 or 80 */
+  /** a hostname, lowercased, to 443 or 80
+   *  @principle P5 */
   export type Carried = Table<
     typeof destinationOf,
     [
@@ -260,7 +262,9 @@ declare namespace destinationOf {
       ],
     ]
   >;
-  /** an address alone (it would skip the domain's rules), another port, or not a CONNECT */
+  /** an address alone (it would skip the domain's rules), another port, or not a CONNECT
+   *  @principle P5
+   *  @realIn T2 05-egress, "the relay inside the workspace is not the boundary: without it, the proxy still decides" */
   export type Refused = Table<
     typeof destinationOf,
     [
@@ -298,7 +302,8 @@ declare namespace destinationOf {
 }
 
 declare namespace allowlistRefusal {
-  /** an open network carries any name; an enforced one only what it lists */
+  /** an open network carries any name; an enforced one only what it lists
+   *  @principle P5 */
   export type Rules = Table<
     typeof allowlistRefusal,
     [
@@ -375,7 +380,10 @@ declare namespace viaSecretsProxy {
   // The domain's secrets proxy, running, for the hosts its secrets name.
   type Running = { port: 22000; pid: 4242; hosts: ["api.openai.com", "*.anthropic.com"] };
   /** to 443 of a host a secret names: through the secrets proxy, where the name is swapped
-   *  for the value */
+   *  for the value
+   *  @principle P3
+   *  @realIn T2 07-secrets, "the name becomes the value on the way to the secret's host, in its headers, and nowhere else"
+   *  @realIn T4, tests/v3/t3/01-boundaries.test.ts, "T3 a secret is substituted on the way out of a real VM, and its value stays in the root" */
   export type Through = Table<
     typeof viaSecretsProxy,
     [
@@ -384,7 +392,8 @@ declare namespace viaSecretsProxy {
     ]
   >;
   /** anything else stays end to end, and a placeholder sent there arrives as a name: another
-   *  host, port 80 (no TLS to terminate), or no secrets proxy at all */
+   *  host, port 80 (no TLS to terminate), or no secrets proxy at all
+   *  @principle P3 */
   export type EndToEnd = Table<
     typeof viaSecretsProxy,
     [

@@ -114,7 +114,8 @@ export const list = (domain: string) =>
 declare namespace list {
   type Fresh = Invoke<typeof emptyRoot>;
   /** what workspaces may know of a secret, from root's index (there is no value in it to
-   *  leak): its name, its hosts, its headers, and whether it is on now */
+   *  leak): its name, its hosts, its headers, and whether it is on now
+   *  @principle P3 */
   export type Names = Given<
     [
       Fresh,

@@ -42,7 +42,8 @@ const hostHeader = (head: string): string | null => {
   return absolute && normalizeName(absolute[1]!) !== name ? null : name;
 };
 
-/** A hostname, lowercased, without a port or a trailing dot; null if it is not one. */
+/** A hostname, lowercased, without a port or a trailing dot; null if it is not one.
+ *  {@link normalizeName.Names} {@link normalizeName.Refuses} */
 export const normalizeName = (raw: string): string | null => {
   let name = raw.trim().toLowerCase();
   if (name.startsWith("[")) return null;
@@ -127,9 +128,10 @@ const sni = (data: Buffer): string | null | undefined => {
 
 /** What could be the start of an HTTP request: a method, then a space. Such bytes are HTTP:
  *  if the request line never parses, or the head runs past LIMIT, they are HTTP that names
- *  no one (refused), never a protocol with no name. They once were taken for one, and routed
- *  to whichever workspace had the port first, with no name checked: a page could send the
- *  person's browser there with a 20 KB path and another site's cookies (audit, 2026-11-16). */
+ *  no one (refused), never a protocol with no name. {@link sniff.LongRequestLine} They once were
+ *  taken for one, and routed to whichever workspace had the port first, with no name checked: a
+ *  page could send the person's browser there with a 20 KB path and another site's cookies (audit,
+ *  2026-11-16). */
 const HTTP_SHAPED = /^[A-Z]{1,16}( |$)/;
 
 export const sniff = (data: Buffer): Sniffed => {
@@ -259,7 +261,8 @@ declare namespace sniff {
     ]
   >;
   /** a request line longer than a sniff reads is HTTP that names no one, not a protocol with
-   *  no name (it once went, unchecked, to the port's first workspace) */
+   *  no name (it once went, unchecked, to the port's first workspace)
+   *  @incident 2026-11-16-forwarder-preconnect */
   export type LongRequestLine = Expect<
     Invoke<
       typeof sniff,
@@ -414,7 +417,8 @@ declare namespace sniff {
 /** Read from a socket until its first bytes are classified, or the wait or the size runs
  *  out. A client that says nothing within `quietMs` is a raw one (a protocol where the
  *  server speaks first). */
-/** `undecided`: it ended (the wait, or the client) before its bytes said what they were. */
+/** `undecided`: it ended (the wait, or the client) before its bytes said what they were.
+ *  {@link sniffSocket.Quiet} */
 export const sniffSocket = (
   socket: import("node:net").Socket,
   quietMs: number,
@@ -480,8 +484,9 @@ declare namespace sniffSocket {
  *  it preconnected (final review, 2026-11-16): an `answer` (Chrome takes "HTTP" within the first
  *  5 bytes; Firefox also "ICY " after up to 7 of white space, read in its source, not tried),
  *  `more` while what came could still become one, or `other`, which can no longer: only then
- *  does any of it go on. A server whose whole greeting is that short still gets through: its
- *  bytes stop looking like an answer at once ("raw:one\n" at its first byte). */
+ *  does any of it go on. {@link greetingIs.Verdict} A server whose whole greeting is that short
+ *  still gets through: its bytes stop looking like an answer at once ("raw:one\n" at its first
+ *  byte). */
 export const greetingIs = (text: string): "answer" | "more" | "other" => {
   const lower = text.toLowerCase();
   if (/^[\s\S]{0,4}http/.test(lower) || /^\s{0,7}icy /.test(lower)) return "answer";

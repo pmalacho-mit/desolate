@@ -153,7 +153,8 @@ declare namespace init {
       Expect<Invoke<typeof init, [log: typeof collect]>, "=", false>,
     ]
   >;
-  /** a kind asked for by a name it does not know is refused, never read as the default */
+  /** a kind asked for by a name it does not know is refused, never read as the default
+   *  @principle P6 */
   export type UnknownKind = Given<
     [
       Invoke<typeof emptyHome>,
@@ -306,7 +307,8 @@ export const sign = async (
 };
 
 declare namespace sign {
-  /** refused before anyone is asked: a text that is not a push, a stack with no approver */
+  /** refused before anyone is asked: a text that is not a push, a stack with no approver
+   *  @principle P2 */
   export type Refuses = Given<
     Invoke<typeof emptyHome>,
     [
@@ -374,7 +376,8 @@ export const signClicked = (message: string): string => {
 declare namespace signClicked {
   type Push =
     "desolate push approval v3\nrepo: acme/web\nbranch: fix/login\ncommit: 0123456789abcdef0123456789abcdef01234567\nonto: none\nsquashes: none\npack: eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\nlfs: 0 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\nnonce: 00000000000000000000000000000001\n";
-  /** the approver's signature over exactly the text the page showed, and no other */
+  /** the approver's signature over exactly the text the page showed, and no other
+   *  @principle P2 */
   export type Signs = Given<
     [
       Invoke<typeof emptyHome>,
@@ -403,7 +406,8 @@ declare namespace signClicked {
       >,
     ]
   >;
-  /** nothing that is not a push approval is signed, and nothing at all without an approver */
+  /** nothing that is not a push approval is signed, and nothing at all without an approver
+   *  @principle P2 */
   export type Refuses = [
     Given<
       [Invoke<typeof emptyHome>, Invoke<typeof init, [log: typeof collect]>],

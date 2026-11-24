@@ -24,7 +24,9 @@ const closed = (server: http.Server) =>
   });
 
 /** `token`: what the editor's token file holds, or null for no file. A WebSocket upgrade is a
- *  request whose headers carry `upgrade`. */
+ *  request whose headers carry `upgrade`.
+ *  @standsIn the editor's server (VSCodium's, behind the gate)
+ *  @realIn T2 06-editor, "a page somewhere else cannot drive the editor: cross-site requests and foreign origins are refused" */
 export const throughGate = async (
   open: Gate,
   editorHost: string,

@@ -97,7 +97,8 @@ declare namespace printable {
     ]
   >;
   /** a cut is said: text over the bound ends in the mark, which counts toward the bound;
-   *  text that fits exactly is whole, and carries no mark */
+   *  text that fits exactly is whole, and carries no mark
+   *  @requirement R1 */
   export type Cut = Table<
     typeof printable,
     [
@@ -118,7 +119,8 @@ declare namespace printable {
     "matches",
     "^x{4000}$"
   >;
-  /** and a flood does not: 4,000 characters, the last of them the mark */
+  /** and a flood does not: 4,000 characters, the last of them the mark
+   *  @requirement R7 */
   export type Flood = Expect<
     Invoke<typeof printable, [value: Invoke<typeof repeat, [text: "x", count: 1000000]>]>,
     "matches",
@@ -229,7 +231,8 @@ export const failure = (
 };
 
 declare namespace failure {
-  /** what a person is shown of a failure: its end, how much came before, where all of it is */
+  /** what a person is shown of a failure: its end, how much came before, where all of it is
+   *  @requirement R1 */
   export type Shown = Expect<
     Invoke<
       typeof failure,
@@ -263,7 +266,8 @@ declare namespace failure {
     "=",
     "(3 earlier lines not shown)\nd"
   >;
-  /** one line that is a flood is cut at the bound against one, and says so */
+  /** one line that is a flood is cut at the bound against one, and says so
+   *  @requirement R1 */
   export type LongLine = Expect<
     Invoke<
       typeof failure,
