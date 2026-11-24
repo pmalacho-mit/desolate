@@ -50,7 +50,8 @@ const pubFile = (repo: Repo, role: Role) =>
   path.join(KEYRING.pub, repo.owner, repo.name, `${role}.pub`);
 /** ssh-agent's own socket for a role. Only the keyring's user can open it. */
 const agentOf = (role: Role) => path.join(KEYRING.private, `${role}-agent.sock`);
-/** The key's comment is how keyring-askpass learns which repository a signature is for. */
+/** The key's comment is how keyring-askpass learns which repository a signature is for.
+ *  {@link commentOf.Names} */
 export const commentOf = (repo: Repo, role: Role) => `desolate-${role}:${repoId(repo)}`;
 
 declare namespace commentOf {
@@ -324,7 +325,8 @@ declare namespace challenge {
     ]
   >;
   /** anyone may ask: the challenge is the text the host's approver will show and sign,
-   *  naming exactly this push and a nonce of the keyring's */
+   *  naming exactly this push and a nonce of the keyring's
+   *  @principle P2 */
   export type Issues = Given<
     [Fresh, Pushable, Issued],
     [
@@ -384,7 +386,8 @@ declare namespace challenge {
     >
   >;
   /** nothing that is not a repository, a branch and a whole commit; never the all-zero id
-   *  (git's "no such ref", which would make a push a deletion) */
+   *  (git's "no such ref", which would make a push a deletion)
+   *  @principle P2 */
   export type Refuses = Table<
     typeof challenge,
     [
@@ -632,7 +635,8 @@ declare namespace approve {
     ]
   >;
   /** a text that answers the challenge's nonce but names another push is refused before any
-   *  signature is looked at: a nonce approves only the push it was issued for */
+   *  signature is looked at: a nonce approves only the push it was issued for
+   *  @principle P2 */
   export type NotItsPush = Given<
     [Fresh, Pushable, Issued],
     Expect<
@@ -644,7 +648,8 @@ declare namespace approve {
   /** a challenge the keyring issued, answered with a signature that is not the host
    *  approver's, files no approval: the push it names is still not approved. (The approver's
    *  key is root's, at /etc/desolate: a test cannot install one, so the signature that would
-   *  pass is T2's and T4's to show.) */
+   *  pass is T2's and T4's to show.)
+   *  @principle P2 */
   export type NotTheApprovers = Given<
     [Fresh, Pushable, Issued],
     [
@@ -664,7 +669,8 @@ declare namespace approve {
     ]
   >;
   /** a well-formed approval text the keyring never issued (or issued and has forgotten) is
-   *  refused before any signature is looked at, and the refusal is audited */
+   *  refused before any signature is looked at, and the refusal is audited
+   *  @principle P2 */
   export type NotIssued = Given<
     Fresh,
     [
@@ -691,7 +697,8 @@ declare namespace approve {
       >,
     ]
   >;
-  /** text that is not an approval is not one */
+  /** text that is not an approval is not one
+   *  @principle P2 */
   export type NotAnApproval = Expect<
     Invoke<typeof approve, [request: { message: "approve everything"; signature: "AAAA" }]>,
     "=",
@@ -699,7 +706,8 @@ declare namespace approve {
   >;
 }
 
-/** ssh-agent is about to sign with a write key. Allowed only against a live approval. */
+/** ssh-agent is about to sign with a write key. Allowed only against a live approval.
+ *  {@link consume.NoApproval} */
 const consume = (request: Record<string, unknown>): Record<string, unknown> => {
   const repo = String(request.repo ?? "");
   let spent: Approval | null = null;
@@ -734,7 +742,9 @@ const consume = (request: Record<string, unknown>): Record<string, unknown> => {
 declare namespace consume {
   type Fresh = Invoke<typeof emptyRoot>;
   /** ssh-agent asks before every write-key signature: with no approval a person gave, the
-   *  answer is no, and the refusal is audited */
+   *  answer is no, and the refusal is audited
+   *  @principle P2
+   *  @realIn T2 04-offers, "a push is impossible without a person: every automation path is tried, and refused" */
   export type NoApproval = Given<
     Fresh,
     [
@@ -804,7 +814,9 @@ export const publicOps = (
 
 declare namespace publicOps {
   type Fresh = Invoke<typeof emptyRoot>;
-  /** there is no operation that returns a private key: asking for one is an unknown op, said so */
+  /** there is no operation that returns a private key: asking for one is an unknown op, said so
+   *  @principle P3
+   *  @realIn T2 01-root, "keys are never readable from outside the keyring: a test that tries" */
   export type NoExport = [
     Expect<
       Invoke<typeof publicOps, [request: { op: "export"; repo: "acme/app"; role: "write" }]>,
@@ -852,7 +864,8 @@ declare namespace publicOps {
       { ok: true; keys: [{ repo: "acme/app"; role: "read" }, { repo: "acme/app"; role: "write" }] }
     >
   >;
-  /** a public half, for the forge's deploy keys; a key that was never made is said so */
+  /** a public half, for the forge's deploy keys; a key that was never made is said so
+   *  @principle P3 */
   export type Pubkey = Given<
     [
       Fresh,
@@ -897,7 +910,8 @@ declare namespace publicOps {
 
 declare namespace internalOps {
   /** the askpass's socket answers the askpass's one question and nothing else: not even a
-   *  challenge or an approval */
+   *  challenge or an approval
+   *  @principle P2 */
   export type OnlyConsume = Table<
     typeof internalOps,
     [
@@ -972,7 +986,8 @@ const pusherOps = (
 };
 
 declare namespace pusherOps {
-  /** the pusher asks what an approval names; one that is not live names nothing */
+  /** the pusher asks what an approval names; one that is not live names nothing
+   *  @principle P2 */
   export type NoApproval = Expect<
     Invoke<typeof pusherOps, [request: { op: "approval"; id: "mgx1abc-0123456789ab" }]>,
     "=",
@@ -984,7 +999,8 @@ declare namespace pusherOps {
     "=",
     { ok: false; error: "unknown op 'revoke'" }
   >;
-  /** asking for a challenge or filing an approval is the control socket's, not the pusher's */
+  /** asking for a challenge or filing an approval is the control socket's, not the pusher's
+   *  @principle P2 */
   export type Only = Table<
     typeof pusherOps,
     [
@@ -998,7 +1014,7 @@ declare namespace pusherOps {
 }
 
 /** The reviewer's one question (root/reviewer.ts), on a socket only it reaches: a read key's
- *  public half, which names the key in the read agent. */
+ *  public half, which names the key in the read agent. {@link reviewerOps.ReadKey} */
 const reviewerOps = (request: Record<string, unknown>): Record<string, unknown> => {
   if (request.op !== "readkey") return { ok: false, error: `unknown op '${String(request.op)}'` };
   const repo = parseRepo(request.repo);
@@ -1012,7 +1028,8 @@ const reviewerOps = (request: Record<string, unknown>): Record<string, unknown> 
 
 declare namespace reviewerOps {
   type Fresh = Invoke<typeof emptyRoot>;
-  /** a read key's public half, and only a read key's: the write key is never named here */
+  /** a read key's public half, and only a read key's: the write key is never named here
+   *  @principle P3 */
   export type ReadKey = Given<
     [
       Fresh,
@@ -1201,9 +1218,10 @@ const startAgent = (socketPath: string, env: NodeJS.ProcessEnv) => {
 };
 
 /** Where the keys are must be the keyring's alone, all the way up: a directory of its own
- *  (not a link), mode 0700, in directories only root can change. Otherwise whoever could
- *  rename an entry on the way could have put a directory of theirs there before a key was
- *  made, and read the key. (start.sh makes it so; this does not take that on trust.) */
+ *  (not a link), mode 0700, in directories only root can change. {@link keysDirRefusal.Refuses}
+ *  Otherwise whoever could rename an entry on the way could have put a directory of theirs there
+ *  before a key was made, and read the key. (start.sh makes it so; this does not take that on
+ *  trust.) */
 export const keysDirRefusal = (dir: string, uid: number): string | null => {
   const stat = fs.lstatSync(dir);
   if (!stat.isDirectory()) return `${dir} is not a directory`;
@@ -1222,7 +1240,8 @@ declare namespace keysDirRefusal {
   type Fresh = Invoke<typeof emptyRoot>;
   /** the keys directory must be a directory, the keyring's, closed to others, and every
    *  directory above it root's alone. (That last can be met only as root, in the root VM: a
-   *  test's directories are its user's, so even the closed one is refused, for its parent.) */
+   *  test's directories are its user's, so even the closed one is refused, for its parent.)
+   *  @principle P6 */
   export type Refuses = Given<
     Fresh,
     [

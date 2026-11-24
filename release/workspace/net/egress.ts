@@ -18,9 +18,9 @@ import { sniffSocket } from "../../shared/sniff.ts";
 import { printable } from "../../shared/text.ts";
 import type { Sniffed } from "../../shared/sniff.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Repeat, Table } from "../../../suede.nests/dsl.import.meta.vitest.ts";
 import type { bytes } from "../../.harness/shared-bytes.ts";
-import type { repeatedReason, throughEgress, utf8, xs } from "../../.harness/workspace-egress.ts";
+import type { repeatedReason, throughEgress, utf8 } from "../../.harness/workspace-egress.ts";
 
 type Link = NonNullable<ReturnType<typeof parseLink>>;
 
@@ -228,7 +228,7 @@ declare namespace proxyAnswer {
       ],
       [
         args: [answer: Invoke<typeof repeatedReason, [length: 2000]>],
-        expected: { refused: Invoke<typeof xs, [length: 2000]> },
+        expected: { refused: Repeat<"x", 2000> },
       ],
     ]
   >;

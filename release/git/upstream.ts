@@ -417,7 +417,8 @@ declare namespace prepare {
     ]
   >;
   /** written as a person might (`./vendor/lib/`), it is the same directory: past this check,
-   *  the next is whether the clone is here */
+   *  the next is whether the clone is here
+   *  @control */
   export type TakesTheDirectory = Throws<
     Invoke<
       typeof prepare,
@@ -434,7 +435,8 @@ declare namespace prepare {
     >,
     { instanceOf: Stop; message: "no clone of acme/app here" }
   >;
-  /** the consumer's clone, then the dependency's mirror: both are desolate's, made on the Mac */
+  /** the consumer's clone, then the dependency's mirror: both are desolate's, made on the Mac,
+   *  and the refusal says the command that makes each */
   export type NeedsCloneAndMirror = [
     Throws<
       Invoke<
@@ -450,7 +452,11 @@ declare namespace prepare {
           at: Invoke<typeof gitVm, [clones: [], mirrors: []]>,
         ]
       >,
-      { instanceOf: Stop; message: "no clone of acme/app here" }
+      {
+        instanceOf: Stop;
+        message: "no clone of acme/app here";
+        fix: "on the Mac: desolate git acme/app";
+      }
     >,
     Throws<
       Invoke<
@@ -466,7 +472,11 @@ declare namespace prepare {
           at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/other"]]>,
         ]
       >,
-      { instanceOf: Stop; message: "desolate holds no mirror of acme/lib" }
+      {
+        instanceOf: Stop;
+        message: "desolate holds no mirror of acme/lib";
+        fix: "on the Mac: desolate clone acme/lib";
+      }
     >,
   ];
   /** suede's `--remote` may only say again where the push goes: the dependency named. Never
@@ -588,7 +598,8 @@ declare namespace prepare {
     ]
   >;
   /** controls for the two above: the dependency's own address, in any spelling and case, and
-   *  a branch name, pass; the branch is then looked for in the clone (which, here, has none) */
+   *  a branch name, pass; the branch is then looked for in the clone (which, here, has none)
+   *  @control */
   export type TakesTheRemoteAndTheRef = [
     Throws<
       Invoke<
@@ -994,7 +1005,9 @@ export const upstream = async (argv: string[], cwdRepo: () => string): Promise<n
 // refusal is how a test here shows the command line was taken.
 declare namespace upstream {
   /** `<dependency-dir> <owner/repo>` in a clone, the consumer being the clone's repository;
-   *  or the consumer named first, and then the current directory is not asked */
+   *  or the consumer named first, and then the current directory is not asked: parsed, and
+   *  refused only at the next step, where the refusals below are not
+   *  @control */
   export type Parses = [
     Throws<
       Invoke<

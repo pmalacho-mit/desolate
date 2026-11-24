@@ -28,7 +28,8 @@ export const listed = <T>(all: readonly T[], from = 0, count = PAGE): Listed<T> 
 
 declare namespace listed {
   /** a page of the list, and the count of all of it. (The DSL writes a generic function's
-   *  rows as literal lists.) */
+   *  rows as literal lists.)
+   *  @requirement R2 */
   export type Pages = Table<
     typeof listed,
     [
@@ -71,7 +72,8 @@ export const andMore = (list: Listed<unknown>, noun: string, nouns = `${noun}s`)
 };
 
 declare namespace andMore {
-  /** the rest, counted from the total, never from what the page happens to hold */
+  /** the rest, counted from the total, never from what the page happens to hold
+   *  @requirement R2 */
   export type Says = Table<
     typeof andMore,
     [

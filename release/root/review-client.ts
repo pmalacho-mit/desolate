@@ -22,6 +22,7 @@ import type {
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { attemptsThat } from "../.harness/root-retry.ts";
+import type { onFakeTime } from "../.harness/time.ts";
 
 const RETRY = new Set(["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"]);
 /** The reviewer is one request per process: between two, it is starting. */
@@ -47,7 +48,11 @@ declare namespace withReviewer {
   export type Starts = Given<
     Starting,
     [
-      Expect<Invoke<typeof withReviewer, [attempt: Starting["attempt"]]>, "=", { tips: [] }>,
+      Expect<
+        Invoke<typeof onFakeTime, [run: typeof withReviewer, attempt: Starting["attempt"]]>,
+        "=",
+        { tips: [] }
+      >,
       Expect<Call<Starting, "calls">, "=", 3>,
     ]
   >;

@@ -6,7 +6,7 @@
 [subrepo]
 	remote = git@github.com:pmalacho-mit/suede.nests.git
 	branch = release
-	commit = 8ca3937fcf8bada86955ef5b26e60496a8a75214
-	parent = a706efd1abd12c3d6070d28313b9c4a62d056830
+	commit = 755ef5f3a6906a8ec683887b8516f38c45a4a1da
+	parent = 0dcf215d0e763d93b9a394440a91d8a103e7820d
 	method = merge
 	cmdver = 0.4.9

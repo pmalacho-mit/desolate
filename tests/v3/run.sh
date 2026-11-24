@@ -13,6 +13,11 @@
 #   tests/v3/run.sh t4      end to end on real VMs, on a Mac (the vz backend): the boundary
 #                           tests in t3/ (named for the tier that was). About 5 minutes on an M1.
 #   tests/v3/run.sh all     t1, t2
+#   tests/v3/run.sh claims-lint
+#                           what the in-source tests' words would mislead a reader about (T1 runs it)
+#   tests/v3/run.sh claims-diff [<base>]
+#                           what a change does to the in-source tests' claims since <base>
+#                           (origin/main); CHECK=1 fails on one removed, changed or skipped
 #
 # A tier whose needs are not met FAILS and says what to install: it does not skip, because a
 # suite that did not run is not a suite that passed.
@@ -62,6 +67,42 @@ run_node_tests() { "$NODE" --disable-warning=ExperimentalWarning --test --test-c
 # (LANES files at a time; each file is a process of its own.)
 detached_node_tests() { detached "$NODE" --disable-warning=ExperimentalWarning --test --test-concurrency="${LANES:-1}" --test-reporter="${DESOLATE_TEST_REPORTER:-spec}" "$@"; }
 
+# The in-source tests read as documentation (suede.nests' `docs`, its README's "Tests as
+# documentation"). `docs lint` finds where their words would mislead a reader. A kind named in
+# CLAIMS_ENFORCED is clean and fails T1 on any new finding; the others are counted, not
+# enforced, until they are clean too (no list of exceptions: a kind is enforced or it is not).
+# The whole list: node suede.nests/cli.mts docs lint. About 5 s.
+CLAIMS_ENFORCED="unresolved-link"
+CLAIMS_EXCLUDE=(--exclude 'tests/**' --exclude 'suede.nests/**' --exclude '.suede/**')
+claims_lint() {
+  echo "== the in-source tests' words (docs lint): $CLAIMS_ENFORCED enforced"
+  # shellcheck disable=SC2086 # the kinds are words
+  "$NODE" suede.nests/cli.mts docs lint --json "${CLAIMS_EXCLUDE[@]}" | "$NODE" -e '
+    const enforced = process.argv.slice(1);
+    let text = "";
+    process.stdin.on("data", (d) => (text += d)).on("end", () => {
+      const counts = {};
+      let failed = 0;
+      for (const f of JSON.parse(text))
+        if (enforced.includes(f.rule)) {
+          console.error(`   ${f.file}:${f.line}  ${f.rule}  ${f.message}`);
+          failed = 1;
+        } else counts[f.rule] = (counts[f.rule] ?? 0) + 1;
+      const rest = Object.entries(counts).map(([rule, n]) => `${rule} ${n}`).join(", ");
+      if (rest) console.log(`   not enforced: ${rest}`);
+      process.exit(failed);
+    });' $CLAIMS_ENFORCED
+}
+
+# What a change does to the claims since <base>: each added, removed, changed, skipped or
+# reworded, in its author's words, with its evidence before and after. CHECK=1 fails when a
+# claim was removed, changed or newly skipped: a guarantee that is gone or different.
+claims_diff() {
+  local base=${1:-origin/main} check=--no-check
+  [ "${CHECK:-}" != 1 ] || check=--check
+  "$NODE" suede.nests/cli.mts docs diff --base "$base" "${CLAIMS_EXCLUDE[@]}" "$check"
+}
+
 t1() {
   echo "== T1: static and unit"
   local failed=0
@@ -78,6 +119,7 @@ t1() {
   else
     need "vitest is not installed, so the in-source tests (suede.nests) cannot run" "npm install"
   fi
+  claims_lint || failed=1
   # Formatted as the editor formats it on save (.vscode/settings.json): `make format` fixes it.
   if [ -x node_modules/.bin/prettier ]; then
     git ls-files -z '*.ts' '*.mts' | xargs -0 node_modules/.bin/prettier --ignore-path .prettierignore --check --log-level warn \
@@ -173,6 +215,8 @@ case "${1:-t1}" in
   t2) shift; t2 "$@" ;;
   affected) shift; affected "$@" ;;
   t4) t4 ;;
+  claims-lint) claims_lint ;;
+  claims-diff) shift; claims_diff "$@" ;;
   all) t1 && t2 ;;
-  *) sed -n '2,23p' "$0"; exit 64 ;;
+  *) sed -n '2,28p' "$0"; exit 64 ;;
 esac

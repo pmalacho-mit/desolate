@@ -505,7 +505,8 @@ export const indexOf = (store: Store): Indexed[] =>
     .sort((a, b) => a.name.localeCompare(b.name));
 
 declare namespace indexOf {
-  /** what the root's user may read of a domain's secrets: everything but the value */
+  /** what the root's user may read of a domain's secrets: everything but the value
+   *  @principle P3 */
   export type NoValue = Expect<
     Invoke<
       typeof indexOf,

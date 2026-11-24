@@ -8,6 +8,9 @@ the rules at the bottom exist.
 The design rationale for each control is in [the README](../README.md); this
 is the history that rationale was earned from.
 
+An entry that an in-source test was written to pin has an id (`<a id="...">`, the date of its
+section and a few words), and the test names it: `@incident <id>` in its comment.
+
 ## Found while building v3 (2026-11), by its own tests
 
 These were caught before any of v3 shipped. They are here because each has the shape this
@@ -212,11 +215,11 @@ page is about, and because three of them were mistakes in the *tests*.
   - *A secrets proxy's port could be taken first* by another domain's proxies while it
     started; the root recorded whatever listened. Now the root, and each workspace proxy on
     every connection, checks in `/proc/net/tcp` that the listener is the domain's own user.
-  - *The vz link sent its token to whatever held the port.* A freed port is any local
+  - <a id="2026-11-12-link-impostor"></a>*The vz link sent its token to whatever held the port.* A freed port is any local
     user's to take. The link now proves knowledge of the token both ways, host first, and
     the token never crosses (`shared/link.ts`; T1 has both impostors). A workspace's VM is
     stopped before its port is let go, and a port the daemon cannot bind is retried.
-  - *A workspace could have the host bind any loopback port*, a VM's ssh or link port
+  - <a id="2026-11-12-ports-desolate-uses"></a>*A workspace could have the host bind any loopback port*, a VM's ssh or link port
     included, by listening on it. Ports desolate itself uses are never forwarded.
   - *sshd allowed ten sessions per connection*, and every link connection, dashboard
     request and forward is one, all on one connection per VM: raised to 1000, and a link
@@ -225,7 +228,7 @@ page is about, and because three of them were mistakes in the *tests*.
   - *Updated proxies kept running old code*: start.sh matched them by a path they no longer
     run from. And the host daemon and each workspace's relay also kept old code after an
     update: both now restart when their code changes.
-  - *The root's ordinary user both parsed what domains send and pushed* (F6). It no
+  - <a id="2026-11-12-pusher-parsed-nothing"></a>*The root's ordinary user both parsed what domains send and pushed* (F6). It no
     longer pushes: the pusher, a user of its own, is the only one that reaches the write
     agent. Its first version ran git on a bundle the root's user made, and a second audit
     pointed out that a git bug that compromised one could be replayed on the other. The
@@ -369,7 +372,7 @@ reviewer could not say what this push would send ... Approve only if you know wh
 then lockfile text. The reviewer wrote its answer and called `process.exit(0)`; on a pipe the
 write was cut at 146,175 bytes. Every test's answer had fit in a pipe's buffer.
 
-**A fix that made the forwarder worse, found by the audit the same night.** Chrome's
+<a id="2026-11-16-forwarder-preconnect"></a>**A fix that made the forwarder worse, found by the audit the same night.** Chrome's
 preconnects made a port "raw" for good (kept taken everywhere, and the request sent later on
 that socket went to the first workspace). The fix piped a silent socket to the port's only
 listener, which a request naming *another* workspace, with that workspace's cookies, then
@@ -381,7 +384,7 @@ HTTP.
 `main`, which nothing moves: after a merge, with `--fetch`, without it, and for every spawn.
 Two agents caught it only by comparing with the mirror by hand.
 
-**The host took the root's word for which VM.** A plan or record naming another domain's VM
+<a id="2026-11-16-root-named-vm"></a>**The host took the root's word for which VM.** A plan or record naming another domain's VM
 would have had it stopped, removed or given a proxy; VM names are a 40-bit hash a domain
 could search for a collision with. The host now checks every answer against the name it
 computes, and never takes over or destroys a VM that already exists.
@@ -398,14 +401,14 @@ existed failed their devcontainer at every start after an upgrade, as red lines 
 Tests written under every function, as notes for a reviewer on how each is used, asked
 questions no tier had asked.
 
-**A window operation that reached the person's terminal.** The filter between an agent's
+<a id="2026-11-16-terminal-window-op"></a>**A window operation that reached the person's terminal.** The filter between an agent's
 output and the Mac's terminal drops xterm's window operations and concealed text. Put a
 control byte, a DEL, or 256 bytes of parameters inside the sequence, and the filter gave up
 on it and let it go as text. The terminal, reading the same bytes by the DEC parser, carries
 out the control and finishes the sequence. The filter now reads a CSI as that parser does.
 (`release/host/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
 
-**`desolate status` broken in every running devcontainer after an upgrade.** A devcontainer
+<a id="2026-11-16-status-bind"></a>**`desolate status` broken in every running devcontainer after an upgrade.** A devcontainer
 got `desolate`, `/desolate/status` and the two git remote helpers as binds of single files
 from the release share. When an upgrade replaced `status`, each running container went on
 reading a mix of the old file and the new one, cut short: `/desolate/status: 103: Syntax
@@ -416,7 +419,7 @@ keeps its old binds until it is made again. (`release/workspace/devcontainer.ts`
 
 ## Found by the owner, trying it as a new person would (2026-11-17)
 
-**"Open editor" on the dashboard opened a refusal.** The editor's gate lets one request from
+<a id="2026-11-17-open-editor-refused"></a>**"Open editor" on the dashboard opened a refusal.** The editor's gate lets one request from
 another site through: the navigation that carries the editor's token, which is what the
 dashboard's link is. The editor answers that with a 302 to the same address without the
 token, and a browser follows a redirect with the site it started from: `Sec-Fetch-Site:

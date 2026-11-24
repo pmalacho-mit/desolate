@@ -71,9 +71,12 @@ checks both on a copy of `release/` taken out of the checkout, each beside a con
   Each test file has a home of its own ([`setup.ts`](setup.ts) sets `DESOLATE_HOME` before
   anything is imported); its tests run one after another and share it, so a test that needs
   it empty starts with `emptyHome`.
+- **What the DSL says itself is not a harness:** a long string is `Repeat<"x", 200>` (or
+  `` `b${Repeat<"x", 199>}` ``), a folder of files is `TempDir<{ "a.json": "{}" }>`, and a
+  refusal's fix and exit code are read with `Caught<..., Refusal>`.
 - **Anything a type cannot say goes in a harness:** an ordinary function in
-  `release/.harness/<area>-<module>.ts`, imported `import type` (`env.ts`, `home.ts` and
-  `refusal.ts` are for any area). Vitest's functions come from `./vitest.ts`, never from
+  `release/.harness/<area>-<module>.ts`, imported `import type` (`env.ts`, `home.ts`,
+  `refusal.ts` and `time.ts`, a fake clock, are for any area). Vitest's functions come from `./vitest.ts`, never from
   `"vitest"`. A harness says in a comment what it stands in for. Keep them small; one that
   grows a second purpose is two harnesses.
 - **Leave out what needs a VM, Docker, the network or a real git remote.** That is T1's and

@@ -355,7 +355,8 @@ const ownDirectory = (dir: string) => {
 };
 
 declare namespace ownDirectory {
-  /** the host's own directory in the root's share: made, and taken */
+  /** the host's own directory in the root's share: made, and taken
+   *  @control */
   export type Made = Given<
     Invoke<typeof emptyHome>,
     Expect<

@@ -570,7 +570,8 @@ export const verify = (
 };
 
 declare namespace verify {
-  /** the control: signed by the parent's key, a second after it was made */
+  /** the control: signed by the parent's key, a second after it was made
+   *  @principle P5 */
   export type Good = Expect<
     Invoke<
       typeof verify,
@@ -595,7 +596,9 @@ declare namespace verify {
     null
   >;
   /** the same request, with one thing changed as the root's ordinary user could in transit:
-   *  another domain, another command, another workspace's key, no key */
+   *  another domain, another command, another workspace's key, no key
+   *  @principle P5
+   *  @realIn T2 16-spawn, "the root's ordinary user cannot make one: a request without the workspace's key is refused by the host" */
   export type NotSigned = Table<
     typeof verify,
     [

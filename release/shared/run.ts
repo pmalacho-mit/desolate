@@ -337,7 +337,8 @@ declare namespace run {
   >;
   /** the bound is in bytes, as it says: here 4 characters of 3 bytes each, in two writes,
    *  are 12 bytes, over 10 (until 2026-11-21 the kept text's UTF-16 length, 3, was added to
-   *  the second write's 3 bytes, and all 12 were kept) */
+   *  the second write's 3 bytes, and all 12 were kept)
+   *  @requirement R8 */
   export type TooMuchCountsBytes = Expect<
     Invoke<
       typeof run,
@@ -392,7 +393,8 @@ declare namespace run {
     "=",
     { code: 128; stdout: ""; stderr: "\n(timed out after 50 ms)" }
   >;
-  /** silent for longer than `idleMs`, it is killed, and says so; what it said first is kept */
+  /** silent for longer than `idleMs`, it is killed, and says so; what it said first is kept
+   *  @requirement R4 */
   export type Idle = Expect<
     Invoke<
       typeof run,
@@ -402,7 +404,8 @@ declare namespace run {
     { code: 128; stdout: "connecting\n"; stderr: "\n(nothing from it for 300 ms: stopped)" }
   >;
   /** idle is not a total: a program that keeps saying something runs past `idleMs` (here
-   *  four lines, 150 ms apart, against 400 ms) */
+   *  four lines, 150 ms apart, against 400 ms)
+   *  @requirement R4 */
   export type NotIdleWhileItTalks = Expect<
     Invoke<
       typeof run,
@@ -415,7 +418,8 @@ declare namespace run {
     "=",
     { code: 0; stdout: "1\n2\n3\n4\n"; stderr: "" }
   >;
-  /** whoever asked went away: it is killed, and says so: 128, never a success */
+  /** whoever asked went away: it is killed, and says so: 128, never a success
+   *  @requirement R4 */
   export type Cancelled = Expect<
     Invoke<
       typeof run,
@@ -429,7 +433,8 @@ declare namespace run {
     { code: 128; stdout: "started\n"; stderr: "\n(cancelled)" }
   >;
   /** ended by us is never a success, though the program itself exited 0: here a shell that
-   *  exits at once, leaving a `sleep` that holds its output open and says nothing */
+   *  exits at once, leaving a `sleep` that holds its output open and says nothing
+   *  @principle P6 */
   export type EndedIsNotASuccess = Expect<
     Invoke<
       typeof run,
