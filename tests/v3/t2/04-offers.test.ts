@@ -1972,6 +1972,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
         );
       // (Signed in by the page's own address first, as `desolate approve --web --open` does.)
       const page = await browser.tab(address);
+      await page.goto("about:blank");
       await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=web-a&commit=${commit}`);
       await page.until(
         ["web-a", "web-b"]
