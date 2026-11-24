@@ -334,7 +334,12 @@ else {
     if (!(await until(() => urlOf("web/one", 5432) !== undefined, HELD_AGAIN_MS + 5000))) {
       const holder = spawnSync(
         "bash",
-        ["-c", "lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; ss -tanp 'sport = :5432' 2>&1"],
+        [
+          "-c",
+          // As root where the test may (its processes are another user's, or a container's),
+          // and the containers alive with their age: a holder from an earlier stack shows.
+          "S=; sudo -n true 2>/dev/null && S='sudo -n'; $S lsof -nP -iTCP:5432 -sTCP:LISTEN 2>&1; $S ss -tanp 'sport = :5432' 2>&1; for p in $($S ss -tlnpH 'sport = :5432' 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2); do $S ps -o pid,ppid,user,etime,args -p $p; $S cat /proc/$p/cgroup 2>/dev/null | head -3; done; docker ps --format '{{.Names}} {{.RunningFor}} {{.Label \"desolate.instance\"}}' 2>&1",
+        ],
         { encoding: "utf8" },
       ).stdout;
       assert.fail(
