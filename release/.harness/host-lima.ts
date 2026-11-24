@@ -459,6 +459,11 @@ export const channelsConfigured = async (call: "master" | "forward" | "cancel", 
 const STAND_IN_SSH = String.raw`
 import net from "node:net"; import fs from "node:fs"; import path from "node:path"; import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
+// Nothing of a test outlives it: each stand-in ends once the test's process has (a run killed
+// midway never reaches its own clean-up), and a client never waits more than a minute.
+const parent = Number(process.env.STAND_IN_PARENT);
+setInterval(() => { try { process.kill(parent, 0); } catch { process.exit(1); } }, 1000).unref();
+if (args[0] !== "--serve") setTimeout(() => process.exit(124), 60_000).unref();
 const opt = (name) => args.map((a, i) => (args[i - 1] === "-o" && a.startsWith(name + "=") ? a.slice(name.length + 1) : null)).find(Boolean);
 if (args[0] === "--serve") {
   const ctl = args[1]; const servers = new Map();
@@ -506,31 +511,21 @@ if (args[0] === "--serve") {
 }
 `;
 
-/** One VM's connections for channels (lima.ts channelsIn, as the backend's dial makes them),
- *  with the stand-in ssh above,
- *  after `what` happened to its master once a first connection was carried: nothing (the
- *  control); its control socket removed while it lives; it killed, with the pid it gave when
- *  it came up another live process's (this one's: a pid used again); or the VM let go while
- *  a first dial is on its way. What the first connection (to 8080) and the next (to 8081, a
- *  forward of its own) got, each sending `hi` and ending; whether the next came within 5 s;
- *  and how many masters are left running. */
-export const channelsAfter = async (
-  what:
-    | "nothing"
-    | "control socket removed"
-    | "master killed, its pid another's"
-    | "let go while dialling",
-): Promise<{ first: string; next: string; inTime: boolean; left: number }> => {
+/** What the channel rows run in: a Lima home of its own under /tmp (short enough for the
+ *  sockets; the test's own home under the system's temporary folder on a Mac is not:
+ *  channelsDontFit), with one VM's folder and Lima's file beside it (base.yaml, which
+ *  release() goes past), the stand-in ssh first on PATH, and channelsIn over it with
+ *  `controlMs` for each ssh it runs. `masters()` is every stand-in master still running;
+ *  `dial(target)` what a connection that says `hi` and ends got back; `until(fact)` waits
+ *  for a fact, for at most 30 s (far past what a step takes on a Mac whose every core is
+ *  busy: STAND_IN_MS), and says whether it came; `done()` ends all of it. */
+const standIn = async (controlMs: number) => {
   const { channelsIn } = await import("../host/vm/lima.ts");
-  // A home of its own, short enough for the sockets (the test's own, under the system's
-  // temporary folder on a Mac, is not: channelsDontFit).
   const lima = fs.mkdtempSync("/tmp/dsl-ch-");
-  const backend = channelsIn(lima, () => process.env);
   const name = "dsl-main-chan";
-  const dir = path.join(lima, name);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(dir, "ssh.config"), `Host lima-${name}\n`);
-  // A file beside the VMs' folders, as Lima keeps one (base.yaml): release() goes past it.
+  const vm = path.join(lima, name);
+  fs.mkdirSync(vm, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(vm, "ssh.config"), `Host lima-${name}\n`);
   fs.writeFileSync(path.join(lima, "base.yaml"), "");
   const stands = path.join(home(), "stand-in-ssh");
   fs.rmSync(stands, { recursive: true, force: true });
@@ -544,95 +539,30 @@ export const channelsAfter = async (
   const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
   process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
   process.env.STAND_IN_HOME = stands;
+  process.env.STAND_IN_PARENT = String(process.pid);
+  const backend = channelsIn(lima, () => process.env, controlMs);
+  /** Whether `pid` runs: a pid with no process is not an error here. */
+  const running = (pid: string) => {
+    try {
+      process.kill(Number(pid), 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  /** `pid` ended, if it has not ended already. */
+  const end = (pid: string, signal: NodeJS.Signals = "SIGKILL") => {
+    try {
+      process.kill(Number(pid), signal);
+    } catch {
+      // gone already
+    }
+  };
   const masters = () =>
     fs.existsSync(path.join(stands, "masters"))
-      ? fs.readdirSync(path.join(stands, "masters")).filter((pid) => {
-          try {
-            process.kill(Number(pid), 0);
-            return true;
-          } catch {
-            return false;
-          }
-        })
+      ? fs.readdirSync(path.join(stands, "masters")).filter(running)
       : [];
-  const said = (stream: import("node:stream").Duplex) =>
-    new Promise<string>((resolve) => {
-      let got = "";
-      stream.on("data", (chunk) => (got += chunk));
-      stream.on("error", () => {});
-      stream.on("close", () => resolve(got));
-      stream.end("hi\n");
-    });
-  try {
-    if (what === "let go while dialling") {
-      const first = said(backend.dial(name, 8080));
-      backend.release!(name);
-      const got = await first;
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      return { first: got, next: "", inTime: true, left: masters().length };
-    }
-    if (what === "master killed, its pid another's")
-      fs.writeFileSync(path.join(stands, "report-pid"), String(process.pid));
-    const first = await said(backend.dial(name, 8080));
-    const [pid] = masters();
-    if (what === "control socket removed") fs.rmSync(path.join(dir, "ch", "ctl"));
-    if (what === "master killed, its pid another's") {
-      process.kill(Number(pid), "SIGKILL");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    const began = performance.now();
-    const next = await said(backend.dial(name, 8081));
-    const inTime = performance.now() - began < 5000;
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    return { first, next, inTime, left: masters().length };
-  } finally {
-    backend.release();
-    for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
-    fs.rmSync(lima, { recursive: true, force: true });
-    process.env.PATH = before.PATH;
-    if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
-    else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
-  }
-};
-
-/** A forward that fails while a master is up (to 8081, after one to 8080 was carried), and the
- *  check that follows it answered as `check` says (nothing set: as the master is; or it hangs
- *  past its 500 ms, cannot be started, answers another pid, or finds no master on the socket).
- *  What that connection got, whether the master that carried the first is the one left
- *  running, and what a third connection (to 8082) got. */
-export const checkThatFails = async (
-  check: "as it is" | "hang" | "cannot spawn" | "another pid" | "no socket",
-): Promise<{ next: string; sameMaster: boolean; carriesOn: string }> => {
-  const { channelsIn } = await import("../host/vm/lima.ts");
-  const lima = fs.mkdtempSync("/tmp/dsl-ck-");
-  const backend = channelsIn(lima, () => process.env, 500);
-  const name = "dsl-main-chan";
-  fs.mkdirSync(path.join(lima, name), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(lima, name, "ssh.config"), `Host lima-${name}\n`);
-  const stands = path.join(home(), "stand-in-ssh");
-  fs.rmSync(stands, { recursive: true, force: true });
-  fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
-  fs.writeFileSync(path.join(stands, "ssh.mjs"), STAND_IN_SSH);
-  fs.writeFileSync(
-    path.join(stands, "bin", "ssh"),
-    `#!/bin/sh\nexec '${process.execPath}' '${stands}/ssh.mjs' "$@"\n`,
-    { mode: 0o755 },
-  );
-  const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
-  process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
-  process.env.STAND_IN_HOME = stands;
-  const masters = () =>
-    fs.existsSync(path.join(stands, "masters"))
-      ? fs.readdirSync(path.join(stands, "masters")).filter((pid) => {
-          try {
-            process.kill(Number(pid), 0);
-            return true;
-          } catch {
-            return false;
-          }
-        })
-      : [];
-  const said = (target: number) =>
+  const dial = (target: number) =>
     new Promise<string>((resolve) => {
       const stream = backend.dial(name, target);
       let got = "";
@@ -641,32 +571,112 @@ export const checkThatFails = async (
       stream.on("close", () => resolve(got));
       stream.end("hi\n");
     });
-  try {
-    await said(8080);
-    const first = masters();
-    fs.writeFileSync(path.join(stands, "fail-forward"), "");
-    if (check !== "as it is") fs.writeFileSync(path.join(stands, "check-mode"), check);
-    const next = await said(8081);
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    const sameMaster = JSON.stringify(masters()) === JSON.stringify(first);
-    const carriesOn = await said(8082);
-    return { next, sameMaster, carriesOn };
-  } finally {
-    backend.release();
-    for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
-    fs.rmSync(lima, { recursive: true, force: true });
+  const until = async (fact: () => boolean) => {
+    for (const began = Date.now(); Date.now() - began < 30_000;) {
+      if (fact()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return fact();
+  };
+  /** The masters now are exactly `first` (none ended, none made). */
+  const same = (first: string[]) => {
+    const now = masters();
+    return now.length === first.length && now.every((pid) => first.includes(pid));
+  };
+  const done = () => {
+    const ch = path.join(vm, "ch");
+    try {
+      if (fs.existsSync(ch)) fs.chmodSync(ch, 0o700);
+      backend.release();
+    } finally {
+      for (const pid of masters()) end(pid);
+      fs.rmSync(lima, { recursive: true, force: true });
+    }
     process.env.PATH = before.PATH;
     if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
     else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
+    delete process.env.STAND_IN_PARENT;
+  };
+  return { backend, name, vm, stands, masters, running, end, dial, until, same, done };
+};
+
+/** One VM's connections for channels (lima.ts channelsIn, as the backend's dial makes them),
+ *  with the stand-in ssh above, after `what` happened to its master once a first connection
+ *  (to 8080) was carried: nothing (the control); its control socket removed while it lives;
+ *  it killed, with the pid it gave when it came up another live process's (this one's: a pid
+ *  used again); or the VM let go while a first dial is on its way. What the first connection
+ *  and the next (to 8081, a forward of its own) got, and how many masters are left running
+ *  once the one let go has ended (waited for: it ends by itself). */
+export const channelsAfter = async (
+  what:
+    | "nothing"
+    | "control socket removed"
+    | "master killed, its pid another's"
+    | "let go while dialling",
+): Promise<{ first: string; next: string; left: number }> => {
+  const t = await standIn(10_000);
+  try {
+    if (what === "let go while dialling") {
+      const first = t.dial(8080);
+      t.backend.release(t.name);
+      const got = await first;
+      await t.until(() => t.masters().length === 0);
+      return { first: got, next: "", left: t.masters().length };
+    }
+    if (what === "master killed, its pid another's")
+      fs.writeFileSync(path.join(t.stands, "report-pid"), String(process.pid));
+    const first = await t.dial(8080);
+    const [pid] = t.masters();
+    if (what === "control socket removed") fs.rmSync(path.join(t.vm, "ch", "ctl"));
+    if (what === "master killed, its pid another's") {
+      t.end(pid!);
+      await t.until(() => !t.running(pid!));
+    }
+    const next = await t.dial(8081);
+    // The one ended (a master that no longer answered) ends by itself, as the new one carries.
+    await t.until(() => t.masters().length <= 1);
+    return { first, next, left: t.masters().length };
+  } finally {
+    t.done();
   }
 };
+
+/** A forward that fails while a master is up (to 8081, after one to 8080 was carried), and the
+ *  check that follows it answered as `check` says (nothing set: as the master is; or it hangs
+ *  past its time, cannot be started, answers another pid, or finds no master on the socket).
+ *  What that connection got, whether the masters are still just the one that carried the
+ *  first, and what a third connection (to 8082) got. */
+export const checkThatFails = async (
+  check: "as it is" | "hang" | "cannot spawn" | "another pid" | "no socket",
+): Promise<{ next: string; sameMaster: boolean; carriesOn: string }> => {
+  const t = await standIn(STAND_IN_MS);
+  try {
+    await t.dial(8080);
+    const first = t.masters();
+    fs.writeFileSync(path.join(t.stands, "fail-forward"), "");
+    if (check !== "as it is") fs.writeFileSync(path.join(t.stands, "check-mode"), check);
+    const next = await t.dial(8081);
+    const sameMaster = t.same(first);
+    const carriesOn = await t.dial(8082);
+    return { next, sameMaster, carriesOn };
+  } finally {
+    t.done();
+  }
+};
+
+/** Each ssh's time in the rows whose stand-in hangs (it is waited out each time): 2 s, where a
+ *  stand-in's own step (a node that starts and answers) took 0.06 s at most of 30 with every
+ *  core of the M1 busy (`yes` on each of its 10, load 53; 2026-11-24). The other rows give each
+ *  ssh the backend's own 10 s, and every row of these tables two minutes in all (Configure,
+ *  lima.ts): what they wait on is facts (a master gone, a connection answered), not a time. */
+const STAND_IN_MS = 2000;
 
 /** What dials to one VM got after its channel folder was left in `state` once a first
  *  connection (to 8080) was carried: its control socket replaced by a folder, the folder
  *  made one this user cannot enter, the connection's configuration removed, the whole folder
  *  removed, or its master stopped (SIGSTOP: it holds its sockets and answers nothing). Each
  *  next dial is to a target of its own (a forward to add), up to three until one is carried;
- *  then whether the first master is the one left, and what one more connection got. */
+ *  then whether the masters are still just the first, and what one more connection got. */
 export const afterState = async (
   state:
     | "as it is"
@@ -676,69 +686,26 @@ export const afterState = async (
     | "folder gone"
     | "master stopped",
 ): Promise<{ tries: string[]; sameMaster: boolean; carriesOn: string }> => {
-  const { channelsIn } = await import("../host/vm/lima.ts");
-  const lima = fs.mkdtempSync("/tmp/dsl-st-");
-  const backend = channelsIn(lima, () => process.env, 500);
-  const name = "dsl-main-chan";
-  const ch = path.join(lima, name, "ch");
-  fs.mkdirSync(path.join(lima, name), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(path.join(lima, name, "ssh.config"), `Host lima-${name}\n`);
-  const stands = path.join(home(), "stand-in-ssh");
-  fs.rmSync(stands, { recursive: true, force: true });
-  fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
-  fs.writeFileSync(path.join(stands, "ssh.mjs"), STAND_IN_SSH);
-  fs.writeFileSync(
-    path.join(stands, "bin", "ssh"),
-    `#!/bin/sh\nexec '${process.execPath}' '${stands}/ssh.mjs' "$@"\n`,
-    { mode: 0o755 },
-  );
-  const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
-  process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
-  process.env.STAND_IN_HOME = stands;
-  const masters = () =>
-    fs.existsSync(path.join(stands, "masters"))
-      ? fs.readdirSync(path.join(stands, "masters")).filter((pid) => {
-          try {
-            process.kill(Number(pid), 0);
-            return true;
-          } catch {
-            return false;
-          }
-        })
-      : [];
-  const said = (target: number) =>
-    new Promise<string>((resolve) => {
-      const stream = backend.dial(name, target);
-      let got = "";
-      stream.on("data", (chunk) => (got += chunk));
-      stream.on("error", () => {});
-      stream.on("close", () => resolve(got));
-      stream.end("hi\n");
-    });
+  const t = await standIn(state === "master stopped" ? STAND_IN_MS : 10_000);
+  const ch = path.join(t.vm, "ch");
   try {
-    await said(8080);
-    const first = masters();
+    await t.dial(8080);
+    const first = t.masters();
     if (state === "control socket a folder")
       (fs.rmSync(path.join(ch, "ctl")), fs.mkdirSync(path.join(ch, "ctl")));
     if (state === "folder unenterable") fs.chmodSync(ch, 0o000);
     if (state === "config gone") fs.rmSync(path.join(ch, "ssh.config"));
     if (state === "folder gone") fs.rmSync(ch, { recursive: true });
-    if (state === "master stopped") process.kill(Number(first[0]), "SIGSTOP");
+    if (state === "master stopped") t.end(first[0]!, "SIGSTOP");
     const tries: string[] = [];
     for (let target = 8081; target <= 8083; target++) {
-      tries.push(await said(target));
+      tries.push(await t.dial(target));
       if (tries.at(-1)) break;
     }
-    const sameMaster = JSON.stringify(masters()) === JSON.stringify(first);
-    const carriesOn = await said(8090);
+    const sameMaster = t.same(first);
+    const carriesOn = await t.dial(8090);
     return { tries, sameMaster, carriesOn };
   } finally {
-    if (fs.existsSync(ch)) fs.chmodSync(ch, 0o700);
-    backend.release();
-    for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
-    fs.rmSync(lima, { recursive: true, force: true });
-    process.env.PATH = before.PATH;
-    if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
-    else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
+    t.done();
   }
 };

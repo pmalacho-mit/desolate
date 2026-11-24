@@ -35,6 +35,7 @@ import { shareRefused } from "./shares.ts";
 import type { Backend, Check, ExecOptions, VmInfo, VmSpec, VmStatus } from "./types.ts";
 import type {
   Call,
+  Configure,
   Expect,
   Given,
   Invoke,
@@ -3316,58 +3317,61 @@ declare namespace limaBackend {
   /** dial's connections are channels on a master of desolate's own (here a stand-in ssh, with
    *  no VM), which is made again when it no longer answers as itself: its control socket gone
    *  while it lives, or it killed while the pid it gave is another live process's (this
-   *  test's): each time the next connection is carried within 5 s, on a new master, and the
+   *  test's): each time the next connection is carried, on a new master, and the
    *  old one is ended. A VM let go while its first dial is on its way gets no master. The
    *  control: nothing happened, and the one master carries both. */
-  export type ChannelsRecover = Table<
-    typeof channelsAfter,
-    [
+  export type ChannelsRecover = Configure<
+    { timeout: 120_000 },
+    Table<
+      typeof channelsAfter,
       [
-        args: [what: "nothing"],
-        expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; inTime: true; left: 1 },
-      ],
-      [
-        args: [what: "control socket removed"],
-        expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; inTime: true; left: 1 },
-      ],
-      [
-        args: [what: "master killed, its pid another's"],
-        expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; inTime: true; left: 1 },
-      ],
-      [
-        args: [what: "let go while dialling"],
-        expected: { first: ""; next: ""; inTime: true; left: 0 },
-      ],
-    ]
+        [
+          args: [what: "nothing"],
+          expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; left: 1 },
+        ],
+        [
+          args: [what: "control socket removed"],
+          expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; left: 1 },
+        ],
+        [
+          args: [what: "master killed, its pid another's"],
+          expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; left: 1 },
+        ],
+        [args: [what: "let go while dialling"], expected: { first: ""; next: ""; left: 0 }],
+      ]
+    >
   >;
   /** a check that fails for a reason of this Mac's (it hangs past its time, ssh cannot be
    *  started) fails that one connection and keeps the master, which carries the next; only a
    *  check ssh answered (another pid, no master on the socket) makes another. The control: a
    *  forward that fails while the master answers as itself keeps it */
-  export type ChecksThatFail = Table<
-    typeof checkThatFails,
-    [
+  export type ChecksThatFail = Configure<
+    { timeout: 120_000 },
+    Table<
+      typeof checkThatFails,
       [
-        args: [check: "as it is"],
-        expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [check: "hang"],
-        expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [check: "cannot spawn"],
-        expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [check: "another pid"],
-        expected: { next: "hi\nEOF-SEEN\n"; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [check: "no socket"],
-        expected: { next: "hi\nEOF-SEEN\n"; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-    ]
+        [
+          args: [check: "as it is"],
+          expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [check: "hang"],
+          expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [check: "cannot spawn"],
+          expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [check: "another pid"],
+          expected: { next: "hi\nEOF-SEEN\n"; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [check: "no socket"],
+          expected: { next: "hi\nEOF-SEEN\n"; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+      ]
+    >
   >;
   /** ssh's answer about the connection's own socket or configuration is an answer: a control
    *  socket that is a folder, a folder this user cannot enter, the configuration or the whole
@@ -3375,38 +3379,41 @@ declare namespace limaBackend {
    *  the next connection is carried. A master stopped, which answers nothing, is not known at
    *  each check (each waits its time out): the third makes another. The control: nothing
    *  changed, the master carries them all */
-  export type StatesOfTheFolder = Table<
-    typeof afterState,
-    [
+  export type StatesOfTheFolder = Configure<
+    { timeout: 120_000 },
+    Table<
+      typeof afterState,
       [
-        args: [state: "as it is"],
-        expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [state: "control socket a folder"],
-        expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [state: "folder unenterable"],
-        expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [state: "config gone"],
-        expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [state: "folder gone"],
-        expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
-      ],
-      [
-        args: [state: "master stopped"],
-        expected: {
-          tries: ["", "", "hi\nEOF-SEEN\n"];
-          sameMaster: false;
-          carriesOn: "hi\nEOF-SEEN\n";
-        },
-      ],
-    ]
+        [
+          args: [state: "as it is"],
+          expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [state: "control socket a folder"],
+          expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [state: "folder unenterable"],
+          expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [state: "config gone"],
+          expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [state: "folder gone"],
+          expected: { tries: ["hi\nEOF-SEEN\n"]; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+        ],
+        [
+          args: [state: "master stopped"],
+          expected: {
+            tries: ["", "", "hi\nEOF-SEEN\n"];
+            sameMaster: false;
+            carriesOn: "hi\nEOF-SEEN\n";
+          },
+        ],
+      ]
+    >
   >;
   /** dial refuses by throwing, which the forwarder takes as a connection that closes */
   export type DialNotRunning = Throws<
