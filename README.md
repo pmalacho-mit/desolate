@@ -5,8 +5,10 @@ your machine, your credentials or your remotes. A project's code, its dependenci
 dev servers run in a **workspace**: a VM with its own checkouts, the project's devcontainer
 and an editor in a browser tab, no keys, and no network but its own proxy. A dependency with
 a malicious install script, a compromised build tool, or a coding agent you handed a task:
-what any of them can reach is that VM. You review what was committed in the root VM's
-dashboard, and a push happens only when you approve the exact commit, with one click.
+what any of them can reach is that VM, and through its proxy the hosts its domain allows
+(any named host on ports 80 and 443, until you limit the domain to a list). You review what
+was committed in the root VM's dashboard, and a push happens only when you approve the exact
+commit, with one click.
 
 You work in a workspace as in any development environment; an agent works in one the same
 way, with the same limits. Neither needs anything from the other.
@@ -36,15 +38,19 @@ VM, and the root VM holds the keys that write to your remotes. So:
 - in the root you do **not** build, install, test or open the tree in a tool that runs
   tasks. `git checkout dev/some-branch` is fine; `npm install` after it is running that
   branch's code beside your keys. There is no editor in the root, on purpose.
+- the git VM (`desolate git`) is the same: it holds no key, but it reads every domain's
+  branches and can deliver into any domain, so do not build or run a branch's tests there.
 
-Keep that rule, and what the code you work on can reach is its own VM and the hosts you
-allowed.
+Keep that rule, and what the code you work on can reach is its own VM and, through its
+proxy, named hosts on ports 80 and 443: every one of them until you limit its domain to a
+list (`desolate domain <d> net enforce`).
 
 ## The shape of it
 
 ```
 host (your Mac)      the desolate CLI and one daemon: the port forwarder and each workspace's link.
-                     No keys. Runs no git on desolate's repositories.
+                     No deploy key; the key that approves pushes, and your own gh.
+                     Runs no git on desolate's repositories.
   ~/.desolate/       mirrors/ (what each remote published), root/ (your own clones),
                      domains/<d>/ (each domain's clones, outbox and inbox)
 root VM              every deploy key, the mirrors, your clones, one proxy per workspace.
@@ -55,7 +61,11 @@ workspace VMs        one per workspace, in a domain. Its checkouts, its devconta
 
 A **domain** is a trust boundary: a set of repositories and network rules shared by every
 workspace in it. Anything one workspace in a domain can do, assume every workspace in it can.
-Two domains share nothing but read-only mirrors.
+Two domains share no checkout, branch, secret or network rule; a repository in both has one
+read-only mirror. What every domain shares: the root VM, whose ordinary user reads every
+domain's work; the git VM; a port whose protocol carries no name (one workspace has it at a
+time, whatever its domain: `desolate ports` says which); and a secret you copy from one domain
+to another (`recipes/claude.sh` copies its token without asking).
 
 ## Using it
 
@@ -141,7 +151,10 @@ a control showing the test would have noticed.
   from a browser tab. Nothing from a workspace runs in a desktop editor on your Mac.
 - **P2. Every push goes through a human.** A push to any remote happens only as the direct
   result of a person's action in the root, naming the repository, the branch and the exact
-  commit they reviewed. No agent, workspace or automation can push.
+  commit they reviewed. No agent, workspace or automation can push through desolate. A forge
+  token you make a domain's secret is outside this: every workspace of the domain can then
+  write through the forge's API as you, with no approval (Secrets, in
+  [docs/reference.md](docs/reference.md)).
 - **P3. No credential enters a workspace.** Deploy keys live only in the root VM, behind an
   agent that signs but never exports. API secrets are placeholders inside workspaces: one set
   with its headers is put in place only in those, so a workspace can use it at its hosts but

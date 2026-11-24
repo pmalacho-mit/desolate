@@ -14,7 +14,8 @@
 //                     only its own shares (`profile`).
 //
 // desolate keeps its own Lima home under ~/.desolate, so it never touches a VM it did not
-// make, and refuses Lima's user-wide _config overrides, which could add a network.
+// make, and `doctor` fails while Lima's user-wide _config overrides, which could add a
+// network, are there.
 import { attachFiltered } from "./attach.ts";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -864,7 +865,8 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
           `    location: ${yq(path.join(imageDir, "initrd"))}`,
         ].join("\n") + "\n"
       );
-    // vz: Lima's own digest-pinned Ubuntu image, provisioned once by image/provision.sh.
+    // vz: Lima's own Ubuntu template (a dated image by digest, or the latest release with no
+    // digest once that one is gone), provisioned once by image/provision.sh.
     return (
       [
         "minimumLimaVersion: 2.0.0",
@@ -1385,7 +1387,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         await limaOk(["create", `--name=${BASE}`, file]);
         return;
       }
-      // vz: boot Lima's pinned Ubuntu image once, provision it with the same script the
+      // vz: boot Lima's Ubuntu image once, provision it with the same script the
       // Linux image is built from, and stop it. Every VM is then a copy-on-write clone.
       fs.writeFileSync(file, baseYaml());
       log("creating the base VM from Lima's pinned Ubuntu image (downloads it the first time)");

@@ -89,6 +89,11 @@ workspace, the network rules, upgrading with `git pull` and `desolate bootstrap`
   registries need nothing: their TLS is never opened.
 - **A repository whose devcontainer uses Docker Compose with a service that is not glibc**
   (Alpine) gets no port forwarding and no editor inside that service.
+- **One workspace can slow the whole stack.** The root VM and the Mac's daemon serve every
+  domain, and not all that a workspace asks of them is bounded per domain. If desolate slows
+  down, `desolate stop` the workspace that is busy.
+- **Nothing of desolate's updates a VM's packages** (git among them) after the base is
+  provisioned. Whether Ubuntu's own updater runs in the VMs has not been measured.
 
 **You will be the first** (none of these has been tried yet; tell us how it goes):
 - installing on a Mac other than the one desolate was developed on;
