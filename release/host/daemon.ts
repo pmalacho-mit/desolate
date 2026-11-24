@@ -2211,8 +2211,9 @@ const serve = async () => {
     entry.folder = folderFor(checkouts, r.workspace);
     const base = paths.domainRepos(r.domain);
     const domainDir = paths.domain(r.domain);
-    /** Whether `dir` is watched now. */
-    const watch = (dir: string, wanted: (file: string | null) => boolean) => {
+    /** A watch of `dir`, calling `then` with each event's file name; null when `dir` is not
+     *  a real directory inside the domain's tree (not there yet, a link, or elsewhere). */
+    const watch = (dir: string, then: (file: string | null) => void) => {
       try {
         // The domain's own tree: a directory there may be a link anywhere on the Mac, which
         // a watch would follow. Nothing is read through one, but only a real directory inside
@@ -2222,25 +2223,25 @@ const serve = async () => {
           fs.realpathSync(dir) !==
             path.join(fs.realpathSync(domainDir), path.relative(domainDir, dir))
         )
-          return false;
-        const watcher = fs.watch(dir, (_event, file) => {
-          if (wanted(file === null ? null : String(file))) nudge();
-        });
+          return null;
+        const watcher = fs.watch(dir, (_event, file) => then(file === null ? null : String(file)));
         // The directory is the workspace's: it can vanish or be replaced at any moment. A
         // watcher that fails is closed; it must never be an error nobody listens to,
         // which would end this daemon and with it every workspace's link.
         watcher.on("error", () => watcher.close());
         entry.watchers.push(watcher);
-        return true;
+        return watcher;
       } catch {
-        return false; // no such checkout yet: the state service's own slow look covers it
+        return null;
       }
     };
+    /** Each directory nudged for, and which of its events are (null: any). */
+    const targets = new Map<string, ((file: string | null) => boolean) | null>();
     const repos = new Set<string>();
     for (const c of checkouts) {
       // Its status or note, or what it has checked out (HEAD: a `git switch`, a commit on a
       // detached HEAD, a rebase starting or ending).
-      watch(
+      targets.set(
         statusDir(base, c),
         (file) => file === null || file.startsWith("desolate-") || file === "HEAD",
       );
@@ -2256,25 +2257,44 @@ const serve = async () => {
     // on Linux a recursive watch is one per directory there, however many it makes. So these
     // directories only, by the names of the repositories this host knows the workspace has,
     // each by itself. Nothing in them is read or listed, and no file name is looked at: any
-    // event is a nudge, which the state service paces. One not made yet (before the first
-    // sync) is watched once its parent changes. (Without the outbox's own watch, a workspace
-    // registered before its first sync was never watched there: T2 09-ui, 2026-11-23, a
-    // branch move shown at the state service's slow look, 9 s after.)
-    const sync = path.join(paths.outbox(r.domain), "sync");
-    const outbox = [
-      ...new Set(
-        [...repos]
-          .filter((repo) => typeof repo === "string" && parseRepo(repo))
-          .flatMap((repo) => [path.join(sync, repo.split("/")[0]!), path.join(sync, repo)]),
-      ),
-    ];
+    // event is a nudge, which the host paces.
+    for (const repo of repos)
+      if (typeof repo === "string" && parseRepo(repo))
+        targets.set(path.join(paths.outbox(r.domain), "sync", repo), null);
+    // A directory not made yet (a checkout's clone as the workspace starts, sync/ before its
+    // first sync) is watched once it is: until then its nearest parent in the domain's tree
+    // that is, whose every event tries again, and the first look at it is a nudge. (Tried
+    // once, at registering, a checkout's .git was not there yet and its status never an
+    // event, in T2: the dashboard's budget of a second for a status was met only by the
+    // state service's look every 10 s, by chance. The look every second had hidden it.)
     const held = new Set<string>();
-    const hold = () => {
-      // (From the outbox itself, which the domain's making made: sync/ is made at the first sync.)
-      for (const dir of [paths.outbox(r.domain), sync, ...outbox])
-        if (!held.has(dir) && watch(dir, () => (hold(), true))) held.add(dir);
+    const waiting = new Map<string, fs.FSWatcher>();
+    const hold = (first = false) => {
+      for (const [dir, wanted] of targets)
+        if (!held.has(dir) && watch(dir, (file) => (wanted === null || wanted(file)) && nudge())) {
+          held.add(dir);
+          if (!first) nudge();
+        }
+      const parents = new Set<string>();
+      for (const dir of targets.keys()) {
+        if (held.has(dir)) continue;
+        let at = path.dirname(dir);
+        while (at.startsWith(`${domainDir}${path.sep}`) && !fs.existsSync(at))
+          at = path.dirname(at);
+        if (at.startsWith(`${domainDir}${path.sep}`)) parents.add(at);
+      }
+      for (const [at, watcher] of waiting)
+        if (!parents.has(at)) {
+          watcher.close();
+          waiting.delete(at);
+        }
+      for (const at of parents)
+        if (!waiting.has(at)) {
+          const watcher = watch(at, () => hold());
+          if (watcher) waiting.set(at, watcher);
+        }
     };
-    hold();
+    hold(true);
     openLink(entry);
     entry.watch = watchOf(entry);
     events.publish(
