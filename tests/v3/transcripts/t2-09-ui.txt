@@ -53,6 +53,8 @@ doctor: all checks passed.
 
 ## events, not a timer
 
+## the state service started again
+
 ## stop and start
 
 ## new workspace in another repository's environment

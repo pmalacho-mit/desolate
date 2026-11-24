@@ -171,6 +171,42 @@ const pushed = (
     socket.on("error", () => resolve(null));
   });
 
+// Every state pushed on the stream from now, and when (the first is where things stand).
+const heard = () => {
+  const got: { at: number; state: State }[] = [];
+  const socket = net.connect(port, "127.0.0.1");
+  let buffer = "";
+  socket.on("connect", () =>
+    socket.write(
+      `GET /events?key=${key} HTTP/1.1\r\nHost: ${HOST}:${port}\r\nCookie: ${cookie}\r\nAccept: text/event-stream\r\n\r\n`,
+    ),
+  );
+  socket.on("data", (chunk) => {
+    buffer += chunk;
+    for (const match of buffer.matchAll(/data: (\{.*\})\n\n/g))
+      got.push({ at: performance.now(), state: JSON.parse(match[1]!) as State });
+    buffer = buffer.slice(buffer.lastIndexOf("\n\n") + 2);
+  });
+  socket.on("error", () => {});
+  return { got, close: () => socket.destroy() };
+};
+/** Whether two states pushed one after the other differ in anything but web/one's own words
+ *  (its status, note and HEADs): a look that had only those to say is one that read them,
+ *  not one made for something else that showed them by the way. */
+const elsewhere = (a: State, b: State) => {
+  const strip = (s: State) =>
+    JSON.stringify({
+      ...s,
+      domains: s.domains.map((d) => ({
+        ...d,
+        workspaces: d.workspaces.map((w) =>
+          d.slug === "web" && w.workspace === "one" ? { ...w, says: null } : w,
+        ),
+      })),
+    });
+  return strip(a) !== strip(b);
+};
+
 describe("T2 section 4.8: the root UI", () => {
   before(() => {
     stack = newStack("ui");
@@ -652,25 +688,6 @@ describe("T2 section 4.8: the root UI", () => {
 
   it("the state is pushed when it changes, not looked for: a branch at once, a flood at most once a second", async () => {
     stack.step("events, not a timer");
-    // Every state pushed on the stream from now, and when (the first is where things stand).
-    const heard = () => {
-      const got: { at: number; state: State }[] = [];
-      const socket = net.connect(port, "127.0.0.1");
-      let buffer = "";
-      socket.on("connect", () =>
-        socket.write(
-          `GET /events?key=${key} HTTP/1.1\r\nHost: ${HOST}:${port}\r\nCookie: ${cookie}\r\nAccept: text/event-stream\r\n\r\n`,
-        ),
-      );
-      socket.on("data", (chunk) => {
-        buffer += chunk;
-        for (const match of buffer.matchAll(/data: (\{.*\})\n\n/g))
-          got.push({ at: performance.now(), state: JSON.parse(match[1]!) as State });
-        buffer = buffer.slice(buffer.lastIndexOf("\n\n") + 2);
-      });
-      socket.on("error", () => {});
-      return { got, close: () => socket.destroy() };
-    };
     // A branch moved in the workspace: its daemon writes the list to the outbox, which the
     // host watches and nudges the state service for. The service's own look is every 10 s,
     // so six moves each pushed within 2 s would have to land in its first fifth every time
@@ -714,12 +731,9 @@ describe("T2 section 4.8: the root UI", () => {
     );
     // A flood: the workspace's status rewritten every 20 ms for 3 s (here on the host's side
     // of the share, as a VM's writes are). The host nudges at most once a second, and the
-    // service looks on each nudge: four from the flood (at once, then one a second until it
-    // stops). Any other look while the file changes shows it too, and two others may fall in
-    // the window (the service's look every 10 s, the host's facts said again every 45 s): six
-    // states at most in the 4.5 s from its start (it was one a second and one per nudge, with
-    // the host's two a second: up to fifteen). CONTROL:
-    // the flood is seen while it lasts, more than once, not held back until it stops.
+    // service looks on each nudge. (It was a look every second and one per nudge, with the
+    // host's two a second: up to three a second.) CONTROL: the flood is seen while it lasts,
+    // more than once, not held back until it stops.
     const file = path.join(
       stack.home,
       "domains",
@@ -750,19 +764,26 @@ describe("T2 section 4.8: the root UI", () => {
     listening.close();
     fs.writeFileSync(`${file}.flood`, kept);
     fs.renameSync(`${file}.flood`, file);
-    const during = listening.got.filter((g) => g.at >= started);
-    const flooded = new Set(
-      during
-        .filter((g) => g.at <= ended + 200)
-        .map((g) => ws(g.state, "web/one")?.says.status?.message)
-        .filter((m) => m?.startsWith("flood ")),
+    // The looks the flood made: states that changed nothing but its words. (Any other look
+    // while the file changes shows the flood too, and says something else besides.)
+    const got = listening.got;
+    const fromFlood = got.filter(
+      (g, i) =>
+        i > 0 &&
+        g.at >= started &&
+        !elsewhere(got[i - 1]!.state, g.state) &&
+        ws(g.state, "web/one")?.says.status?.message?.startsWith("flood ") === true,
     );
+    const others = got.filter((g) => g.at >= started).length - fromFlood.length;
+    const during = fromFlood.filter((g) => g.at <= ended + 200).length;
     console.log(
-      `# ${n} writes; ${during.length} states pushed, ${flooded.size} of them during the flood`,
+      `# ${n} writes; ${fromFlood.length} states from the flood (${during} while it lasted), ${others} others`,
     );
     assert.ok(n > 100, `the flood was a flood: ${n} writes`);
-    assert.ok(during.length <= 6, `about once a second: ${during.length} states in 4.5 s`);
-    assert.ok(flooded.size >= 2, `control: seen while it lasted, ${flooded.size} times`);
+    // Four from the host's nudges (at once, then one a second until it stops), and the
+    // service's own look every 10 s if it falls in the window.
+    assert.ok(fromFlood.length <= 5, `once a second: ${fromFlood.length} in 4.5 s`);
+    assert.ok(during >= 2, `control: seen while it lasted, ${during} times`);
     assert.ok(
       await until(
         async () =>
@@ -770,6 +791,76 @@ describe("T2 section 4.8: the root UI", () => {
       ),
       "and back as it was",
     );
+  });
+
+  it("the state service started again is noticed by the host within seconds: a click is taken, and `desolate events` goes on (control: the same before)", async () => {
+    stack.step("the state service started again");
+    // `desolate events`, as a script on the Mac follows it.
+    const heard: Record<string, unknown>[] = [];
+    const listener = spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["events"], {
+      env: stack.env,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let partial = "";
+    listener.stdout.on("data", (chunk: Buffer) => {
+      partial += chunk.toString();
+      for (let end = partial.indexOf("\n"); end >= 0; end = partial.indexOf("\n")) {
+        heard.push(JSON.parse(partial.slice(0, end)) as Record<string, unknown>);
+        partial = partial.slice(end + 1);
+      }
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      /** How long a click waits for the host to take it, and a status to reach the events. */
+      const round = async (tag: string) => {
+        const clicked = performance.now();
+        const id = (
+          JSON.parse((await action("repo.fetch", { repo: "acme/app" })).body) as { id: string }
+        ).id;
+        assert.ok(
+          await until(
+            async () => (await state()).actions.find((a) => a.id === id)?.state !== "queued",
+            90_000,
+          ),
+          `${tag}: the click was taken`,
+        );
+        const taken = performance.now() - clicked;
+        const message = `the state service, ${tag}`;
+        assert.equal(
+          stack.quiet("exec", "web/one", "--", "/desolate/status", "set", "green", message).code,
+          0,
+        );
+        const set = performance.now();
+        assert.ok(
+          await until(
+            async () => heard.some((e) => e.type === "status" && e.message === message),
+            90_000,
+          ),
+          `${tag}: the status reached \`desolate events\``,
+        );
+        return { taken: Math.round(taken), told: Math.round(performance.now() - set) };
+      };
+      const before = await round("before");
+      // Started again, as a bootstrap or an update does: ended, and its keeper starts it.
+      assert.equal(stack.inRoot(["bash", "-c", "pkill -f '^node .*stated\\.ts$'"]).code, 0);
+      assert.ok(
+        await until(async () => (await http("GET", "/state")).status === 200, 60_000),
+        "the state service is back",
+      );
+      const back = await round("after");
+      console.log(
+        `# a click taken after ${before.taken} ms, then ${back.taken} ms once the service was back; a status in the events after ${before.told}, then ${back.told} ms`,
+      );
+      // The host's held requests ended with the service: it asks the new one at once. (They
+      // waited out their 70 s.)
+      assert.ok(before.taken <= 3000 && before.told <= 3000, `control: ${JSON.stringify(before)}`);
+      assert.ok(
+        back.taken <= 2500 && back.told <= 2500,
+        `after a restart: ${JSON.stringify(back)}`,
+      );
+    } finally {
+      listener.kill();
+    }
   });
 
   it("stop and start from the dashboard; its agents as they are after the start, at once", async () => {
@@ -801,18 +892,33 @@ describe("T2 section 4.8: the root UI", () => {
       "desolate-status.json",
     );
     const kept = fs.readFileSync(file, "utf8");
+    const listening = heard();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     const written = performance.now();
     fs.writeFileSync(
       `${file}.lost`,
       JSON.stringify({ color: "green", message: "no event for this" }),
     );
     fs.renameSync(`${file}.lost`, file);
-    const repaired = await pushed(
-      (s) => ws(s, "web/one")?.says.status?.message === "no event for this",
-      12_000,
+    const shows = (g: { state: State }) =>
+      ws(g.state, "web/one")?.says.status?.message === "no event for this";
+    assert.ok(
+      await until(async () => listening.got.some(shows), 12_000),
+      "a change with no event is shown, within the slow look's 10 s",
     );
-    assert.ok(repaired, "a change with no event is shown by the slow look, within its 10 s");
-    console.log(`# a change with no event shown after ${Math.round(repaired!.at - written)} ms`);
+    listening.close();
+    const at = listening.got.findIndex(shows);
+    console.log(
+      `# a change with no event shown after ${Math.round(listening.got[at]!.at - written)} ms`,
+    );
+    // By a look that had only it to say: not a look made for something else (the control:
+    // such a state differs elsewhere too, and fails this).
+    assert.ok(at > 0, "it was not there before");
+    assert.equal(
+      elsewhere(listening.got[at - 1]!.state, listening.got[at]!.state),
+      false,
+      "the look that showed it had nothing else to say",
+    );
     fs.writeFileSync(`${file}.lost`, kept);
     fs.renameSync(`${file}.lost`, file);
     assert.equal(

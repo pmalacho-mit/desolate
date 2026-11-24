@@ -2373,7 +2373,14 @@ const serve = async () => {
         settle(answer);
       });
       stream.on("error", (error) => settle(error));
-      stream.on("close", () => settle(new Error("the root's state service is not there")));
+      // Its end, not only its close: a dial is a program (ssh, socat) whose output ends when
+      // the service's side does, and a stream left open for writing is never closed. A
+      // request held while the service was started again (a bootstrap, an update) waited out
+      // its whole timeout, 70 s for the state and the dashboard's requests, with nothing
+      // said on the dashboard's clicks or `desolate events` meanwhile (T2 09-ui, traced on
+      // 2026-11-23: 44 s without a state after a restart).
+      for (const ended of ["end", "close"])
+        stream.on(ended, () => settle(new Error("the root's state service is not there")));
       stream.write(
         `${method} ${pathname} HTTP/1.1\r\nHost: root\r\nAuthorization: Bearer ${token}\r\nConnection: close\r\n${payload ? `Content-Type: application/json\r\nContent-Length: ${Buffer.byteLength(payload)}\r\n` : ""}\r\n${payload}`,
       );
@@ -2664,8 +2671,13 @@ const serve = async () => {
   /** Each request is run once, however many times the root hands it over. */
   const taken = new Set<string>();
   let lastFailure = "";
+  /** How long to wait before asking the root again after a failure: half a second for the
+   *  first 3 s (the service started again is back within a second or two: its keeper starts
+   *  it after 1 s), then 3 s (the root is down). (Once at half a second and then 3 s, a click
+   *  waited 3.3 s after the service was back: T2 09-ui.) */
+  const again = (failures: number) => sleep(failures <= 6 ? 500 : 3000);
   const collect = async () => {
-    for (;;) {
+    for (let failures = 0; ;) {
       try {
         const reply = await rootHttp("GET", "/host/requests", undefined, 70_000);
         if (reply.status !== 200) throw new Error(`status ${reply.status}`);
@@ -2679,11 +2691,12 @@ const serve = async () => {
           void runAction(action).catch((error: Error) => log(`a request failed: ${error.message}`));
         }
         lastFailure = "";
+        failures = 0;
       } catch (error) {
         // The root is not up, or its service is not: try again in a while.
         if (String(error) !== lastFailure)
           log(`dashboard requests: ${(lastFailure = String(error))}`);
-        await sleep(3000);
+        await again(++failures);
       }
     }
   };
@@ -2694,7 +2707,7 @@ const serve = async () => {
   const followState = async () => {
     let tag = "";
     let before: Parameters<typeof stateEvents>[0] = null;
-    for (;;) {
+    for (let failures = 0; ;) {
       try {
         const reply = await rootHttp("GET", `/host/state?since=${tag}`, undefined, 70_000);
         if (reply.status !== 200) throw new Error(`status ${reply.status}`);
@@ -2708,8 +2721,9 @@ const serve = async () => {
         tag = sinceTag(next);
         // At most four looks a second, whatever the root's user's service answers.
         await sleep(250);
+        failures = 0;
       } catch {
-        await sleep(3000);
+        await again(++failures);
       }
     }
   };
