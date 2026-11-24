@@ -1257,8 +1257,10 @@ export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
     } catch {
       return;
     }
+    // (Lima keeps files beside its VMs' folders too: _config's, a cache's.)
     for (const name of names)
-      fs.rmSync(path.join(lima, name, "ch"), { recursive: true, force: true });
+      if (fs.existsSync(path.join(lima, name, "ch")))
+        fs.rmSync(path.join(lima, name, "ch"), { recursive: true, force: true });
   };
 
   return {

@@ -516,6 +516,8 @@ export const channelsAfter = async (
   const dir = path.join(lima, name);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(dir, "ssh.config"), `Host lima-${name}\n`);
+  // A file beside the VMs' folders, as Lima keeps one (base.yaml): release() goes past it.
+  fs.writeFileSync(path.join(lima, "base.yaml"), "");
   const stands = path.join(home(), "stand-in-ssh");
   fs.rmSync(stands, { recursive: true, force: true });
   fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
