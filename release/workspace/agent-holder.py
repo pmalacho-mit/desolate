@@ -52,10 +52,8 @@ HOME = os.path.expanduser("~")
 STATE = os.path.join(HOME, ".desolate-agents")
 RUN = os.path.join(os.environ.get("XDG_RUNTIME_DIR") or os.path.join(HOME, ".desolate-agents"), "sockets")
 ENTER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "enter.sh")
-NAME_OK = set("abcdefghijklmnopqrstuvwxyz0123456789-")
-# A name, in characters: shared/limits.ts NAMES.slug, the host's rule for the same name
-# (host/agent.ts checks it with names.ts's SLUG). This file cannot import TypeScript;
-# tests/v3/t1/agent-holder.test.ts checks that the two agree.
+# A name: shared/names.ts's SLUG, as host/agent.ts checks it (tests/v3/t1/scripts.test.ts).
+NAME = re.compile(r"(?=[a-z0-9][a-z0-9-]{0,39}$)(?!xn--)(?!.*---)(?!.*--.*--)(?!.*-$)[a-z0-9-]+")
 NAME_MOST = 40
 # A size an attached terminal may ask for: shared/limits.ts TERMINAL (checked as NAME_MOST is).
 COLS_MOST = 1000
@@ -77,7 +75,7 @@ SEGMENT = re.compile(r"^(.+)\.log\.([0-9]+)$")
 
 
 def checked(name):
-    if not name or len(name) > NAME_MOST or not set(name) <= NAME_OK or name[0] == "-":
+    if not NAME.fullmatch(name):
         sys.exit(f"agent-holder: a name is lower-case letters, digits and dashes, at most {NAME_MOST}")
     return name
 

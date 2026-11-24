@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
+import { isBranch, isCommit, isSlug, parseRepo } from "../shared/names.ts";
 const parseRepoName = (value: string) => (parseRepo(value) ? value : null);
 import { writeJson } from "../shared/json.ts";
 import { git as gitIn, gitSaid, repoOf, writeKnownHosts } from "./git.ts";
@@ -694,9 +694,7 @@ export const ops: Record<string, Op> = {
     const mine = new Set(spawnSync("id", ["-G"], { encoding: "utf8" }).stdout.trim().split(/\s+/));
     const domainDirs = (() => {
       try {
-        return fs
-          .readdirSync(`${ROOT.proxies}/domains`)
-          .filter((name) => /^[a-z0-9-]{1,40}$/.test(name));
+        return fs.readdirSync(`${ROOT.proxies}/domains`).filter((name) => isSlug(name));
       } catch {
         return [] as string[];
       }
