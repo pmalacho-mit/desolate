@@ -1819,6 +1819,23 @@ echo "=====waits"; cat /tmp/waits.lines`,
         `setsid nohup git push origin ${commit}:refs/heads/web-held >/tmp/web-held.log 2>&1 </dev/null & sleep 0.2`,
       );
       await opened(page, "web-held");
+      // A failure of this very move already in the pusher's log, from before this approval
+      // (as a push of it approved earlier would have left): it ends nothing signed after it.
+      const stale = {
+        type: "push-failed",
+        repo: "acme/widgets",
+        branch: "web-held",
+        commit,
+        onto: null,
+        error: "an earlier push's failure",
+      };
+      assert.match(
+        stack.inRoot(["bash", "-c", "cat >> /var/lib/desolate-root/pusher.log && echo written"], {
+          root: true,
+          input: `EVENT ${JSON.stringify({ at: new Date().toISOString(), ...stale })}\n`,
+        }).stdout,
+        /written/,
+      );
       await armedPress(page, ".card.asked button.approve", "Approve push");
       const pushing =
         "Approved: the root is pushing it to the remote now. This card goes when the root's pusher reports the remote has it.";
@@ -1832,6 +1849,12 @@ echo "=====waits"; cat /tmp/waits.lines`,
           ["Refuse", true],
         ],
         "its buttons stay where they were, and none can be pressed: it cannot be approved twice",
+      );
+      await sleep(5000);
+      assert.equal(
+        await page.evaluate(hintOf("web-held")),
+        pushing,
+        "the failure written before the signature ended nothing",
       );
       await page.shot(shot("pushing"));
       // A reload mid-push: the card is drawn from the host's record, being pushed, with no
@@ -1890,8 +1913,17 @@ echo "=====waits"; cat /tmp/waits.lines`,
       ];
       const hostile =
         "refused \u001b[31mred\u001b[0m <b>bold</b> <img src=x onerror=alert(1)> &amp; \u202eevil";
+      // (Its time an hour before the Mac's: where it is in the log decides, not when it says.)
       assert.match(
-        forged([...flood, { ...move, type: "push-failed", error: hostile }]).stdout,
+        forged([
+          ...flood,
+          {
+            ...move,
+            type: "push-failed",
+            error: hostile,
+            at: new Date(Date.now() - 3_600_000).toISOString(),
+          },
+        ]).stdout,
         /written/,
       );
       const failed =
