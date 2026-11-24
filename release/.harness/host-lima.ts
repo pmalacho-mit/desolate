@@ -212,7 +212,8 @@ export const statusOf = async (
  *  it was given (its last argument) to a shell: here, this machine's /bin/sh, so the test sees
  *  what the line runs. The login shell it names is a stand-in too, which insists on `-l` and
  *  is /bin/sh, and so is `sudo`, which runs what it is given: nothing of this machine's own is
- *  asked, and nothing runs as anyone else. `dial`'s line (socat) is written down, not run.
+ *  asked, and nothing runs as anyone else. `dial` is for its refusals, which come before any
+ *  connection: one that is not refused is destroyed at once.
  *
  *  The VM (`vm`) is `running` (its processes this one, its host agent's socket listening,
  *  Lima's ssh.config there), `no ssh.config`, or `stopped` (made, never started); desolate's
@@ -271,7 +272,7 @@ export const sessionOf = async (
     fs.writeFileSync(path.join(bin(), file), `#!/bin/sh\n${text}`, { mode: 0o755 });
   script(
     "ssh",
-    `n=$(ls '${record}' | wc -l | tr -d ' ')\nfor a in "$@"; do printf '%s\\0' "$a"; done >'${record}'/$n\nfor last in "$@"; do :; done\n${call === "dial" || apart ? "exit 0" : `SHELL='${bin()}/login-shell' exec /bin/sh -c "$last"`}\n`,
+    `n=$(ls '${record}' | wc -l | tr -d ' ')\nfor a in "$@"; do printf '%s\\0' "$a"; done >'${record}'/$n\nfor last in "$@"; do :; done\n${apart ? "exit 0" : `SHELL='${bin()}/login-shell' exec /bin/sh -c "$last"`}\n`,
   );
   script(
     "login-shell",
@@ -294,7 +295,9 @@ export const sessionOf = async (
       child.stdout!.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
       child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
       code = await new Promise<number>((resolve) => child.on("close", (c) => resolve(c ?? 1)));
-    } else if (call === "attach") {
+    } else if (call === "dial") {
+      backend.dial(name, Number(argv[0])).destroy();
+    } else {
       if (terminal)
         (Object.assign(process.stdin, { isTTY: true }),
           Object.assign(process.stdout, { isTTY: true }));
@@ -303,9 +306,6 @@ export const sessionOf = async (
         true
       )) as typeof written;
       code = await backend.attach(name, argv.map(at), given);
-    } else {
-      const stream = backend.dial(name, Number(argv[0]));
-      await new Promise((resolve) => stream.once("close", resolve).resume().end());
     }
   } finally {
     process.stderr.write = written;
@@ -401,31 +401,34 @@ export const sharesWaited = async (
   };
 };
 
-/** A session's line (lima.ts sessionLine) for `argv`, in its login form or plain, run as sshd
- *  runs a command: `/bin/sh -c <line>`, with SHELL a stand-in login shell, which refuses
- *  anything but `-l`, writes down that it was started, and is /bin/sh. What the line printed,
- *  split at NULs, its code, and whether it started SHELL. */
-export const lineRan = async (
-  argv: string[],
-  form: "login" | "plain",
-): Promise<{ said: string[]; code: number; shell: boolean }> => {
-  const { sessionLine } = await import("../host/vm/lima.ts");
-  fs.mkdirSync(bin(), { recursive: true });
-  const login = path.join(bin(), "login-shell-noted");
-  const noted = path.join(bin(), "login-shell-started");
-  fs.rmSync(noted, { force: true });
+/** What ssh makes of the arguments desolate's connection for channels is opened with
+ *  (lima.ts masterArgs; `ours`), or of Lima's configuration alone, for a VM whose ssh.config is
+ *  Lima's with `config` added to its Host: `ssh -G`, which reads the configuration and connects
+ *  nowhere. The options that let a server open a channel to this side, and every forward. */
+export const channelsConfigured = async (config: string, ours: boolean) => {
+  const { masterArgs } = await import("../host/vm/lima.ts");
+  const name = "dsl-main-cfg";
+  const dir = path.join(limaHome(), name);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, "ssh.config");
   fs.writeFileSync(
-    login,
-    `#!/bin/sh\n: >'${noted}'\n[ "$1" = -l ] || { echo "not a login shell" >&2; exit 99; }\nshift\nexec /bin/sh "$@"\n`,
-    { mode: 0o755 },
+    file,
+    `Host lima-${name}\n  IdentityFile "${dir}/user"\n  PreferredAuthentications publickey\n  BatchMode yes\n  IdentitiesOnly yes\n  User desolate\n  ControlMaster auto\n  ControlPath "${dir}/ssh.sock"\n  ControlPersist yes\n  Hostname 127.0.0.1\n  Port 22\n${config}`,
   );
-  const line = sessionLine(argv, {}, { login: form === "login" });
-  const ran = spawnSync("/bin/sh", ["-c", line], {
-    env: { ...process.env, SHELL: login },
+  const args = ours ? masterArgs(name, path.join(dir, "ch", "ctl")) : ["-F", file, `lima-${name}`];
+  const shown = spawnSync("ssh", ["-G", ...args], {
     encoding: "utf8",
-    timeout: 30_000,
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  const said = ran.stdout === "" ? [] : ran.stdout.split("\0");
-  if (said.at(-1) === "") said.pop();
-  return { said, code: ran.status ?? 128, shell: fs.existsSync(noted) };
+  const lines = shown.stdout.split("\n");
+  const value = (key: string) =>
+    lines.find((line) => line.startsWith(`${key} `))?.slice(key.length + 1) ?? null;
+  return {
+    forwardagent: value("forwardagent"),
+    forwardx11: value("forwardx11"),
+    clearallforwardings: value("clearallforwardings"),
+    permitlocalcommand: value("permitlocalcommand"),
+    tunnel: value("tunnel"),
+    forwards: lines.filter((line) => /^(local|remote|dynamic)forward /.test(line)).sort(),
+  };
 };

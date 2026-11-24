@@ -209,6 +209,85 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
       );
     });
 
+    it("T4 a connection into or out of a workspace is a channel on desolate's own ssh connection to its VM: none starts a process in the VM, only the Mac's user reaches them, and a connection that went is made again", async () => {
+      stack.step("channels");
+      const lima = path.join(stack.home, "lima");
+      const root = `dsl-${stack.instance}-root`;
+      const master = (name: string) =>
+        Number(
+          /pid=(\d+)/.exec(
+            spawnSync(
+              "ssh",
+              [
+                "-F",
+                path.join(lima, name, "ssh.config"),
+                "-o",
+                `ControlPath=${path.join(lima, name, "ch", "ctl")}`,
+                "-O",
+                "check",
+                `lima-${name}`,
+              ],
+              { encoding: "utf8" },
+            ).stderr,
+          )?.[1] ?? 0,
+        );
+      const ports = JSON.parse(stack.quiet("ports", "--json").stdout) as {
+        forwarded: { url: string }[];
+      }[];
+      const url = new URL(
+        ports.flatMap((w) => w.forwarded).find((f) => new URL(f.url).port === String(PORT))!.url,
+      );
+      const out = (n: number) =>
+        stack.inVm(vm, [
+          "bash",
+          "-c",
+          `for i in $(seq ${n}); do curl -sS -m 60 http://api.example.test/ch-$i; echo; done`,
+        ]);
+      // In and out, each on its VM's connection: the workspace's for its port, the root's for
+      // its proxy.
+      assert.match(await fromTheMac(url), /backend-answered/);
+      assert.match(out(1).stdout, /upstream http host=api\.example\.test path=\/ch-1/);
+      const pids = { vm: master(vm), root: master(root) };
+      assert.ok(pids.vm > 0 && pids.root > 0, JSON.stringify(pids));
+      // Only this Mac's user enters the folders, and each socket is its alone.
+      for (const name of [vm, root]) {
+        const dir = path.join(lima, name, "ch");
+        assert.equal(fs.lstatSync(dir).mode & 0o777, 0o700, dir);
+        const sockets = fs.readdirSync(dir);
+        assert.ok(sockets.length >= 2, `${dir}: ${sockets.join(" ")}`);
+        for (const file of sockets) {
+          const seen = fs.lstatSync(path.join(dir, file));
+          assert.ok(seen.isSocket(), file);
+          assert.equal(seen.mode & 0o777, 0o600, file);
+          assert.equal(seen.uid, process.getuid!(), file);
+        }
+      }
+      // Processes the root VM starts, by its last pid, over 30 connections out: a session
+      // each (the old way) was 4 there. The control: one exec into the root VM is seen.
+      const lastPid = () =>
+        Number(stack.inRoot(["cut", "-d", " ", "-f", "5", "/proc/loadavg"]).stdout.trim());
+      const before = lastPid();
+      const control = lastPid();
+      assert.ok(control > before, "control: a session into the root VM is counted");
+      const start = lastPid();
+      const sent = out(30);
+      const started = lastPid() - start - 1;
+      assert.equal(sent.stdout.match(/upstream http host=api\.example\.test/g)?.length, 30);
+      assert.ok(started < 10, `the root VM started ${started} processes for 30 connections out`);
+      // Each connection is killed with its master: the next is carried on a new one.
+      process.kill(pids.vm, "SIGKILL");
+      process.kill(pids.root, "SIGKILL");
+      assert.match(
+        await fromTheMac(url),
+        /backend-answered/,
+        "in, after its connection was killed",
+      );
+      assert.match(out(1).stdout, /path=\/ch-1/, "out, after the root's connection was killed");
+      const again = { vm: master(vm), root: master(root) };
+      assert.ok(again.vm > 0 && again.vm !== pids.vm, JSON.stringify({ pids, again }));
+      assert.ok(again.root > 0 && again.root !== pids.root, JSON.stringify({ pids, again }));
+    });
+
     it("T3 resize: a stopped workspace's VM gets its new CPUs, memory and disk, and keeps what is on its disk", async () => {
       stack.step("resize, in a real VM");
       const running = stack.desolate("resize", "dev/w1", "--cpus", "2");
@@ -284,6 +363,10 @@ echo "volume=$(docker volume ls -q --filter name=^devdb$)"`);
       const result = stack.desolate("destroy", "--all");
       assert.equal(result.code, 0, result.stdout);
       assert.equal(fs.existsSync(stack.home), false);
+      // No connection for channels is left running: each names its control socket, under the
+      // stack's home.
+      const left = spawnSync("pgrep", ["-f", `${stack.home}/lima/.*/ch/ctl`], { encoding: "utf8" });
+      assert.equal(left.stdout.trim(), "", "no ssh of this stack's channels is left");
     });
 
     it("the transcript reads as reviewed", () => {

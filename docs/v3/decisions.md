@@ -150,14 +150,64 @@ resolver that answers every name with a placeholder address and a redirect of po
 443 to a small relay that reads the name from the TLS SNI or the HTTP Host and asks the proxy
 for it. None of that is a boundary: with all of it removed, the VM still has no way out.
 
-## The forwarder's way into a VM: a session running socat, over plain ssh (measured)
+## The forwarder's way into a VM: a channel on desolate's own ssh connection (measured)
 
-When first tried, `ssh -W host:port` through Lima's ssh config failed on the Mac with "Stdio
-forwarding request failed: Session open refused by peer". On Lima 2.3.0 it worked in a
-workspace VM (2026-11-23): that note was stale for this Lima, or was about the root VM. A
-backend's `dial` still runs `socat STDIO <address>` in the guest over a session, as the fake
-backend does over `docker exec`, because a target may be a unix socket in the VM (a
-workspace's proxy), which `-W` does not reach. The base image carries socat.
+Until 2026-11-24 a backend's `dial` ran `socat STDIO <address>` in the guest over a session,
+as the fake backend still does over `docker exec`. With test runs busy in two workspaces the
+root VM started 300 to 460 processes in some 30 s windows, nearly all of them these: each
+connection out of a workspace was an ssh here and a session there, whose login shell ran the
+profile before socat (4 processes in the root VM a connection; 1 without the login shell).
+
+**Now** (`host/vm/lima.ts`, `dial`): each VM the Mac dials has one ssh connection of
+desolate's own (`ssh -f -N`, ControlMaster, its control socket at `<vm>/ch/ctl` in the VM's
+Lima folder), and each target a forward on it, added at its first dial
+(`ssh -O forward -L <vm>/ch/<name>.sock:<target>`): a workspace's proxy socket in the root VM,
+a port or the daemon's socket in a workspace VM. A connection is the daemon connecting to that
+local socket; sshd opens the channel itself. Measured on the M1 Max into the root VM
+(2026-11-24, OpenSSH 9.6 both ends): 100 connections started no process in the VM and none on
+the Mac; the master took 220 ms to come up and a forward 9 ms; a connection 1 to 5 ms; the
+master 1.9 MB idle and 26 MB with 700 channels held (35 KB each, where a session was 1.5 MB
+here and 1.2 MB there); half-close and an end from either side behave as before.
+
+- **Which connection.** Desolate's own, not Lima's (`ssh.sock`), which `limactl`, every exec
+  and `refreshSessions` share and end: `refreshSessions` ends this one too (a channel to a
+  proxy's socket needs the groups the login had), and the daemon makes it again at the next
+  dial. A master that has gone is seen at the next dial (its socket refuses and its pid is not
+  there) and made again: a forward's socket is left behind by ssh, which will not bind over it,
+  so the folder is emptied first. One of an earlier daemon is ended (`-O exit`) for the same
+  reason. A refusal while the master lives is its listen queue full (ssh listens with 128:
+  262 of a burst of 800 at once were refused, none with 64 at a time), tried again for up to
+  2 s; 600 at once through `dial` all answered. When a workspace goes, its VM's master is
+  ended and its proxy's forward on the root's cancelled; a port no longer listened on has its
+  forward cancelled; a daemon that stops ends every master. T4 `02-dev-stack` kills both
+  masters and connects again.
+- **Who can connect.** The folder is 0700 (Lima's VM folder is too) and each socket 0600
+  (ssh's StreamLocalBindMask), owned by the Mac's user: that user, who can already use Lima's
+  key and control socket, and root. No other user on the Mac.
+- **What a channel reaches.** The target is the Mac's own (`forwardSpec`: a port 1 to 65535 on
+  the VM's loopback, or a path of plain names, checked as `socatAddress` did; a workspace's
+  proxy path is rebuilt by the Mac, replies.ts `proxySocket`), fixed when the forward is added.
+- **A hostile VM's sshd gets nothing new.** No remote forward is asked for, and the master is
+  made with ForwardAgent, ForwardX11 and PermitLocalCommand off and ClearAllForwardings on, on
+  the command line, which wins over any configuration (`masterArgs`, in-source with `ssh -G`
+  beside a configuration asking for each: Lima's asks for none). The OpenSSH client refuses a
+  server's channel of its own ("forwarded-tcpip" or "forwarded-streamlocal" for a forward it did
+  not ask for, "x11", "auth-agent").
+- **What bounds channels.** sshd's MaxSessions counts sessions, not channels. sshd's process
+  for the connection holds a file per channel and may hold 1024 (systemd's soft limit): 1017
+  held at once answered, and each past them was closed as soon as it opened (ssh's own table
+  stops at 16,384). The Mac's 800 (CONNECTIONS_MOST) is under that, counted where the daemon
+  pipes, and refused in words past it as before.
+- **`ssh -W`** (one ssh here a connection, none in the VM) works on OpenSSH 9.6 for a port and,
+  despite the note below, for a unix socket too: it was not chosen, since a forward costs no
+  process at all and one mechanism serves both ways.
+- **What only T4 shows.** T2's backend has no ssh: its `dial` is `docker exec socat`, so T2
+  covers what the daemon does with a dial (the counts, the refusals, the pipes), and T4 the
+  channels.
+
+The note from before: when first tried, `ssh -W host:port` through Lima's ssh config failed on
+the Mac with "Stdio forwarding request failed: Session open refused by peer". On Lima 2.3.0 it
+worked in a workspace VM (2026-11-23).
 
 **The session is plain ssh, not `limactl shell`** (2026-11-23, `host/vm/lima.ts`,
 `sessionArgs`): `ssh -F <LIMA_HOME>/<vm>/ssh.config -o LogLevel=ERROR -T lima-<vm> -- <line>`,
@@ -170,9 +220,8 @@ program that built the same ssh and waited on it. Measured on the M1 Max, Lima 2
 | a held session | 83 MB for limactl, 1.5 MB for its ssh | 1.5 MB (3.3 MB resident) |
 
 300 plain ssh sessions held at once in one workspace VM all answered (982 MB resident
-together); sshd allows 1,000 a connection there and in the root VM (`MaxSessions`). A session
-over ssh ran `socat STDIO TCP:...` and returned the guest sshd's banner. Killing the local
-client leaves the remote program running in both forms, so that did not change.
+together); sshd allows 1,000 a connection there and in the root VM (`MaxSessions`). Killing
+the local client leaves the remote program running in both forms, so that did not change.
 
 What the line is, and why: every argument, the working directory and every `KEY=value` go
 through one quoting function, since ssh hands the VM one string where `limactl shell` took
@@ -1693,7 +1742,7 @@ hundreds of milliseconds) are gone, and the state service is dialed when asked. 
 connection is carried or refused at once. `link.connections` stays, 256 by default, and now
 bounds each workspace twice, apart: its connections out, and its connections in (its dev
 servers, its editor: never counted before), so that a flood one way does not starve the
-other. The Mac carries 800 in and out of every workspace together, a fixed bound: under sshd's 1,000 sessions a connection (`MaxSessions`, in the root VM and every workspace VM), since every connection out and the dashboard's pipes ride the one control connection to the root VM, with room for the host's own sessions on it. Past
+other. The Mac carries 800 in and out of every workspace together, a fixed bound: under sshd's 1,000 sessions a connection (`MaxSessions`, in the root VM and every workspace VM), since every connection out and the dashboard's pipes ride the one control connection to the root VM, with room for the host's own sessions on it. (Since 2026-11-24 they are channels, which MaxSessions does not count; the bound is now sshd's 1024 files: "The forwarder's way into a VM".) Past
 either, a request is answered 503 with `X-Desolate-Reason`, anything else closed, and
 `desolate ports` and the log say so. A connection counts until its client's socket closes,
 which every end of a pipe comes to (`carrying`, `daemon.ts`). The dashboard's own pipes to

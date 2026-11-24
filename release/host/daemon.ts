@@ -224,8 +224,8 @@ const wsdReply = (line: string): Record<string, unknown> | Error => {
 
 /** How long to wait before a workspace's watch that ended is opened again: a second, doubling
  *  to 30 s while each lasts less than 30 s, and a second again after one that lasted. Each
- *  open is one ssh session into the VM (with commands over plain ssh, ticket #250 step 2:
- *  1.5 MB and 8 ms), so a daemon there that is gone costs one every 30 s, and a daemon that
+ *  open is one channel on the ssh connection to the VM (lima.ts, dial: no process), so a
+ *  daemon there that is gone costs one every 30 s, and a daemon that
  *  comes back is watched within 30 s. In the first minute after the workspace was
  *  registered, a second: it is registered before its services start (workspaces.ts,
  *  startServices), and what its daemon says then (its editor's token, its dev servers) is
@@ -525,20 +525,22 @@ export const LINK_CONNECTIONS = define({
   env: "DESOLATE_LINK_CONNECTIONS",
   side: "host",
   default: () => 256,
-  // Every session into the root VM is one of its sshd's, which allows 1000 on a connection
-  // (root/start.sh, MaxSessions): no workspace may have more than that.
+  // Every connection out is a channel on the one ssh connection to the root VM, whose sshd
+  // holds a file for each and may open 1024 (about 1017 channels: CONNECTIONS_MOST): no
+  // workspace may have more than 1000.
   parse: whole(1, 1000),
-  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; past it, one is refused at once. Each is a plain ssh session: about 1.5 MB of this Mac's memory and 1.2 MB of the VM's.",
+  why: "How many connections out of one workspace (its downloads, its installs) are carried to its proxy at once; past it, one is refused at once. Each is a channel on desolate's one ssh connection to the VM: about 35 KB of this Mac's memory, and no process.",
 });
 
 /** The most connections this Mac carries at once into and out of all its workspaces
- *  together. Each is a socket of this daemon's, which carries every workspace, and an ssh
- *  session: about 1.5 MB here, and 1.2 MB in the VM it reaches (200 held at once in the
- *  root VM, which has 3.9 GiB: measured on the M1, 2026-11-23). Every connection out is a
- *  session on the one control connection to the root VM as its login user, and so are the
- *  dashboard's pipes to the state service; sshd takes 1,000 sessions a connection, in the
- *  root VM and every workspace VM (root/start.sh, workspace/start.sh: MaxSessions). So this
- *  stays under 1,000, with room for the host's own sessions on that connection. */
+ *  together. Each is a socket of this daemon's, which carries every workspace, and a channel
+ *  on desolate's own ssh connection to the VM it reaches (lima.ts, dial): about 35 KB in
+ *  that ssh here, no process here or there. Every connection out rides the one connection
+ *  to the root VM, and so do the dashboard's pipes to the state service. sshd's MaxSessions
+ *  does not count channels; what bounds them is the files sshd's process for the connection
+ *  may hold, 1024 (measured in the root VM, Ubuntu 24.04, 2026-11-24: 1017 channels held at
+ *  once answered, and each past them was closed as soon as it opened). So this stays under
+ *  1,000, with room for the dashboard's own pipes on that connection. */
 const CONNECTIONS_MOST = 800;
 
 /** `n` connections, the word agreeing with the count. */
@@ -1873,7 +1875,7 @@ const serve = async () => {
     upstream.on("data", onGreeting);
     client.resume();
     // Among the silent, as every client is until it speaks: else each silent one held a
-    // session into the VM for ten minutes, past SILENT_MOST.
+    // channel into the VM for ten minutes, past SILENT_MOST.
     const first = await heard(silent, client, 600_000);
     if (client.destroyed) return void upstream.destroy();
     if (spokeAsBrowser(first)) return close();
@@ -2104,6 +2106,9 @@ const serve = async () => {
     const taken = listenersFrom(reply.listeners, ours);
     // What the VM itself left out, and what was cut here.
     const left = unforwardedOf(reply.unforwarded);
+    // A port no longer listened on: its channel from the Mac goes too (dial adds one at a
+    // port's first connection, and it would otherwise last as long as the VM's connection).
+    for (const port of entry.listeners) if (!taken.listeners.has(port)) b.release?.(entry.vm, port);
     entry.listeners = taken.listeners;
     entry.low = [...new Set([...left.low, ...taken.low])].sort((x, y) => x - y);
     entry.more = left.more;
@@ -2404,6 +2409,10 @@ const serve = async () => {
     entry.link?.();
     entry.watch?.close();
     for (const watcher of entry.watchers) watcher.close();
+    // Its channels: every one into its VM, with the connection they ride, and the one to its
+    // proxy on the root's.
+    b.release?.(vm);
+    if (entry.proxy) b.release?.(ROOT_VM, entry.proxy);
     entries.delete(vm);
     reconcile();
   };
@@ -2422,9 +2431,8 @@ const serve = async () => {
   // knows, nudges it when a share changed, and collects the dashboard's requests, which it
   // runs as desolate's own CLI, from the fixed list in shared/actions.ts.
   let rootUp = false;
-  // Dialed when asked: a session into the root VM opens in 8 ms (measured on the M1,
-  // 2026-11-23), against the dashboard's 300 ms for showing state. (A few were kept open
-  // ahead of need while one was a `limactl shell`, tens to hundreds of milliseconds.)
+  // Dialed when asked: a channel into the root VM opens in a few milliseconds (3 ms, on the
+  // M1, 2026-11-24), against the dashboard's 300 ms for showing state.
   const toStateService = () => dial(ROOT_VM, ROOT_UI.port);
   // The service's own questions, on one stream (heldAsker). A new stream is told the facts
   // at the next pass of the loop below (a second at most): a service started again has none.
@@ -2880,7 +2888,8 @@ const serve = async () => {
           editors.close();
           editors6.close();
           for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
-          for (const entry of entries.values()) entry.link?.();
+          for (const entry of entries.values()) (entry.link?.(), b.release?.(entry.vm));
+          b.release?.(ROOT_VM);
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });
           process.exit(0);

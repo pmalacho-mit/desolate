@@ -12,11 +12,13 @@
 // network, are there.
 import { attachFiltered } from "./attach.ts";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import { Duplex } from "node:stream";
+import type { Socket } from "node:net";
 import { refuse } from "../../shared/exit.ts";
 import { run } from "../../shared/run.ts";
 import type { RunResult } from "../../shared/run.ts";
@@ -27,7 +29,7 @@ import { define, valueOf, whole } from "../../shared/settings.ts";
 import { because } from "../failures.ts";
 import { imageFingerprint } from "../image.ts";
 import { INSTANCE, paths, RELEASE_DIR } from "../paths.ts";
-import { duplexOf, runStreamed } from "./stream.ts";
+import { runStreamed } from "./stream.ts";
 import { socatAddress } from "./types.ts";
 import { shareRefused } from "./shares.ts";
 import type { Backend, Check, ExecOptions, VmInfo, VmSpec, VmStatus } from "./types.ts";
@@ -43,10 +45,10 @@ import type {
 import type {
   alone,
   baseYaml,
+  channelsConfigured,
   cloneCall,
   confinement,
   madeWithoutLinkToken,
-  lineRan,
   sessionOf,
   sharesWaited,
   statusOf,
@@ -681,95 +683,232 @@ declare namespace vmStatus {
   >;
 }
 
-/** One argument for a remote shell, quoted so that it stays one argument. */
-const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
-/** The one line a session hands the shell sshd starts in the VM: in `cwd` (/ unless said),
- *  with `env` set, `argv` exactly as given (after `sudo`, for root), every word quoted so
- *  that it arrives as the one word it was, whatever it holds. ssh passes a command as one
- *  string, where `limactl shell` took words and quoted them itself. */
-const commandLine = (argv: string[], options: ExecOptions, sudo: boolean, totalMs?: number) => {
-  const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
-  const words = [...(sudo ? ["sudo"] : []), ...bounded(totalMs), "env", ...vars, ...argv];
-  return `cd ${quote(options.cwd ?? "/")} && exec ${words.map(quote).join(" ")}`;
-};
-/** A command exec runs with a total (`timeoutMs`, `totalMs` here) is held to it in the VM too: ending the ssh on this
- *  side leaves the program in the VM running (measured on the M1, 2026-11-23, for ssh and
- *  `limactl shell` alike, with no terminal), so a call made on a timer into a VM that is
- *  stuck would pile its programs up there. coreutils' `timeout`, in every VM's image: the
- *  whole second past the Mac's bound, so the Mac's says why first (and a 124 or 137 of its
- *  own reaches no caller then, which none reads apart from any other failure); TERM, then
- *  KILL five seconds on, to the command's process group, which is what it started. As root
- *  it runs under sudo, so that it may end what it runs. Its command reads stdin as before:
- *  it is in a group of its own, which matters only to a terminal, and these have none. A
- *  call with no total (streamed, held, dial's socat, attach) is meant to last as long as it
- *  is wanted; socat ends when its stdin closes. */
-const bounded = (totalMs?: number) =>
-  totalMs
-    ? ["timeout", "--signal=TERM", "--kill-after=5", String(Math.ceil(totalMs / 1000) + 1)]
-    : [];
-/** What a session hands sshd in the VM, which runs it with the login user's shell and `-c`:
- *  `commandLine` in a login shell (`login`, as limactl ran every command), or as it is. A
- *  login shell runs the profile, which holds what the VMs' commands rely on (the git VM's
- *  GIT_NO_LAZY_FETCH, the root's git config for its login user, a person's PATH for node);
- *  as it is, the line runs with sshd's own PATH and no profile. Measured in the root VM
- *  (2026-11-24, Ubuntu 24.04): a session's line ran in a login shell started 4 processes
- *  there, and as it is 1 (bash, which execs `env`, which execs the command). */
-export const sessionLine = (
-  argv: string[],
-  options: ExecOptions,
-  { sudo = false, totalMs, login = true }: { sudo?: boolean; totalMs?: number; login?: boolean },
-) => {
-  const line = commandLine(argv, options, sudo, totalMs);
-  return login ? `exec "$SHELL" -l -c ${quote(line)}` : line;
+/** Where a VM's channels from the Mac are kept: its ssh control socket (`ctl`) and one local
+ *  socket per target, in a folder of the VM's own Lima folder that only this Mac's user may
+ *  enter (made 0700 here; Lima makes the VM's folder 0700 too). A folder that is anything else
+ *  (a link, another user's, open to others) is refused, not used. */
+const channelDir = (name: string) => {
+  const dir = path.join(LIMA_HOME, name, "ch");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const seen = fs.lstatSync(dir);
+  if (!seen.isDirectory() || seen.uid !== process.getuid?.() || (seen.mode & 0o077) !== 0)
+    throw new Error(
+      `${dir} is not a folder only this user may enter: desolate keeps ${name}'s connections there. Remove it, and connect again.`,
+    );
+  return dir;
 };
 
-declare namespace sessionLine {
-  /** Either form, run by a real `sh` as sshd's `-c` would: each word arrives as the one word
-   *  it was, and nothing in it is expanded or run. The login form starts the login user's
-   *  shell (a stand-in that notes it) and the plain one does not; the first two rows are the
-   *  controls, the same word through both forms. */
-  export type Words = Table<
-    typeof lineRan,
+/** The local socket a target's channel is reached at, by a name this Mac makes: a port by
+ *  its number, a socket in the VM by the start of its path's SHA-256 (the path itself would
+ *  not fit a socket's 104 bytes). */
+const channelSocket = (dir: string, target: number | string) =>
+  path.join(
+    dir,
+    typeof target === "number"
+      ? `${target}.sock`
+      : `${createHash("sha256").update(target).digest("hex").slice(0, 16)}.sock`,
+  );
+
+/** ssh's `-L` for a channel from `local` on this Mac to `target` in the VM: a port on the VM's
+ *  own loopback, or a socket by an absolute path of plain names, checked as a dial's target
+ *  always was (socatAddress); never anything a VM said. `-L` splits at colons, so a local path
+ *  with one is refused (this Mac makes it, under its home). */
+export const forwardSpec = (local: string, target: number | string) => {
+  socatAddress(target);
+  if (/[:\s]/.test(local)) throw new Error(`bad local socket path ${printable(local, 120)}`);
+  return `${local}:${typeof target === "number" ? `127.0.0.1:${target}` : target}`;
+};
+
+declare namespace forwardSpec {
+  /** a port on the VM's loopback and a socket by its path, as the Mac named them; the controls
+   *  for the refusals below */
+  export type Targets = Table<
+    typeof forwardSpec,
+    [
+      [args: [local: "/h/ch/5173.sock", target: 5173], expected: "/h/ch/5173.sock:127.0.0.1:5173"],
+      [
+        args: [local: "/h/ch/a.sock", target: "/var/lib/desolate-proxies/out/acme/dsl-main-x.sock"],
+        expected: "/h/ch/a.sock:/var/lib/desolate-proxies/out/acme/dsl-main-x.sock",
+      ],
+    ]
+  >;
+  /** nothing but the one target: no other host, no port out of range, no path that climbs,
+   *  holds a colon (which `-L` would read as host:port) or anything but plain names, and no
+   *  local path with a colon or a space */
+  export type Refuses = [
+    Throws<Invoke<typeof forwardSpec, [local: "/h/a.sock", target: 0]>, "bad port 0">,
+    Throws<Invoke<typeof forwardSpec, [local: "/h/a.sock", target: 65536]>, "bad port 65536">,
+    Throws<Invoke<typeof forwardSpec, [local: "/h/a.sock", target: 80.5]>, "bad port 80.5">,
+    Throws<
+      Invoke<typeof forwardSpec, [local: "/h/a.sock", target: "/a/../etc/x"]>,
+      "bad socket path"
+    >,
+    Throws<Invoke<typeof forwardSpec, [local: "/h/a.sock", target: "/a/b:22"]>, "bad socket path">,
+    Throws<
+      Invoke<typeof forwardSpec, [local: "/h/a.sock", target: "github.com:22"]>,
+      "bad socket path"
+    >,
+    Throws<Invoke<typeof forwardSpec, [local: "/h/a.sock", target: "/a b/c"]>, "bad socket path">,
+    Throws<Invoke<typeof forwardSpec, [local: "/h/a.sock", target: "/a/b\nc"]>, "bad socket path">,
+    Throws<
+      Invoke<typeof forwardSpec, [local: "/h:x/a.sock", target: 80]>,
+      "bad local socket path /h:x/a.sock"
+    >,
+    Throws<
+      Invoke<typeof forwardSpec, [local: "/h x/a.sock", target: 80]>,
+      "bad local socket path /h x/a.sock"
+    >,
+  ];
+}
+
+/** ssh to a VM on its connection for channels (`ctl`), with Lima's configuration for it, then
+ *  `op`. What a VM's sshd could use to open a channel back to this Mac is off whatever the
+ *  configuration says (on the command line, which ssh reads before -F's file, and the first
+ *  value read wins): no agent, no X11, no local command. No remote forward (-R) is ever asked
+ *  for, so the OpenSSH client refuses every channel a server opens of its own ("forwarded-tcpip"
+ *  and "forwarded-streamlocal" name no forward it asked for; "x11" and "auth-agent" are off:
+ *  clientloop.c). */
+export const channelArgs = (name: string, ctl: string, ...op: string[]) => [
+  "-F",
+  path.join(LIMA_HOME, name, "ssh.config"),
+  "-o",
+  "LogLevel=ERROR",
+  "-o",
+  `ControlPath=${ctl}`,
+  "-o",
+  "ForwardAgent=no",
+  "-o",
+  "ForwardX11=no",
+  "-o",
+  "PermitLocalCommand=no",
+  ...op,
+  `lima-${name}`,
+];
+
+/** The connection itself: desolate's own (not Lima's, which limactl, `exec` and refreshSessions
+ *  share and end), as a master for `-O forward`, in the background once it is up (`-f`: ssh
+ *  exits 0 when its control socket listens), with no session (`-N`) and no forward from any
+ *  configuration (ClearAllForwardings: here only, since on `-O forward` it would clear the
+ *  forward asked for, and the first value ssh reads is the one it keeps). */
+export const masterArgs = (name: string, ctl: string) =>
+  channelArgs(
+    name,
+    ctl,
+    "-o",
+    "ControlMaster=yes",
+    "-o",
+    "ControlPersist=no",
+    "-o",
+    "ClearAllForwardings=yes",
+    "-f",
+    "-N",
+  );
+
+declare namespace masterArgs {
+  /** what ssh makes of them with Lima's own configuration (`ssh -G`, which reads it and
+   *  connects nowhere): agent and X11 forwarding off, no forward or tunnel of any kind, no local
+   *  command, with a configuration that asked for each of them; the control is that
+   *  configuration read alone, where ssh -G shows each (so one that turned them on is seen) */
+  export type Configured = Table<
+    typeof channelsConfigured,
     [
       [
-        args: [argv: ["printf", "%s\\0", "plain"], form: "login"],
-        expected: { said: ["plain"]; code: 0; shell: true },
+        args: [config: "", ours: true],
+        expected: {
+          forwardagent: "no";
+          forwardx11: "no";
+          clearallforwardings: "yes";
+          permitlocalcommand: "no";
+          tunnel: "false";
+          forwards: [];
+        },
       ],
       [
-        args: [argv: ["printf", "%s\\0", "plain"], form: "plain"],
-        expected: { said: ["plain"]; code: 0; shell: false },
+        args: [
+          config: "  ForwardAgent yes\n  ForwardX11 yes\n  RemoteForward 9999 127.0.0.1:22\n  LocalForward 8888 127.0.0.1:22\n  DynamicForward 7777\n  PermitLocalCommand yes\n  Tunnel yes\n",
+          ours: true,
+        ],
+        expected: {
+          forwardagent: "no";
+          forwardx11: "no";
+          clearallforwardings: "yes";
+          permitlocalcommand: "no";
+          tunnel: "false";
+          forwards: [];
+        },
       ],
       [
-        args: [argv: ["printf", "%s\\0", "two words"], form: "plain"],
-        expected: { said: ["two words"]; code: 0; shell: false },
-      ],
-      [
-        args: [argv: ["printf", "%s\\0", 'it\'s "quoted"'], form: "plain"],
-        expected: { said: ['it\'s "quoted"']; code: 0; shell: false },
-      ],
-      [
-        args: [argv: ["printf", "%s\\0", "$(echo injected)", "`echo injected`"], form: "plain"],
-        expected: { said: ["$(echo injected)", "`echo injected`"]; code: 0; shell: false },
-      ],
-      [
-        args: [argv: ["printf", "%s\\0", "; echo injected", "&& echo injected"], form: "plain"],
-        expected: { said: ["; echo injected", "&& echo injected"]; code: 0; shell: false },
-      ],
-      [
-        args: [argv: ["printf", "%s\\0", "line\necho injected"], form: "plain"],
-        expected: { said: ["line\necho injected"]; code: 0; shell: false },
-      ],
-      [
-        args: [argv: ["printf", "%s\\0", "-n", "", "*", "~"], form: "plain"],
-        expected: { said: ["-n", "", "*", "~"]; code: 0; shell: false },
-      ],
-      [
-        args: [argv: ["printf", "%s\\0", "$(echo injected)", "line\necho injected"], form: "login"],
-        expected: { said: ["$(echo injected)", "line\necho injected"]; code: 0; shell: true },
+        args: [
+          config: "  ForwardAgent yes\n  ForwardX11 yes\n  RemoteForward 9999 127.0.0.1:22\n  LocalForward 8888 127.0.0.1:22\n  DynamicForward 7777\n  PermitLocalCommand yes\n  Tunnel yes\n",
+          ours: false,
+        ],
+        expected: {
+          forwardagent: "yes";
+          forwardx11: "yes";
+          clearallforwardings: "no";
+          permitlocalcommand: "yes";
+          tunnel: "point-to-point";
+          forwards: [
+            "dynamicforward 7777",
+            "localforward 8888 [127.0.0.1]:22",
+            "remoteforward 9999 [127.0.0.1]:22",
+          ];
+        },
       ],
     ]
   >;
 }
+
+/** A stream that is `ready`'s socket once it connects: what is written before is held (in
+ *  order, under the stream's own high-water mark), an end is passed on as the socket's end
+ *  (a half-close: the VM's side then sends what it has left), and reading is paced by the
+ *  reader (back-pressure). A `ready` that fails ends the stream with its error. */
+const later = (ready: Promise<Socket>): Duplex => {
+  let socket: Socket | null = null;
+  let eof = false;
+  const end = () => {
+    if (!eof) stream.push(null);
+    eof = true;
+  };
+  const stream = new Duplex({
+    allowHalfOpen: true,
+    read() {
+      socket?.resume();
+    },
+    write(chunk, encoding, callback) {
+      ready.then((s) => void s.write(chunk, encoding, callback), callback);
+    },
+    final(callback) {
+      ready.then((s) => void s.end(callback), callback);
+    },
+    destroy(error, callback) {
+      ready.then(
+        (s) => void s.destroy(),
+        () => {},
+      );
+      callback(error);
+    },
+  });
+  ready.then(
+    (s) => {
+      socket = s;
+      s.on("data", (chunk) => {
+        if (!stream.push(chunk)) s.pause();
+      });
+      s.on("end", end);
+      s.on("error", (error) => stream.destroy(error));
+      // What came before the close is read first: the reader (a pipe) takes it, then the end.
+      s.on("close", () => {
+        end();
+        if (stream.readableEnded) stream.destroy();
+        else stream.once("end", () => stream.destroy());
+      });
+    },
+    (error) => stream.destroy(error),
+  );
+  return stream;
+};
+
 /** The one backend, and so the one place desolate is refused on a host that is not a Mac:
  *  its VMs are Apple's hypervisor's, run by Lima (vz), and every command that makes or starts
  *  one asks for this first (stack.ts, `backend`). */
@@ -952,6 +1091,32 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     );
   };
 
+  /** One argument for a remote shell, quoted so that it stays one argument. */
+  const quote = (arg: string) => `'${arg.replace(/'/g, "'\\''")}'`;
+  /** The one line a session hands the shell sshd starts in the VM: in `cwd` (/ unless said),
+   *  with `env` set, `argv` exactly as given (after `sudo`, for root), every word quoted so
+   *  that it arrives as the one word it was, whatever it holds. ssh passes a command as one
+   *  string, where `limactl shell` took words and quoted them itself. */
+  const commandLine = (argv: string[], options: ExecOptions, sudo: boolean, totalMs?: number) => {
+    const vars = Object.entries(options.env ?? {}).map(([key, value]) => `${key}=${value}`);
+    const words = [...(sudo ? ["sudo"] : []), ...bounded(totalMs), "env", ...vars, ...argv];
+    return `cd ${quote(options.cwd ?? "/")} && exec ${words.map(quote).join(" ")}`;
+  };
+  /** A command exec runs with a total (`timeoutMs`, `totalMs` here) is held to it in the VM too: ending the ssh on this
+   *  side leaves the program in the VM running (measured on the M1, 2026-11-23, for ssh and
+   *  `limactl shell` alike, with no terminal), so a call made on a timer into a VM that is
+   *  stuck would pile its programs up there. coreutils' `timeout`, in every VM's image: the
+   *  whole second past the Mac's bound, so the Mac's says why first (and a 124 or 137 of its
+   *  own reaches no caller then, which none reads apart from any other failure); TERM, then
+   *  KILL five seconds on, to the command's process group, which is what it started. As root
+   *  it runs under sudo, so that it may end what it runs. Its command reads stdin as before:
+   *  it is in a group of its own, which matters only to a terminal, and these have none. A
+   *  call with no total (streamed, held, dial's socat, attach) is meant to last as long as it
+   *  is wanted; socat ends when its stdin closes. */
+  const bounded = (totalMs?: number) =>
+    totalMs
+      ? ["timeout", "--signal=TERM", "--kill-after=5", String(Math.ceil(totalMs / 1000) + 1)]
+      : [];
   /** Root in the ROOT VM is reached by ssh as root, with Lima's key for this home (on the
    *  host only), on its own control socket: never through the VM's login user, which runs
    *  everything there that reads a domain's data and has no sudo (root/start.sh). */
@@ -1019,8 +1184,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
    *  waited on it (measured on the M1, 2026-11-23, Lima 2.3.0: `limactl shell <vm> true`
    *  77 ms and 87 MB at its peak; the same command over ssh 8 ms and 1.5 MB).
    *
-   *  - The command runs in a login shell, `"$SHELL" -l -c`, as limactl ran it, unless
-   *    `login` is false (dial's socat, which needs nothing of a login: sessionLine): the VMs'
+   *  - The command runs in a login shell, `"$SHELL" -l -c`, as limactl ran it: the VMs'
    *    profiles hold what their commands rely on. The git VM's (git/provision.sh) sets
    *    GIT_NO_LAZY_FETCH, so that a fetch from a mirror or a root's clone, whose config is
    *    the root's user's, fetches nothing further; the root's (root/start.sh) gives its login
@@ -1038,11 +1202,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     name: string,
     argv: string[],
     options: ExecOptions = {},
-    {
-      terminal = false,
-      totalMs,
-      login = true,
-    }: { terminal?: boolean; totalMs?: number; login?: boolean } = {},
+    { terminal = false, totalMs }: { terminal?: boolean; totalMs?: number } = {},
   ): string[] => [
     "-F",
     path.join(LIMA_HOME, name, "ssh.config"),
@@ -1051,8 +1211,140 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     terminal ? "-t" : "-T",
     `lima-${name}`,
     "--",
-    sessionLine(argv, options, { sudo: options.root === true, totalMs, login }),
+    `exec "$SHELL" -l -c ${quote(commandLine(argv, options, options.root === true, totalMs))}`,
   ];
+  /** Each VM's connection for channels, as this process knows it: the master's pid once it is
+   *  up, and each target's forward once added (by its local socket). A master that has gone (its
+   *  VM stopped, it was killed, refreshSessions ended it) is seen at the next dial: its sockets
+   *  refuse and its pid is not there. */
+  type Master = { up: Promise<number>; pid: number; forwards: Map<string, Promise<void>> };
+  const masters = new Map<string, Master>();
+  /** desolate's connection to `name` for channels, made if it is not up: a master of an
+   *  earlier daemon, or one that went, is ended and its sockets removed first (ssh leaves a
+   *  forward's socket behind when it goes, and does not bind over one), since nothing here
+   *  knows its forwards. ssh -f answers once the master listens: about 220 ms into the root
+   *  VM (measured on the M1, 2026-11-24). */
+  const masterOf = (name: string) => {
+    const known = masters.get(name);
+    if (known) return known;
+    const open = async (): Promise<number> => {
+      const dir = channelDir(name);
+      const ctl = path.join(dir, "ctl");
+      await run("ssh", channelArgs(name, ctl, "-O", "exit"), { env: env(), timeoutMs: 10_000 });
+      for (const file of fs.readdirSync(dir)) fs.rmSync(path.join(dir, file), { force: true });
+      const master = await run("ssh", masterArgs(name, ctl), { env: env(), timeoutMs: 60_000 });
+      const check =
+        master.code === 0
+          ? await run("ssh", channelArgs(name, ctl, "-O", "check"), {
+              env: env(),
+              timeoutMs: 10_000,
+            })
+          : master;
+      const pid = Number(/\(pid=(\d+)\)/.exec(check.stderr)?.[1]);
+      if (check.code !== 0 || !pid)
+        throw new Error(
+          `could not open desolate's connection to ${name}: ${printable(check.stderr || check.stdout, 300)}`,
+        );
+      return (made.pid = pid);
+    };
+    const made: Master = { pid: 0, up: Promise.resolve(0), forwards: new Map() };
+    made.up = open();
+    made.up.catch(() => masters.get(name) === made && masters.delete(name));
+    masters.set(name, made);
+    return made;
+  };
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "EPERM";
+    }
+  };
+  /** The local socket that reaches `target` in `name`, its forward added on desolate's
+   *  connection if it is not there (8 ms; once a target for as long as the connection lasts). */
+  const forwarded = async (name: string, target: number | string) => {
+    const master = masterOf(name);
+    const pid = await master.up;
+    const local = channelSocket(path.join(LIMA_HOME, name, "ch"), target);
+    let added = master.forwards.get(local);
+    if (!added) {
+      added = (async () => {
+        fs.rmSync(local, { force: true });
+        const forward = await run(
+          "ssh",
+          channelArgs(
+            name,
+            path.join(LIMA_HOME, name, "ch", "ctl"),
+            "-O",
+            "forward",
+            "-L",
+            forwardSpec(local, target),
+          ),
+          { env: env(), timeoutMs: 10_000 },
+        );
+        if (forward.code !== 0)
+          throw new Error(
+            `could not open a channel to ${name}: ${printable(forward.stderr || forward.stdout, 300)}`,
+          );
+      })();
+      master.forwards.set(local, added);
+      added.catch(() => master.forwards.get(local) === added && master.forwards.delete(local));
+    }
+    await added;
+    return { local, pid, master };
+  };
+  const connected = (local: string) =>
+    new Promise<Socket>((resolve, reject) => {
+      const socket = net.connect({ path: local, allowHalfOpen: true });
+      socket.once("connect", () => (socket.removeListener("error", reject), resolve(socket)));
+      socket.once("error", reject);
+    });
+  /** A connection to `target` in `name`, as a channel on desolate's connection to it: no
+   *  process here or in the VM (sshd opens the channel itself). A refusal while the master
+   *  lives is its listening queue full (ssh listens with a backlog of 128, and a burst of 800
+   *  connects at once had 262 refused on the M1, 2026-11-24; with 64 at a time, none), so it is
+   *  tried again shortly, for up to 2 s. A master gone is made again, once. */
+  const channel = async (name: string, target: number | string): Promise<Socket> => {
+    for (let tries = 0, again = true; ; tries++) {
+      const { local, pid, master } = await forwarded(name, target);
+      try {
+        return await connected(local);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (!alive(pid) && again) {
+          again = false;
+          if (masters.get(name) === master) masters.delete(name);
+          continue;
+        }
+        if (code === "ENOENT" && again) {
+          // Its socket removed while the master lives: added again (the master would answer a
+          // forward it already has with yes, without binding it again).
+          again = false;
+          await run(
+            "ssh",
+            channelArgs(
+              name,
+              path.join(LIMA_HOME, name, "ch", "ctl"),
+              "-O",
+              "cancel",
+              "-L",
+              forwardSpec(local, target),
+            ),
+            { env: env(), timeoutMs: 10_000 },
+          );
+          master.forwards.delete(local);
+          continue;
+        }
+        if (code === "ECONNREFUSED" && alive(pid) && tries < 200) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          continue;
+        }
+        throw error;
+      }
+    }
+  };
+
   /** `name`, if it is one of this stack's VMs' names (`PREFIX`, then a VM's own part, as
    *  shared/names.ts and templates.ts make them): else a refusal, before it is used. */
   const named = (name: string) => {
@@ -1537,25 +1829,44 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     },
 
     dial(name, target) {
-      // A session running socat, as the fake backend's `docker exec` does. ssh's own stdio
-      // forwarding (`ssh -W`) through Lima's control connection was refused when first tried
-      // and worked on Lima 2.3.0 in a workspace VM (2026-11-23), but reaches TCP only, and a
-      // target may be a unix socket in the VM (a workspace's proxy). Refused by the VM's
-      // processes alone, as spawn is: a connection is answered at once. No login shell:
-      // socat needs no profile, which was 3 of the 4 processes a connection started in the
-      // root VM (sessionLine).
+      // A channel on desolate's own ssh connection to the VM (channel): sshd opens it itself,
+      // so a connection starts no process in the VM or here, where a session running socat
+      // started an ssh here and 4 processes in the root VM. Refused by the VM's processes
+      // alone, as spawn is: a connection is answered at once.
       const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name)));
       if (why) throw new Error(why);
-      return duplexOf(
-        spawn(
-          "ssh",
-          sessionArgs(name, ["socat", "STDIO", socatAddress(target)], {}, { login: false }),
-          {
-            stdio: ["pipe", "pipe", "ignore"],
-            env: env(),
-          },
+      socatAddress(target);
+      return later(channel(name, target));
+    },
+
+    release(name, target) {
+      const master = masters.get(name);
+      if (target === undefined) {
+        // The VM's connection and every channel on it: its master told to end, no process
+        // started for it (a daemon that stops, a workspace that goes).
+        // (At once, when it is up: a daemon that stops exits right after.)
+        masters.delete(name);
+        const end = (pid: number) => alive(pid) && process.kill(pid, "SIGTERM");
+        if (master?.pid) end(master.pid);
+        else void master?.up.then(end, () => {});
+        fs.rmSync(path.join(LIMA_HOME, name, "ch"), { recursive: true, force: true });
+        return;
+      }
+      const local = channelSocket(path.join(LIMA_HOME, name, "ch"), target);
+      if (!master?.forwards.has(local)) return;
+      master.forwards.delete(local);
+      void run(
+        "ssh",
+        channelArgs(
+          name,
+          path.join(LIMA_HOME, name, "ch", "ctl"),
+          "-O",
+          "cancel",
+          "-L",
+          forwardSpec(local, target),
         ),
-      );
+        { env: env(), timeoutMs: 10_000 },
+      ).then(() => fs.rmSync(local, { force: true }));
     },
 
     link(name) {
@@ -1613,6 +1924,13 @@ export const limaBackend = (platform: string = process.platform): Backend => {
         ["-F", path.join(LIMA_HOME, name, "ssh.config"), "-O", "exit", `lima-${name}`],
         { env: env(), timeoutMs: 30_000 },
       );
+      // And desolate's own connection for channels, which logged in with the same groups (a
+      // channel to a proxy's socket needs the proxies' group): the daemon finds it gone at its
+      // next dial, and opens it again.
+      await run("ssh", channelArgs(name, path.join(LIMA_HOME, name, "ch", "ctl"), "-O", "exit"), {
+        env: env(),
+        timeoutMs: 30_000,
+      });
     },
   };
   return backend;
@@ -2419,27 +2737,6 @@ declare namespace limaBackend {
               "lima-dsl-main-w1",
               "--",
               "exec \"$SHELL\" -l -c 'cd '\\''/'\\'' && exec '\\''env'\\'' '\\''true'\\'''",
-            ],
-          ];
-          said: [];
-          code: 0;
-          stderr: "";
-        },
-      ],
-      /** dial: socat in a session, to the VM's loopback port, in no login shell (sshd runs the line in the user's shell, with no profile) */
-      [
-        args: [backend: Vz, call: "dial", name: "dsl-main-w1", argv: ["8080"], options: {}],
-        expected: {
-          ssh: [
-            [
-              "-F",
-              "<home>/lima/dsl-main-w1/ssh.config",
-              "-o",
-              "LogLevel=ERROR",
-              "-T",
-              "lima-dsl-main-w1",
-              "--",
-              "cd '/' && exec 'env' 'socat' 'STDIO' 'TCP:127.0.0.1:8080'",
             ],
           ];
           said: [];
