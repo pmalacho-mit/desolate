@@ -650,6 +650,128 @@ describe("T2 section 4.8: the root UI", () => {
     );
   });
 
+  it("the state is pushed when it changes, not looked for: a branch at once, a flood at most once a second", async () => {
+    stack.step("events, not a timer");
+    // Every state pushed on the stream from now, and when (the first is where things stand).
+    const heard = () => {
+      const got: { at: number; state: State }[] = [];
+      const socket = net.connect(port, "127.0.0.1");
+      let buffer = "";
+      socket.on("connect", () =>
+        socket.write(
+          `GET /events?key=${key} HTTP/1.1\r\nHost: ${HOST}:${port}\r\nCookie: ${cookie}\r\nAccept: text/event-stream\r\n\r\n`,
+        ),
+      );
+      socket.on("data", (chunk) => {
+        buffer += chunk;
+        for (const match of buffer.matchAll(/data: (\{.*\})\n\n/g))
+          got.push({ at: performance.now(), state: JSON.parse(match[1]!) as State });
+        buffer = buffer.slice(buffer.lastIndexOf("\n\n") + 2);
+      });
+      socket.on("error", () => {});
+      return { got, close: () => socket.destroy() };
+    };
+    // A branch moved in the workspace: its daemon writes the list to the outbox, which the
+    // host watches and nudges the state service for. The service's own look is every 10 s,
+    // so six moves each pushed within 2 s would have to land in its first fifth every time
+    // by chance (1 in 15,000) if the nudge were not there.
+    const tipOf = (state: State) =>
+      (
+        state as unknown as {
+          domains: {
+            slug: string;
+            branches: { items: { repo: string; branch: string; commit: string }[] };
+          }[];
+        }
+      ).domains
+        .find((d) => d.slug === "web")
+        ?.branches.items.find((b) => b.repo === "acme/app" && b.branch === "events")?.commit;
+    const delays: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const moved = stack.quiet(
+        "exec",
+        "web/one",
+        "--",
+        "sh",
+        "-c",
+        `c=$(git -c user.name=t -c user.email=t@example.test commit-tree 'HEAD^{tree}' -p HEAD -m 'event ${i}') && git branch -f events "$c" && echo "$c"`,
+      );
+      assert.equal(moved.code, 0, moved.stderr);
+      const made = performance.now();
+      const tip = moved.stdout.trim();
+      const told = await pushed((s) => tipOf(s) === tip, 15_000);
+      assert.ok(told, `branch move ${i} was pushed`);
+      delays.push(Math.max(0, Math.round(told!.at - made)));
+    }
+    console.log(`# a branch move pushed after ${delays.join(", ")} ms`);
+    assert.ok(
+      delays.every((ms) => ms <= 2000),
+      `each pushed within 2 s of the move, not at the state service's look: ${delays.join(", ")} ms`,
+    );
+    assert.equal(
+      stack.quiet("exec", "web/one", "--", "git", "branch", "-D", "-q", "events").code,
+      0,
+    );
+    // A flood: the workspace's status rewritten every 20 ms for 3 s (here on the host's side
+    // of the share, as a VM's writes are). The host nudges at most once a second, and the
+    // service looks on each nudge: four from the flood (at once, then one a second until it
+    // stops). Any other look while the file changes shows it too, and two others may fall in
+    // the window (the service's look every 10 s, the host's facts said again every 45 s): six
+    // states at most in the 4.5 s from its start (it was one a second and one per nudge, with
+    // the host's two a second: up to fifteen). CONTROL:
+    // the flood is seen while it lasts, more than once, not held back until it stops.
+    const file = path.join(
+      stack.home,
+      "domains",
+      "web",
+      "repos",
+      "acme",
+      "app",
+      ".git",
+      "desolate-status.json",
+    );
+    const kept = fs.readFileSync(file, "utf8");
+    assert.match(kept, /need: a decision/, "web/one's status, as the budgets left it");
+    const listening = heard();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const started = performance.now();
+    let n = 0;
+    const flood = setInterval(() => {
+      fs.writeFileSync(
+        `${file}.flood`,
+        JSON.stringify({ color: "yellow", message: `flood ${n++}` }),
+      );
+      fs.renameSync(`${file}.flood`, file);
+    }, 20);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    clearInterval(flood);
+    const ended = performance.now();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    listening.close();
+    fs.writeFileSync(`${file}.flood`, kept);
+    fs.renameSync(`${file}.flood`, file);
+    const during = listening.got.filter((g) => g.at >= started);
+    const flooded = new Set(
+      during
+        .filter((g) => g.at <= ended + 200)
+        .map((g) => ws(g.state, "web/one")?.says.status?.message)
+        .filter((m) => m?.startsWith("flood ")),
+    );
+    console.log(
+      `# ${n} writes; ${during.length} states pushed, ${flooded.size} of them during the flood`,
+    );
+    assert.ok(n > 100, `the flood was a flood: ${n} writes`);
+    assert.ok(during.length <= 6, `about once a second: ${during.length} states in 4.5 s`);
+    assert.ok(flooded.size >= 2, `control: seen while it lasted, ${flooded.size} times`);
+    assert.ok(
+      await until(
+        async () =>
+          ws(await state(), "web/one")?.says.status?.message?.startsWith("need:") === true,
+      ),
+      "and back as it was",
+    );
+  });
+
   it("stop and start from the dashboard; its agents as they are after the start, at once", async () => {
     stack.step("stop and start");
     const sleeper = async () =>
@@ -666,6 +788,33 @@ describe("T2 section 4.8: the root UI", () => {
     assert.ok(
       await until(async () => ws(await state(), "web/one")?.host?.status === "stopped", 60_000),
     );
+    // A change nothing watches: a stopped workspace's status (the host watches a running
+    // one's), written on the host's side. The state service's slow look, every 10 s, shows it.
+    const file = path.join(
+      stack.home,
+      "domains",
+      "web",
+      "repos",
+      "acme",
+      "app",
+      ".git",
+      "desolate-status.json",
+    );
+    const kept = fs.readFileSync(file, "utf8");
+    const written = performance.now();
+    fs.writeFileSync(
+      `${file}.lost`,
+      JSON.stringify({ color: "green", message: "no event for this" }),
+    );
+    fs.renameSync(`${file}.lost`, file);
+    const repaired = await pushed(
+      (s) => ws(s, "web/one")?.says.status?.message === "no event for this",
+      12_000,
+    );
+    assert.ok(repaired, "a change with no event is shown by the slow look, within its 10 s");
+    console.log(`# a change with no event shown after ${Math.round(repaired!.at - written)} ms`);
+    fs.writeFileSync(`${file}.lost`, kept);
+    fs.renameSync(`${file}.lost`, file);
     assert.equal(
       (await action("workspace.start", { domain: "web", workspace: "one" })).status,
       202,

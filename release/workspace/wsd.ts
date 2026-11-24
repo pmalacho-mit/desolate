@@ -19,13 +19,13 @@ import { createServer } from "node:net";
 import type { Server, Socket } from "node:net";
 import { fileURLToPath } from "node:url";
 import { PORTS } from "../shared/limits.ts";
-import { sleep } from "../shared/run.ts";
+import { paced, sleep } from "../shared/run.ts";
 import { MIRRORS, tick as bridgeTick, unmirrored } from "./bridge.ts";
 import { branches, clone, domainRepos, importDeliveries, syncRepo, watchRefs } from "./sync.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { repeated } from "../.harness/shared-bytes.ts";
-import type { pacedLooks, watching } from "../.harness/workspace-wsd.ts";
+import type { watching } from "../.harness/workspace-wsd.ts";
 
 const SOCKET = "/run/desolate/wsd.sock";
 /** desolate's own listeners in the VM: never offered for forwarding. */
@@ -623,84 +623,6 @@ const serve = () => {
     }
   })();
 };
-
-/** Look after things change: `poke` for each event. A look starts `quietMs` after the last
- *  event (a commit touches several files within milliseconds, a rebase moves a branch many
- *  times in a second), or `gapMs` after the first it answers if they keep coming; never
- *  sooner than `gapMs` after the last look began, never two at once. So a flood of events
- *  (a loop touching a ref) costs at most a look a second. `look` does not throw; `later`
- *  sets a timer and answers what cancels it. */
-export const paced = (
-  look: () => Promise<void>,
-  now = () => performance.now(),
-  later = (fn: () => void, ms: number) => clearTimeout.bind(null, setTimeout(fn, ms)),
-  quietMs = 300,
-  gapMs = 1000,
-) => {
-  let first: number | null = null;
-  let last = 0;
-  let began = -Infinity;
-  let cancel = () => {};
-  let looking = false;
-  const arm = () => {
-    cancel();
-    if (first === null || looking) return;
-    const at = Math.max(began + gapMs, Math.min(last + quietMs, first + gapMs));
-    cancel = later(async () => {
-      [first, looking, began] = [null, true, now()];
-      await look();
-      looking = false;
-      arm();
-    }, at - now());
-  };
-  return {
-    poke: () => {
-      last = now();
-      first ??= last;
-      arm();
-    },
-    /** what was poked and not looked at yet is dropped */
-    close: () => {
-      first = null;
-      arm();
-    },
-  };
-};
-
-declare namespace paced {
-  /** when it looks, given when events came (bursts: from, to, every ms) and how long a look
-   *  takes. One event: a look 300 ms after it. A commit's few events within milliseconds:
-   *  one look, 300 ms after the last. Two events seconds apart: two looks (the control) */
-  export type Quiet = Table<
-    typeof pacedLooks,
-    [
-      [args: [bursts: [[0, 0, 1]]], expected: [300]],
-      [args: [bursts: [[0, 20, 5]]], expected: [320]],
-      [args: [bursts: [[0, 0, 1], [2000, 2000, 1]]], expected: [300, 2300]],
-    ]
-  >;
-  /** at most one look a second: events every 10 ms for 3 s look three times, not never (a
-   *  flood would otherwise keep the quiet from coming) and not once each; two quick changes
-   *  a look apart wait out the second's rest */
-  export type AtMostOneASecond = Table<
-    typeof pacedLooks,
-    [
-      [args: [bursts: [[0, 2990, 10]]], expected: [1000, 2000, 3000]],
-      [args: [bursts: [[0, 0, 1], [400, 400, 1]]], expected: [300, 1300]],
-    ]
-  >;
-  /** never two at once: an event during a slow look (1.5 s) is looked at when it ends */
-  export type OneAtATime = Expect<
-    Invoke<typeof pacedLooks, [bursts: [[0, 0, 1], [400, 400, 1]], lookMs: 1500]>,
-    "=",
-    [300, 1800]
-  >;
-  /** closed, what was poked is dropped: no look (the control: the same poke, not closed) */
-  export type Closed = [
-    Expect<Invoke<typeof pacedLooks, [bursts: [[0, 0, 1]], lookMs: 0, closeAt: 100]>, "=", []>,
-    Expect<Invoke<typeof pacedLooks, [bursts: [[0, 0, 1]], lookMs: 0, closeAt: 400]>, "=", [300]>,
-  ];
-}
 
 // A domain's branches, written out when they move: looked at on an event in a repository's
 // refs (watchRefs: git run in this VM, here or in its devcontainer), and once a minute
