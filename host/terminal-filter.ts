@@ -201,7 +201,8 @@ declare namespace terminalFilter {
   >;
   /** inside a CSI, a terminal carries out a C0 control and goes on reading the CSI, and
    *  ignores DEL: so the filter does too, and the window operation (t) or concealed text
-   *  (SGR 8) the control was hiding is still dropped; the control itself passes, in order */
+   *  (SGR 8) the control was hiding is still dropped; the control itself passes, in order
+   *  @incident 2026-11-16-terminal-window-op */
   export type ControlInsideCsi = Table<
     typeof filtered,
     [

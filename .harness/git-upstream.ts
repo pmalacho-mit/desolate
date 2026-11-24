@@ -22,7 +22,9 @@ const placesIn = (dir: string): Places => ({
   scratch: dir,
 });
 
-/** A git VM with clones of `clones` and mirrors of `mirrors` (each <owner>/<repo>). */
+/** A git VM with clones of `clones` and mirrors of `mirrors` (each <owner>/<repo>).
+ *  @standsIn the git VM's places (release/git/upstream.ts, GIT_VM)
+ *  @realIn T2 13-upstream, "the happy path: the split, the approval page naming the dependency, branch and commit, the pusher, and the stand-in pull request" */
 export const gitVm = (clones: string[], mirrors: string[]): Places => {
   const at = placesIn(scratch());
   for (const repo of clones) fs.mkdirSync(path.join(at.clones, repo, ".git"), { recursive: true });

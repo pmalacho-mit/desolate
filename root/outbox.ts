@@ -351,9 +351,9 @@ export const UNREAD = "could not be read: its directory in the outbox is not a p
  *  beside each bundle: workspace/sync.ts), read as data: the one reader of that file, for
  *  the root's remote helper (what git fetches, and prunes the rest of) and for the dashboard.
  *  Only names desolate carries and whole commits are taken; any other entry is not a branch
- *  the root holds. A list that is not there is an empty one (nothing synced yet). One that
- *  cannot be read whole (over REFS_BYTES, a link, not JSON, not a record of branches) is
- *  `refused`, with why: never a part, and never taken for none.
+ *  the root holds. A list that is not there is an empty one (nothing synced yet).
+ *  {@link refsOf.NotThere} One that cannot be read whole (over REFS_BYTES, a link, not JSON, not a
+ *  record of branches) is `refused`, with why: never a part, and never taken for none.
  *
  *  Read as everything in an outbox is (openDir, above): so off Linux every list that is
  *  there is refused. Its cases are in tests/v3/t1/outbox.test.ts, which runs on Linux. */
@@ -505,7 +505,7 @@ export const refusalsOf = (domain: string): Refusal[] =>
 /** What to do about a refusal, by its reason. A list the root could not open is no verdict on
  *  a branch: the share between the two VMs showed the root something other than the
  *  directory the workspace made (T4, 2026-11-23; openDir, above). Anything else is what git
- *  refused in a bundle. */
+ *  refused in a bundle. {@link refusalFix.ByReason} */
 export const refusalFix = (why: string) =>
   why.includes(UNREAD)
     ? "the share between the workspace's VM and the root's had not yet shown the root what the workspace wrote: offer again from the workspace (desolate offer)"
@@ -655,7 +655,8 @@ export const takeLfs = async (
 
 declare namespace takeLfs {
   type Fresh = Invoke<typeof emptyRoot>;
-  /** an object is named by its sha256, which is checked before any path is made of it */
+  /** an object is named by its sha256, which is checked before any path is made of it
+   *  @principle P4 */
   export type NotAnId = Expect<
     Invoke<
       typeof takeLfs,

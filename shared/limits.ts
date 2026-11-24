@@ -130,7 +130,8 @@ export const over = (
 };
 
 declare namespace over {
-  /** the bound that was hit, by name, with the limit and the actual value */
+  /** the bound that was hit, by name, with the limit and the actual value
+   *  @requirement R3 */
   export type Says = Table<
     typeof over,
     [

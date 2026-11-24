@@ -42,7 +42,8 @@ declare namespace Refusal {
     typeof Refusal,
     [message: "no such domain: dev", fix: "desolate domain create dev"]
   >;
-  /** what went wrong, for the person; what to run; the exit code a script reads */
+  /** what went wrong, for the person; what to run; the exit code a script reads
+   *  @principle P6 */
   export type Says = [
     Expect<Busy["message"], "=", "another push holds acme/app">,
     Expect<Busy["fix"], "=", "wait, then run `desolate push` again">,

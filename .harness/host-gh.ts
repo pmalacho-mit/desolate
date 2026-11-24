@@ -12,7 +12,8 @@ import { onTestFinished } from "./vitest.ts";
 const dir = () => path.join(process.env.DESOLATE_HOME!, "nests-gh");
 const log = () => path.join(dir(), "calls");
 
-/** gh, for this test: it prints `stdout` (and `stderr`) and exits with `status`. */
+/** gh, for this test: it prints `stdout` (and `stderr`) and exits with `status`.
+ *  @standsIn the person's gh (DESOLATE_GH) */
 export const fakeGh = (stdout: string, status: number, stderr = "") => {
   fs.mkdirSync(dir(), { recursive: true });
   fs.writeFileSync(path.join(dir(), "out"), stdout);
