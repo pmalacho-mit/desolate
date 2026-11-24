@@ -1868,7 +1868,8 @@ echo "=====waits"; cat /tmp/waits.lines`,
       await sleep(3000);
       assert.equal(await page.evaluate(hintOf("web-held")), failed);
       // Until dismissed; and dismissed, a reload does not bring it back.
-      await page.click(".card button.dismiss", "Dismiss");
+      // (Its own Dismiss: another card's, hidden while it is pushed, has the same text.)
+      await page.click(".card.failed button.dismiss", "Dismiss");
       await page.until(`!${cardOf("web-held")}`, "the card dismissed");
       assert.notEqual(
         await page.evaluate("document.activeElement === document.body"),
