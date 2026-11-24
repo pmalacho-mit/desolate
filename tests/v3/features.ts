@@ -266,7 +266,7 @@ export const FEATURES: Feature[] = [
       "release/root/proxy/secrets_addon.py",
       "release/host/domains.ts",
       "release/host/env-import.ts",
-      "release/shared/envfile.ts",
+      "release/host/envfile.ts",
       "release/host/approve-ui/secrets.html",
       "release/host/approve-ui/secrets.js",
     ],
@@ -281,7 +281,12 @@ export const FEATURES: Feature[] = [
   {
     id: "agents",
     what: "programs kept running in a workspace, agents, and the recipes",
-    code: ["release/host/agent.ts", "release/workspace/agent-holder.py", "release/recipes/"],
+    code: [
+      "release/host/agent.ts",
+      "release/host/terminal-filter.ts",
+      "release/workspace/agent-holder.py",
+      "release/recipes/",
+    ],
     tests: ["t2/12-agent"],
     docs: ["release/docs/agents.md", "release/recipes/README.md"],
     shots: [],

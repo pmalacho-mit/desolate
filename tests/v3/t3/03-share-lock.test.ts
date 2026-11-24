@@ -1,10 +1,10 @@
-// T3 (qemu) and T4 (vz, on a Mac: DESOLATE_TIER=T4). A share lock (shared/lock.ts, scope
+// T4 (vz, on a Mac: DESOLATE_TIER=T4). A share lock (shared/lock.ts, scope
 // "share") between two real VMs, over the share they both see: /workspaces, a domain's, as
 // workspace/init.ts takes it. In-source tests take it between processes of one machine; only
 // here does a beat cross virtiofs, written by one VM's kernel and read by another's.
 // And a stopped workspace's link: what it carried ends when the host lets it go.
 //
-// Run: tests/v3/run.sh t4   (or t3)
+// Run: tests/v3/run.sh t4
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -14,7 +14,7 @@ import { bootstrap, git, newStack } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
-const REAL = process.env.DESOLATE_TIER === "T3" || process.env.DESOLATE_TIER === "T4";
+const REAL = process.env.DESOLATE_TIER === "T4";
 const DIR = "/workspaces/.t4-lock";
 const vms: Record<string, string> = {};
 const inVm = (who: string, script: string) => stack.inVm(vms[who]!, ["bash", "-c", script]);
@@ -81,7 +81,7 @@ const count = (text: string, line: string) =>
 
 describe(
   "T3: a share lock between two VMs, and a stopped workspace's link",
-  { skip: REAL ? false : "set DESOLATE_TIER=T3 (tests/v3/run.sh t3), or T4 on a Mac" },
+  { skip: REAL ? false : "set DESOLATE_TIER=T4 (tests/v3/run.sh t4, on a Mac)" },
   () => {
     before(() => {
       stack = newStack("lock");

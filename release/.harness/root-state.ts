@@ -216,3 +216,18 @@ export const jsonListIn = (where: Where, name: string): unknown[] | null => {
   const text = readIn(where, name);
   return text === null ? null : (JSON.parse(text) as unknown[]);
 };
+
+/** `count` of a domain's close requests in the host's queue, as an earlier rootd wrote them
+ *  (layout.ts's HOST_QUEUE: a time and a random part, then `.json`). */
+export const queuedForHost = (domain: string, count: number) => {
+  for (let i = 0; i < count; i++)
+    writeJsonIn(
+      "state",
+      `host-queue/${domain.replace(/-/g, "")}${i}-${String(i).padStart(10, "0")}.json`,
+      {
+        kind: "workspace.close",
+        args: { domain, workspace: `c${i}`, parent: "w1" },
+        at: Date.now(),
+      },
+    );
+};

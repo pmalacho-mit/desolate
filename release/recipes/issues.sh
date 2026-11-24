@@ -37,7 +37,8 @@ while [ $# -gt 0 ] && [ "$1" != -- ]; do
 done
 [ "${1:-}" = -- ] && shift
 [ -n "$repo" ] && [ -n "$domain" ] || usage
-[[ $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "--repo is <owner>/<repo>" >&2; exit 64; }
+# One desolate holds (so one its own rule took: gh is asked of it next, by its name).
+desolate repos --json | jq -e --arg r "$repo" 'any(.[]; .repo == $r)' >/dev/null || { echo "--repo is <owner>/<repo>, one of desolate repos" >&2; exit 64; }
 [[ $max =~ ^[0-9]+$ ]] || { echo "--max is a number" >&2; exit 64; }
 number() { [[ $1 =~ ^[0-9]+$ ]]; }   # issue numbers, as GitHub and the workspaces' names give them
 

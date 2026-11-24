@@ -1,4 +1,4 @@
-// T3 (qemu) and T4 (vz, on a Mac: DESOLATE_TIER=T4). Not a boundary: a project's dev stack
+// T4 (vz, on a Mac: DESOLATE_TIER=T4). Not a boundary: a project's dev stack
 // as it runs in a workspace, on a real VM, so the conveniences around the boundary are tried
 // with what real use sends. Found 2026-11-18, by an agent setting up a project: a backend
 // container behind its dev server's proxy, Postgres beside it, and API keys as secrets.
@@ -12,7 +12,7 @@
 // Needs Docker Hub from the VM (python:3.12-slim, postgres:16-alpine), through the domain's
 // proxy, as a person's devcontainer would pull them.
 //
-// Run: tests/v3/run.sh t4   (or t3)
+// Run: tests/v3/run.sh t4
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -24,7 +24,7 @@ import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
-const REAL = process.env.DESOLATE_TIER === "T3" || process.env.DESOLATE_TIER === "T4";
+const REAL = process.env.DESOLATE_TIER === "T4";
 const PORT = 18431; // a backend's published port: not one a Mac is likely to hold
 const PY = "python:3.12-slim";
 const PG = "postgres:16-alpine";
@@ -48,7 +48,7 @@ const fromTheMac = (url: URL): Promise<string> =>
 
 describe(
   "T3: a project's dev stack in a workspace, on a real VM",
-  { skip: REAL ? false : "set DESOLATE_TIER=T3 (tests/v3/run.sh t3), or T4 on a Mac" },
+  { skip: REAL ? false : "set DESOLATE_TIER=T4 (tests/v3/run.sh t4, on a Mac)" },
   () => {
     before(() => {
       stack = newStack("dev");
@@ -234,7 +234,7 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
           expected,
         );
         assert.equal(
-          await vmStatus(path.join(stack.home, "lima", name), stack.backend as "qemu" | "vz"),
+          await vmStatus(path.join(stack.home, "lima", name)),
           expected,
           `${name}: limactl list said ${said}`,
         );

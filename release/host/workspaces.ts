@@ -31,7 +31,7 @@ import type { ProjectSize, Size } from "../shared/size.ts";
 import { RUN_MAX } from "../shared/run.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import type { RunResult } from "../shared/run.ts";
-import { terminalFilter } from "../shared/terminal-filter.ts";
+import { terminalFilter } from "./terminal-filter.ts";
 import { BEAT_MS, elapsed } from "../shared/step.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";
@@ -995,8 +995,6 @@ export const reconnectRunning = async (): Promise<number> => {
         ],
         { root: true, timeoutMs: 120_000 },
       );
-      // Its key too: a workspace made before keys were given gets one here, without a restart.
-      await (await import("./spawn.ts")).giveIdentity(b, w.vm);
       // And its editor's token, made again if the host retired the tokens since it was made.
       if (await editorTokenStale(w.vm))
         await b.exec(
@@ -1575,7 +1573,7 @@ export const exec = async (
   process.stdin.pipe(child.stdin!);
   child.stdin!.on("error", () => {});
   // To a terminal (a person running an agent by hand): kept to what a screen needs
-  // (shared/terminal-filter.ts). To a pipe or a file (a script): unchanged.
+  // (host/terminal-filter.ts). To a pipe or a file (a script): unchanged.
   const shown = terminalFilter();
   if (process.stdout.isTTY)
     child.stdout!.on("data", (chunk: Buffer) => process.stdout.write(shown(chunk)));

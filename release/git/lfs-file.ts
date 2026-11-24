@@ -17,14 +17,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { parseRepo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { fetchedFrom, holdsEverything, holdsNothing } from "../.harness/git-lfs.ts";
 
 /** The two stores of a repository this VM reads (its argument, from git's config): none for
- *  anything that is not `<owner>/<repo>`. */
+ *  anything that is not a repository by names.ts's rule (each store is a path). */
 export const storesFor = (repo: string) =>
-  /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo)
+  parseRepo(repo)
     ? [`/desolate/mirrors/${repo}.git/lfs/objects`, `/desolate/root/${repo}/.git/lfs/objects`]
     : [];
 
@@ -41,6 +42,8 @@ declare namespace storesFor {
       [args: [repo: ""], expected: []],
       [args: [repo: "acme"], expected: []],
       [args: [repo: "acme/app/../../etc"], expected: []],
+      [args: [repo: "acme/.."], expected: []],
+      [args: [repo: "../app"], expected: []],
     ]
   >;
 }

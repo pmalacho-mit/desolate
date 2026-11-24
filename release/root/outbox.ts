@@ -63,38 +63,39 @@ export const WHY_MOST = 300;
 //
 // (Found the hard way: the first version removed "the bundle it had just read" by path, and
 // a symlinked directory made that path one of the root's own files. tests/v3/t2/10.)
-type Dir = { at: (name: string) => string; names: () => string[]; close: () => void };
+type Dir = {
+  at: (name: string) => string;
+  names: () => string[];
+  first: (most: number) => { names: string[]; more: boolean };
+  close: () => void;
+};
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /** Open a directory under the domains' share and prove it is the one asked for; else why
  *  not, in a few words ("a link", "not there"), for a refusal and a log to say. Never throws.
- *  `settle`: the share may show a directory a moment before it lets it be opened, or still
- *  show a link the workspace has since replaced with one (T4, on vz, 2026-11-21: an honest
- *  offer refused as "a link, or not a directory", a moment after its workspace had put a
- *  directory where it had planted a link). So it is looked at again while every directory
- *  above is a plain one and `dir` itself one or a link, every check made again each time (a
- *  link is never opened: O_NOFOLLOW): a few tries, a second at most, blocking. Only for a
- *  process of one domain's own (git-remote-desolate), never rootd's or the state service's
- *  loop, which every domain waits on.
  *
- *  Not seen since: on 2026-11-23 a probe on real VMs (vz, virtiofs mounted rw,relatime in
- *  both VMs) opened, from the root VM, 2,400 directories a workspace VM had just made or
- *  just renamed a file into, every one at the first look (at most 12 ms after the
- *  workspace's mkdir returned), quiet and with a T2 suite loading the Mac, and watched
- *  sync/<repo> through two restarts of the workspace and 70 honest offers: no look at it
- *  failed while it was there; while 01-boundaries' first offer had failed so twice that day. So the refusal says
- *  what lstat saw at its last look (a link, or a directory that would not open as one):
- *  the next one tells which, and the wait is not lengthened on a guess. */
+ *  `settle`, for a process of one domain's own (git-remote-desolate), never rootd's or the
+ *  state service's loop, which every domain waits on. First, the host is asked what the name
+ *  is now (askHost): this VM's kernel answers a look at a name on the share from what it was
+ *  told when it last asked the host, for a second (vz's virtiofs, measured on real VMs on
+ *  2026-11-23, 100 of 100 times: a link the root had looked at, replaced by a directory, was
+ *  still a link to lstat and open until 1.00 to 1.03 s after the root's first look, however
+ *  often it looked meanwhile; T4's 01-boundaries refused an honest offer so, a moment after
+ *  its workspace had taken back a link it planted). With the host asked, a link is a link:
+ *  refused at once. A directory that will not open is looked at again while every directory
+ *  from the share down is a plain one, every check made again each time: a few tries, a
+ *  second at most, blocking (T4, 2026-11-21: the share showed a directory a moment before it
+ *  let it be opened). */
 export const openDir = (dir: string, settle = false): Dir | string => {
+  if (settle) askHost(dir);
   for (let tries = 1; ; tries++) {
     const opened = openOnce(dir);
     const unsettled =
       typeof opened === "string" &&
       [NOT_THERE, NOT_DIR, OPENED_GONE, OPENED_ELSEWHERE].includes(opened);
-    const seen = settle && unsettled ? settling(dir) : null;
-    if (!seen) return opened;
+    if (!settle || !unsettled || !plainWay(dir)) return opened;
     if (tries === OPEN_TRIES)
-      return `${opened}, at each of ${OPEN_TRIES} looks over a second; lstat saw ${seen}`;
+      return `${opened}, at each of ${OPEN_TRIES} looks over a second; lstat saw a directory`;
     Atomics.wait(PAUSE, 0, 0, 1000 / OPEN_TRIES);
   }
 };
@@ -106,22 +107,35 @@ const OPENED_GONE = "opened, and removed meanwhile";
 const OPENED_ELSEWHERE = "opened at another path than asked: a link on the way";
 const PAUSE = new Int32Array(new SharedArrayBuffer(4));
 
-/** Whether every directory from the domains' share down to `dir` is there and a plain one
- *  (no link), as lstat sees it now, but for `dir` itself, which may be a link: what `dir`
- *  is then ("a directory", "a link"); null on anything else, a failure too. */
-const settling = (dir: string): "a directory" | "a link" | null => {
-  const parts = ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)];
+/** Make this VM's kernel ask the host what `dir`'s last name is now, rather than answer from
+ *  what it last heard. Nothing else does it at once (measured on vz, 30 of 30 each: listing
+ *  the directory above, a stat of it, opening it and looking from there all still showed the
+ *  link). A name looked up to be created is always asked of the host (fuse revalidates an
+ *  exclusive lookup), and a hard link to it from `/` is a create that never makes anything:
+ *  EEXIST when the name is there, else EXDEV (`/` is not on the share) or EPERM (`/` is a
+ *  directory, which is never hard linked). Measured on vz, 100 of 100: right after the
+ *  workspace's change the fetch's list was the directory's, in under 2 ms, while a plain look
+ *  just before it still saw the link; and a directory just turned into a link was refused. */
+const askHost = (dir: string) => {
+  try {
+    fs.linkSync("/", dir);
+  } catch {
+    /* always: see above */
+  }
+};
+
+/** Whether every directory from the domains' share down to `dir`, `dir` too, is there and a
+ *  plain one (no link), as lstat sees it now: false on anything else, a failure too. */
+const plainWay = (dir: string): boolean => {
   let at = ROOT.domains;
   try {
-    for (const [i, part] of parts.entries()) {
+    for (const part of ["", ...path.relative(ROOT.domains, path.resolve(dir)).split(path.sep)]) {
       at = path.join(at, part);
-      const stat = fs.lstatSync(at, { throwIfNoEntry: false });
-      if (stat?.isDirectory()) continue;
-      return i === parts.length - 1 && stat?.isSymbolicLink() ? "a link" : null;
+      if (!fs.lstatSync(at, { throwIfNoEntry: false })?.isDirectory()) return false;
     }
-    return "a directory";
+    return true;
   } catch {
-    return null;
+    return false;
   }
 };
 
@@ -162,11 +176,8 @@ const openOnce = (dir: string): Dir | string => {
         if (!NAME.test(name)) throw new Error("not a file name");
         return `/proc/self/fd/${held}/${name}`;
       },
-      names: () =>
-        fs
-          .readdirSync(`/proc/self/fd/${held}`)
-          .filter((name) => NAME.test(name))
-          .sort(),
+      names: () => listed(held, Infinity).names,
+      first: (most: number) => listed(held, most),
       close: () => fs.closeSync(held),
     };
   } catch {
@@ -174,6 +185,24 @@ const openOnce = (dir: string): Dir | string => {
     return "not opened";
   } finally {
     if (fd !== null) fs.closeSync(fd);
+  }
+};
+/** The names in an open directory that NAME takes, sorted, among its first `most` entries,
+ *  read entry by entry as the kernel gives them, so that a directory of a million names
+ *  costs `most` of them (which entries come first is the file system's order, not the
+ *  names'); `more`: there were others. */
+const listed = (fd: number, most: number): { names: string[]; more: boolean } => {
+  const listing = fs.opendirSync(`/proc/self/fd/${fd}`);
+  const names: string[] = [];
+  try {
+    for (let read = 0; read < most; read++) {
+      const entry = listing.readSync();
+      if (!entry) return { names: names.sort(), more: false };
+      if (NAME.test(entry.name)) names.push(entry.name);
+    }
+    return { names: names.sort(), more: listing.readSync() !== null };
+  } finally {
+    listing.closeSync();
   }
 };
 
@@ -246,19 +275,34 @@ const readIn = (dir: Dir, name: string, max: number, what: string): Buffer | str
   }
 };
 
-/** Every JSON file waiting in a directory of an outbox whose name matches, oldest name
- *  first, each read once and removed (its name, in that directory). One that could not be
- *  taken (past JSON_BYTES, a link, not JSON) is `data: null`, with `why`, to answer with. */
+/** How many names of a directory of requests the root reads at one look (R7: a bound against
+ *  a workspace, which can put any number of names there, of anything: reading them all was a
+ *  cost, every pass, on the one loop every domain waits on). A workspace writes one name a
+ *  request, and its writes are atomic
+ *  (shared/json.ts: a temporary name beside it, renamed), so a directory holds no more than
+ *  a domain asks at once: the root holds 50 of a domain's at a time (rootd.ts, MOST_HELD),
+ *  and a thousand is twenty times that. Past it, what is not read waits, and `more` says
+ *  so, for the domain to be told (rootd.ts). */
+export const REQUEST_NAMES_READ = 1000;
+
+/** The JSON files waiting in a directory of an outbox whose name matches, oldest name first
+ *  of those among its first REQUEST_NAMES_READ names, at most `most`, each read once and
+ *  removed (its name, in that directory). One that could not be taken (past JSON_BYTES, a
+ *  link, not JSON) is `data: null`, with `why`, to answer with. `more`: the directory held
+ *  more names than were read. */
 export const drain = <T>(
   directory: string,
   pattern: RegExp,
   most: number,
-): ({ name: string; data: T } | { name: string; data: null; why: string })[] => {
+): {
+  requests: ({ name: string; data: T } | { name: string; data: null; why: string })[];
+  more: boolean;
+} => {
   const dir = openDir(directory);
-  if (typeof dir === "string") return [];
+  if (typeof dir === "string") return { requests: [], more: false };
   try {
-    return dir
-      .names()
+    const { names, more } = dir.first(REQUEST_NAMES_READ);
+    const requests = names
       .filter((name) => pattern.test(name))
       .slice(0, most)
       .map((name) => {
@@ -272,6 +316,7 @@ export const drain = <T>(
           return { name, data: null, why: `${what} is not JSON` };
         }
       });
+    return { requests, more };
   } finally {
     dir.close();
   }
@@ -390,13 +435,15 @@ const sweep = (incoming: string) => {
  *  from the outbox (its name, in the checked directory) whether or not it could be taken.
  *  The caller removes the copies. With `most`, at most that many are copied at once and
  *  `more` says whether others wait: the root's own disk then holds one bundle at a time,
- *  however many a domain leaves. */
+ *  however many a domain leaves. Only the remote helper takes bundles, so the directory is
+ *  opened as its list is (settle): else, in the second after a link there is replaced, the
+ *  bundles were not seen while the list was, and the fetch took nothing (T4, 2026-11-23). */
 export const takeBundles = (
   domain: string,
   repo: string,
   most = Infinity,
 ): { copies: string[]; dropped: string[]; more: boolean } => {
-  const dir = openDir(syncDir(domain, repo));
+  const dir = openDir(syncDir(domain, repo), true);
   if (typeof dir === "string") return { copies: [], dropped: [], more: false };
   const copies: string[] = [];
   const dropped: string[] = [];
@@ -472,7 +519,7 @@ declare namespace refusalFix {
     [
       [
         args: [
-          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (a link, or not a directory, at each of 5 looks over a second; lstat saw a directory)",
+          why: "acme/app's list of branches (refs.json) could not be read: its directory in the outbox is not a plain one (not there, at each of 5 looks over a second; lstat saw a directory)",
         ],
         expected: "the share between the workspace's VM and the root's had not yet shown the root what the workspace wrote: offer again from the workspace (desolate offer)",
       ],

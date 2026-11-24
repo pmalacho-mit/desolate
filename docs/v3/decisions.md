@@ -361,8 +361,9 @@ command.
 
 - **git's own parsers** read a pack an agent wrote (`index-pack`, then `fetch`, `diff`,
   `log`). A memory-safety bug in git's pack or object parsing would be reachable. Keeping
-  the image's git current is the mitigation; desolate runs that parsing as the root's
-  ordinary user, never as root, and never as the keyring's user.
+  the image's git current would be the mitigation, and nothing of desolate's does it yet;
+  desolate runs that parsing as the root's ordinary user, never as root, and never as the
+  keyring's user.
 - **JSON.parse** on files up to 1 MiB, then field-by-field validation
   (`release/shared/names.ts`).
 - **The proxies** parse what workspaces send (HTTP CONNECT, TLS ClientHello in
@@ -1005,7 +1006,7 @@ exec`'s client never reaches into the container), and kills only when asked (`--
 "y" at its question).
 
 **What an agent prints, on the way to the Mac's terminal**, is filtered
-(`shared/terminal-filter.ts`, for `agent attach` and for `exec` to a terminal): text, C0
+(`host/terminal-filter.ts`, for `agent attach` and for `exec` to a terminal): text, C0
 controls, CSI and single-character escapes pass (a TUI draws); every OSC, DCS, APC, PM and
 SOS string is dropped (OSC 52 writes the clipboard, iTerm2's OSC 1337 offers files, DCS feeds
 tmux integration and sixel parsers). tmux used to stand there; the emulator is outside every
@@ -1101,7 +1102,12 @@ Three things the first workspaces on the Mac showed, each measured by hand on Li
 2. **Two guests do not agree at once.** A workspace replaced a symlink in its outbox with a
    directory; the root VM went on seeing the symlink for about a second (reading through
    it gave "Invalid argument"), then saw the directory. A file replaced by rename (a refs
-   list) can likewise look as it was.
+   list) can likewise look as it was. Measured on 2026-11-23 (#259, 100 rounds each): the
+   guest's kernel keeps what the host said of a name for 1.00 to 1.03 s from its lookup;
+   lstat and open within that second answer from it, however many; listing, stat'ing or
+   opening the directory above changes nothing; a lookup for a create (mkdir, link) asks
+   the host at once. So the root's fetch makes one (`root/outbox.ts`, askHost), and sees a
+   link turned back into a directory, or a directory turned into a link, at once.
 3. **Any user of a guest that reaches a share can write it.** A file in a share reports as
    owned by whichever user of the guest last asked about it, so the guest's permission
    bits give that user the owner's rights: in the root VM the proxies' user (uid 995) saw
@@ -1636,8 +1642,7 @@ agents fetching in a loop had its offers refused.
 - rootd writes `rootd.beat` from a thread of its own every 2 s, and `replies/<id>.taken`
   (`{ boot, doing }`) when it takes a request. The workspace waits while the beat moves, says
   what the root is doing after 10 s, and gives up only on 10 s of no beat (lock.ts's `BEAT`),
-  saying whether the root had taken it. Either side on older code gets the old 2 minutes. (Since #258 a
-  workspace takes no beat file at all for a root that is not running: every root since writes one.)
+  saying whether the root had taken it. Either side on older code gets the old 2 minutes.
 - The rate is gone. One domain is kept from slowing another by structure: the loop never
   waits on a request's work; each domain has a lane (one at a time, in order); fetches are
   coalesced per repository (one runs, one waits, every asker answered by a fetch that began

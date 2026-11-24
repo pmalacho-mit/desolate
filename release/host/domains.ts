@@ -5,7 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { andMore, PAGE } from "../shared/listed.ts";
 import type { Listed } from "../shared/listed.ts";
-import { ANYWHERE_COST } from "../shared/envfile.ts";
+import { ANYWHERE_COST } from "./envfile.ts";
 import { over } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
 import { guest, paths } from "./paths.ts";

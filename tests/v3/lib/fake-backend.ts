@@ -1,29 +1,36 @@
-// The `fake` backend: each "VM" is a privileged container on the host's Docker daemon.
+// The `fake` backend, the tests' stand-in for VMs: each "VM" is a privileged container on the
+// host's Docker daemon.
 //
 // IT GIVES NO HYPERVISOR ISOLATION. It exists so that everything except the VM boundary can
-// be exercised in minutes on any Docker host (tier T2). It is refused unless
-// DESOLATE_BACKEND=fake is set explicitly, every workspace on it is labelled "not isolated",
-// and `doctor` fails on it outside a test run. A T2 test is never proof of a boundary.
+// be exercised in minutes on any Docker host (tier T2). It is not in release/, so no install
+// can select it: a test run loads it into each desolate command it runs, by
+// `NODE_OPTIONS=--import=<this file>` (lib/harness.ts), and the host's commands pass their
+// environment on to the daemon and the commands it runs, so they load it too. Every
+// workspace on it is labelled "not isolated", and `doctor` fails on it outside a test run. A
+// T2 test is never proof of a boundary.
 //
 // It still implements the interface faithfully, so the code above cannot tell:
 //   read-only shares   read-only bind mounts
 //   egress "none"      --network none: the container has a loopback interface and nothing else
 //   sockets            the socket's host directory, bind-mounted read-only
-import { attachFiltered } from "./attach.ts";
 import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Duplex } from "node:stream";
-import { must, run } from "../../shared/run.ts";
-import type { RunResult } from "../../shared/run.ts";
-import { INSTANCE } from "../paths.ts";
-import { runStreamed } from "./stream.ts";
-import { GUEST_USER } from "./types.ts";
-import { socatAddress } from "./types.ts";
-import type { Backend, Check, ExecOptions, VmInfo, VmSpec, VmStatus } from "./types.ts";
-import type { Expect, Invoke } from "../../../suede.nests/dsl.import.meta.vitest.ts";
-import type { endOf, spawnFailed } from "../../.harness/host-vm.ts";
+import { useBackend } from "../../../release/host/stack.ts";
+import { must, run } from "../../../release/shared/run.ts";
+import type { RunResult } from "../../../release/shared/run.ts";
+import { INSTANCE } from "../../../release/host/paths.ts";
+import { attachFiltered } from "../../../release/host/vm/attach.ts";
+import { duplexOf, runStreamed } from "../../../release/host/vm/stream.ts";
+import { GUEST_USER, socatAddress } from "../../../release/host/vm/types.ts";
+import type {
+  Backend,
+  Check,
+  ExecOptions,
+  VmInfo,
+  VmSpec,
+  VmStatus,
+} from "../../../release/host/vm/types.ts";
 
 const IMAGE = process.env.DESOLATE_FAKE_IMAGE ?? "desolate/base:latest";
 const LABEL = "desolate.instance";
@@ -31,53 +38,12 @@ const LABEL = "desolate.instance";
 const docker = (args: string[], options: { input?: string | Buffer; timeoutMs?: number } = {}) =>
   run("docker", args, options);
 
-/** A child process's stdio as one Duplex stream. */
-export const duplexOf = (child: ChildProcess): Duplex => {
-  const { stdin, stdout } = child;
-  // No pipes: the spawn failed before it made them (EMFILE, ENFILE: this process holds too
-  // many files). Its error comes on the next tick and ends the stream, which is not thrown.
-  if (!stdin || !stdout) {
-    const failed = new Duplex({ read() {}, write: (_chunk, _encoding, done) => done() });
-    child.once("error", (error) => failed.destroy(error));
-    return failed;
-  }
-  const stream = new Duplex({
-    read() {
-      stdout.resume();
-    },
-    write(chunk, encoding, callback) {
-      stdin.write(chunk, encoding, callback);
-    },
-    final(callback) {
-      stdin.end(callback);
-    },
-    destroy(error, callback) {
-      child.kill();
-      callback(error);
-    },
-  });
-  stdout.on("data", (chunk) => {
-    if (!stream.push(chunk)) stdout.pause();
-  });
-  stdout.on("end", () => stream.push(null));
-  stdin.on("error", () => {});
-  child.on("error", (error) => stream.destroy(error));
-  return stream;
-};
-
-declare namespace duplexOf {
-  /** a spawn that could not make its pipes gives a stream ended by its error, not a throw */
-  export type NoPipes = Expect<
-    Invoke<
-      typeof endOf,
-      [stream: Invoke<typeof duplexOf, [child: Invoke<typeof spawnFailed, [code: "EMFILE"]>]>]
-    >,
-    "=",
-    "spawn socat EMFILE"
-  >;
-}
-
-const execArgs = (name: string, argv: string[], options: ExecOptions, interactive: boolean) => {
+export const execArgs = (
+  name: string,
+  argv: string[],
+  options: ExecOptions,
+  interactive: boolean,
+) => {
   const args = ["exec"];
   if (interactive) args.push("-i");
   args.push("-u", options.root ? "0:0" : GUEST_USER);
@@ -87,45 +53,6 @@ const execArgs = (name: string, argv: string[], options: ExecOptions, interactiv
   args.push(name, ...argv);
   return args;
 };
-
-declare namespace execArgs {
-  /** the guest user by default, with its own HOME; each variable one -e word, never a shell line */
-  export type AsTheUser = Expect<
-    Invoke<
-      typeof execArgs,
-      [
-        name: "dsl-main-w",
-        argv: ["git", "status"],
-        options: { cwd: "/workspaces/acme/web"; env: { A: "x; rm -rf /" } },
-        interactive: false,
-      ]
-    >,
-    "=",
-    [
-      "exec",
-      "-u",
-      "desolate",
-      "-w",
-      "/workspaces/acme/web",
-      "-e",
-      "HOME=/home/desolate",
-      "-e",
-      "A=x; rm -rf /",
-      "dsl-main-w",
-      "git",
-      "status",
-    ]
-  >;
-  /** root only when asked for, and stdin kept open only when there is input to give */
-  export type AsRoot = Expect<
-    Invoke<
-      typeof execArgs,
-      [name: "dsl-main-root", argv: ["id"], options: { root: true }, interactive: true]
-    >,
-    "=",
-    ["exec", "-i", "-u", "0:0", "-e", "HOME=/root", "dsl-main-root", "id"]
-  >;
-}
 
 export const fakeBackend = (): Backend => {
   const containerArgs = (spec: VmSpec, image: string) => {
@@ -223,7 +150,7 @@ export const fakeBackend = (): Backend => {
             image.code === 0
               ? `${IMAGE} ${image.stdout.trim().slice(7, 19)}`
               : `${IMAGE} is not in the image store`,
-          fix: "desolate bootstrap --backend fake",
+          fix: "desolate bootstrap",
         });
       }
       return checks;
@@ -364,3 +291,6 @@ export const fakeBackend = (): Backend => {
   };
   return backend;
 };
+
+// Loaded by a test run: the backend of this process, whatever its environment says.
+useBackend(fakeBackend());

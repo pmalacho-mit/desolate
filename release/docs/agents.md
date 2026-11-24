@@ -159,8 +159,9 @@ To try them with no AI at all, the stand-in agent writes its task down, commits 
 `-- bash /desolate/release/recipes/echo-agent.sh`.
 
 What happens to an agent's work is what happens to yours: it commits in the workspace, offers
-its branch, and you review it in the dashboard and push it. Nothing it does reaches GitHub
-without your approval.
+its branch, and you review it in the dashboard and push it. Nothing it does is pushed
+without your approval, unless its domain holds a forge token as a secret (the
+[reference](reference.md)'s Secrets).
 
 - **Watch or talk to it:** `desolate agent attach <domain>/<workspace>` (Ctrl-] lets go; it
   keeps working). Your terminal's own scrollback and copy work.
@@ -186,7 +187,8 @@ Each task: `recipes/claude.sh you--app "<what to do>"`. What the recipe does, an
   `CLAUDE_CODE_OAUTH_TOKEN=CLAUDE-OAUTH`, a name; the workspace's proxy writes the token into
   the `Authorization` header of requests to api.anthropic.com, and nowhere else. A workspace
   that leaks its environment leaks a name. A domain without the token gets a copy from one
-  that has it, made inside the root (`desolate domain <d> secret copy`); `secret rm` undoes it.
+  that has it, without asking, made inside the root (`desolate domain <d> secret copy`): the
+  recipe gives that domain the use of your subscription. `secret rm` undoes it.
 - **Installed once per domain.** When the project's devcontainer has no Claude Code, it goes
   into the domain's cache (`/desolate/cache/claude-code`), which every workspace of the domain
   mounts and a container rebuild keeps. To carry it in the image instead, add the devcontainer

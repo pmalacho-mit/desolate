@@ -1,10 +1,10 @@
-// T3 (qemu backend: real VMs, under KVM or TCG) and T4 (vz, on a Mac: DESOLATE_TIER=T4).
+// T4 (vz, on a Mac: DESOLATE_TIER=T4; the tests' names say T3, as their transcripts do).
 // The boundaries that need a real VM
 // (move-to-vms.md section 13.2): read-only shares against root inside the VM, forced egress
 // with root inside the VM, and no cross-domain path. Every negative check sits beside a
 // control that shows it would have caught the failure.
 //
-// Run: tests/v3/run.sh t3   (tens of minutes under TCG: each VM takes minutes to boot)
+// Run: tests/v3/run.sh t4
 import assert from "node:assert/strict";
 import { createHash, createHmac, createPrivateKey, sign } from "node:crypto";
 import * as fs from "node:fs";
@@ -21,7 +21,7 @@ import { signedFor } from "../../../release/shared/approval.ts";
 let stack: Stack;
 let listener: ChildProcess;
 let port = 0;
-const REAL = process.env.DESOLATE_TIER === "T3" || process.env.DESOLATE_TIER === "T4";
+const REAL = process.env.DESOLATE_TIER === "T4";
 const vms = new Map<string, string>();
 const vmOf = (target: string) => {
   if (!vms.has(target)) {
@@ -46,7 +46,7 @@ const lines = (text: string) =>
 
 describe(
   "T3: boundaries that need a real VM",
-  { skip: REAL ? false : "set DESOLATE_TIER=T3 (tests/v3/run.sh t3), or T4 on a Mac" },
+  { skip: REAL ? false : "set DESOLATE_TIER=T4 (tests/v3/run.sh t4, on a Mac)" },
   () => {
     before(async () => {
       stack = newStack("t3");
@@ -181,15 +181,13 @@ describe(
       done
       echo x >> /desolate/mirrors/acme/widgets.git/HEAD 2>/dev/null && echo append_head=WROTE || echo append_head=refused
       mkdir -p /mnt/again
-      for tag in $(awk '$3=="9p" || $3=="virtiofs" {print $1}' /proc/mounts | sort -u); do
-        type=$(awk -v t=$tag '$1==t {print $3; exit}' /proc/mounts)
-        opts=$([ $type = 9p ] && echo trans=virtio,version=9p2000.L,rw || echo rw)
-        if mount -t $type -o $opts $tag /mnt/again 2>/dev/null; then
+      for tag in $(awk '$3=="virtiofs" {print $1}' /proc/mounts | sort -u); do
+        if mount -t virtiofs -o rw $tag /mnt/again 2>/dev/null; then
           touch /mnt/again/planted-fresh-mount 2>/dev/null && echo "fresh_$tag=WROTE" || echo "fresh_$tag=refused"
           umount /mnt/again
         else echo "fresh_$tag=nomount"; fi
       done
-      awk '$3=="9p" || $3=="virtiofs" {print "share_" $1 "=" $2}' /proc/mounts`,
+      awk '$3=="virtiofs" {print "share_" $1 "=" $2}' /proc/mounts`,
       );
       const got = lines(result.stdout);
       assert.equal(
@@ -206,8 +204,7 @@ describe(
         );
       }
       assert.equal(got.append_head, "refused");
-      // Mounting each share afresh, read-write. Where the transport allows a second mount
-      // (virtiofs does; 9p mounts a share once per guest, and says "nomount"), the writable
+      // Mounting each share afresh, read-write. Where a second mount is allowed, the writable
       // share takes the write, which shows the attempt works; a read-only one never does.
       const tagOf = (mountPoint: string) =>
         Object.entries(got)
@@ -247,8 +244,7 @@ describe(
       );
     });
 
-    it("T4 a share swapped for a symlink as its VM starts is refused by the VM itself: it does not start, and the folder the link names is untouched", async (t) => {
-      if (stack.backend !== "vz") return t.skip("the sandbox profile is the vz backend's");
+    it("T4 a share swapped for a symlink as its VM starts is refused by the VM itself: it does not start, and the folder the link names is untouched", async () => {
       // The root's user owns domains/<d>/: taken over, it could swap a share for a link
       // between desolate's check (shares.ts) and the moment the VM opens it. The swap here is
       // made the moment desolate writes the VM's profile, just after its check: what follows
@@ -415,7 +411,7 @@ describe(
       assert.match(
         reached.stdout,
         /upstream http host=api\.example\.test path=\/t3/,
-        "a plain program in the VM reaches an allowed host: through QEMU's guestfwd, the link, and the proxy in the root VM",
+        "a plain program in the VM reaches an allowed host: through the link and the proxy in the root VM",
       );
       assert.match(
         reached.stdout,
@@ -445,7 +441,7 @@ describe(
     it("T3 work crosses from a real VM as checked data: an honest offer is taken, a dangerous tree is refused whole, the outbox cannot point the root at its own files", () => {
       stack.step("an offer, and hostile content, over a real share");
       // The root's handling of an outbox leans on what the kernel says about an open
-      // directory on the SHARE's filesystem (9p here, virtiofs on a Mac). T2 has the full
+      // directory on the SHARE's filesystem (virtiofs). T2 has the full
       // set of attacks on bind mounts; this is the same route on the real thing.
       const ws = (script: string, root = false) =>
         stack.inVm(vmOf("a/w1"), ["bash", "-lc", `cd /workspaces/acme/widgets && ${script}`], {
@@ -988,7 +984,7 @@ attempt(60);`,
             ).map((m) => m.slice(3, -1));
       for (const port of ports)
         assert.deepEqual(
-          holders(port).filter((name) => /limactl|qemu/.test(name)),
+          holders(port).filter((name) => /limactl/.test(name)),
           [],
           `nothing of the VM layer listens on the host's port ${port}`,
         );
@@ -1073,36 +1069,11 @@ attempt(60);`,
         lines(stack.inRoot(["bash", "-c", ping("icmp")], { root: true }).stdout).icmp ?? "";
       const icmp = lines(asRoot("a/w1", ping("icmp")).stdout).icmp ?? "";
       assert.match(icmp, /^refused/, "ICMP, as root in the workspace");
-      if (stack.backend === "vz")
-        assert.match(
-          icmpControl,
-          /^REACHED/,
-          "control: the root VM's ping is answered, so the workspace's silence is its confinement",
-        );
-      // (qemu: slirp answers echoes only where the host may send them; a sandbox may not.)
-      else if (!/^REACHED/.test(icmpControl))
-        console.log(
-          "# ICMP: the root VM's own ping got no answer on this machine, so the refusal above has no control here",
-        );
-      // And outside the VM, on the qemu backend: the hypervisor that is running is the
-      // restricted one, and the root VM's is not (the control).
-      if (stack.backend === "qemu") {
-        const pid = fs
-          .readFileSync(path.join(stack.home, "lima", vmOf("a/w1"), "qemu.pid"), "utf8")
-          .trim();
-        assert.match(fs.readFileSync(`/proc/${pid}/cmdline`, "utf8"), /restrict=on/);
-        const rootPid = fs
-          .readFileSync(
-            path.join(stack.home, "lima", `dsl-${stack.instance}-root`, "qemu.pid"),
-            "utf8",
-          )
-          .trim();
-        assert.doesNotMatch(
-          fs.readFileSync(`/proc/${rootPid}/cmdline`, "utf8"),
-          /restrict=on/,
-          "control: the root VM's network is the unrestricted kind",
-        );
-      }
+      assert.match(
+        icmpControl,
+        /^REACHED/,
+        "control: the root VM's ping is answered, so the workspace's silence is its confinement",
+      );
     });
 
     it("T3 two domains: neither can reach the other's work, whatever it writes", () => {

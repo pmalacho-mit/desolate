@@ -1,5 +1,5 @@
 // Harness for in-source tests of code that reads an environment variable when it is called
-// (DESOLATE_BACKEND, DESOLATE_EDITOR_PORT, ...): it stands in for the person's shell setting
+// (DESOLATE_EDITOR_PORT, ...): it stands in for the person's shell setting
 // one, and puts it back as it was when the test ends.
 import { onTestFinished } from "./vitest.ts";
 
