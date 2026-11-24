@@ -148,25 +148,9 @@ const post = async (what, card, squash) => {
   return body;
 };
 
-// The diff, as text: each line a text node in a span classed by its first character, what
-// would hide or reorder it named (shared/ui/shown-text.js).
-const { unhidden } = DesolateShown;
-const kindOf = (line) => line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
-/** git's text, a line a span; given `tokens` (shared/ui/highlight.js), each line of code in
- *  its syntax's colours, its text unchanged. */
-const diffView = (text, tokens) => {
-  const pre = el("pre", undefined, "diff");
-  text.split("\n").forEach((line, i) => {
-    const span = el("span", undefined, kindOf(line));
-    const code = tokens && tokens[i];
-    // (Coloured, unhidden sees a token at a time: a line with a carriage return inside it is
-    // shown plain, where the return is named.)
-    if (code && !/\r(?!$)/.test(line) && typeof DesolateHighlight !== "undefined") span.append(document.createTextNode(line[0]), ...DesolateHighlight.paint(code, unhidden));
-    else span.textContent = unhidden(line) || " ";
-    pre.append(span);
-  });
-  return pre;
-};
+// The diff, and an issue's text, as text: what would hide or reorder it named
+// (shared/ui/shown-text.js: the dashboard's diff is the same).
+const { unhidden, diffView } = DesolateShown;
 /** What the host is asked for a push the card shows: by its nonce and the token over its very
  *  text, as an approval is. */
 const askHost = async (card, what, query) => {

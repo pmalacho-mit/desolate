@@ -138,18 +138,16 @@ const alertLine = (text) => { notice = text; render(); };
 const button = (label, key, kind, args, quiet = false) =>
   el("button", { class: quiet ? "quiet" : "", disabled: busy.has(key), "data-action": kind, onclick: () => act(key, kind, args) }, busy.has(key) ? `${label}...` : label);
 
-// The diff, as text. Each line is a text node in a span whose class comes from the line's
-// first character: nothing in the diff is ever parsed as markup.
-// What would hide or reorder a line, named, and a file's name as a person reads it in a list
-// (shared/ui/shown-text.js: the approval page's rule, the same here).
-const { unhidden, name: nameShown } = DesolateShown;
-// Given `tokens` (shared/ui/highlight.js, a line's code in its syntax's colours), each line of
-// code is drawn in colour; its text is the same either way.
-const hasColour = (tokens, i) => Boolean(tokens && tokens[i] && typeof DesolateHighlight !== "undefined");
-const fileOf = (line) => line.replace(/^diff --git a\/(.*) b\/.*$/, "$1");
-const diffView = (text, tokens) => el("pre", { class: "mono diff", "data-diff": "" }, text.split("\n").map((line, i) =>
-  el("span", { class: line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "", "data-file": line.startsWith("diff --git") ? fileOf(line) : null },
-    hasColour(tokens, i) ? [line[0], ...DesolateHighlight.paint(tokens[i], unhidden)] : unhidden(line) || " ")));
+// The diff, as text, and a file's name in a list: the approval page's rule and its diff
+// (shared/ui/shown-text.js). Nothing in the diff is ever parsed as markup.
+const { unhidden, name: nameShown, fileOf, colours, diffView } = DesolateShown;
+/** A side-by-side header: the file's name, or a renamed file's two, as git gives them
+ *  (`a/<old> b/<new>`: it named only the old one, the triage of 2026-11-22). */
+const fileHeader = (line) => {
+  const names = line.slice("diff --git ".length);
+  const half = (names.length - 1) / 2;
+  return names.startsWith("a/") && names.slice(half + 1, half + 3) === "b/" && names.slice(2, half) === names.slice(half + 3) ? names.slice(2, half) : names;
+};
 // Side by side: git's unified text, laid out in two columns by this script (nothing in the
 // root parses anything more). A run of removed lines beside the run of added lines that
 // follows it, line by line; in each such pair, the part that differs is marked (the longest
@@ -181,7 +179,7 @@ const sides = (text) => {
     const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
     if (line.startsWith("diff --git")) {
       flush();
-      rows.push({ kind: "file", text: line.replace(/^diff --git a\/(.*) b\/.*$/, "$1") });
+      rows.push({ kind: "file", file: fileOf(line), text: fileHeader(line) });
     } else if (hunk) {
       flush();
       oldNo = Number(hunk[1]);
@@ -263,10 +261,11 @@ const marked = (mine, theirs) => {
   return range ? [mine.slice(0, range[0]), el("mark", {}, mine.slice(range[0], range[1])), mine.slice(range[1])] : [mine];
 };
 const sideBySide = (text, tokens) => el("div", { class: "sbs", "data-diff": "" }, sides(text).map((row) => {
-  if (row.kind !== "change" && row.kind !== "same") return el("div", { class: `sbs-${row.kind}`, "data-file": row.kind === "file" ? row.text : null }, row.text);
+  if (row.kind !== "change" && row.kind !== "same") return el("div", { class: `sbs-${row.kind}`, "data-file": row.kind === "file" ? row.file : null }, unhidden(row.text));
   const code = (side, other) => {
     const pair = row.kind === "change" && row.like;
-    if (hasColour(tokens, side.at)) return DesolateHighlight.paint(tokens[side.at], unhidden, pair ? differing(unhidden(side.text), other && unhidden(other.text)) : null);
+    const coloured = colours(tokens, side.at, side.text);
+    if (coloured) return DesolateHighlight.paint(coloured, unhidden, pair ? differing(unhidden(side.text), other && unhidden(other.text)) : null);
     return pair ? marked(unhidden(side.text), other && unhidden(other.text)) : unhidden(side.text) || " ";
   };
   const cell = (side, other, cls) => side

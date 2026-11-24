@@ -1,5 +1,6 @@
 // Text a repository or a workspace wrote, as the approval page and the dashboard show it: what
-// would hide or reorder it named, so that it reads as git stores it. One rule for both pages.
+// would hide or reorder it named, so that it reads as git stores it, and a diff drawn from it.
+// One rule and one diff for both pages: the two diffs a person compares cannot differ.
 // Everything is set as text (textContent, text nodes), never as markup.
 "use strict";
 const DesolateShown = (() => {
@@ -12,5 +13,28 @@ const DesolateShown = (() => {
   /** A file's name in a list: each one named, a newline and a tab too, a trailing space marked
    *  (notes-<U+202E>dm.hs read "notes-sh.md": safety-colleague, dogfooding 2026-11-22). */
   const name = (text) => String(text).replace(HIDDEN, mark).replace(/ +$/, (spaces) => "⟨space⟩".repeat(spaces.length));
-  return { HIDDEN, unhidden, name };
+  /** What a line of git's diff is, as its span's class. */
+  const kindOf = (line) => line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
+  /** A header's file by its old name, as the dashboard's list finds it (`data-file`). */
+  const fileOf = (line) => line.replace(/^diff --git a\/(.*) b\/.*$/, "$1");
+  /** A line's colours (shared/ui/highlight.js), or null. `unhidden` then sees a token at a time,
+   *  where a return that ends one reads as the line's end: such a line is drawn plain. */
+  const colours = (tokens, i, line) => tokens && tokens[i] && typeof DesolateHighlight !== "undefined" && !/\r(?!$)/.test(line) ? tokens[i] : null;
+  /** git's text, a line a span classed by what it is; given `tokens`, in colour, the same text. */
+  const diffView = (text, tokens) => {
+    const pre = document.createElement("pre");
+    pre.className = "diff";
+    pre.setAttribute("data-diff", "");
+    text.split("\n").forEach((line, i) => {
+      const span = document.createElement("span");
+      span.className = kindOf(line);
+      if (span.className === "file") span.setAttribute("data-file", fileOf(line));
+      const code = colours(tokens, i, line);
+      if (code) span.append(document.createTextNode(line[0]), ...DesolateHighlight.paint(code, unhidden));
+      else span.textContent = unhidden(line) || " ";
+      pre.append(span);
+    });
+    return pre;
+  };
+  return { HIDDEN, unhidden, name, fileOf, colours, diffView };
 })();

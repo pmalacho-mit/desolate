@@ -1272,7 +1272,7 @@ describe("T2 section 4.8: the root UI", () => {
         const where = `unified, panel ${panel || "as it opens"}`;
         const m = await page.evaluate<Measured>(measure);
         fits(m, where);
-        assert.equal(m.diff, "PRE.mono diff");
+        assert.equal(m.diff, "PRE.diff");
         assert.ok(m.diffScrolls > 0, `${where}: control: the diff scrolls in its box`);
       }
       const lines = await page.evaluate<number[]>(
