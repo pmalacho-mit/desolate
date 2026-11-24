@@ -14,7 +14,9 @@ export const gitAnswers = (answers: Answer[]) => {
 };
 
 /** The replacement for shared/run.ts. An unscripted command fails, as git would on a
- *  repository that has none of it. */
+ *  repository that has none of it.
+ *  @standsIn release/shared/run.ts (git, run in a workspace's clone)
+ *  @realIn T2 04-offers, "an agent finishes: commits, a new LFS file, and `desolate offer`" */
 export const scriptedGit = {
   run: async (command: string, args: string[], _options?: RunOptions): Promise<RunResult> => {
     const words = command === "git" && args[0] === "-C" ? args.slice(2) : args;

@@ -11,7 +11,9 @@ const pkt = (text: string) =>
 /** A forge whose receive-pack lists `refs` (the first line carries its capabilities after a
  *  NUL, as git's does), and then, if it is asked for an update, reports `report`. Each line is
  *  sent as one pkt-line; a flush ends each list. `raw` is sent as it is instead, for a forge
- *  that does not speak the protocol. */
+ *  that does not speak the protocol.
+ *  @standsIn the forge's receive-pack
+ *  @realIn tests/v3/t1/pusher.test.ts (git's own receive-pack), and T4 (tests/v3/t3/01-boundaries.test.ts, "T4 a push from the real root VM: a pack the root's user made is not sent, and the reviewer's lands") */
 export const forgeSaying = (refs: string[], report: string[] = [], raw?: string) => {
   const stdin = new PassThrough();
   const stdout = new PassThrough();

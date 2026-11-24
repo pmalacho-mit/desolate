@@ -25,7 +25,9 @@ for (const [dir, name] of Object.entries(WHERE)) process.env[name] = path.join(b
 
 const at = (where: Where, name: string) => path.join(base, where, name);
 
-/** The root's directories, each empty: no registry, no domains, no keys. */
+/** The root's directories, each empty: no registry, no domains, no keys.
+ *  @standsIn the root VM's directories (release/root/layout.ts: /var/lib/desolate, /desolate/domains, ...)
+ *  @realIn T2 01-root, and T4 (tests/v3/t3/01-boundaries.test.ts) */
 export const emptyRoot = () => {
   fs.rmSync(base, { recursive: true, force: true });
   for (const dir of [...Object.keys(WHERE), "mirrors", "clones"])
@@ -148,7 +150,9 @@ export const linkIn = (where: Where, name: string, target: string) => {
 
 /** layout.ts with its mirrors and root clones under this harness's root, for `Mock`: the rest
  *  as layout.ts has it (with the environment above). Named by their real path, as
- *  /desolate/mirrors is in the root VM (macOS's temporary directory is behind a link). */
+ *  /desolate/mirrors is in the root VM (macOS's temporary directory is behind a link).
+ *  @standsIn release/root/layout.ts
+ *  @realIn T2 04-offers, "the root never runs git in a domain's repository: a booby-trapped clone and a lying outbox" */
 export const mirrorsAndClonesHere = async (
   importOriginal: () => Promise<typeof import("../root/layout.ts")>,
 ) => {

@@ -490,7 +490,8 @@ declare namespace review {
     >
   >;
   /** every number is the root's count, not the length of what it sent: a branch of 250
-   *  commits and 1,200 files says so, lists the first, and says how many more */
+   *  commits and 1,200 files says so, lists the first, and says how many more
+   *  @requirement R2 */
   export type Counted = Given<
     [
       Mock<"./stack.ts", typeof fakeStack>,
@@ -1135,7 +1136,8 @@ export const approve = async (
 };
 
 declare namespace approve {
-  /** nothing waiting: said, and nothing is signed */
+  /** nothing waiting: said, and nothing is signed
+   *  @principle P2 */
   export type NothingWaiting = Given<
     [
       Mock<"./stack.ts", typeof fakeStack>,

@@ -159,7 +159,8 @@ export const openingPage = (token: string, url: string) => {
 };
 
 declare namespace openingPage {
-  /** the cookie the editor's server would set, and on to the same address without the token */
+  /** the cookie the editor's server would set, and on to the same address without the token
+   *  @incident 2026-11-17-open-editor-refused */
   export type Opens = [
     Expect<
       Invoke<
@@ -269,7 +270,8 @@ export const gate = (editorHost: string, serverPort: number, tokenFile?: string)
 // one is 48). "e.localhost" is the editor's hostname; the gate is reached at any port of it.
 declare namespace gate {
   /** what a browser at the editor's own page sends, and what is not a browser at all: let
-   *  through to the editor */
+   *  through to the editor
+   *  @principle P1 */
   export type Passes = Table<
     typeof throughGate,
     [
@@ -323,7 +325,10 @@ declare namespace gate {
   >;
 
   /** what another page in the person's browser could make it send: refused, and the editor
-   *  never sees it */
+   *  never sees it
+   *  @principle P1
+   *  @standsIn the editor's server (throughGate)
+   *  @realIn T2 06-editor, "a page somewhere else cannot drive the editor: cross-site requests and foreign origins are refused" */
   export type RefusesOtherPages = Table<
     typeof throughGate,
     [
@@ -424,7 +429,8 @@ declare namespace gate {
 
   /** the dashboard's "Open editor": a navigation from another site, which the gate answers
    *  itself because its address carries this editor's token (openingPage): the editor's
-   *  server never sees it, and what the page then opens is a same-origin request */
+   *  server never sees it, and what the page then opens is a same-origin request
+   *  @incident 2026-11-17-open-editor-refused */
   export type OpenedFromTheDashboard = Expect<
     Invoke<
       typeof throughGate,
@@ -448,7 +454,8 @@ declare namespace gate {
   >;
 
   /** that exception and nothing near it: a wrong token, a frame, a fetch, another path or
-   *  method, a token file that is missing or not a token, a foreign Origin */
+   *  method, a token file that is missing or not a token, a foreign Origin
+   *  @principle P1 */
   export type OnlyThatNavigation = Table<
     typeof throughGate,
     [
@@ -612,7 +619,8 @@ declare namespace gate {
   >;
 
   /** WebSocket upgrades (the editor's terminals and files): the editor's own page only. The
-   *  token exception is for loading the page, never for a socket */
+   *  token exception is for loading the page, never for a socket
+   *  @principle P1 */
   export type Upgrades = Table<
     typeof throughGate,
     [
