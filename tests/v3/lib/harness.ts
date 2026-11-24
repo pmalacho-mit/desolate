@@ -294,6 +294,9 @@ export const newStack = (label: string): Stack => {
       .replace(/ssh-ed25519 [A-Za-z0-9+/=]+/g, "ssh-ed25519 <key>")
       .replace(/tkn=[0-9a-f]{48}/g, "tkn=<token>")
       .replace(/docker daemon: docker \d+\.\d+\.\d+/g, "docker daemon: docker <version>")
+      // (The image's fingerprint changes with any edit to what provisions it, a comment too:
+      // the transcript is of the message, not of the image.)
+      .replace(/(desolate's image \()[0-9a-f]{16}(\))/g, "$1<image>$2")
       .replace(/\b[0-9a-f]{40}\b/g, "<commit>")
       .replace(/\b[0-9a-f]{64}\b/g, "<oid>")
       .replace(/sha256:[0-9a-f]{12}|\b[0-9a-f]{12}\b/g, "<id>")
