@@ -712,7 +712,7 @@ describe("T2 section 4.8: the root UI", () => {
       // waited out their 70 s.)
       assert.ok(before.taken <= 3000 && before.told <= 3000, `control: ${JSON.stringify(before)}`);
       assert.ok(
-        back.taken <= 5000 && back.told <= 5000,
+        back.taken <= 2500 && back.told <= 2500,
         `after a restart: ${JSON.stringify(back)}`,
       );
     } finally {
