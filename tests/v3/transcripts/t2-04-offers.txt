@@ -349,13 +349,13 @@ error: failed to push some refs to 'desolate-offer::acme/widgets'
 
 $ desolate exec dev/w1 --checkout acme/widgets -- git push origin HEAD:refs/heads/other-name
 To desolate-offer::acme/widgets
- ! [remote rejected] HEAD -> other-name (not offered: only a branch is offered, under its own name (git push origin <branch>))
+ ! [remote rejected] HEAD -> other-name (not offered: only a branch is offered, under its own name: git push origin <branch>)
 error: failed to push some refs to 'desolate-offer::acme/widgets'
 [exit 1]
 
 $ desolate exec dev/w1 --checkout acme/widgets -- git push origin fix+plus
 desolate: 'fix+plus' is not a branch desolate will carry
-  fix: check out the branch to offer, or name it: desolate offer <owner>/<repo> <branch>
+  fix: rename it with letters, digits and . _ / - only: git branch -m <new-name>
 To desolate-offer::acme/widgets
  ! [remote rejected] fix+plus -> fix+plus (not offered: desolate offer says why above, with its fix)
 error: failed to push some refs to 'desolate-offer::acme/widgets'
@@ -363,7 +363,7 @@ error: failed to push some refs to 'desolate-offer::acme/widgets'
 
 $ desolate exec dev/w1 --checkout acme/widgets -- git push origin :elsewhere
 To desolate-offer::acme/widgets
- ! [remote rejected] elsewhere (not deleted: a workspace changes nothing on the remote; the person deletes branches there (desolate git, on the Mac))
+ ! [remote rejected] elsewhere (not deleted: a workspace changes nothing on the remote; the person deletes branches there, in desolate git on the Mac)
 error: failed to push some refs to 'desolate-offer::acme/widgets'
 [exit 1]
 
