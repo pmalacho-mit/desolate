@@ -417,7 +417,8 @@ declare namespace prepare {
     ]
   >;
   /** written as a person might (`./vendor/lib/`), it is the same directory: past this check,
-   *  the next is whether the clone is here */
+   *  the next is whether the clone is here
+   *  @control */
   export type TakesTheDirectory = Throws<
     Invoke<
       typeof prepare,
@@ -588,7 +589,8 @@ declare namespace prepare {
     ]
   >;
   /** controls for the two above: the dependency's own address, in any spelling and case, and
-   *  a branch name, pass; the branch is then looked for in the clone (which, here, has none) */
+   *  a branch name, pass; the branch is then looked for in the clone (which, here, has none)
+   *  @control */
   export type TakesTheRemoteAndTheRef = [
     Throws<
       Invoke<
@@ -994,7 +996,9 @@ export const upstream = async (argv: string[], cwdRepo: () => string): Promise<n
 // refusal is how a test here shows the command line was taken.
 declare namespace upstream {
   /** `<dependency-dir> <owner/repo>` in a clone, the consumer being the clone's repository;
-   *  or the consumer named first, and then the current directory is not asked */
+   *  or the consumer named first, and then the current directory is not asked: parsed, and
+   *  refused only at the next step, where the refusals below are not
+   *  @control */
   export type Parses = [
     Throws<
       Invoke<

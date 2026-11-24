@@ -476,6 +476,15 @@ declare namespace lookup {
 }
 
 declare namespace storedIn {
+  /** what `desolate settings` writes is read, by name: the control for the refusal below */
+  export type Ours = Given<
+    Invoke<typeof storeText, [text: '{"git.shells":{"value":"9","side":"host"}}']>,
+    Expect<
+      Invoke<typeof storedIn, [file: Invoke<typeof storeFile, [side: "host"]>]>,
+      "matches",
+      { "git.shells": { value: "9"; side: "host" } }
+    >
+  >;
   /** a file that is not one desolate wrote is refused, not read as nothing */
   export type NotOurs = Given<
     Invoke<typeof storeText, [text: '{"git.shells":9}']>,

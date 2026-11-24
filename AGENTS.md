@@ -28,6 +28,9 @@ in its own devcontainer, with `DESOLATE_WORKSPACE=1` in the environment. That me
   hypervisor) or run the new code as the person's real stack. A change to a boundary (VMs,
   shares, egress, the keyring, the pusher) needs T4 on the Mac before it is believed.
   Write that in your offer's status: `desolate status set yellow "ready; T4 not run: <why it matters>"`.
+- **Say what your change did to the claims.** Before you hand work back, run `make claims-diff`:
+  every in-source test your branch added, removed, changed or skipped since `origin/main`, in
+  its author's words. In your report, name each claim it removed or weakened, and why.
 - **When a workspace is not enough, ask for the Mac user.** Some work cannot be done from
   inside a desolate workspace at all: T4, anything else that needs the Mac's hypervisor,
   trying the new code as a real stack, or a change outside the VMs. For that, the owner

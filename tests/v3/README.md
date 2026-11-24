@@ -74,6 +74,12 @@ re-exported: that path is how Vitest finds the file. Vitest is pinned at 5.0.3 (
 plugins root-relative ids, and the library's generated test modules are then "not found");
 install with `npm install --legacy-peer-deps` (npm's peer resolution crashes on Vitest 5.0.3).
 
+Their words are read too. `make claims-lint` (part of T1) runs the library's `docs lint` and
+fails on a finding of a kind that is clean today (a `{@link}` to a test that no longer
+exists); the other kinds are counted, not enforced. `make claims-diff` says what a branch does
+to the claims since `origin/main` (`BASE=<ref>`; `CHECK=1` fails when one was removed,
+changed or newly skipped). Both run on node 22.18 and up, as T1 does.
+
 ## What a machine needs
 
 - **T1:** node >= 22.18, `npm install` (for TypeScript and Vitest). `shellcheck` if you have it.
