@@ -62,6 +62,7 @@ import { retire, retiredAt } from "./retired.ts";
 import { opened as statedReply } from "./replies.ts";
 import type { Answer, Stated } from "./replies.ts";
 import { backend, config, ROOT_VM, rootctl, rootctlBrief } from "./stack.ts";
+import { withLock } from "../shared/lock.ts";
 import {
   editorAddress,
   editorTokenOf,
@@ -125,6 +126,7 @@ import type { refusalOf } from "../.harness/refusal.ts";
 
 const SOCKET = path.join(paths.state, "daemon.sock");
 const PIDFILE = path.join(paths.state, "daemon.pid");
+const DAEMON_LOCK = path.join(paths.state, "daemon.lock");
 const LOG = path.join(paths.logs, "daemon.log");
 const NODE = ["node", "--disable-warning=ExperimentalWarning"];
 
@@ -1750,7 +1752,7 @@ declare namespace pusherLogRead {
   >;
 }
 
-const serve = async () => {
+const serving = async () => {
   const b = backend();
   const entries = new Map<string, Entry>();
   /** A host listener per forwarded port. */
@@ -3288,9 +3290,24 @@ export const stopForwarder = async () => {
   if (await alive()) await ask({ op: "stop" }).catch(() => {});
 };
 
+/** The daemon, one a home: a lock held for its life, taken before it does anything (two
+ *  started at once, by two commands each finding none, or one started while another is still
+ *  stopping). The second ends at once, saying which holds it, and so never ends the first's
+ *  connections (backend.release, at a start) nor takes its ports. A lock whose holder is gone
+ *  is nobody's (shared/lock.ts): a daemon that died leaves its place to the next. */
+const serve = () =>
+  withLock(DAEMON_LOCK, serving, {
+    wait: false,
+    busy: (holder) =>
+      `the host daemon for ${paths.home} is already running (pid ${holder.pid}, since ${holder.since}): this one ends`,
+  });
+
 if (
   process.argv[2] === "serve" &&
   process.argv[1] &&
   fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)
 )
-  void serve();
+  serve().catch((error: unknown) => {
+    console.error(`desolate: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });

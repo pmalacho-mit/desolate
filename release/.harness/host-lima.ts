@@ -439,6 +439,7 @@ export const channelsConfigured = async (call: "master" | "forward" | "cancel", 
     forwardagent: value("forwardagent"),
     forwardx11: value("forwardx11"),
     permitlocalcommand: value("permitlocalcommand"),
+    globalknownhostsfile: value("globalknownhostsfile"),
     tunnel: value("tunnel"),
     forwards: lines
       .filter((line) => /^(local|remote|dynamic)forward /.test(line))
@@ -483,11 +484,20 @@ if (args[0] === "--serve") {
     const wait = () => (fs.existsSync(ctl) ? process.exit(0) : setTimeout(wait, 5)); wait();
   } else {
     const op = args[at + 1]; const spec = args[args.indexOf("-L") + 1] ?? ""; const local = spec.slice(0, spec.indexOf(":"));
+    const once = (file) => { const at = path.join(process.env.STAND_IN_HOME, file); try { const said = fs.readFileSync(at, "utf8"); fs.rmSync(at); return said; } catch { return null; } };
+    if (op === "forward" && once("fail-forward") !== null) { process.stderr.write("mux_client_forward: forwarding request failed\n"); process.exit(255); }
+    const mode = op === "check" ? once("check-mode") : null;
+    if (mode === "hang") setInterval(() => {}, 1000);
+    else if (mode === "cannot spawn") { process.stderr.write("spawn ssh EMFILE"); process.exit(127); }
+    else if (mode === "another pid") { process.stderr.write("Master running (pid=1)\n"); process.exit(0); }
+    else if (mode === "no socket") { process.stderr.write("Control socket connect(" + ctl + "): No such file or directory\n"); process.exit(255); }
+    else {
     const c = net.connect(ctl); let got = "";
-    c.on("error", (e) => { process.stderr.write("Control socket connect(" + ctl + "): " + e.message + "\n"); process.exit(255); });
+    c.on("error", (e) => { process.stderr.write("Control socket connect(" + ctl + "): " + ({ ENOENT: "No such file or directory", ECONNREFUSED: "Connection refused" }[e.code] ?? e.message) + "\n"); process.exit(255); });
     c.on("connect", () => c.write(JSON.stringify({ op, local })));
     c.on("data", (d) => (got += d));
     c.on("end", () => { const r = JSON.parse(got || "{}"); if (op === "check" && r.ok) process.stderr.write("Master running (pid=" + r.pid + ")\n"); process.exit(r.ok ? 0 : 255); });
+    }
   }
 }
 `;
@@ -571,6 +581,72 @@ export const channelsAfter = async (
     const inTime = performance.now() - began < 5000;
     await new Promise((resolve) => setTimeout(resolve, 300));
     return { first, next, inTime, left: masters().length };
+  } finally {
+    backend.release();
+    for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
+    fs.rmSync(lima, { recursive: true, force: true });
+    process.env.PATH = before.PATH;
+    if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
+    else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
+  }
+};
+
+/** A forward that fails while a master is up (to 8081, after one to 8080 was carried), and the
+ *  check that follows it answered as `check` says (nothing set: as the master is; or it hangs
+ *  past its 500 ms, cannot be started, answers another pid, or finds no master on the socket).
+ *  What that connection got, whether the master that carried the first is the one left
+ *  running, and what a third connection (to 8082) got. */
+export const checkThatFails = async (
+  check: "as it is" | "hang" | "cannot spawn" | "another pid" | "no socket",
+): Promise<{ next: string; sameMaster: boolean; carriesOn: string }> => {
+  const { channelsIn } = await import("../host/vm/lima.ts");
+  const lima = fs.mkdtempSync("/tmp/dsl-ck-");
+  const backend = channelsIn(lima, () => process.env, 500);
+  const name = "dsl-main-chan";
+  fs.mkdirSync(path.join(lima, name), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(lima, name, "ssh.config"), `Host lima-${name}\n`);
+  const stands = path.join(home(), "stand-in-ssh");
+  fs.rmSync(stands, { recursive: true, force: true });
+  fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(stands, "ssh.mjs"), STAND_IN_SSH);
+  fs.writeFileSync(
+    path.join(stands, "bin", "ssh"),
+    `#!/bin/sh\nexec '${process.execPath}' '${stands}/ssh.mjs' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
+  process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
+  process.env.STAND_IN_HOME = stands;
+  const masters = () =>
+    fs.existsSync(path.join(stands, "masters"))
+      ? fs.readdirSync(path.join(stands, "masters")).filter((pid) => {
+          try {
+            process.kill(Number(pid), 0);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+      : [];
+  const said = (target: number) =>
+    new Promise<string>((resolve) => {
+      const stream = backend.dial(name, target);
+      let got = "";
+      stream.on("data", (chunk) => (got += chunk));
+      stream.on("error", () => {});
+      stream.on("close", () => resolve(got));
+      stream.end("hi\n");
+    });
+  try {
+    await said(8080);
+    const first = masters();
+    fs.writeFileSync(path.join(stands, "fail-forward"), "");
+    if (check !== "as it is") fs.writeFileSync(path.join(stands, "check-mode"), check);
+    const next = await said(8081);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const sameMaster = JSON.stringify(masters()) === JSON.stringify(first);
+    const carriesOn = await said(8082);
+    return { next, sameMaster, carriesOn };
   } finally {
     backend.release();
     for (const pid of masters()) process.kill(Number(pid), "SIGKILL");

@@ -19,7 +19,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { vmStatus } from "../../../release/host/vm/lima.ts";
+import { mastersOf, vmStatus } from "../../../release/host/vm/lima.ts";
 import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
@@ -249,6 +249,17 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
       assert.match(out(1).stdout, /upstream http host=api\.example\.test path=\/ch-1/);
       const pids = { vm: master(vm), root: master(root) };
       assert.ok(pids.vm > 0 && pids.root > 0, JSON.stringify(pids));
+      // What a daemon that starts or stops ends (lima.ts, mastersOf: pkill by the control
+      // socket each master's command names) is these two, and nothing else of this user's: a
+      // ssh that no longer showed its options in its command line would leak them.
+      const named = spawnSync("pgrep", ["-u", String(process.getuid!()), "-f", mastersOf(lima)], {
+        encoding: "utf8",
+      });
+      assert.deepEqual(
+        named.stdout.trim().split("\n").map(Number).sort(),
+        [pids.vm, pids.root].sort(),
+        named.stdout,
+      );
       // Only this Mac's user enters the folders, and each socket is its alone.
       for (const name of [vm, root]) {
         const dir = path.join(lima, name, "ch");

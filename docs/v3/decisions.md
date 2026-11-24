@@ -174,14 +174,17 @@ here and 1.2 MB there); half-close and an end from either side behave as before.
   proxy's socket needs the groups the login had). Its configuration is desolate's own
   (`channelConfig`, `ch/ssh.config`), written by the Mac at each start from the seven values it
   takes from `ssh -G` of Lima's file (host, port, user, key, known-hosts file, host-key alias,
-  strict checking): ssh reads its configuration again for every `-O forward` and sends the
+  strict checking; no system-wide known hosts): ssh reads its configuration again for every `-O forward` and sends the
   master every forward named there, and a master carries a forward asked on its control socket
   whatever its own ClearAllForwardings (both seen with `ssh -G`, review of 2026-11-24), so
   nothing of Lima's file but those may ride along. A check of each invocation's `ssh -G`
   instead would have to be run, and kept right, before every forward.
 - **A master that no longer answers.** When a connection cannot be made (or a forward cannot
   be added), the master is asked on its control socket (`-O check`) whether it still answers
-  as the pid it gave; if not (gone, killed, its control socket removed under it), it is ended
+  as the pid it gave; only an answer counts (no master on the socket, or another pid): a check
+  that could not be started or ran out of time, this Mac short of something, fails that one
+  connection and keeps the master. If it does not answer (gone, killed, its control socket
+  removed under it), it is ended
   (`-O exit`, else every process whose command names that control socket: never a pid kept
   from before) and another made, once. Its pid alone decided this before, and a pid can be
   another process's by then. While it answers, a refusal is its listen queue full (ssh
@@ -194,8 +197,10 @@ here and 1.2 MB there); half-close and an end from either side behave as before.
   the daemon no longer carries is refused. When a workspace goes, its VM's master is ended and
   its proxy's forward on the root's cancelled; a port no longer listened on has its forward
   cancelled. A daemon that stops ends every master under the Lima home, and so does one that
-  starts (by the control sockets their commands name), so a crashed daemon's masters live
-  until the next daemon starts or their VMs stop. A folder too long for the sockets is refused
+  starts (by the control sockets their commands name, which T4 checks pgrep finds), so a
+  crashed daemon's masters live until the next daemon starts or their VMs stop. There is one
+  daemon a home (a lock held for its life, `daemon.lock`): a second ends at once, saying
+  which holds it, before it can end the first's connections (T1 `daemon-single`). A folder too long for the sockets is refused
   in words, and `doctor` says so ("socket paths fit").
 - **Who can connect.** The folder is 0700 (Lima's VM folder is too) and each socket 0600
   (ssh's StreamLocalBindMask), owned by the Mac's user: that user, who can already use Lima's

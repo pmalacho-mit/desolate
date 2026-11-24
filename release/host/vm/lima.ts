@@ -46,6 +46,7 @@ import type {
   alone,
   baseYaml,
   channelsAfter,
+  checkThatFails,
   channelsConfigured,
   cloneCall,
   confinement,
@@ -723,7 +724,10 @@ const channelDir = (lima: string, name: string) => {
   const dir = path.join(lima, name, "ch");
   const long = channelsDontFit(dir);
   if (long) throw new Error(long);
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Only `ch`, in the VM's folder: a VM deleted a moment before does not get its folder back.
+  if (!fs.existsSync(path.join(lima, name)))
+    throw new Error(`${name} is not a VM of this Mac any more: its folder is gone`);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { mode: 0o700 });
   const seen = fs.lstatSync(dir);
   if (!seen.isDirectory() || seen.uid !== process.getuid?.() || (seen.mode & 0o077) !== 0)
     throw new Error(
@@ -836,6 +840,7 @@ export const channelConfig = (name: string, shown: string) => {
     "  BatchMode yes",
     "  StrictHostKeyChecking yes",
     `  UserKnownHostsFile "${file("userknownhostsfile")}"`,
+    "  GlobalKnownHostsFile none",
     `  HostKeyAlias lima-${name}`,
     "",
   ].join("\n");
@@ -849,7 +854,7 @@ declare namespace channelConfig {
   export type Written = Expect<
     Invoke<typeof channelConfig, [name: "dsl-main-root", shown: Shown]>,
     "=",
-    'Host lima-dsl-main-root\n  HostName 127.0.0.1\n  Port 52436\n  User desolate\n  IdentityFile "/Users/d/.desolate/lima/_config/user"\n  IdentitiesOnly yes\n  PreferredAuthentications publickey\n  BatchMode yes\n  StrictHostKeyChecking yes\n  UserKnownHostsFile "/Users/d/.desolate/lima/dsl-main-root/ssh.known_hosts"\n  HostKeyAlias lima-dsl-main-root\n'
+    'Host lima-dsl-main-root\n  HostName 127.0.0.1\n  Port 52436\n  User desolate\n  IdentityFile "/Users/d/.desolate/lima/_config/user"\n  IdentitiesOnly yes\n  PreferredAuthentications publickey\n  BatchMode yes\n  StrictHostKeyChecking yes\n  UserKnownHostsFile "/Users/d/.desolate/lima/dsl-main-root/ssh.known_hosts"\n  GlobalKnownHostsFile none\n  HostKeyAlias lima-dsl-main-root\n'
   >;
   /** another host, no host key check, another VM's alias, a path that would end the quoted
    *  value: refused */
@@ -940,7 +945,7 @@ declare namespace masterArgs {
   /** what ssh makes of each invocation (`ssh -G`, which reads the configuration and connects
    *  nowhere), with the configuration channelConfig writes from a Lima file that asks for an
    *  agent, X11, a local command, a tunnel and a forward of each kind: agent and X11 off, no
-   *  tunnel or local command, and no forward but the one asked; the controls are the same
+   *  tunnel, local command or system-wide known hosts, and no forward but the one asked; the controls are the same
    *  invocations with that Lima file itself, where each shows */
   export type Configured = Table<
     typeof channelsConfigured,
@@ -951,6 +956,7 @@ declare namespace masterArgs {
           forwardagent: "no";
           forwardx11: "no";
           permitlocalcommand: "no";
+          globalknownhostsfile: "none";
           tunnel: "false";
           forwards: [];
         },
@@ -961,6 +967,7 @@ declare namespace masterArgs {
           forwardagent: "no";
           forwardx11: "no";
           permitlocalcommand: "no";
+          globalknownhostsfile: "none";
           tunnel: "false";
           forwards: ["localforward <dir>/5173.sock [127.0.0.1]:5173"];
         },
@@ -971,6 +978,7 @@ declare namespace masterArgs {
           forwardagent: "no";
           forwardx11: "no";
           permitlocalcommand: "no";
+          globalknownhostsfile: "none";
           tunnel: "false";
           forwards: ["localforward <dir>/5173.sock [127.0.0.1]:5173"];
         },
@@ -981,6 +989,7 @@ declare namespace masterArgs {
           forwardagent: "yes";
           forwardx11: "yes";
           permitlocalcommand: "yes";
+          globalknownhostsfile: "/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2";
           tunnel: "point-to-point";
           forwards: [
             "dynamicforward 7777",
@@ -995,6 +1004,7 @@ declare namespace masterArgs {
           forwardagent: "yes";
           forwardx11: "yes";
           permitlocalcommand: "yes";
+          globalknownhostsfile: "/etc/ssh/ssh_known_hosts /etc/ssh/ssh_known_hosts2";
           tunnel: "point-to-point";
           forwards: [
             "dynamicforward 7777",
@@ -1058,11 +1068,87 @@ const later = (ready: Promise<Socket>): Duplex => {
   return stream;
 };
 
+/** What `ssh -O check` said of a master that came up as `pid`: `yes`, it answers as itself;
+ *  `gone`, ssh ran and found no master on the control socket (none there, or it refuses), or
+ *  another process answers; or, for anything else (ssh could not be started, ran out of
+ *  time, said something else), what happened, in words: nothing is known of the master. */
+export const checked = (check: RunResult, pid: number): "yes" | "gone" | string => {
+  if (check.code === 0)
+    return /\(pid=(\d+)\)/.exec(check.stderr)?.[1] === String(pid) ? "yes" : "gone";
+  if (
+    check.code === 255 &&
+    /^Control socket connect\(.*\): (No such file or directory|Connection refused)$/m.test(
+      check.stderr,
+    )
+  )
+    return "gone";
+  return printable(check.stderr.trim() || `exit ${check.code}`, 200);
+};
+
+declare namespace checked {
+  /** gone only when ssh answered so: no master on the socket, or another pid; a spawn that
+   *  failed, a timeout or anything else is not known; the control, the master as it came up */
+  export type Verdicts = Table<
+    typeof checked,
+    [
+      [
+        args: [check: { code: 0; stdout: ""; stderr: "Master running (pid=4242)\n" }, pid: 4242],
+        expected: "yes",
+      ],
+      [
+        args: [check: { code: 0; stdout: ""; stderr: "Master running (pid=4243)\n" }, pid: 4242],
+        expected: "gone",
+      ],
+      [
+        args: [
+          check: {
+            code: 255;
+            stdout: "";
+            stderr: "Control socket connect(/h/ch/ctl): No such file or directory\n";
+          },
+          pid: 4242,
+        ],
+        expected: "gone",
+      ],
+      [
+        args: [
+          check: {
+            code: 255;
+            stdout: "";
+            stderr: "Control socket connect(/h/ch/ctl): Connection refused\n";
+          },
+          pid: 4242,
+        ],
+        expected: "gone",
+      ],
+      [
+        args: [check: { code: 127; stdout: ""; stderr: "spawn ssh EAGAIN" }, pid: 4242],
+        expected: "spawn ssh EAGAIN",
+      ],
+      [
+        args: [check: { code: 128; stdout: ""; stderr: "\n(timed out after 10000 ms)" }, pid: 4242],
+        expected: "(timed out after 10000 ms)",
+      ],
+      [
+        args: [
+          check: {
+            code: 255;
+            stdout: "";
+            stderr: "Control socket connect(/h/ch/ctl): Too many open files\n";
+          },
+          pid: 4242,
+        ],
+        expected: "Control socket connect(/h/ch/ctl): Too many open files",
+      ],
+    ]
+  >;
+}
+
 /** Every VM's connections for channels from this Mac, under the Lima home `lima` (ssh run
  *  with `env`): `dial` a target, `release` what is kept for one, for one VM, or for every VM
  *  (and any an earlier process left), and `exit` a VM's master, as refreshSessions does. The
  *  backend's dial and release are these; a harness makes its own, in a short home. */
-export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
+export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv, checkMs = 10_000) => {
   /** Each VM's connection for channels, as this process knows it: the pid its master gave
    *  when it came up, and each target's forward (by its local socket). `closed` once let go
    *  (released: a dial still on its way then makes nothing more; or `retired`: it no longer
@@ -1076,7 +1162,7 @@ export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
     closed: boolean;
     retired: boolean;
     forwards: Map<string, Promise<void>>;
-    asking: Promise<boolean> | null;
+    asking: Promise<string> | null;
   };
   const masters = new Map<string, Master>();
   const turns = new Map<string, Promise<unknown>>();
@@ -1089,7 +1175,10 @@ export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
     return next;
   };
   const control = (name: string, dir: string, ...op: string[]) =>
-    run("ssh", channelArgs(name, dir, ...op), { env: env(), timeoutMs: 10_000 });
+    run("ssh", channelArgs(name, dir, ...op), {
+      env: env(),
+      timeoutMs: op[1] === "check" ? checkMs : 10_000,
+    });
   const released = (name: string) => new Error(`${name}'s connections were let go`);
   /** A master ended: told to exit on its control socket; if that cannot be reached (removed,
    *  or the master no longer answers), every process whose command names this control socket
@@ -1146,7 +1235,7 @@ export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
   const answers = (name: string, master: Master) =>
     (master.asking ??= control(name, master.dir, "-O", "check").then((check) => {
       master.asking = null;
-      return check.code === 0 && check.stderr.includes(`(pid=${master.pid})`);
+      return checked(check, master.pid);
     }));
   /** A master that no longer answers, let go and ended: the next dial makes another. */
   const retire = (name: string, master: Master) => {
@@ -1216,12 +1305,19 @@ export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
         // Let go (its workspace went, the daemon stops), or never made: nothing more is made.
         if ((master.closed && !master.retired) || !master.pid) throw error;
         const code = (error as NodeJS.ErrnoException).code;
-        if (master.retired || (!answered && !(await answers(name, master)))) {
+        const verdict = master.retired || answered ? "yes" : await answers(name, master);
+        if (master.retired || verdict === "gone") {
           if (remade) throw error;
           remade = true;
           retire(name, master);
           continue;
         }
+        // Not known (the check could not run, or ran out of time: this Mac short of something):
+        // this connection fails, and the master, which may be well, is kept.
+        if (verdict !== "yes")
+          throw new Error(
+            `${printable(error instanceof Error ? error.message : String(error), 200)}; and desolate's connection to ${name} could not be asked whether it answers: ${verdict}`,
+          );
         answered = true;
         if (code === "ENOENT" && !readded) {
           // The master would answer a forward it already has with yes, and not bind it again.
@@ -1257,10 +1353,18 @@ export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
     } catch {
       return;
     }
-    // (Lima keeps files beside its VMs' folders too: _config's, a cache's.)
-    for (const name of names)
-      if (fs.existsSync(path.join(lima, name, "ch")))
-        fs.rmSync(path.join(lima, name, "ch"), { recursive: true, force: true });
+    // (Lima keeps files beside its VMs' folders too: _config's, a cache's.) Each by itself: one
+    // that cannot be removed is said, and the rest are still removed.
+    for (const name of names) {
+      const dir = path.join(lima, name, "ch");
+      try {
+        if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+      } catch (error) {
+        console.error(
+          `desolate: could not remove ${dir}, where ${name}'s connections were: ${printable(error instanceof Error ? error.message : String(error), 200)}`,
+        );
+      }
+    }
   };
 
   return {
@@ -3161,6 +3265,35 @@ declare namespace limaBackend {
       [
         args: [what: "let go while dialling"],
         expected: { first: ""; next: ""; inTime: true; left: 0 },
+      ],
+    ]
+  >;
+  /** a check that fails for a reason of this Mac's (it hangs past its time, ssh cannot be
+   *  started) fails that one connection and keeps the master, which carries the next; only a
+   *  check ssh answered (another pid, no master on the socket) makes another. The control: a
+   *  forward that fails while the master answers as itself keeps it */
+  export type ChecksThatFail = Table<
+    typeof checkThatFails,
+    [
+      [
+        args: [check: "as it is"],
+        expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+      ],
+      [
+        args: [check: "hang"],
+        expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+      ],
+      [
+        args: [check: "cannot spawn"],
+        expected: { next: ""; sameMaster: true; carriesOn: "hi\nEOF-SEEN\n" },
+      ],
+      [
+        args: [check: "another pid"],
+        expected: { next: "hi\nEOF-SEEN\n"; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
+      ],
+      [
+        args: [check: "no socket"],
+        expected: { next: "hi\nEOF-SEEN\n"; sameMaster: false; carriesOn: "hi\nEOF-SEEN\n" },
       ],
     ]
   >;
