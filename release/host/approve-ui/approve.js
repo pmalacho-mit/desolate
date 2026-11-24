@@ -148,13 +148,9 @@ const post = async (what, card, squash) => {
   return body;
 };
 
-// The diff, as text: each line a text node in a span classed by its first character.
-// What reorders or hides what is shown (controls, bidi and other format characters, what
-// shows nothing: the classes shared/text.ts's printable replaces, and the blank Braille
-// pattern), but for a tab and a carriage return that ends a line: in a diff a person
-// approves from, each is shown as itself, named, so the line reads as git stores it.
-const HIDES = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
-const unhidden = (line) => line.replace(HIDES, (c, at) => c === "\t" || c === "\n" || (c === "\r" && (at + 1 === line.length || line[at + 1] === "\n")) ? c : `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
+// The diff, as text: each line a text node in a span classed by its first character, what
+// would hide or reorder it named (shared/ui/shown-text.js).
+const { unhidden } = DesolateShown;
 const kindOf = (line) => line.startsWith("diff --git") ? "file" : line.startsWith("@@") ? "hunk" : line.startsWith("+") && !line.startsWith("+++") ? "add" : line.startsWith("-") && !line.startsWith("---") ? "del" : "";
 /** git's text, a line a span; given `tokens` (shared/ui/highlight.js), each line of code in
  *  its syntax's colours, its text unchanged. */

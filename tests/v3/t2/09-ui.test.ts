@@ -223,8 +223,8 @@ describe("T2 section 4.8: the root UI", () => {
     );
     assert.doesNotMatch(
       page.body,
-      /<script(?![^>]* src="\/(page-key|ui|highlight|markdown)\.js")|\son[a-z]+="|https?:\/\//i,
-      "no inline script, handler or remote address in the page: its own four scripts",
+      /<script(?![^>]* src="\/(page-key|ui|highlight|shown-text|markdown)\.js")|\son[a-z]+="|https?:\/\//i,
+      "no inline script, handler or remote address in the page: its own five scripts",
     );
     for (const file of ["/ui.js", "/ui.css"])
       assert.equal((await http("GET", file)).status, 200, file);
@@ -622,10 +622,11 @@ describe("T2 section 4.8: the root UI", () => {
       [
         '<script src="/page-key.js">',
         '<script src="/highlight.js">',
+        '<script src="/shown-text.js">',
         '<script src="/markdown.js">',
         '<script src="/ui.js">',
       ],
-      "and the only scripts on the page are the dashboard's own (its page key's keeper, its diff colours, an issue's Markdown preview, and itself)",
+      "and the only scripts on the page are the dashboard's own (its page key's keeper, its diff colours, the rule and the diff it shares with the approval page, an issue's Markdown preview, and itself)",
     );
     assert.doesNotMatch(
       page.stderr,

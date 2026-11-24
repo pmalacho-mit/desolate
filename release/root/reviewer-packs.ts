@@ -15,7 +15,8 @@ import { lfsDigest } from "../shared/approval.ts";
 import type { Sends } from "../shared/review-account.ts";
 import { startOf } from "../shared/lock.ts";
 import { define, mebibytes, valueOf, whole } from "../shared/settings.ts";
-import { atomically, env, gitBytes, gitOk, hardened, POINTER, shown } from "./reviewer-git.ts";
+import { printable } from "../shared/text.ts";
+import { atomically, env, gitBytes, gitOk, hardened, POINTER } from "./reviewer-git.ts";
 import { REVIEWER } from "./layout.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
@@ -234,7 +235,7 @@ export const prepare = async (
   if (packed.code !== 0) {
     fs.rmSync(temporary, { force: true });
     throw new Error(
-      `cannot pack the push: ${shown(packed.said.trim().split("\n").slice(-1)[0] ?? "", 300)}`,
+      `cannot pack the push: ${printable(packed.said.trim().split("\n").slice(-1)[0] ?? "", 300)}`,
     );
   }
   say({ phase: "listing the push's LFS objects" });

@@ -140,14 +140,9 @@ const button = (label, key, kind, args, quiet = false) =>
 
 // The diff, as text. Each line is a text node in a span whose class comes from the line's
 // first character: nothing in the diff is ever parsed as markup.
-// Characters that reorder or hide what is shown (bidi controls, zero-width ones): in a diff a
-// person reviews, each is shown as itself, named, so the line reads as git stores it.
-const unhidden = (line) => line.replace(/[\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`);
-// A file's name as a person reads it in a list: what `unhidden` names, and control characters
-// too (a newline would read as a space), and a trailing space marked. A name that reads as
-// another (a right-to-left override turning notes-<U+202E>dm.hs into "notes-sh.md") is shown
-// as git stores it (safety-colleague, dogfooding 2026-11-22).
-const nameShown = (name) => unhidden(String(name)).replace(/[\u0000-\u001f\u007f]/g, (c) => `⟨U+${c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")}⟩`).replace(/ +$/, (spaces) => "⟨space⟩".repeat(spaces.length));
+// What would hide or reorder a line, named, and a file's name as a person reads it in a list
+// (shared/ui/shown-text.js: the approval page's rule, the same here).
+const { unhidden, name: nameShown } = DesolateShown;
 // Given `tokens` (shared/ui/highlight.js, a line's code in its syntax's colours), each line of
 // code is drawn in colour; its text is the same either way.
 const hasColour = (tokens, i) => Boolean(tokens && tokens[i] && typeof DesolateHighlight !== "undefined");
