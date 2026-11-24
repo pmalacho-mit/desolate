@@ -337,6 +337,12 @@ const setLayout = (value) => {
   }
   render();
 };
+/** The layout, as both its choices with the chosen one marked: radio buttons drawn as one
+ *  control (a button named after the layout it was not showed one choice at a time, #281).
+ *  Being radios, the arrow keys move between them and a screen reader says which is chosen. */
+const layoutChoice = () => el("div", { class: "segmented", role: "radiogroup", "aria-label": "Diff layout" },
+  [["sides", "Side by side"], ["unified", "Unified"]].map(([value, label]) => el("label", { "data-layout": value },
+    el("input", { type: "radio", name: "diff-layout", value, checked: layout === value, "data-focus": `layout:${value}`, onchange: () => setLayout(value) }), label)));
 
 const query = (target, against) => `domain=${encodeURIComponent(target.domain)}&repo=${encodeURIComponent(target.repo)}&branch=${encodeURIComponent(target.branch)}&against=${encodeURIComponent(against)}`;
 /** What the review asks the root for after its first answer: the next page of a list, the
@@ -754,7 +760,7 @@ const diffPart = (diff, review) => {
   return [
     el("div", { class: "toolbar" },
       el("button", { class: "quiet small", "data-whitespace": "", onclick: () => { reviewing.whitespace = reviewing.whitespace === "ignore" ? "show" : "ignore"; loadDiff(file ? { path: file, was: diff.params.was } : null); } }, reviewing.whitespace === "ignore" ? "Show whitespace changes" : "Ignore whitespace changes"),
-      el("button", { class: "quiet small", "data-layout": "", onclick: () => setLayout(layout === "sides" ? "unified" : "sides") }, layout === "sides" ? "Unified" : "Side by side"),
+      layoutChoice(),
       file ? [el("span", { class: "sub", "data-diff-file": file }, "The diff of one file: ", el("span", { class: "mono" }, file)),
         el("button", { class: "quiet small", type: "button", "data-diff-all": "", onclick: () => loadDiff() }, "Every file's diff")] : null),
     diff.total === 0 ? el("div", { class: "sub" }, "No changes to show.") : diffElement(diff),
