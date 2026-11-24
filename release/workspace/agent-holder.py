@@ -29,10 +29,8 @@ but what already runs as it.
 Attach protocol, one line each way per message from the client: "i <base64>" input,
 "r <cols> <rows>" a size, "k" Ctrl-C (twice, as a person ends most programs), "K" kill (the
 agent's process group, at once). The holder sends the terminal's bytes, raw, and closes the
-connection when the agent ends. A holder started before this one (one log file,
-<name>.log, cut at 64 MiB, and a replay of its own) speaks the same protocol but for "K",
-which it ignores (it kills 3 s after "k"); everything here but the holding itself is this
-file, run anew, so it still lists, reads, attaches to and stops such an agent.
+connection when the agent ends. A holder from before 2026-11-21 (one log file, <name>.log)
+is refused by name: stopping its workspace ends it.
 """
 import base64
 import fcntl
@@ -115,8 +113,7 @@ def alive(pid):
 
 
 def segments(name):
-    """The log's segments, oldest first, as (offset, path). An agent whose holder is from
-    before segments has one file, <name>.log: one segment, at 0."""
+    """The log's segments, oldest first, as (offset, path)."""
     found = []
     try:
         entries = os.listdir(STATE)
@@ -127,10 +124,14 @@ def segments(name):
         if m and m.group(1) == name:
             found.append((int(m.group(2)), os.path.join(STATE, entry)))
     found.sort()
-    legacy = os.path.join(STATE, name + ".log")
-    if not found and os.path.exists(legacy):
-        found = [(0, legacy)]
     return found
+
+
+def refuse_old(name):
+    """A holder from before 2026-11-21 kept one log, <name>.log, and ignores "K": not read or
+    stopped by this one, but said."""
+    if os.path.exists(os.path.join(STATE, name + ".log")):
+        sys.exit(f"agent-holder: '{name}' was started by a holder from before 2026-11-21, which this one does not read or stop: stop this workspace (desolate stop <domain>/<workspace>) and start it again")
 
 
 class Log:
@@ -141,10 +142,6 @@ class Log:
         self.name = name
         self.most = most
         self.part = max(1, most // SEGMENTS)
-        legacy = os.path.join(STATE, name + ".log")
-        if os.path.exists(legacy) and not any(p != legacy for _, p in segments(name)):
-            # An earlier run's log, from a holder before segments: the start of this one.
-            os.replace(legacy, os.path.join(STATE, name + ".log.0"))
         self.parts = [(offset, os.path.getsize(path)) for offset, path in segments(name)]
         if not self.parts:
             self.parts = [(0, 0)]
@@ -189,7 +186,7 @@ class Log:
             first = self.parts[0][0]
             self.times.close()
             times = paths(self.name)[2]
-            kept = [(at, offset) for at, offset in read_times(self.name) or [] if offset >= first]
+            kept = [(at, offset) for at, offset in read_times(self.name) if offset >= first]
             with open(times + ".tmp", "w") as f:
                 f.writelines(f"{at} {offset}\n" for at, offset in kept)
             os.replace(times + ".tmp", times)
@@ -197,7 +194,7 @@ class Log:
 
 
 def read_times(name):
-    """<name>.times, as (unix time, offset); None when there is none (a holder from before)."""
+    """<name>.times, as (unix time, offset)."""
     try:
         with open(paths(name)[2]) as f:
             out = []
@@ -207,7 +204,7 @@ def read_times(name):
                     out.append((int(parts[0]), int(parts[1])))
             return out
     except OSError:
-        return None
+        return []
 
 
 def opened(name):
@@ -253,10 +250,8 @@ def lines_from(parts, lines):
 
 def since_from(name, parts, at):
     """Where the output since `at` (unix time) begins, about: from the last time noted at or
-    before it, so up to TICK seconds earlier. None when the log has no times."""
+    before it, so up to TICK seconds earlier."""
     times = read_times(name)
-    if times is None:
-        return None
     start = parts[0][0]
     for t, offset in times:
         if t <= at:
@@ -541,6 +536,7 @@ def show_log(name, how, value):
     starts at `from`; `before` is how much is kept before it, 0 when it starts at the oldest
     line kept; `most`, the log's most), then the bytes. `how`: "all", "lines" (the last `value`) or "since"
     (unix time `value`)."""
+    refuse_old(name)
     parts = opened(name)
     if not parts:
         sys.exit(f"agent-holder: no agent '{name}' here")
@@ -549,8 +545,6 @@ def show_log(name, how, value):
             start = lines_from(parts, value)
         elif how == "since":
             start = since_from(name, parts, value)
-            if start is None:
-                sys.exit(f"agent-holder: '{name}' was started before its log noted times: --all or --lines")
         else:
             start = parts[0][0]
         oldest = start == parts[0][0]
@@ -587,15 +581,15 @@ def listing():
 
 
 def stop(name, kill, wait):
-    """Asks it to stop ("k": Ctrl-C), or kills it ("K"; and "k", for a holder from before,
-    which kills 3 s after it). With `wait`, returns when it has ended, for as long as that
-    takes: whoever waits decides how long (the host asks the person whether to kill it).
-    Prints {"name", "ended", "exit"}."""
+    """Asks it to stop ("k": Ctrl-C), or kills it ("K"). With `wait`, returns when it has
+    ended, for as long as that takes: whoever waits decides how long (the host asks the
+    person whether to kill it). Prints {"name", "ended", "exit"}."""
+    refuse_old(name)
     sock_path, _, _ = paths(name)
     client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         client.connect(sock_path)
-        client.sendall(b"K\nk\n" if kill else b"k\n")
+        client.sendall(b"K\n" if kill else b"k\n")
     except OSError:
         sys.exit(f"agent-holder: '{name}' is not running")
     ended = False

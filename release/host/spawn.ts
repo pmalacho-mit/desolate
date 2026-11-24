@@ -34,16 +34,11 @@ type Ledger = {
 };
 const ledger = (): Ledger => {
   const value = readJson<Partial<Ledger>>(LEDGER(), {});
-  // (Signatures an older desolate kept in spawn.json still count, once: a request run just
-  // before an upgrade is not run again after it.)
-  const used = { ...(value.used ?? {}), ...readJson<Record<string, number>>(USED(), {}) };
-  // Moved to their own file at once: the next write of spawn.json, by the CLI too, leaves
-  // them out (final review).
-  if (value.used && Object.keys(value.used).length > 0) {
-    saveUsed(used);
-    save({ max: value.max ?? {}, started: value.started ?? {}, used });
-  }
-  return { max: value.max ?? {}, started: value.started ?? {}, used };
+  return {
+    max: value.max ?? {},
+    started: value.started ?? {},
+    used: readJson<Record<string, number>>(USED(), {}),
+  };
 };
 /** The requests run, in a file of their own that only the daemon writes: spawn.json is also
  *  written by the CLI (a started record, a limit), and one whole-file write must not undo
@@ -450,41 +445,6 @@ declare namespace check {
       >,
     ]
   >;
-  /** a request an older desolate ran (it kept them in spawn.json) is not run again after the
-   *  upgrade, and spawn.json, which the CLI also writes, no longer holds it */
-  export type RanBeforeTheUpgrade = Given<
-    [
-      Empty,
-      LeadsKey,
-      Invoke<
-        typeof writeState,
-        [
-          name: "spawn.json",
-          text: '{"max":{},"started":{},"used":{"2c83209c4fc7a4f3d1947e14da1b18bc73f6e57935e015a4e353df39e2c42039":1794823200000}}',
-        ]
-      >,
-    ],
-    [
-      Expect<
-        Invoke<
-          typeof check,
-          [
-            r: Invoke<typeof signed, [key: Lead, request: Spawn]>,
-            exists: typeof noVmExists,
-            now: Now,
-          ]
-        >,
-        "=",
-        "that request was already run"
-      >,
-      Expect<
-        Invoke<typeof readState, [name: "spawn.json"]>,
-        "=",
-        '{\n  "max": {},\n  "started": {}\n}\n'
-      >,
-    ]
-  >;
-
   /** the person's limit: 0 turns spawning off; at the limit, those still there count */
   export type Off = Given<
     [Empty, LeadsKey, Invoke<typeof setMax, [domain: "acme", max: 0]>],

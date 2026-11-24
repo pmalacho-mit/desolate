@@ -101,14 +101,9 @@ export const cloneCall = async (backend: Backend, spec: VmSpec): Promise<string[
   );
 };
 
-/** The base VM's configuration, as `ensureImage` writes it for Lima. (The qemu kind needs a
- *  built image: three empty files stand in for it, where the backend looks by default.) */
+/** The base VM's configuration, as `ensureImage` writes it for Lima. */
 export const baseYaml = async (backend: Backend): Promise<string> => {
   fakeLimactl();
-  const images = path.join(home(), "images", arch);
-  fs.mkdirSync(images, { recursive: true });
-  for (const file of ["disk.raw", "vmlinuz", "initrd"])
-    fs.writeFileSync(path.join(images, file), "");
   // (The stand-in makes no VM, so a vz base's stamp has no directory to go in: that is where
   // it stops, after the configuration is written.)
   await backend.ensureImage(() => {}).catch(() => {});
@@ -256,7 +251,7 @@ export const sessionOf = async (
   );
   const servers: net.Server[] = [];
   if (vm !== "stopped") {
-    for (const file of ["ha.pid", "vz.pid", "qemu.pid"])
+    for (const file of ["ha.pid", "vz.pid"])
       fs.writeFileSync(path.join(dir, file), `${process.pid}\n`);
     const server = net.createServer((connection) => void connection.destroy());
     await new Promise<void>((resolve) => server.listen(path.join(dir, "ha.sock"), resolve));

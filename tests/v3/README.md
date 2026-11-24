@@ -4,8 +4,7 @@
 tests/v3/run.sh t1     # static and unit: seconds, anywhere                    (make test)
 tests/v3/run.sh t2     # end to end on the fake backend: minutes; needs Docker (make e2e-fast)
 tests/v3/run.sh affected   # T1, then the T2 suites a change since origin/main touches
-tests/v3/run.sh t3     # end to end on real VMs: tens of minutes under emulation (make e2e-slow)
-tests/v3/run.sh t4     # t3's tests on a Mac's own VMs (vz): about 3 minutes on an M1
+tests/v3/run.sh t4     # t3/'s tests on a Mac's own VMs (vz): about 5 minutes on an M1 (make e2e-slow)
 ```
 
 A tier whose needs are not met fails and says what to install. It never skips.
@@ -22,8 +21,7 @@ whole of T2 is the check before a merge into main.
 |---|---|---|---|
 | **T1** `t1/` | none | names, the name sniffer, the root's reading of an outbox and of status files (links, swapped directories, fifos); types; shell syntax | |
 | **T2** `t2/` | `fake`: each "VM" is a container | everything but the hypervisor boundary: bootstrap, the keyring and the push gate, mirrors and LFS, domains and checkouts, the port router, offers and pushes, the proxy and its rules, the editor, secrets, devcontainers, the dashboard, and what a hostile domain can send the root (`10-hostile-content`) | **any boundary a VM gives.** A T2 test is never taken as proof of one |
-| **T3** `t3/` | `qemu`: real VMs through Lima (KVM, or software emulation) | read-only shares against root in the VM, forced egress against root in the VM, no path between domains; an offer, a dangerous tree and a linked outbox over a real share; and (`02-dev-stack`) a project's dev stack on the VM's Docker: a published port 80 from the VM and the Mac, a service calling another, Postgres in a named volume, a container calling a secret's host | anything about a Mac |
-| **T4** | `vz` on a Mac: the same `t3/` files, `tests/v3/run.sh t4` | as T3, on the product backend; ICMP too | the qemu-only assertions (QEMU's command line) |
+| **T4** `t3/` | `vz`: real VMs on a Mac, `tests/v3/run.sh t4` (the files keep the name of the tier that was) | read-only shares against root in the VM, forced egress against root in the VM, no path between domains; an offer, a dangerous tree and a linked outbox over a real share; and (`02-dev-stack`) a project's dev stack on the VM's Docker: a published port 80 from the VM and the Mac, a service calling another, Postgres in a named volume, a container calling a secret's host; ICMP | |
 
 How the tests are built (move-to-vms.md section 13):
 
@@ -87,9 +85,6 @@ install with `npm install --legacy-peer-deps` (npm's peer resolution crashes on 
     (works on an M1, arm64). It fetches the editor server from GitHub's releases, and fails
     when it cannot; where GitHub cannot be reached, add `--build-arg DESOLATE_IMAGE_EDITOR=none`
     (on Linux, `build.sh --no-editor`) for an image that says it has no editor.
-- **T3:** also Lima >= 2.0 (`limactl` on PATH), `qemu-system-<arch>`, `socat`, `uidmap`, and
-  `DESOLATE_IMAGE_DIR=<dir>` pointing at what `build.sh` wrote.
-
 - **T4:** a Mac, Lima >= 2.3, Docker for the stand-in forge (Colima works:
   `colima start --vm-type vz`), and the base image built as above. The forge publishes its
   ports on the Mac's loopback, including 80 and 443, which must be free.
