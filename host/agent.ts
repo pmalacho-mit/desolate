@@ -16,9 +16,8 @@
 // shows the running ones, and a workspace's every one when it is named.
 //
 // What the holder in the VM says (its errors, its log, its list) is the VM's, where an agent
-// is root: made safe before it reaches a terminal. A holder started before this file (its log
-// one file, cut at 64 MiB) is still talked to: the socket's protocol is the same, and every
-// command here runs the holder's file anew (workspace/agent-holder.py says how).
+// is root: made safe before it reaches a terminal. Every command here runs the holder's file
+// anew; a holder from before 2026-11-21 is refused by name (workspace/agent-holder.py).
 import { EXIT, refuse } from "../shared/exit.ts";
 import { formatBytes, NAMES } from "../shared/limits.ts";
 import { andMore, PAGE } from "../shared/listed.ts";
@@ -678,7 +677,7 @@ export const stop = async (
     out(`agent ${name} in ${at} has ended${exit === null ? "" : ` (exit ${exit})`}`);
   const kill = async () => {
     // A kill ends its process group at once; the holder answers when the agent's terminal
-    // closes. (A holder from before kills 3 s after the Ctrl-C it is also sent.)
+    // closes.
     const killed = said(
       await backend().exec(w.vm, [...HOLDER(), "stop", name, "--kill", "--wait"], {
         timeoutMs: 30_000,
@@ -950,7 +949,7 @@ export const attach = async (
   process.stdin.resume();
   size();
   process.stdout.on("resize", size);
-  // What the agent prints, kept to what a screen needs (shared/terminal-filter.ts): your
+  // What the agent prints, kept to what a screen needs (host/terminal-filter.ts): your
   // terminal emulator is outside every boundary. (It knows what the reset owes, too.)
   const filter = terminalFilter();
   const done = new Promise<number>((resolve) => {

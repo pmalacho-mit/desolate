@@ -677,7 +677,7 @@ Every setting there is (T1 checks that this table names exactly those):
 | `git.memoryMiB` | `DESOLATE_GIT_MEMORY_MIB` | on the Mac | 1.5 GiB | the git VM's memory |
 | `git.shells` | `DESOLATE_GIT_SHELLS` | on the Mac | 6 | git terminal shells open at once, a tab reading each or not: each is a bash in the git VM |
 | `git.scrollbackLines` | `DESOLATE_GIT_SCROLLBACK_LINES` | on the Mac | 5000 | lines the git terminal's browser tab keeps to scroll back through |
-| `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly (QEMU without KVM) |
+| `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly |
 | `root.silentSeconds` | `DESOLATE_ROOT_SILENT_SECONDS` | on the Mac | 900 | how long a call to the root VM may hear nothing from it (no progress, no answer) before it is given up |
 | `workspace.silentSeconds` | `DESOLATE_WORKSPACE_SILENT_SECONDS` | on the Mac | 120 | how long a step of a workspace's start may hear nothing from the workspace's VM before it is stopped |
 | `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | 256 | connections one workspace has carried at once each way, out (to its proxy) and, counted apart, in (to its dev servers and its editor); past it one is refused at once. Each is a plain ssh session, about 1.5 MB of this Mac's memory |
@@ -706,37 +706,36 @@ base image's, 30 GiB.
 
 "T1" is static and unit: the type check, node's tests, and the in-source tests beside the
 code. "T2" is the fake backend: containers standing in for VMs, **not isolated**, good for
-everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through Lima); it
-last ran in the first pass's cloud sandbox.
-"Mac" means Lima with Virtualization.framework, the product backend.
+everything but the hypervisor boundary. "T4" is real VMs on a Mac: Lima with
+Virtualization.framework, the one backend (desolate runs on macOS only, for now).
 
 | | Implemented | Tested | Not yet |
 |---|---|---|---|
-| bootstrap, doctor, destroy | yes | T2, T3 | installing the host's own tools (it checks for them and says what to install) |
-| Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T3; `clone --keys-by-hand` against github.com | |
+| bootstrap, doctor, destroy | yes | T2, T4 | installing the host's own tools (it checks for them and says what to install) |
+| Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T4; `clone --keys-by-hand` against github.com | |
 | P2: pushes only by a person (`--expect`, exit codes, LFS first, audit) | yes | T2 | |
 | P2: the approval is given on the host, outside every VM (a signed challenge; `desolate approve` for a raw `git push origin`) | yes | T2, with the `terminal` approver, which is the default | the opt-in Touch ID approver (`host/approver/touchid.swift`) has never been compiled or run |
 | P3: keys never leave the keyring; a secret's value never reaches a workspace (but one set `--anywhere` can come back changed from its host) | yes | T2 | |
 | P4: the root never runs git in a domain's clone | yes | T2 (a booby-trapped clone, a lying outbox) | |
-| What the root takes from a domain is checked data: bundles strictly checked in quarantine, a held and checked outbox directory, verified LFS, git settings that ignore what a tree asks for | yes | T1, T2 (`10-hostile-content`: dangerous objects, a planted repository, links in the outbox, hostile names; each beside a control), T3 (an offer, a dangerous tree and a linked outbox over a real VM's share) | a size quota for a domain's outbox; on the Mac, status files are checked by a second look, not by the kernel |
-| Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T3, T4 | |
+| What the root takes from a domain is checked data: bundles strictly checked in quarantine, a held and checked outbox directory, verified LFS, git settings that ignore what a tree asks for | yes | T1, T2 (`10-hostile-content`: dangerous objects, a planted repository, links in the outbox, hostile names; each beside a control), T4 (an offer, a dangerous tree and a linked outbox over a real VM's share) | a size quota for a domain's outbox; on the Mac, status files are checked by a second look, not by the kernel |
+| Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T4 | |
 | Offers, the root's view (`git fetch --all`), deliveries between domains | yes | T2 | |
 | `desolate upstream`: a consumer's change to a vendored suede dependency, split by suede's own upstream (pinned) in the git VM, pushed as `downstream/...` after your approval ([suede.md](suede.md)) | yes | T1, T2; against github.com | LFS files in the dependency |
 | Ports: same number, routed by name, reservations; a port a program on the Mac holds reported as not forwarded; a bare `localhost` sent to the workspace serving the port; none forwarded under the editor's name | yes | T2 (`03`, `06`); on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
-| P5: read-only shares against root in the VM | yes | **T3** (and measured on an M1 for the Mac) | |
-| P5: forced egress against root in the VM | yes | **T3**; Mac: measured for TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
-| Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T3 | |
-| Secrets: per domain, substituted for the hosts and headers they name, proven by the upstream's certificate, scrubbed from responses, switched off and on (`--ttl`) | yes | T2, T3 | v2's self-test fixture; "learn" as a timed mode |
-| **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T3 | v2's workspace extension's panel ([`release/vscode-image/extension`](https://github.com/pmalacho-mit/desolate/tree/4f32c77/release/vscode-image/extension) at `4f32c77`) is not ported; a bare `localhost` link reaches the workspace through the forwarder |
+| P5: read-only shares against root in the VM | yes | **T4** (and measured on an M1) | |
+| P5: forced egress against root in the VM | yes | **T4**: TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
+| Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T4 | |
+| Secrets: per domain, substituted for the hosts and headers they name, proven by the upstream's certificate, scrubbed from responses, switched off and on (`--ttl`) | yes | T2, T4 | v2's self-test fixture; "learn" as a timed mode |
+| **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T4 | v2's workspace extension's panel ([`release/vscode-image/extension`](https://github.com/pmalacho-mit/desolate/tree/4f32c77/release/vscode-image/extension) at `4f32c77`) is not ported; a bare `localhost` link reaches the workspace through the forwarder |
 | The project's devcontainer, from its own `devcontainer.json` (features included), inside the workspace VM; `exec` and the editor enter it | yes | T2 (an image, a Dockerfile, a failing spec, no spec, a changed spec, a compose spec and its ports); on the M1, a public image with a feature, compose with Docker outside and inside | a compose service that is not glibc gets no port relay and no editor |
-| The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T3 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
+| The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T4 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
 | The Mac backend (`vz`) | yes | **T4 on an M1** (15 of 15, 2026-11-16): read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over a real share, the editor, a secret | |
 | Pushes by the pusher alone (it speaks receive-pack; compare-and-swap from the commit you saw) | yes | T1, T2; against github.com | |
 | One-click approval in the browser, beside the git terminal | yes | T1, T2, and in Chrome | Firefox and Safari cannot say whether Approve is covered (Chrome can) |
 | The git VM: your git in a browser tab, no network or keys; a remote per domain; LFS | yes | T2 | |
 | `desolate events` and `desolate notify` | yes | T1, T2 | |
 | Upgrades: `git pull` then `bootstrap` (root and base re-provisioned in place when the image changed); `destroy` keeps the root's keys, secrets and rules for the next `bootstrap` | yes | T1, T2 (`13-rebuild`); by hand on the M1 | |
-| Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T3 inside a workspace |
+| Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T4 inside a workspace |
 | Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
 | Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`12-agent`: `agent.sh`); on the M1, `agent.sh` to an offer, `claude.sh` with a stand-in token, and `issues.sh` and `suede.sh` with the stand-in agent | `issues.sh` and `suede.sh` not run on real work |
 | Workspaces that start workspaces in their own domain (`desolate spawn`, `close`, `domain stats`, `events` inside one): signed by the workspace, checked by the host | yes | T1; T2 (`16-spawn`: the limit, the labels, stats and events, a forged request refused beside a signed one run, close refused with uncommitted work) | on real VMs (vz) |
@@ -749,7 +748,7 @@ last ran in the first pass's cloud sandbox.
 cli.sh             the launcher: finds node >= 22.18, runs host/cli.ts
 pins.env           the tools the image downloads, by version and sha256 (its top says what is not)
 host/              runs on the host: the CLI, the daemon (forwarder, links), the VM layer
-  vm/              one interface, two backends: qemu, vz (the tests' stand-in: tests/v3/lib/fake-backend.ts)
+  vm/              one interface, one backend: vz (the tests' stand-in: tests/v3/lib/fake-backend.ts)
   approver.ts      the key that approves pushes (approver/touchid.swift: opt-in, the Mac's Secure Enclave)
 root/              runs in the root VM: keyring, mirrors, clones, offers, push, proxies
   proxy/           each workspace's proxy; each domain's secrets and its secrets proxy

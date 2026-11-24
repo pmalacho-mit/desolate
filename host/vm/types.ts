@@ -1,8 +1,8 @@
-// The VM layer: one interface, three kinds of backend (section 13.2).
+// The VM layer: one interface, two kinds of backend (section 13.2).
 //
 //   fake   each "VM" is a container. NO hypervisor isolation, and it says so everywhere.
-//   qemu   Lima's QEMU driver on Linux: KVM where /dev/kvm exists, TCG where it does not.
-//   vz     Lima's Virtualization.framework driver on a Mac: the product backend.
+//   vz     Lima's Virtualization.framework driver on a Mac: the product backend, the one there
+//          is (desolate runs on macOS only, for now).
 //
 // Everything above this file is written against `Backend` only. What a backend must enforce
 // OUTSIDE the VM (P5), so that root inside it cannot undo it:
@@ -68,7 +68,7 @@ export type ExecOptions = {
 export type Check = { name: string; ok: boolean; detail: string; fix?: string };
 
 export interface Backend {
-  readonly kind: "fake" | "qemu" | "vz";
+  readonly kind: "fake" | "vz";
   /** false for `fake`. Shown on every workspace and checked by `doctor`. */
   readonly isolated: boolean;
   /** What this backend needs on the host, for `doctor` and `bootstrap`. */

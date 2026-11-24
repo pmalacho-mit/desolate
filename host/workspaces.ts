@@ -1651,7 +1651,7 @@ export const exec = async (
   process.stdin.pipe(child.stdin!);
   child.stdin!.on("error", () => {});
   // To a terminal (a person running an agent by hand): kept to what a screen needs
-  // (shared/terminal-filter.ts). To a pipe or a file (a script): unchanged.
+  // (host/terminal-filter.ts). To a pipe or a file (a script): unchanged.
   const shown = terminalFilter();
   if (process.stdout.isTTY)
     child.stdout!.on("data", (chunk: Buffer) => process.stdout.write(shown(chunk)));

@@ -1,17 +1,11 @@
-// The Lima backends: `qemu` (Linux; KVM where there is /dev/kvm, TCG where there is not) and
-// `vz` (macOS Virtualization.framework, the product backend). One implementation: Lima is the
-// same tool on both. What differs is how each enforces, OUTSIDE the VM, the two things the
-// interface demands (P5), and docs/v3/decisions.md has the measurements behind each:
+// The Lima backend: `vz` (macOS Virtualization.framework), desolate's one backend, and so
+// desolate runs on macOS only, for now. How it enforces, OUTSIDE the VM, the two things the
+// interface demands (P5), with the measurements behind each in docs/v3/decisions.md:
 //
-//                     read-only shares                   a workspace's egress
-//   qemu  (Linux)     9p with QEMU's `readonly`.         QEMU's user network with restrict=on,
-//                     NOT virtiofs: virtiofsd has no     and guestfwd to the link's socket
-//                     read-only mode, and root in the    (qemu-wrapper.sh).
-//                     guest remounts it rw (measured).
-//   vz    (macOS)     virtiofs; the host refuses the     Lima's host process under sandbox-exec,
-//                     write (measured on an M1). The     allowed one loopback port: the link.
-//                     same profile lets it hand the VM
-//                     only its own shares (`profile`).
+//   read-only shares     virtiofs; the host refuses the write (measured on an M1). The same
+//                        profile lets it hand the VM only its own shares (`profile`).
+//   a workspace's egress Lima's host process under sandbox-exec, allowed one loopback port:
+//                        the link.
 //
 // desolate keeps its own Lima home under ~/.desolate, so it never touches a VM it did not
 // make, and `doctor` fails while Lima's user-wide _config overrides, which could add a
@@ -23,7 +17,7 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { refuse } from "../../shared/exit.ts";
 import { run } from "../../shared/run.ts";
 import type { RunResult } from "../../shared/run.ts";
 import { readJson, writeJson } from "../../shared/json.ts";
@@ -57,8 +51,8 @@ import type {
   statusOf,
   stepsSaid,
 } from "../../.harness/host-lima.ts";
+import type { refusalOf } from "../../.harness/refusal.ts";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 const LIMA_HOME = path.join(paths.home, "lima");
 /** The base VM's disk, which every desolate VM is cloned from: the smallest any of them has. */
 export const BASE_DISK_GIB = 30;
@@ -81,7 +75,7 @@ const baseStamp = () => {
 };
 /** How long Lima waits for a VM it started to be up (its ssh answering, its own checks
  *  passed). Lima must be given a number, and the right one is this Mac's: seconds on Apple's
- *  hypervisor, minutes where QEMU emulates every instruction (a Linux host with no KVM). One
+ *  hypervisor, more on a Mac that is busy, or downloading Lima's image the first time. One
  *  setting where there were three numbers (10, 20 and 30 minutes, for the base started
  *  again, the base's first start and any other VM, none with a reason): thirty, the most
  *  patient of them. */
@@ -91,7 +85,7 @@ export const BOOT_MINUTES = define({
   side: "host",
   default: 30,
   parse: whole(1, 24 * 60),
-  why: "How long Lima waits for a VM it started to come up before it gives up: more on a machine where VMs boot slowly (QEMU without KVM).",
+  why: "How long Lima waits for a VM it started to come up before it gives up: more on a Mac where VMs boot slowly.",
 });
 /** `limactl start`'s own `--timeout`, and the time after which a limactl that did not keep
  *  to it is ended: one number, the setting, and the second derived from it. Lima's is the
@@ -103,9 +97,6 @@ const boot = () => {
   const minutes = valueOf(BOOT_MINUTES);
   return { flag: `${minutes}m`, timeoutMs: (minutes + 10) * 60_000 };
 };
-/** What the guest connects to for its link, per backend. */
-const QEMU_LINK = "tcp:192.168.5.100:15000";
-
 type Meta = { spec: VmSpec; sshPort: number; linkPort: number; linkToken: string };
 /** Every share a real directory, reached through no symlink (shares.ts): else nothing starts. */
 const sharesPlain = (shares: { host: string }[]) => {
@@ -132,8 +123,8 @@ const freePort = (): Promise<number> =>
   });
 
 /** Which of a VM's shares are not mounted yet, and which are mounted the wrong way, from
- *  the guest's /proc/mounts. `flags`: also hold each mount's ro/rw to the spec (vz, where
- *  the guest's flag and the host's refusal agree; measured).
+ *  the guest's /proc/mounts: each a virtiofs mount, read-only or read-write as the spec says
+ *  (the guest's flag and the host's refusal agree; measured).
  *
  *  Why it exists: on vz, ssh answers before every virtiofs share is mounted, so the first
  *  command after `limactl start` can see a share's bare mount point: an empty directory
@@ -142,8 +133,6 @@ const freePort = (): Promise<number> =>
 export const unmounted = (
   procMounts: string,
   shares: { guest: string; writable: boolean }[],
-  fsType: string,
-  flags: boolean,
 ): { missing: string[]; wrong: string[] } => {
   // /proc/mounts escapes space, tab, newline and backslash as octal.
   const decode = (field: string) =>
@@ -159,8 +148,8 @@ export const unmounted = (
   const wrong: string[] = [];
   for (const share of shares) {
     const found = mounted.get(share.guest);
-    if (!found || found.type !== fsType) missing.push(share.guest);
-    else if (flags && found.ro === share.writable)
+    if (!found || found.type !== "virtiofs") missing.push(share.guest);
+    else if (found.ro === share.writable)
       wrong.push(`${share.guest} is mounted ${found.ro ? "read-only" : "read-write"}`);
   }
   return { missing, wrong };
@@ -177,8 +166,6 @@ declare namespace unmounted {
           { guest: "/desolate/release"; writable: false },
           { guest: "/workspaces"; writable: true },
         ],
-        fsType: "virtiofs",
-        flags: true,
       ]
     >,
     "=",
@@ -188,12 +175,7 @@ declare namespace unmounted {
   export type NotYet = Expect<
     Invoke<
       typeof unmounted,
-      [
-        procMounts: "/dev/vda1 / ext4 rw 0 0\n",
-        shares: [{ guest: "/workspaces"; writable: true }],
-        fsType: "virtiofs",
-        flags: true,
-      ]
+      [procMounts: "/dev/vda1 / ext4 rw 0 0\n", shares: [{ guest: "/workspaces"; writable: true }]]
     >,
     "=",
     { missing: ["/workspaces"]; wrong: [] }
@@ -209,8 +191,6 @@ declare namespace unmounted {
           { guest: "/desolate/release"; writable: false },
           { guest: "/workspaces"; writable: true },
         ],
-        fsType: "virtiofs",
-        flags: true,
       ]
     >,
     "=",
@@ -219,20 +199,6 @@ declare namespace unmounted {
       wrong: ["/desolate/release is mounted read-write", "/workspaces is mounted read-only"];
     }
   >;
-  /** qemu holds read-only itself (9p's `readonly`), so the guest's flag is not compared */
-  export type FlagsNotHeld = Expect<
-    Invoke<
-      typeof unmounted,
-      [
-        procMounts: "m /desolate/release 9p rw 0 0\n",
-        shares: [{ guest: "/desolate/release"; writable: false }],
-        fsType: "9p",
-        flags: false,
-      ]
-    >,
-    "=",
-    { missing: []; wrong: [] }
-  >;
   /** /proc/mounts writes a space in a path as \\040 */
   export type Escaped = Expect<
     Invoke<
@@ -240,8 +206,6 @@ declare namespace unmounted {
       [
         procMounts: "m /git/acme/my\\040app virtiofs rw 0 0\n",
         shares: [{ guest: "/git/acme/my app"; writable: true }],
-        fsType: "virtiofs",
-        flags: true,
       ]
     >,
     "=",
@@ -452,10 +416,10 @@ const accepts = (socket: string): Promise<boolean> =>
 
 /** A VM's state from the files Lima keeps in its folder (`dir`), with no process started:
  *  `missing` with no lima.yaml; `running` when the host agent's pid file (ha.pid) and the
- *  driver's (`<vmType>.pid`: vz.pid, qemu.pid) both name a live process and the host agent's
+ *  driver's (vz.pid) both name a live process and the host agent's
  *  socket (ha.sock) accepts a connection; `stopped` otherwise. The rule is Lima's own
- *  (pkg/store/instance.go, v2.3.0), which `limactl list` applies to both drivers (neither has
- *  an `InspectStatus` of its own): `Inspect` asks the host agent's socket for Info whenever
+ *  (pkg/store/instance.go, v2.3.0), which `limactl list` applies to vz (it has no
+ *  `InspectStatus` of its own): `Inspect` asks the host agent's socket for Info whenever
  *  ha.pid names a live process, and calls it Broken if that fails;
  *  `inspectStatusWithPIDFiles` then says Running for both pids alive, Stopped for neither,
  *  Broken for one alone. Broken is "stopped" here, as it was when `limactl list` was asked.
@@ -475,20 +439,17 @@ const accepts = (socket: string): Promise<boolean> =>
  *  guest shuts down, as Lima's Running did, then stopped: the driver's pid file goes when the
  *  VM has stopped, then the socket, then ha.pid. Like Lima's Running, `running` means the VM's
  *  process is up, not that its ssh answers: `start` waits for that itself. */
-export const vmStatus = async (dir: string, driver: "qemu" | "vz"): Promise<VmStatus> => {
+export const vmStatus = async (dir: string): Promise<VmStatus> => {
   if (!fs.existsSync(path.join(dir, "lima.yaml"))) return "missing";
-  return processesUp(dir, driver) && (await accepts(path.join(dir, "ha.sock")))
-    ? "running"
-    : "stopped";
+  return processesUp(dir) && (await accepts(path.join(dir, "ha.sock"))) ? "running" : "stopped";
 };
 /** `vmStatus`'s first half, for a caller that cannot wait for the socket: the host agent's
  *  and the driver's pid files both name a live process. */
-const processesUp = (dir: string, driver: "qemu" | "vz") =>
-  pidAlive(path.join(dir, "ha.pid")) && pidAlive(path.join(dir, `${driver}.pid`));
+const processesUp = (dir: string) =>
+  pidAlive(path.join(dir, "ha.pid")) && pidAlive(path.join(dir, "vz.pid"));
 
 declare namespace vmStatus {
-  type Vz = Invoke<typeof limaBackend, [kind: "vz"]>;
-  type Qemu = Invoke<typeof limaBackend, [kind: "qemu"]>;
+  type Vz = Invoke<typeof limaBackend, [platform: "darwin"]>;
 
   /** What `info` says of a VM folder, from Lima's files and its host agent's socket alone.
    *  `<self>` is this test's own process, alive; `<gone>` a child that has exited;
@@ -543,31 +504,6 @@ declare namespace vmStatus {
         args: [
           backend: Vz,
           files: { "lima.yaml": ""; "ha.pid": "<self>"; "ha.sock": "<listening>" },
-        ],
-        expected: "stopped",
-      ],
-      /** the driver's file is the backend's own: qemu.pid on qemu, and vz.pid there is not it */
-      [
-        args: [
-          backend: Qemu,
-          files: {
-            "lima.yaml": "";
-            "ha.pid": "<self>";
-            "qemu.pid": "<self>";
-            "ha.sock": "<listening>";
-          },
-        ],
-        expected: "running",
-      ],
-      [
-        args: [
-          backend: Qemu,
-          files: {
-            "lima.yaml": "";
-            "ha.pid": "<self>";
-            "vz.pid": "<self>";
-            "ha.sock": "<listening>";
-          },
         ],
         expected: "stopped",
       ],
@@ -744,16 +680,16 @@ declare namespace vmStatus {
   >;
 }
 
-export const limaBackend = (kind: "qemu" | "vz"): Backend => {
+/** The one backend, and so the one place desolate is refused on a host that is not a Mac:
+ *  its VMs are Apple's hypervisor's, run by Lima (vz), and every command that makes or starts
+ *  one asks for this first (stack.ts, `backend`). */
+export const limaBackend = (platform: string = process.platform): Backend => {
+  if (platform !== "darwin")
+    refuse(
+      `desolate runs on macOS only, for now: its VMs are made with Apple's Virtualization framework (Lima's vz), and this host is ${platform}`,
+      "run desolate on a Mac with Apple silicon (M1 or later), with Lima 2.3 or newer: brew install lima",
+    );
   const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
-  const imageDir = process.env.DESOLATE_IMAGE_DIR ?? path.join(paths.images, arch);
-  const realQemu = () => {
-    for (const dir of (process.env.PATH ?? "").split(":")) {
-      const candidate = path.join(dir, `qemu-system-${arch}`);
-      if (fs.existsSync(candidate)) return candidate;
-    }
-    return "";
-  };
   const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
     const out: NodeJS.ProcessEnv = { ...process.env, LIMA_HOME, ...extra };
     // Lima copies proxy variables into the guest; a desolate VM gets none of the host's.
@@ -770,10 +706,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       "ALL_PROXY",
     ])
       delete out[key];
-    if (kind === "qemu") {
-      out[`QEMU_SYSTEM_${arch.toUpperCase()}`] = path.join(HERE, "qemu-wrapper.sh");
-      out.DESOLATE_QEMU_REAL = realQemu();
-    }
     return out;
   };
   const lima = (
@@ -836,48 +768,25 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     `.networks = []`,
   ];
 
-  const baseYaml = (): string => {
-    const common = [
-      `vmType: ${kind}`,
+  /** Lima's own Ubuntu template (a dated image by digest, or the latest release with no
+   *  digest once that one is gone), provisioned once by image/provision.sh; shares over
+   *  virtiofs, whose read-only is the host's. */
+  const baseYaml = (): string =>
+    [
+      "minimumLimaVersion: 2.0.0",
+      "base:",
+      "- template:_images/ubuntu-24.04",
+      "vmType: vz",
       `arch: ${arch}`,
-      // qemu: 9p, whose read-only is QEMU's. vz: virtiofs, whose read-only is the host's.
-      `mountType: ${kind === "qemu" ? "9p" : "virtiofs"}`,
+      "mountType: virtiofs",
       "cpus: 2",
       "memory: 2GiB",
       `disk: ${BASE_DISK_GIB}GiB`,
-      "mounts: []",
       "containerd:\n  system: false\n  user: false",
       `portForwards: ${yq(NO_FORWARDS)}`,
       "networks: []",
-    ];
-    if (kind === "qemu")
-      return (
-        [
-          ...common,
-          "images:",
-          `- location: ${yq(path.join(imageDir, "disk.raw"))}`,
-          `  arch: ${arch}`,
-          "  kernel:",
-          `    location: ${yq(path.join(imageDir, "vmlinuz"))}`,
-          '    cmdline: "root=LABEL=desolate-root rw console=ttyS0"',
-          "  initrd:",
-          `    location: ${yq(path.join(imageDir, "initrd"))}`,
-        ].join("\n") + "\n"
-      );
-    // vz: Lima's own Ubuntu template (a dated image by digest, or the latest release with no
-    // digest once that one is gone), provisioned once by image/provision.sh.
-    return (
-      [
-        "minimumLimaVersion: 2.0.0",
-        "base:",
-        "- template:_images/ubuntu-24.04",
-        ...common,
-        `mounts:\n- location: ${yq(RELEASE_DIR)}\n  mountPoint: /desolate/release\n  writable: false`,
-      ]
-        .filter((line) => line !== "mounts: []")
-        .join("\n") + "\n"
-    );
-  };
+      `mounts:\n- location: ${yq(RELEASE_DIR)}\n  mountPoint: /desolate/release\n  writable: false`,
+    ].join("\n") + "\n";
 
   /** Where each share of a VM must be, read-only or read-write, as Apple's VM process will be
    *  allowed to open it: a share under desolate's home named from the home and its path,
@@ -1158,7 +1067,6 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
    *  share missing after a minute is not late. A session that fails is tried again within
    *  the minute. */
   const sharesReady = async (name: string, m: Meta) => {
-    const fsType = kind === "qemu" ? "9p" : "virtiofs";
     const guests = m.spec.shares.map((share) => share.guest);
     let last = { missing: guests, wrong: [] as string[] };
     for (const began = performance.now(); performance.now() - began <= 60_000;) {
@@ -1166,11 +1074,11 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const totalMs = (left + 10) * 1000;
       const mounts = await run(
         "ssh",
-        sessionArgs(name, sharesWait(guests, fsType, left), {}, { totalMs }),
+        sessionArgs(name, sharesWait(guests, "virtiofs", left), {}, { totalMs }),
         { env: env(), timeoutMs: totalMs },
       );
       if (mounts.code === 0) {
-        last = unmounted(mounts.stdout, m.spec.shares, fsType, kind === "vz");
+        last = unmounted(mounts.stdout, m.spec.shares);
         if (last.wrong.length + last.missing.length === 0) return;
         break;
       }
@@ -1179,13 +1087,13 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     await lima(["stop", "-f", name], { timeoutMs: 120_000 });
     throw new Error(
       last.wrong.length > 0
-        ? `${name} came up with a share mounted against its spec (${last.wrong.join("; ")}); it was stopped. This is a bug in desolate's ${kind} backend.`
+        ? `${name} came up with a share mounted against its spec (${last.wrong.join("; ")}); it was stopped. This is a bug in desolate's vz backend.`
         : `${name} came up without its shares after a minute (${last.missing.join(", ")}); it was stopped. ${path.join(LIMA_HOME, name, "ha.stderr.log")} may say why.`,
     );
   };
 
   const backend: Backend = {
-    kind,
+    kind: "vz",
     isolated: true,
 
     async check(): Promise<Check[]> {
@@ -1195,7 +1103,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       // vz needs 2.3: on 2.1.2 a confined guest's pings were answered and it was never
       // shown that nothing left the Mac; on 2.3.0 they are not (decisions.md, section 4.3).
       const [major, minor] = number ? [Number(number[1]), Number(number[2])] : [0, 0];
-      const least = kind === "vz" ? [2, 3] : [2, 0];
+      const least = [2, 3];
       checks.push({
         name: "lima",
         ok:
@@ -1203,10 +1111,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
           number !== null &&
           (major > least[0]! || (major === least[0] && minor >= least[1]!)),
         detail: version.code === 0 ? version.stdout.trim() : "limactl was not found",
-        fix:
-          process.platform === "darwin"
-            ? `brew ${version.code === 0 ? "upgrade" : "install"} lima (${least.join(".")} or newer)`
-            : `install Lima ${least.join(".")} or newer (https://lima-vm.io) and put limactl on PATH, or set DESOLATE_LIMACTL`,
+        fix: `brew ${version.code === 0 ? "upgrade" : "install"} lima (${least.join(".")} or newer)`,
       });
       for (const override of ["default.yaml", "override.yaml"])
         if (fs.existsSync(path.join(LIMA_HOME, "_config", override)))
@@ -1216,44 +1121,21 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
             detail: `${LIMA_HOME}/_config/${override} would change every VM (it could add a network)`,
             fix: `remove ${LIMA_HOME}/_config/${override}`,
           });
-      if (kind === "qemu") {
-        checks.push({
-          name: "qemu",
-          ok: realQemu() !== "",
-          detail: realQemu() || `qemu-system-${arch} was not found`,
-          fix: "apt-get install qemu-system-x86 qemu-utils (or your distribution's package)",
-        });
-        const socat = await run("socat", ["-V"]);
-        checks.push({
-          name: "socat (carries a workspace's link)",
-          ok: socat.code === 0,
-          detail: socat.code === 0 ? "present" : "not found",
-          fix: "apt-get install socat",
-        });
-        checks.push({
-          name: "acceleration",
-          ok: true,
-          detail: fs.existsSync("/dev/kvm")
-            ? "KVM"
-            : "none: software emulation (TCG). A real VM boundary, and slow: minutes to boot",
-        });
-      } else {
-        const sandbox = await run("sandbox-exec", ["-n", "no-network", "true"]);
-        checks.push({
-          name: "sandbox-exec (cuts a workspace's egress from outside it)",
-          ok: sandbox.code === 0,
-          detail: sandbox.code === 0 ? "present" : "not usable on this macOS",
-          fix: "desolate's vz backend needs macOS's sandbox-exec",
-        });
-        // Measured, by tests/probes/v3/phase0-mac-egress3.sh and on every T4 run
-        // (tests/v3/t3/01-boundaries): docs/v3/decisions.md, section 4.3.
-        checks.push({
-          name: "vz: ICMP from a workspace",
-          ok: true,
-          detail:
-            "closed by the same confinement as TCP, UDP and DNS (measured on Lima 2.3.0: a confined guest's echo gets no reply; the unconfined control's does)",
-        });
-      }
+      const sandbox = await run("sandbox-exec", ["-n", "no-network", "true"]);
+      checks.push({
+        name: "sandbox-exec (cuts a workspace's egress from outside it)",
+        ok: sandbox.code === 0,
+        detail: sandbox.code === 0 ? "present" : "not usable on this macOS",
+        fix: "desolate's vz backend needs macOS's sandbox-exec",
+      });
+      // Measured, by tests/probes/v3/phase0-mac-egress3.sh and on every T4 run
+      // (tests/v3/t3/01-boundaries): docs/v3/decisions.md, section 4.3.
+      checks.push({
+        name: "vz: ICMP from a workspace",
+        ok: true,
+        detail:
+          "closed by the same confinement as TCP, UDP and DNS (measured on Lima 2.3.0: a confined guest's echo gets no reply; the unconfined control's does)",
+      });
       // macOS keeps a unix socket's path under 104 bytes, and Lima's ssh control socket (and
       // desolate's own, for root in the root VM) is under each VM's directory. The longest
       // is a workspace VM's (found on the M1, where a long home made Lima refuse to start).
@@ -1284,28 +1166,26 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       });
       // Every running vz VM may be handed only its own shares (`profile`): one whose host
       // process started before its profile was written keeps no such limit.
-      if (kind === "vz") {
-        const loose: string[] = [];
-        let undecided = false;
-        for (const vm of await backend.list())
-          if (vm.status === "running") {
-            const confined = await startedConfined(vm.name);
-            if (confined === null) undecided = true;
-            else if (!confined) loose.push(vm.labels.title ?? vm.name);
-          }
-        checks.push({
-          name: "VMs started confined",
-          ok: loose.length === 0 && !undecided,
-          detail: undecided
-            ? "macOS could not be asked whether a VM's host process is sandboxed (/usr/bin/python3 did not answer)"
-            : loose.length === 0
-              ? "every running VM's host process may hand it only its own shares"
-              : `${loose.join(", ")} started without the profile that lets it be handed only its own shares: until it starts again, a share swapped for a link could hand it any folder of this Mac's user`,
-          fix: undecided
-            ? "xcode-select --install (the command line tools, which give /usr/bin/python3), then desolate doctor"
-            : "restart each: desolate stop <domain>/<workspace> && desolate start <domain>/<workspace> (the root VM: desolate down, then desolate bootstrap)",
-        });
-      }
+      const loose: string[] = [];
+      let undecided = false;
+      for (const vm of await backend.list())
+        if (vm.status === "running") {
+          const confined = await startedConfined(vm.name);
+          if (confined === null) undecided = true;
+          else if (!confined) loose.push(vm.labels.title ?? vm.name);
+        }
+      checks.push({
+        name: "VMs started confined",
+        ok: loose.length === 0 && !undecided,
+        detail: undecided
+          ? "macOS could not be asked whether a VM's host process is sandboxed (/usr/bin/python3 did not answer)"
+          : loose.length === 0
+            ? "every running VM's host process may hand it only its own shares"
+            : `${loose.join(", ")} started without the profile that lets it be handed only its own shares: until it starts again, a share swapped for a link could hand it any folder of this Mac's user`,
+        fix: undecided
+          ? "xcode-select --install (the command line tools, which give /usr/bin/python3), then desolate doctor"
+          : "restart each: desolate stop <domain>/<workspace> && desolate start <domain>/<workspace> (the root VM: desolate down, then desolate bootstrap)",
+      });
       const haveBase = fs.existsSync(path.join(LIMA_HOME, BASE, "lima.yaml"));
       const stamp = baseStamp();
       const current = haveBase && stamp === imageFingerprint();
@@ -1317,7 +1197,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
           : current
             ? `the base VM ${BASE}, provisioned from this desolate's image (${stamp})`
             : `the base VM ${BASE} was provisioned from ${stamp ? `another image (${stamp})` : "an image older than image stamps"}; this desolate's is ${imageFingerprint()}`,
-        fix: `desolate bootstrap${haveBase ? " (it provisions the base again, in place: minutes, once)" : ` --backend ${kind}`}`,
+        fix: `desolate bootstrap${haveBase ? " (it provisions the base again, in place: minutes, once)" : ""}`,
       });
       return checks;
     },
@@ -1374,20 +1254,8 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
         return;
       }
       const file = path.join(LIMA_HOME, "base.yaml");
-      if (kind === "qemu") {
-        for (const need of ["disk.raw", "vmlinuz", "initrd"])
-          if (!fs.existsSync(path.join(imageDir, need)))
-            throw new Error(
-              `the base image is missing (${path.join(imageDir, need)}). Build it: sudo release/image/build.sh --out ${imageDir}  (or set DESOLATE_IMAGE_DIR to where it was built)`,
-            );
-        fs.writeFileSync(file, baseYaml());
-        log(`creating the base VM from ${imageDir}`);
-        // No timer (R4): Lima copies the image's disk on this machine, and reaches nothing.
-        await limaOk(["create", `--name=${BASE}`, file]);
-        return;
-      }
-      // vz: boot Lima's Ubuntu image once, provision it with the same script the
-      // Linux image is built from, and stop it. Every VM is then a copy-on-write clone.
+      // Boot Lima's Ubuntu image once, provision it with image/provision.sh, and stop it.
+      // Every VM is then a copy-on-write clone.
       fs.writeFileSync(file, baseYaml());
       log("creating the base VM from Lima's pinned Ubuntu image (downloads it the first time)");
       await limaOk(["start", `--name=${BASE}`, "--timeout", boot().flag, file], {
@@ -1434,48 +1302,28 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const m = meta(name);
       if (!m) throw new Error(`${name} is not a VM desolate made`);
       sharesPlain(m.spec.shares);
-      const cut = m.spec.egress === "none";
       // A VM made by an older desolate gets today's forwarding rules before it boots.
       if (!forwardsClosed(name))
         await limaOk(["edit", "--set", `.portForwards = ${yq(NO_FORWARDS)}`, name], {
           timeoutMs: 120_000,
         });
       const args = ["start", "--timeout", boot().flag, name];
-      if (kind === "vz") {
-        const file = path.join(LIMA_HOME, name, "confine.sb");
-        // After sharesPlain: the profile names each share where it must be.
-        fs.writeFileSync(file, profile(m));
-        // The host process starts under the profile and keeps it for its whole life.
-        const result = await run("sandbox-exec", ["-f", file, LIMACTL, "--tty=false", ...args], {
-          env: env(),
-          timeoutMs: boot().timeoutMs,
-        });
-        if (result.code !== 0)
-          throw new Error(
-            because(
-              `could not start ${name} confined. If what follows says "Failed to issue sandbox extension", a share of it changed after desolate checked it: see desolate doctor, and ${path.join(LIMA_HOME, name, "ha.stderr.log")}. limactl said`,
-              "limactl-start",
-              result.stderr || result.stdout,
-            ),
-          );
-        return sharesReady(name, m);
-      }
-      const extraEnv: Record<string, string> =
-        kind === "qemu" && cut
-          ? { DESOLATE_QEMU_EGRESS: "none", DESOLATE_QEMU_LINK: m.spec.sockets[0]?.host ?? "" }
-          : {};
-      await limaOk(args, { timeoutMs: boot().timeoutMs, extraEnv });
-      if (cut && kind === "qemu") {
-        // Not taken on trust: the QEMU that is running must be the restricted one.
-        const pid = fs.readFileSync(path.join(LIMA_HOME, name, "qemu.pid"), "utf8").trim();
-        const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8");
-        if (!cmdline.includes("restrict=on")) {
-          await lima(["stop", "-f", name]);
-          throw new Error(
-            `${name} came up with an unrestricted network; it was stopped. This is a bug in desolate's qemu backend.`,
-          );
-        }
-      }
+      const file = path.join(LIMA_HOME, name, "confine.sb");
+      // After sharesPlain: the profile names each share where it must be.
+      fs.writeFileSync(file, profile(m));
+      // The host process starts under the profile and keeps it for its whole life.
+      const result = await run("sandbox-exec", ["-f", file, LIMACTL, "--tty=false", ...args], {
+        env: env(),
+        timeoutMs: boot().timeoutMs,
+      });
+      if (result.code !== 0)
+        throw new Error(
+          because(
+            `could not start ${name} confined. If what follows says "Failed to issue sandbox extension", a share of it changed after desolate checked it: see desolate doctor, and ${path.join(LIMA_HOME, name, "ha.stderr.log")}. limactl said`,
+            "limactl-start",
+            result.stderr || result.stdout,
+          ),
+        );
       await sharesReady(name, m);
     },
 
@@ -1520,7 +1368,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       const m = meta(name);
       return {
         name,
-        status: await vmStatus(path.join(LIMA_HOME, name), kind),
+        status: await vmStatus(path.join(LIMA_HOME, name)),
         labels: m ? { ...m.spec.labels, role: m.spec.role } : {},
       };
     },
@@ -1543,7 +1391,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     async exec(name, argv, options = {}): Promise<RunResult> {
       const why = unreachable(
         named(name),
-        (await vmStatus(path.join(LIMA_HOME, name), kind)) === "running",
+        (await vmStatus(path.join(LIMA_HOME, name))) === "running",
       );
       if (why) return { code: 1, stdout: "", stderr: `${why}\n` };
       const asRoot = options.root === true && isRootVm(name);
@@ -1578,7 +1426,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       // (Asked by the VM's processes alone: a spawn is answered at once, and the socket's
       // answer is not. A host agent gone while its pid lives on leaves ssh to say so.) Refused,
       // it is a session that ended saying why: a real one, so it ends as any child does.
-      const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name), kind));
+      const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name)));
       if (why)
         return spawn("sh", ["-c", 'printf "%s\\n" "$1" >&2; exit 1', "sh", why], {
           stdio: ["pipe", "pipe", "pipe"],
@@ -1603,7 +1451,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     async attach(name, argv, options = {}) {
       const why = unreachable(
         named(name),
-        (await vmStatus(path.join(LIMA_HOME, name), kind)) === "running",
+        (await vmStatus(path.join(LIMA_HOME, name))) === "running",
       );
       if (why) {
         process.stderr.write(`desolate: ${why}\n`);
@@ -1625,7 +1473,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
       // and worked on Lima 2.3.0 in a workspace VM (2026-11-23), but reaches TCP only, and a
       // target may be a unix socket in the VM (a workspace's proxy). Refused by the VM's
       // processes alone, as spawn is: a connection is answered at once.
-      const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name), kind));
+      const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name)));
       if (why) throw new Error(why);
       return duplexOf(
         spawn("ssh", sessionArgs(name, ["socat", "STDIO", socatAddress(target)]), {
@@ -1636,9 +1484,7 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
     },
 
     link(name) {
-      // qemu: QEMU carries connections to this address to the link's socket (qemu-wrapper.sh).
-      // vz: the Mac's loopback, where the sandbox allows this VM one port.
-      if (kind === "qemu") return { guest: QEMU_LINK };
+      // The Mac's loopback, where the sandbox allows this VM one port.
       // A loopback port is open to every process on the Mac, so the link opens with a token
       // that only this host and this VM are given (shared/link.ts). No token, no link.
       const m = meta(name);
@@ -1698,8 +1544,25 @@ export const limaBackend = (kind: "qemu" | "vz"): Backend => {
 };
 
 declare namespace limaBackend {
-  type Vz = Invoke<typeof limaBackend, [kind: "vz"]>;
-  type Qemu = Invoke<typeof limaBackend, [kind: "qemu"]>;
+  type Vz = Invoke<typeof limaBackend, [platform: "darwin"]>;
+  /** desolate runs on macOS only, for now: on any other host the one backend is refused, in
+   *  words, before anything is asked of Lima (the control: a Mac, which is not refused) */
+  export type MacOnly = [
+    Expect<
+      Invoke<typeof refusalOf, [run: typeof limaBackend, args: [platform: "linux"]]>,
+      "=",
+      {
+        message: "desolate runs on macOS only, for now: its VMs are made with Apple's Virtualization framework (Lima's vz), and this host is linux";
+        fix: "run desolate on a Mac with Apple silicon (M1 or later), with Lima 2.3 or newer: brew install lima";
+        code: 1;
+      }
+    >,
+    Expect<
+      Invoke<typeof refusalOf, [run: typeof limaBackend, args: [platform: "darwin"]]>,
+      "=",
+      null
+    >,
+  ];
   type Workspace = {
     name: "dsl-main-0123456789";
     role: "workspace";
@@ -1787,17 +1650,11 @@ declare namespace limaBackend {
     ]
   >;
 
-  /** vz: Lima's pinned Ubuntu, virtiofs, the release read-only, no containerd, nothing forwarded */
+  /** Lima's pinned Ubuntu, virtiofs, the release read-only, no containerd, nothing forwarded */
   export type VzBase = Expect<
     Invoke<typeof baseYaml, [backend: Vz]>,
     "=",
     'minimumLimaVersion: 2.0.0\nbase:\n- template:_images/ubuntu-24.04\nvmType: vz\narch: <arch>\nmountType: virtiofs\ncpus: 2\nmemory: 2GiB\ndisk: 30GiB\ncontainerd:\n  system: false\n  user: false\nportForwards: [{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"udp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"udp","ignore":true}]\nnetworks: []\nmounts:\n- location: "<release>"\n  mountPoint: /desolate/release\n  writable: false\n'
-  >;
-  /** qemu: desolate's own image, booted by its kernel, shares over 9p (QEMU keeps them read-only) */
-  export type QemuBase = Expect<
-    Invoke<typeof baseYaml, [backend: Qemu]>,
-    "=",
-    'vmType: qemu\narch: <arch>\nmountType: 9p\ncpus: 2\nmemory: 2GiB\ndisk: 30GiB\nmounts: []\ncontainerd:\n  system: false\n  user: false\nportForwards: [{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"0.0.0.0","guestPortRange":[1,65535],"proto":"udp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"tcp","ignore":true},{"guestIP":"127.0.0.1","guestPortRange":[1,65535],"proto":"udp","ignore":true}]\nnetworks: []\nimages:\n- location: "<home>/images/<arch>/disk.raw"\n  arch: <arch>\n  kernel:\n    location: "<home>/images/<arch>/vmlinuz"\n    cmdline: "root=LABEL=desolate-root rw console=ttyS0"\n  initrd:\n    location: "<home>/images/<arch>/initrd"\n'
   >;
 
   /** a VM with no egress starts under a profile that lets its host process reach two loopback
