@@ -53,7 +53,7 @@ import { over } from "../shared/limits.ts";
 import { printable } from "../shared/text.ts";
 import type { Account, AccountLine, AccountRequest, DiffPage } from "../shared/review-account.ts";
 import type { Listed } from "../shared/listed.ts";
-import type { PlanRow } from "../shared/envfile.ts";
+import type { PlanRow } from "./envfile.ts";
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
 import type { mint } from "./signin.ts";

@@ -26,7 +26,7 @@ import type { Listed } from "../shared/listed.ts";
 import { parseRepo, SLUG } from "../shared/names.ts";
 import { define, mebibytes, valueOf } from "../shared/settings.ts";
 import { StringDecoder } from "node:string_decoder";
-import { terminalFilter } from "../shared/terminal-filter.ts";
+import { terminalFilter } from "./terminal-filter.ts";
 import { CUT, failure, printable, printableLines } from "../shared/text.ts";
 import { keep, LAST } from "./failures.ts";
 import { guest } from "./paths.ts";
@@ -48,7 +48,7 @@ import type {
   vmAnswers,
 } from "../.harness/host-stack.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
-import type { byteByByte, inChunks } from "../.harness/shared-terminal.ts";
+import type { byteByByte, inChunks } from "../.harness/host-terminal.ts";
 
 type Out = (line: string) => void;
 type Workspace = {
