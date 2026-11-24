@@ -11,7 +11,7 @@
 // streamed straight through, this does that part of tmux's job.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { byteByByte, inChunks, repeat } from "../.harness/shared-terminal.ts";
+import type { byteByByte, inChunks, repeat } from "../.harness/host-terminal.ts";
 
 const ESC = 0x1b;
 const BEL = 0x07;

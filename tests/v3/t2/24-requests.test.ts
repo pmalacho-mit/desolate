@@ -13,6 +13,18 @@
 // - A flood of requests from one domain does not slow another's: beside the control, the same
 //   offer from the other domain with no flood; and the flooding domain's own offer waits
 //   behind its flood (so the flood was real), and is answered, not refused.
+// - A domain's spawn and close requests waiting for the host are at most 8: a flood of 200
+//   that the host refuses each of is refused past 8 by the root, in words, and another
+//   domain's spawn is answered and made as fast as before the flood (the control).
+// - A domain's requests folder holding 100,000 names that are not requests costs the root's
+//   loop a look at 1,000: another domain's round trip is as fast as without it (the
+//   control), and the domain is told why its own request may wait.
+// - One domain's import held for a minute in a root clone it shares with another holds up
+//   none of the other's work there: its offer is answered as fast as with nothing held (the
+//   control), while the hold is still on.
+// - Locks two domains' git takes in one clone are waited for: 80 rounds of two fetches at
+//   once, with the root's git and settings, fail none; an offer while another git holds
+//   packed-refs and a ref of its own for 15 s is taken, not refused (the control: none held).
 // - A root that is down is said to be down within the beat's 10 s, and the request is
 //   withdrawn; the same offer once it runs again is answered (the control).
 import assert from "node:assert/strict";
@@ -83,7 +95,12 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
     for (const repo of ["acme/widgets", "acme/gadgets"])
       assert.equal(stack.quiet("clone", repo, "--no-domain").code, 0);
     assert.equal(stack.quiet("domain", "create", "alpha", "--repo", "acme/widgets").code, 0);
-    assert.equal(stack.quiet("domain", "create", "beta", "--repo", "acme/gadgets").code, 0);
+    // beta shares acme/widgets with alpha: one root clone, two domains' imports into it.
+    assert.equal(
+      stack.quiet("domain", "create", "beta", "--repo", "acme/gadgets", "--repo", "acme/widgets")
+        .code,
+      0,
+    );
     for (const [domain, name, branch] of [
       ["alpha", "a1", "task/a"],
       ["beta", "b1", "task/b"],
@@ -177,6 +194,320 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
       mine!.err,
       /desolate: (waiting for \d+ earlier request\(s\) of this domain to be answered|the root has not taken it yet)/,
     );
+  });
+
+  it("a domain's spawn and close requests waiting for the host are bounded at 8, and another domain's spawn is asked and made as fast as before it (the control)", async () => {
+    type Event = {
+      type: string;
+      workspace?: string;
+      request?: string;
+      ok?: boolean;
+      said?: string;
+    };
+    const events = (workspace: string): Event[] =>
+      inside(workspace, "desolate events --all")
+        .stdout.split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Event);
+    /** beta asks for a workspace: how long the root took to answer, and the host to make it */
+    const spawned = async (name: string) => {
+      const asked = inside("beta/b1", `desolate spawn --name ${name} --branch task/${name}`);
+      assert.equal(asked.code, 0, asked.stderr);
+      assert.match(asked.stdout, new RegExp(`asked for beta/${name}`));
+      const made = (e: Event) =>
+        e.type === "request" && e.request === "spawn" && e.workspace === name;
+      const start = Date.now();
+      assert.ok(
+        await until(() => events("beta/b1").some(made), 240_000),
+        `beta/${name} was not made`,
+      );
+      assert.equal(
+        events("beta/b1").find(made)!.ok,
+        true,
+        JSON.stringify(events("beta/b1").find(made)),
+      );
+      return { asked: asked.ms, made: Date.now() - start + asked.ms };
+    };
+    /** and closes it, so that the Mac has as many workspaces running for the next */
+    const closed = async (name: string) => {
+      const asked = inside("beta/b1", `desolate close ${name}`);
+      assert.equal(asked.code, 0, asked.stderr);
+      const done = (e: Event) =>
+        e.type === "request" && e.request === "close" && e.workspace === name;
+      assert.ok(
+        await until(() => events("beta/b1").some(done), 120_000),
+        `beta/${name} was not closed`,
+      );
+    };
+    // Small, so that two workspaces more fit on any Mac T2 runs on (a test VM of 10 GiB
+    // refused the third of 3 GiB): the room a Mac has is not what this measures.
+    assert.equal(stack.quiet("domain", "beta", "size", "--memory", "1g").code, 0);
+    const control = await spawned("b2");
+    await closed("b2");
+
+    // alpha writes 200 spawn requests straight into its outbox, each of a shape the root
+    // takes (it cannot check a signature) and a command of 60,000 characters, signed with
+    // nothing the host gave it. The host refuses each; the root holds at most 8 of them
+    // for it at once, and refuses the rest, saying so.
+    const flood = inside(
+      "alpha/a1",
+      `w=$(head -c 15000 /dev/zero | tr '\\0' x); at=$(date -u +%Y-%m-%dT%H:%M:%S.000Z); cd /desolate/outbox/requests && for i in $(seq 1 200); do printf '{"op":"spawn","parent":"a1","name":"s%d","checkouts":[],"command":["%s","%s","%s","%s"],"at":"%s","nonce":"%032d","mac":"%064d"}' $i $w $w $w $w $at $i $i > .s$i && mv .s$i spawn-$i.json; done`,
+    );
+    assert.equal(flood.code, 0, flood.stderr);
+    // What the host's queue holds of alpha's, looked at every 100 ms while the flood is taken.
+    const looked = stack.inRoot([
+      "bash",
+      "-c",
+      'most=0; for i in $(seq 1 60); do n=$(grep -l \'"domain": "alpha"\' /var/lib/desolate/host-queue/* 2>/dev/null | wc -l); [ "$n" -gt "$most" ] && most=$n; sleep 0.1; done; echo $most',
+    ]);
+    const during = await spawned("b3");
+    assert.ok(
+      during.asked < control.asked + 5_000 && during.made < control.made + 30_000,
+      `beta's spawn was answered in ${during.asked} ms and made in ${during.made} ms during alpha's flood, ${control.asked} ms and ${control.made} ms without it`,
+    );
+    assert.ok(
+      Number(looked.stdout.trim()) <= 8,
+      `alpha had ${looked.stdout.trim()} waiting at once`,
+    );
+    // Every one of alpha's was answered: those over the bound in words, the rest by the host.
+    const replies = () =>
+      inside("alpha/a1", "cat /desolate/inbox/replies/spawn-*.json 2>/dev/null").stdout;
+    assert.ok(
+      await until(() => (replies().match(/"ok"/g) ?? []).length === 200, 60_000),
+      "alpha's requests were not all answered",
+    );
+    assert.match(
+      replies(),
+      /alpha has 8 spawn and close requests waiting for the host, the most a domain may have waiting: ask again once one is answered/,
+    );
+    assert.ok(
+      await until(
+        () =>
+          events("alpha/a1").filter(
+            (e) => e.type === "request" && /not signed by alpha\/a1/.test(String(e.said)),
+          ).length === (replies().match(/"ok": true/g) ?? []).length,
+        120_000,
+      ),
+      "the host did not refuse each of alpha's queued requests",
+    );
+    console.log(
+      `beta's spawn: answered in ${control.asked} ms, made in ${control.made} ms; during alpha's flood ${during.asked} ms and ${during.made} ms; alpha's waiting at most ${looked.stdout.trim()}`,
+    );
+    await closed("b3");
+  });
+
+  it("a domain's requests folder holding 100,000 names that are not requests does not slow another domain's requests (the control: the same requests without it), and the domain is told why its own may wait", async () => {
+    // beta's round trip to the root, ten times: a close of a workspace it does not have,
+    // which the root answers at once. The middle of the ten, in ms.
+    const roundTrip = () => {
+      const ran = inside(
+        "beta/b1",
+        "for i in $(seq 1 10); do s=$(date +%s%N); desolate close nobody-$i >/dev/null 2>&1; echo $(( ($(date +%s%N) - s) / 1000000 )); done",
+      );
+      assert.equal(ran.code, 0, ran.stderr);
+      const ms = ran.stdout
+        .trim()
+        .split("\n")
+        .map(Number)
+        .sort((a, b) => a - b);
+      return ms[5]!;
+    };
+    assert.match(
+      inside("beta/b1", "desolate close nobody 2>&1").stdout,
+      /beta has no workspace 'nobody'/,
+      "the round trip is the root's answer",
+    );
+    const control = roundTrip();
+    const filled = inside(
+      "alpha/a1",
+      "cd /desolate/outbox/requests && seq 1 100000 | sed 's/^/x/' | xargs touch && ls -f | wc -l",
+    );
+    assert.equal(filled.code, 0, filled.stderr);
+    assert.ok(Number(filled.stdout.trim()) >= 100_000, filled.stdout);
+    // alpha asks too: its request is taken if it is among the names the root reads, and
+    // waits, saying why, if not.
+    started("alpha/a1", "crowded", "desolate fetch --mirror-only acme/widgets");
+    const during = roundTrip();
+    console.log(`beta's round trip: ${control} ms, and ${during} ms beside alpha's 100,000 names`);
+    assert.ok(
+      during < control + 250,
+      `beta's round trip took ${during} ms beside alpha's 100,000 names, ${control} ms without`,
+    );
+    assert.match(
+      inside("alpha/a1", "cat /desolate/inbox/requests.crowded").stdout,
+      /this domain's outbox holds more than 1000 names in requests\/, the most the root reads at a time/,
+    );
+    await sleep(12_000);
+    const early = ended("alpha/a1", "crowded");
+    if (early === null)
+      assert.match(
+        inside("alpha/a1", "cat /tmp/crowded.err").stdout,
+        /desolate: the root has not taken it yet: this domain's outbox holds more than 1000 names in requests\//,
+      );
+    // The workspace removes what is not a request: its own is then taken, and the note goes.
+    assert.equal(inside("alpha/a1", "find /desolate/outbox/requests -name 'x*' -delete").code, 0);
+    let fetched: ReturnType<typeof ended> = early;
+    assert.ok(await until(() => (fetched = ended("alpha/a1", "crowded")) !== null, 60_000));
+    assert.equal(fetched!.code, 0, fetched!.err);
+    assert.ok(
+      await until(
+        () => inside("alpha/a1", "test -e /desolate/inbox/requests.crowded").code !== 0,
+        10_000,
+      ),
+      "the note went with the names",
+    );
+  });
+
+  it("one domain's import held for a minute in a root clone another domain shares does not hold the other's offer to it (the control: the same offer with nothing held)", async () => {
+    const BT = "/workspaces/acme/widgets/.worktrees/task-b";
+    const offerWidgets = (note: string) =>
+      inside(
+        "beta/b1",
+        `cd ${BT} && echo '${note}' >> notes.txt && git add notes.txt && git commit -qm '${note}' && desolate offer`,
+      );
+    const control = offerWidgets("before the hold");
+    assert.equal(control.code, 0, control.stderr);
+    assert.match(control.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+    // The root's helper for git fetch <domain>, for rootd's next import of alpha only: a
+    // minute before it starts, as a domain's import of bundles made to be slow would be.
+    const helper = [
+      "#!/bin/sh",
+      // (git runs it from `git remote-desolate`, under the `git fetch` rootd started.)
+      "p=$PPID; from=''; for i in 1 2 3 4; do p=$(awk '/^PPid:/{print $2}' /proc/$p/status 2>/dev/null); from=\"$from $(tr '\\0' ' ' </proc/$p/cmdline 2>/dev/null)\"; done",
+      'echo "$* <-$from" >> /slow/log',
+      'case "$2 $from" in "alpha "*rootd.ts*) if mv /slow/armed /slow/used 2>/dev/null; then sleep 60; fi;; esac',
+      'exec node --disable-warning=ExperimentalWarning /desolate/release/root/git-remote-desolate.ts "$@"',
+    ].join("\n");
+    const armed = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        "mkdir -p /slow && touch /slow/armed && chmod -R 777 /slow && rm /usr/local/bin/git-remote-desolate && cat > /usr/local/bin/git-remote-desolate && chmod 755 /usr/local/bin/git-remote-desolate",
+      ],
+      { root: true, input: `${helper}\n` },
+    );
+    assert.equal(armed.code, 0, armed.stderr);
+    try {
+      // alpha commits and syncs: rootd's import of it is the one held.
+      const commit = inside(
+        "alpha/a1",
+        "echo held >> notes.txt && git commit -qam 'held' && desolate sync >/dev/null && git rev-parse HEAD",
+      );
+      assert.equal(commit.code, 0, commit.stderr);
+      assert.ok(
+        await until(() => stack.inRoot(["test", "-e", "/slow/used"]).code === 0, 90_000),
+        `rootd did not import alpha: the helper ran for ${stack.inRoot(["cat", "/slow/log"]).stdout || "nothing"}; rootd said ${stack.inRoot(["bash", "-c", "tail -5 /var/lib/desolate/rootd.log 2>&1"]).stdout}`,
+      );
+      const during = offerWidgets("during the hold");
+      assert.equal(during.code, 0, during.stderr);
+      assert.match(during.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+      console.log(
+        `beta's offer to the shared clone: ${control.ms} ms, and ${during.ms} ms while alpha's import was held`,
+      );
+      assert.ok(
+        during.ms < control.ms + 15_000,
+        `beta's offer took ${during.ms} ms while alpha's import was held, ${control.ms} ms without`,
+      );
+      // The hold was real: alpha's import was still held when beta's offer was answered.
+      const holding = stack.inRoot([
+        "bash",
+        "-c",
+        `for p in /proc/[0-9]*; do [ "$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)" = "sleep 60 " ] && exit 0; done; exit 1`,
+      ]);
+      assert.equal(holding.code, 0, "alpha's import was not held");
+      // And it lands once it is let go.
+      const alphaHas = () =>
+        stack
+          .inRoot([
+            "git",
+            "-C",
+            "/desolate/root/acme/widgets",
+            "rev-parse",
+            "refs/remotes/alpha/task/a",
+          ])
+          .stdout.trim();
+      assert.ok(await until(() => alphaHas() === commit.stdout.trim(), 120_000), alphaHas());
+    } finally {
+      stack.inRoot(
+        [
+          "bash",
+          "-c",
+          "ln -sf /desolate/release/root/git-remote-desolate /usr/local/bin/git-remote-desolate; rm -rf /slow",
+        ],
+        { root: true },
+      );
+    }
+  });
+
+  it("locks two domains' git takes in one clone are waited for, never a refusal: 80 rounds of two fetches at once with the root's git; and an offer while another holds packed-refs and a ref of its own for 15 s is taken (the control: the same with none held)", async () => {
+    // Two domains' `git fetch --prune` at once into one clone, each adding and deleting 30
+    // branches, half the rounds beside a `pack-refs --all --prune`: with the root's settings,
+    // and with git's own (said, not asserted: what the root's settings are for).
+    const stress = (config: string) =>
+      stack
+        .inRoot([
+          "bash",
+          "-c",
+          `export GIT_CONFIG_GLOBAL=${config} GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t; t=$(mktemp -d) && cd $t && git init -q -b main src && git -C src commit -q --allow-empty -m s && git clone -q src clone && cd clone && git pack-refs --all && for d in a b; do git init -q -b main ../$d && git -C ../$d commit -q --allow-empty -m $d && git remote add $d ../$d; done; fails=0; for r in $(seq 1 80); do for d in a b; do for i in $(seq 1 30); do git -C ../$d branch -f br$i-$r main; done; git -C ../$d for-each-ref --format='%(refname:short)' "refs/heads/br*-$((r-1))" | xargs -r git -C ../$d branch -q -D; done; git fetch -q --prune a 2>>err & p=$!; git fetch -q --prune b 2>>err & q=$!; [ $((r % 2)) = 0 ] && { git pack-refs --all --prune 2>>err || fails=$((fails+1)); }; wait $p || fails=$((fails+1)); wait $q || fails=$((fails+1)); done; echo "$(git --version): $fails failed, $(grep -c 'File exists' err) lock refusals; $(sort err | uniq -c | sort -rn | head -1)"; cd / && rm -rf $t`,
+        ])
+        .stdout.trim();
+    const withRoots = stress("/var/lib/desolate-root/gitconfig");
+    const withGits = stress("/dev/null");
+    console.log(`80 rounds, the root's settings: ${withRoots}; git's own: ${withGits}`);
+    assert.match(withRoots, /: 0 failed, 0 lock refusals;/);
+
+    const BT = "/workspaces/acme/widgets/.worktrees/task-b";
+    const clone = "/desolate/root/acme/widgets/.git";
+    const refusals = () =>
+      stack.inRoot(["bash", "-c", "cat /var/lib/desolate/refused/beta.json 2>/dev/null || echo []"])
+        .stdout;
+    /** beta offers again, with a branch it had sent before deleted, so that the root's fetch
+     *  deletes a ref (packed-refs' lock) as well as writing its own (each ref's). (Deleted only
+     *  once the root has it: the workspace syncs on its own as its refs change.) */
+    const offerAfterDeleting = async (gone: string) => {
+      const made = inside("beta/b1", `cd ${BT} && git branch ${gone} && desolate sync >/dev/null`);
+      assert.equal(made.code, 0, made.stderr);
+      const there = () =>
+        stack.inRoot([
+          "git",
+          "-C",
+          "/desolate/root/acme/widgets",
+          "rev-parse",
+          "--verify",
+          "-q",
+          `refs/remotes/beta/${gone}`,
+        ]).code === 0;
+      assert.ok(await until(there, 60_000), `beta's ${gone} never reached the root`);
+      return () => {
+        const offered = inside(
+          "beta/b1",
+          `cd ${BT} && git branch -D ${gone} >/dev/null && echo '${gone}' >> notes.txt && git commit -qam '${gone}' && desolate offer`,
+        );
+        return { ...offered, pruned: !there() };
+      };
+    };
+    const control = (await offerAfterDeleting("gone-1"))();
+    assert.equal(control.code, 0, control.stderr);
+    assert.match(control.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+    assert.ok(control.pruned, "the control's deleted branch was pruned");
+    const offer = await offerAfterDeleting("gone-2");
+    // Another git holds packed-refs and the ref beta's import writes first, for 15 s: past
+    // git's own waits and past the five tries offers.ts makes of a fetch that met a lock.
+    const held = stack.inRoot([
+      "bash",
+      "-c",
+      `mkdir -p ${clone}/refs/desolate/incoming/beta/task && touch ${clone}/packed-refs.lock ${clone}/refs/desolate/incoming/beta/task/b.lock && setsid bash -c 'sleep 15; rm -f ${clone}/packed-refs.lock ${clone}/refs/desolate/incoming/beta/task/b.lock' </dev/null >/dev/null 2>&1 &`,
+    ]);
+    assert.equal(held.code, 0, held.stderr);
+    const during = offer();
+    console.log(
+      `beta's offer: ${control.ms} ms with no lock held, ${during.ms} ms with two held for 15 s`,
+    );
+    assert.equal(during.code, 0, during.stderr);
+    assert.match(during.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+    assert.ok(during.ms >= 12_000, `the offer took ${during.ms} ms: the locks were not in its way`);
+    assert.ok(during.pruned, "the deleted branch was pruned once packed-refs was free");
+    assert.doesNotMatch(refusals(), /beta/, "nothing was recorded against beta");
   });
 
   it("a root that is down is said to be within the beat's 10 s, and the request withdrawn (the control: answered once it runs)", () => {

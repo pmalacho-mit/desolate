@@ -55,6 +55,7 @@ from mitmproxy import http
 
 log = logging.getLogger("desolate-secrets")
 
+# (Both are always set by the proxy's start, secrets.ts: the defaults name no file there is.)
 SETTINGS_PATH = os.environ.get("DESOLATE_SECRETS", "/var/lib/desolate/secrets/unset.json")
 POLICY_PATH = os.environ.get("DESOLATE_POLICY", "/var/lib/desolate/proxy/policy/unset.json")
 # The domain's audit log: a directory of files every proxy of the domain writes, by the rule
@@ -96,7 +97,7 @@ LINK_TOKEN = _read_token()
 # repeats. A short one would match ordinary text.
 SECRET_NAME = re.compile(r"[A-Z][A-Z0-9_-]{7,63}")
 # A workspace's name, as proxy.ts says it: shared/names.ts's SLUG, which T1 checks this repeats.
-WORKSPACE_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+WORKSPACE_NAME = re.compile(r"(?=[a-z0-9][a-z0-9-]{0,39}$)(?!xn--)(?!.*---)(?!.*--.*--)(?!.*-$)[a-z0-9-]+")
 # How much of a request's path goes in the audit log, in characters: the path is the
 # workspace's, and the route is what a person reads in `net log`.
 ROUTE_CHARS = 200

@@ -5,9 +5,9 @@
 #
 # Lima's network gives every VM the subnet 192.168.5.0/24, and in it addresses that ARE the
 # Mac's loopback: the gateway, 192.168.5.2 (measured on the M1, 2026-11-12: the host daemon's
-# approval page answered 200 from the root, and the Mac's own ssh); on QEMU's network every
-# address of the prefix but the resolver's, and IPv6 too. The root's user parses what domains
-# send; a bug in one of those parsers should not get it to every local service of the Mac.
+# approval page answered 200 from the root, and the Mac's own ssh). The root's user parses
+# what domains send; a bug in one of those parsers should not get it to every local service of
+# the Mac.
 #
 # So, to Lima's subnet: replies in flows the host opened (its ssh in), DNS to the resolver,
 # DHCP to the gateway, and nothing else, including flows this VM opened before the wall.

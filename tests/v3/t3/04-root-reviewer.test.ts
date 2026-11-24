@@ -1,4 +1,4 @@
-// T3 (qemu) and T4 (vz, on a Mac: DESOLATE_TIER=T4). The host asks desolate's reviewer as
+// T4 (vz, on a Mac: DESOLATE_TIER=T4). The host asks desolate's reviewer as
 // root in the root VM (host/vm/lima.ts `spawn`, host/daemon.ts `reviewerAsked`), and a
 // question nobody waits for any more must end there: the person's Ctrl-C at the terminal,
 // a CLI killed alone, a page that let go of its question, a git VM push withdrawn with Ctrl-C. Each is tried beside a control
@@ -9,7 +9,7 @@
 // lines that a push changes. Its diff takes a minute or more (measured on the M1: 1.6
 // million lines, 15 s), so no delay is put in the root for the test.
 //
-// Run: tests/v3/run.sh t4   (or t3)
+// Run: tests/v3/run.sh t4
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -21,7 +21,7 @@ import { bootstrap, git, newStack, REPO_ROOT } from "../lib/harness.ts";
 import type { Stack } from "../lib/harness.ts";
 
 let stack: Stack;
-const REAL = process.env.DESOLATE_TIER === "T3" || process.env.DESOLATE_TIER === "T4";
+const REAL = process.env.DESOLATE_TIER === "T4";
 const CLONE = "/desolate/root/acme/widgets";
 const LINES = 3_200_000;
 /** Within this long of being let go, no process of the question is left in the root. */
@@ -112,7 +112,7 @@ const waitingPushes = () =>
 
 describe(
   "T3: a question to the reviewer in the root ends when nobody waits for it",
-  { skip: REAL ? false : "set DESOLATE_TIER=T3 (tests/v3/run.sh t3), or T4 on a Mac" },
+  { skip: REAL ? false : "set DESOLATE_TIER=T4 (tests/v3/run.sh t4, on a Mac)" },
   () => {
     before(() => {
       stack = newStack("rev");

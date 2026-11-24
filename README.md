@@ -72,8 +72,7 @@ How desolate has been wrong before, and what each time taught:
 ## System requirements
 
 - A Mac with Apple silicon, with [Lima](https://lima-vm.io) 2.3 or newer (`brew install lima`)
-  and node 22.18 or newer. (Linux with QEMU is a backend for testing and CI, not a supported
-  host.) [getting-started](release/docs/getting-started.md) has the rest.
+  and node 22.18 or newer. desolate runs on macOS only, for now. [getting-started](release/docs/getting-started.md) has the rest.
 - GitHub CLI (`gh`), to register deploy keys when you clone a repository.
 
 ## Working on this repo
@@ -84,7 +83,7 @@ suede dependency workflow, and must be respected when adding files.
 
 ```
 release/           THE SHIPPED TREE (see release/README.md for its layout)
-tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t3 (real VMs, QEMU); t4 runs t3's tests on the Mac's own VMs
+tests/v3/          the tiers: t1 (unit), t2 (end to end, containers), t4 (real VMs: t3/'s tests on the Mac's own VMs)
 tests/probes/v3/   Phase 0 probes to run on a Mac
 suede.nests/       the in-source tests' DSL and Vitest plugin (a development dependency; release/.harness has their conventions)
 suede.vsix.format-on-save/  has the editor format a file as on save, from the command line (a development dependency)
@@ -97,8 +96,7 @@ npm install              # TypeScript, Vitest and Prettier, for T1
 make test                # T1: seconds, anywhere
 make format              # Prettier over the TypeScript, as the editor does on save
 make e2e-fast            # T2: minutes; needs Docker and the base image (tests/v3/README.md)
-make e2e-slow            # T3: real VMs; run whenever something structural changes
-tests/v3/run.sh t4       # T4: the boundary tests on the Mac's own VMs (vz); about 3 minutes
+make e2e-slow            # T4: the boundary tests on the Mac's own VMs (vz); about 5 minutes
 ```
 
 Three conventions the code holds to, all load-bearing:
@@ -109,4 +107,4 @@ Three conventions the code holds to, all load-bearing:
 - **A negative test sits beside a control.** "Root cannot write the mirror" proves nothing
   unless the same write demonstrably lands somewhere root may write.
 - **A boundary is tested on the tier that has it.** The fake backend (T2) is for speed; a
-  claim about what a VM stops is tested on real VMs (T3), and on a Mac for the Mac.
+  claim about what a VM stops is tested on the Mac's real VMs (T4).

@@ -158,9 +158,12 @@ page is about, and because three of them were mistakes in the *tests*.
 - **An honest offer refused right after its outbox changed.** T4's control at the end of
   the outbox test: the workspace put its sync directory back (a link it had planted
   became a directory again) and offered, and the root "received nothing". On vz the root
-  VM saw the old link for about a second. The root now looks again for about three
-  seconds before refusing (`root/offers.ts`; `docs/v3/decisions.md`, "On vz, a share is
-  the host's files seen through each guest's own cache").
+  VM saw the old link for about a second. The root looked again for a while before
+  refusing, and the refusal came back now and then (#259) until it was measured: the root
+  VM's kernel answers from what the host told it at its last lookup of a name, for exactly
+  a second, and looking again within it changes nothing. The fetch now makes the kernel ask
+  the host first (`root/outbox.ts`, openDir; `docs/v3/decisions.md`, "On vz, a share is the
+  host's files seen through each guest's own cache").
 - **The dashboard answered any program on the machine, and handed it every editor's
   token.** It checked the name and the origin, which keeps other web pages out; a local
   program (another user of the Mac, a sandboxed app allowed to reach localhost) sends any
@@ -400,7 +403,7 @@ output and the Mac's terminal drops xterm's window operations and concealed text
 control byte, a DEL, or 256 bytes of parameters inside the sequence, and the filter gave up
 on it and let it go as text. The terminal, reading the same bytes by the DEC parser, carries
 out the control and finishes the sequence. The filter now reads a CSI as that parser does.
-(`release/shared/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
+(`release/host/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
 
 **`desolate status` broken in every running devcontainer after an upgrade.** A devcontainer
 got `desolate`, `/desolate/status` and the two git remote helpers as binds of single files

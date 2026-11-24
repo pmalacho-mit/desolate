@@ -41,7 +41,7 @@
 body { margin: 0; background: var(--bg); color: var(--ink); font: 13.5px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
 a { color: var(--link); }
 code { font: 12.5px var(--mono); background: var(--raise); padding: 1px 5px; border-radius: 4px; }
-.mono { font-family: var(--mono); font-size: 12.5px; }
+.mono, pre.diff { font-family: var(--mono); font-size: 12.5px; }
 .sub { color: var(--soft); font-size: 13px; }
 .warn { color: var(--orange); }
 .grow { flex: 1; }

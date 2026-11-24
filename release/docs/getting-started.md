@@ -127,8 +127,9 @@ next: desolate up you--app   (a workspace: a VM with its checkout, its devcontai
   all, for a public repository.
 - A **domain** is a trust boundary: its repositories, its network rules, its secrets.
   Workspaces in one domain can see each other's branches; workspaces in different domains
-  share nothing. `clone` makes one per repository, named `owner--repo` (`you--app`): the
-  repository's **home domain**, for it alone (the dashboard marks it). Repositories that work
+  see none of each other's checkouts, branches or secrets (what domains do share is in the
+  [README](../README.md#the-shape-of-it)). `clone` makes one per repository, named
+  `owner--repo` (`you--app`): the repository's **home domain**, for it alone (the dashboard marks it). Repositories that work
   together go in a domain of their own: **New domain** on the dashboard, ticking them, or
   `desolate domain create you--work --repo you/app --repo you/lib`. `--no-domain` makes none.
 
@@ -246,7 +247,7 @@ and 443 ([what that means for registries and builds](reference.md)).
   pull request is merged, start the next change from the default branch:
   `git fetch && git switch --no-track -c <next-branch> origin/main`.
 - **`git push`** (or the editor's Sync) hands your branch to the root, which is as far as
-  anything in a workspace can push. It says so:
+  anything in a workspace can push through desolate. It says so:
 
   ```
   offered you/app feature/greet-by-name at 3f2a91c0d4e1.

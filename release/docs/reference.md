@@ -96,9 +96,12 @@ When its push lands, desolate gives GitHub's page for opening the pull request, 
 "Open pull request" on the dashboard (on the workspace's row and the branch's, until it is
 merged, and in its activity), a line after `desolate push`, and one in a raw `git push
 origin`'s output. It opens in your browser, where you are signed in as
-yourself, and you create the pull request there: desolate holds no forge token, and this
-needs none. The root keeps a record of what it pushed (`/var/lib/desolate/pushed.json`, kept
-across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
+yourself, and you create the pull request there: that needs no token. desolate keeps no
+forge token of its own. Your `gh` on the Mac registers the deploy keys (`clone`) and creates
+the issues you publish, and `desolate upstream` reads its token (`gh auth token`, unless
+`GH_TOKEN` or `GITHUB_TOKEN` is set) to ask api.github.com, from the Mac, for the pull request
+it waits for. No VM is given it. The root keeps a record of what it pushed
+(`/var/lib/desolate/pushed.json`, kept across `destroy`). When the mirror shows a pushed commit's changes in the branch it was for,
 `desolate branches` and the dashboard say "merged into <base>" for as long as the domain's
 branch is still at that commit. The root fetches a repository with a push waiting to land
 every 15 minutes (the setting `root.landedCheckMinutes`), for 30 days; the dashboard's
@@ -123,8 +126,10 @@ them and the git VM has none yet. The
 git VM has no network, no key, and nothing of a project's that runs: no devcontainer, no
 direnv, no clone's hooks; `less` shows colour and nothing else raw, and vim reads no
 modelines. The root's clones and the mirrors are read-only to it. What it pushes, the root
-takes in like a domain's work: every object checked first. The terminal's address carries
-this stack's token, like the approval page's: treat it like a password. Once you have opened
+takes in like a domain's work: every object checked first. It reads every domain's branches
+and delivers into any domain without asking, so treat it as you treat the root: read and
+decide there, and do not build, install or run a branch's tests in it. The terminal's
+address carries this stack's token, like the approval page's: treat it like a password. Once you have opened
 it, **Open in git** in the dashboard's review opens a shell at that repository's clone (made
 on the way if it is not there yet), on the branch reviewed, as its domain has it: it fetches
 the domain, makes your branch of that name at the domain's commit or fast-forwards it (never
@@ -221,7 +226,7 @@ in text, control characters, bidirectional overrides and invisible formatting be
 a JSON line (`--json`, `desolate events`) they are kept as `\u` escapes, exact and still JSON,
 so a script's `jq -r` decides what to print. A terminal session in a VM (`desolate exec`,
 `root shell`, `agent attach`, a push's run, `upstream`) is passed through
-`shared/terminal-filter.ts`, which keeps what a screen needs (colour, cursor movement, the
+`host/terminal-filter.ts`, which keeps what a screen needs (colour, cursor movement, the
 alternate screen) and drops every OSC, DCS and other string sequence (the clipboard, files,
 the title, window operations); the root's shell and the git VM's page through `less`, which
 shows any other control as text. The recipes print text from a repository or GitHub through
@@ -234,8 +239,10 @@ number, at the workspace's own name: `http://<domain>-<workspace>-<id>.localhost
 workspace's apps have an origin of their own, so their cookies and storage never mix with
 another workspace's, or with the editor's. Two workspaces can both serve 3000.
 - **A protocol with no hostname in it** (a database: 3306, 5432, 6379, 27017, 11211, 5672,
-  9092, 1433, 26257) reaches the one workspace that listened on that port first; the others
-  keep the number taken. Another port's protocol is routed by the name in its first bytes, or
+  9092, 1433, 26257) reaches one workspace at a time, whatever its domain: the first that
+  listened on the port, and the others keep the number taken. `desolate ports` says which has
+  it: look before a client on your Mac sends credentials on such a port while workspaces of
+  two domains serve it. Another port's protocol is routed by the name in its first bytes, or
   not at all: a server that speaks first, on a port not in that list, needs it added on your
   Mac (`DESOLATE_RAW_PORTS=7000,7001 desolate bootstrap`). Nothing learns a port is raw from
   traffic.
@@ -325,6 +332,17 @@ work with no credential, private repositories included. Only the `.git` spelling
   else leaves at all: a registry on another port (`:5000`), ssh to a forge, a database
   outside: none of it can be reached from a workspace. Fetch what needs those on the Mac or
   in the root, or serve it on 443.
+- **Any named host, until you list them.** A domain starts open: its workspaces reach every
+  host by its name, never by an address alone, and none that resolves to an internal address
+  (unless that one address was allowed for the domain). `desolate domain <d> net allow
+  <host>...` lists hosts, `net enforce` limits the domain to them, `net open` lifts that, and
+  `net show` says which it is. Enforced, a connection must be to a listed name, and must name
+  it again in its first bytes: the TLS server name, or plain HTTP's Host. That is all the
+  proxy reads. It does not look inside TLS, so a listed name that a shared CDN serves is as
+  wide as that CDN allows: list the origin's own name where there is one, and treat a
+  wildcard on a CDN's or a hosting service's domain (`*.cloudfront.net`, `*.github.io`) as
+  allowing everything hosted there. The list bounds which servers a workspace talks to, not
+  what it sends them: a listed host that takes uploads can carry data out.
 - **Connections out at once.** A workspace has 256 connections through its proxy carried at
   once. Past those, a connection is refused at once with the reason (a plain-HTTP program
   reads it; TLS is closed), the host's log says so, and `desolate ports` counts them. More:
@@ -443,7 +461,8 @@ addresses.
 
 **Secrets.** A workspace never holds a secret's value. It holds the name
 (`export OPENAI_API_KEY=MYAPP-OPENAI-KEY`), and the root puts the value in its place on the
-way out, only over TLS, only toward the hosts the secret names, only in the headers it names.
+way out, only over TLS, only toward the hosts the secret names, only in the headers it
+names (or anywhere in the request, for one set with `--anywhere`: below).
 Connections to those hosts are the only ones whose TLS the root terminates (the workspace
 trusts its domain's CA for that); everything else stays end to end.
 
@@ -658,7 +677,7 @@ Every setting there is (T1 checks that this table names exactly those):
 | `git.memoryMiB` | `DESOLATE_GIT_MEMORY_MIB` | on the Mac | 1.5 GiB | the git VM's memory |
 | `git.shells` | `DESOLATE_GIT_SHELLS` | on the Mac | 6 | git terminal shells open at once, a tab reading each or not: each is a bash in the git VM |
 | `git.scrollbackLines` | `DESOLATE_GIT_SCROLLBACK_LINES` | on the Mac | 5000 | lines the git terminal's browser tab keeps to scroll back through |
-| `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly (QEMU without KVM) |
+| `vm.bootMinutes` | `DESOLATE_VM_BOOT_MINUTES` | on the Mac | 30 | how long Lima waits for a VM it started to come up: more where VMs boot slowly |
 | `root.silentSeconds` | `DESOLATE_ROOT_SILENT_SECONDS` | on the Mac | 900 | how long a call to the root VM may hear nothing from it (no progress, no answer) before it is given up |
 | `workspace.silentSeconds` | `DESOLATE_WORKSPACE_SILENT_SECONDS` | on the Mac | 120 | how long a step of a workspace's start may hear nothing from the workspace's VM before it is stopped |
 | `link.connections` | `DESOLATE_LINK_CONNECTIONS` | on the Mac | 256 | connections one workspace has carried at once each way, out (to its proxy) and, counted apart, in (to its dev servers and its editor); past it one is refused at once. Each is a plain ssh session, about 1.5 MB of this Mac's memory |
@@ -687,37 +706,36 @@ base image's, 30 GiB.
 
 "T1" is static and unit: the type check, node's tests, and the in-source tests beside the
 code. "T2" is the fake backend: containers standing in for VMs, **not isolated**, good for
-everything but the hypervisor boundary. "T3" is real VMs on Linux (QEMU through Lima); it
-last ran in the first pass's cloud sandbox.
-"Mac" means Lima with Virtualization.framework, the product backend.
+everything but the hypervisor boundary. "T4" is real VMs on a Mac: Lima with
+Virtualization.framework, the one backend (desolate runs on macOS only, for now).
 
 | | Implemented | Tested | Not yet |
 |---|---|---|---|
-| bootstrap, doctor, destroy | yes | T2, T3 | installing the host's own tools (it checks for them and says what to install) |
-| Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T3; `clone --keys-by-hand` against github.com | |
+| bootstrap, doctor, destroy | yes | T2, T4 | installing the host's own tools (it checks for them and says what to install) |
+| Root VM: keyring, read and write keys, mirrors with LFS, root clones | yes | T2, T4; `clone --keys-by-hand` against github.com | |
 | P2: pushes only by a person (`--expect`, exit codes, LFS first, audit) | yes | T2 | |
 | P2: the approval is given on the host, outside every VM (a signed challenge; `desolate approve` for a raw `git push origin`) | yes | T2, with the `terminal` approver, which is the default | the opt-in Touch ID approver (`host/approver/touchid.swift`) has never been compiled or run |
-| P3: keys never leave the keyring; a secret's value never leaves the root | yes | T2 | |
+| P3: keys never leave the keyring; a secret's value never reaches a workspace (but one set `--anywhere` can come back changed from its host) | yes | T2 | |
 | P4: the root never runs git in a domain's clone | yes | T2 (a booby-trapped clone, a lying outbox) | |
-| What the root takes from a domain is checked data: bundles strictly checked in quarantine, a held and checked outbox directory, verified LFS, git settings that ignore what a tree asks for | yes | T1, T2 (`10-hostile-content`: dangerous objects, a planted repository, links in the outbox, hostile names; each beside a control), T3 (an offer, a dangerous tree and a linked outbox over a real VM's share) | a size quota for a domain's outbox; on the Mac, status files are checked by a second look, not by the kernel |
-| Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T3, T4 | |
+| What the root takes from a domain is checked data: bundles strictly checked in quarantine, a held and checked outbox directory, verified LFS, git settings that ignore what a tree asks for | yes | T1, T2 (`10-hostile-content`: dangerous objects, a planted repository, links in the outbox, hostile names; each beside a control), T4 (an offer, a dangerous tree and a linked outbox over a real VM's share) | a size quota for a domain's outbox; on the Mac, status files are checked by a second look, not by the kernel |
+| Domains, workspaces, checkouts, worktrees, locks, `--base`, `--fetch`, `--branch`; a domain's environment built once (templates) and its package caches | yes | T2, T4 | |
 | Offers, the root's view (`git fetch --all`), deliveries between domains | yes | T2 | |
 | `desolate upstream`: a consumer's change to a vendored suede dependency, split by suede's own upstream (pinned) in the git VM, pushed as `downstream/...` after your approval ([suede.md](suede.md)) | yes | T1, T2; against github.com | LFS files in the dependency |
 | Ports: same number, routed by name, reservations; a port a program on the Mac holds reported as not forwarded; a bare `localhost` sent to the workspace serving the port; none forwarded under the editor's name | yes | T2 (`03`, `06`); on the M1 by hand (a dev server in a vz workspace, opened by its name) | in a test suite on real VMs |
-| P5: read-only shares against root in the VM | yes | **T3** (and measured on an M1 for the Mac) | |
-| P5: forced egress against root in the VM | yes | **T3**; Mac: measured for TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
-| Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T3 | |
-| Secrets: per domain, substituted for the hosts and headers they name, proven by the upstream's certificate, scrubbed from responses, switched off and on (`--ttl`) | yes | T2, T3 | v2's self-test fixture; "learn" as a timed mode |
-| **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T3 | v2's workspace extension's panel ([`release/vscode-image/extension`](https://github.com/pmalacho-mit/desolate/tree/4f32c77/release/vscode-image/extension) at `4f32c77`) is not ported; a bare `localhost` link reaches the workspace through the forwarder |
+| P5: read-only shares against root in the VM | yes | **T4** (and measured on an M1) | |
+| P5: forced egress against root in the VM | yes | **T4**: TCP, UDP, DNS and ICMP (Lima 2.3.0 or newer required) | |
+| Egress through each workspace's own proxy, per-domain rules, audit by link | yes | T2, T4 | |
+| Secrets: per domain, substituted for the hosts and headers they name, proven by the upstream's certificate, scrubbed from responses, switched off and on (`--ttl`) | yes | T2, T4 | v2's self-test fixture; "learn" as a timed mode |
+| **P1: the editor**: VSCodium's server in every workspace VM (in the project's devcontainer when it can), its own hostname, v2's gate | yes | T2 (HTTP, WebSocket, a real browser), T4 | v2's workspace extension's panel ([`release/vscode-image/extension`](https://github.com/pmalacho-mit/desolate/tree/4f32c77/release/vscode-image/extension) at `4f32c77`) is not ported; a bare `localhost` link reaches the workspace through the forwarder |
 | The project's devcontainer, from its own `devcontainer.json` (features included), inside the workspace VM; `exec` and the editor enter it | yes | T2 (an image, a Dockerfile, a failing spec, no spec, a changed spec, a compose spec and its ports); on the M1, a public image with a feature, compose with Docker outside and inside | a compose service that is not glibc gets no port relay and no editor |
-| The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T3 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
+| The root UI: a state service in the root that pushes changes, a dashboard at `desolate.localhost` with the diff of an offer as text, unified or side by side; no editor in the root | yes | T2 (the spec's three budgets, a real browser), T4 (the state reaches the dashboard) | the side-by-side diff in Playwright's Chromium 131 inside a workspace (it renders in Chrome on the Mac) |
 | The Mac backend (`vz`) | yes | **T4 on an M1** (15 of 15, 2026-11-16): read-only shares and forced egress against root in the VM (TCP, UDP, DNS, ICMP), no path between domains, an offer over a real share, the editor, a secret | |
 | Pushes by the pusher alone (it speaks receive-pack; compare-and-swap from the commit you saw) | yes | T1, T2; against github.com | |
 | One-click approval in the browser, beside the git terminal | yes | T1, T2, and in Chrome | Firefox and Safari cannot say whether Approve is covered (Chrome can) |
 | The git VM: your git in a browser tab, no network or keys; a remote per domain; LFS | yes | T2 | |
 | `desolate events` and `desolate notify` | yes | T1, T2 | |
 | Upgrades: `git pull` then `bootstrap` (root and base re-provisioned in place when the image changed); `destroy` keeps the root's keys, secrets and rules for the next `bootstrap` | yes | T1, T2 (`13-rebuild`); by hand on the M1 | |
-| Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T3 inside a workspace |
+| Developing desolate in a desolate workspace: T1 and T2 there, an inner stack whose pages open on the Mac | yes | on the M1 ([developing-desolate.md](developing-desolate.md)) | T4 inside a workspace |
 | Git in a workspace: `git fetch` refreshes the mirror first, `git push` offers, commits as the person | yes | T2; by hand on the M1 (a commit made on GitHub fetched; a push offered) | the editor's Source Control and Sync clicked through (they run the same git) |
 | Recipes (`recipes/`): an agent on a task, Claude Code, issues, suede | yes | T2 (`12-agent`: `agent.sh`); on the M1, `agent.sh` to an offer, `claude.sh` with a stand-in token, and `issues.sh` and `suede.sh` with the stand-in agent | `issues.sh` and `suede.sh` not run on real work |
 | Workspaces that start workspaces in their own domain (`desolate spawn`, `close`, `domain stats`, `events` inside one): signed by the workspace, checked by the host | yes | T1; T2 (`16-spawn`: the limit, the labels, stats and events, a forged request refused beside a signed one run, close refused with uncommitted work) | on real VMs (vz) |
@@ -728,9 +746,9 @@ last ran in the first pass's cloud sandbox.
 
 ```
 cli.sh             the launcher: finds node >= 22.18, runs host/cli.ts
-pins.env           every tool desolate downloads, by version and sha256
+pins.env           the tools the image downloads, by version and sha256 (its top says what is not)
 host/              runs on the host: the CLI, the daemon (forwarder, links), the VM layer
-  vm/              one interface, three backends: fake, qemu, vz
+  vm/              one interface, one backend: vz (the tests' stand-in: tests/v3/lib/fake-backend.ts)
   approver.ts      the key that approves pushes (approver/touchid.swift: opt-in, the Mac's Secure Enclave)
 root/              runs in the root VM: keyring, mirrors, clones, offers, push, proxies
   proxy/           each workspace's proxy; each domain's secrets and its secrets proxy

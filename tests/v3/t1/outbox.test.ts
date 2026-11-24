@@ -1,7 +1,7 @@
 // T1. The root reads a domain's outbox as data: what a hostile domain can put there, and
 // what the root makes of it. (P4. The end-to-end version, with git, is in t2/04-offers.)
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -45,7 +45,10 @@ describe(
         dropped: [],
         more: false,
       });
-      assert.deepEqual(mod.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), []);
+      assert.deepEqual(mod.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), {
+        requests: [],
+        more: false,
+      });
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
         ["a.bundle", "refs.json"],
@@ -380,10 +383,11 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     }
   });
 
-  it("a link the share still shows where its workspace has put a directory back is waited out by the fetch, never opened; one above is refused at once", () => {
-    // T4 on vz, 2026-11-21: the re-offer a moment after the workspace replaced a link it had
-    // planted with a directory was refused as "a link, or not a directory": the root's view
-    // of the name lagged. Here another process replaces the link while the fetch waits.
+  it("a link is refused by the fetch at once, never opened, after it asks the host what the name is, which makes nothing; one above too", () => {
+    // T4 on vz, 2026-11-23: the root VM's kernel showed a link for a second after the
+    // workspace had replaced it with a directory, and the fetch waited, and refused. The fetch
+    // now asks the host first (openDir), so a link it sees is one there now. Here, on one
+    // kernel, nothing lags: what is tested is that asking changes nothing and a link waits not.
     const secret = path.join(work, "roots-own-2");
     fs.mkdirSync(secret, { recursive: true });
     fs.writeFileSync(
@@ -396,42 +400,35 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     });
     try {
       fs.symlinkSync(secret, flip);
-      const control = Date.now();
-      assert.deepEqual(
-        outbox.refsOf("t1-dom", "acme/flip"),
-        refused("acme/flip", "a link, or not a directory"),
-      );
-      assert.ok(Date.now() - control < 100, "the control: rootd's readers do not wait on a link");
-      // Replaced by a directory 300 ms into the fetch's wait: taken, the directory's list.
-      const swap = spawn("sh", [
-        "-c",
-        `sleep 0.3 && rm "$1" && mkdir "$1.new" && echo '{"refs":{"main":"${"e".repeat(40)}"}}' > "$1.new/refs.json" && mv "$1.new" "$1"`,
-        "sh",
-        flip,
-      ]);
+      for (const settle of [false, true]) {
+        const started = Date.now();
+        assert.deepEqual(
+          outbox.refsOf("t1-dom", "acme/flip", settle),
+          refused("acme/flip", "a link, or not a directory"),
+          "its target's list is never read",
+        );
+        assert.ok(Date.now() - started < 100, `a link is no reason to wait (settle ${settle})`);
+      }
+      assert.equal(fs.readlinkSync(flip), secret, "the link is left as it was");
+      assert.deepEqual(fs.readdirSync(secret), ["refs.json"], "and nothing made where it leads");
+      // Asking makes nothing where there is nothing (the control: a list not there is none).
+      assert.deepEqual(outbox.refsOf("t1-dom", "acme/none", true), { refs: {} });
+      assert.ok(!fs.existsSync(`${domains}/t1-dom/outbox/sync/acme/none`), "nothing was made");
+      // And a directory is taken as it is.
+      fs.rmSync(flip);
+      fs.mkdirSync(flip);
+      fs.writeFileSync(`${flip}/refs.json`, JSON.stringify({ refs: { main: "e".repeat(40) } }));
       assert.deepEqual(outbox.refsOf("t1-dom", "acme/flip", true), {
         refs: { main: "e".repeat(40) },
       });
-      swap.kill();
-      // A link that stays: never opened (its target's list is never read), refused at the bound.
-      fs.rmSync(flip, { recursive: true });
-      fs.symlinkSync(secret, flip);
-      const started = Date.now();
-      assert.deepEqual(
-        outbox.refsOf("t1-dom", "acme/flip", true),
-        refused(
-          "acme/flip",
-          "a link, or not a directory, at each of 5 looks over a second; lstat saw a link",
-        ),
-      );
-      const took = Date.now() - started;
-      assert.ok(took >= 600 && took < 2000, `waited about a second, not more: ${took} ms`);
+      assert.deepEqual(fs.readdirSync(flip), ["refs.json"]);
       // A link above the last component: refused at once, waited or not.
       fs.mkdirSync(path.join(secret, "app"), { recursive: true });
       fs.symlinkSync(secret, `${domains}/t1-dom/outbox/sync/linked-owner`);
       const above = Date.now();
       assert.ok("refused" in outbox.refsOf("t1-dom", "linked-owner/app", true));
       assert.ok(Date.now() - above < 100, "a link above is no reason to wait");
+      assert.deepEqual(fs.readdirSync(path.join(secret, "app")), [], "and nothing made in it");
     } finally {
       fs.rmSync(flip, { recursive: true, force: true });
       fs.rmSync(`${domains}/t1-dom/outbox/sync/linked-owner`, { force: true });
@@ -501,7 +498,10 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.symlinkSync(path.join(work, "roots-own-tree"), `${domains}/t1-dom/outbox/requests`);
     fs.mkdirSync(path.join(work, "roots-own-tree"), { recursive: true });
     fs.writeFileSync(path.join(work, "roots-own-tree", "r.json"), JSON.stringify({ op: "fetch" }));
-    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), []);
+    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), {
+      requests: [],
+      more: false,
+    });
     assert.ok(
       fs.existsSync(path.join(work, "roots-own-tree", "r.json")),
       "nothing was drained from, or removed in, the directory the symlink led to",
@@ -517,9 +517,10 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.rmSync(`${domains}/t1-dom/outbox/requests`);
     fs.mkdirSync(`${domains}/t1-dom/outbox/requests`);
     fs.writeFileSync(`${domains}/t1-dom/outbox/requests/a1.json`, JSON.stringify({ op: "fetch" }));
-    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), [
-      { name: "a1.json", data: { op: "fetch" } },
-    ]);
+    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), {
+      requests: [{ name: "a1.json", data: { op: "fetch" } }],
+      more: false,
+    });
     assert.deepEqual(fs.readdirSync(`${domains}/t1-dom/outbox/requests`), []);
   });
 
@@ -529,7 +530,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.writeFileSync(`${requests}/big.json`, pad(1024 * 1024));
     fs.writeFileSync(`${requests}/fits.json`, pad(1024 * 1024 - 100));
     fs.writeFileSync(`${requests}/notjson.json`, "{");
-    const drained = outbox.drain<{ op: string }>(requests, /\.json$/, 50);
+    const drained = outbox.drain<{ op: string }>(requests, /\.json$/, 50).requests;
     assert.deepEqual(
       drained.map((d) => [d.name, d.data?.op ?? null, "why" in d ? d.why : null]),
       [
@@ -560,6 +561,53 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     outbox.takeBundles("t1-dom", "acme/many", 1);
     const last = outbox.takeBundles("t1-dom", "acme/many", 1);
     assert.deepEqual([last.copies.length, last.more, fs.readdirSync(many)], [1, false, []]);
+  });
+
+  it("a requests directory of 100,000 names costs a look 1,000 of them, says there are more, and a request among them is taken (control: three requests, read whole, nothing more)", () => {
+    const requests = `${domains}/t1-crowd/outbox/requests`;
+    fs.mkdirSync(requests, { recursive: true });
+    for (const name of ["b.json", "a.json", "c.json"])
+      fs.writeFileSync(`${requests}/${name}`, JSON.stringify({ op: "fetch" }));
+    assert.deepEqual(
+      outbox.drain(requests, /\.json$/, 50),
+      {
+        requests: ["a.json", "b.json", "c.json"].map((name) => ({ name, data: { op: "fetch" } })),
+        more: false,
+      },
+      "the control: every request, oldest name first, and nothing more said",
+    );
+    for (let i = 0; i < 100_000; i++) fs.writeFileSync(`${requests}/x${i}.txt`, "");
+    // What a pass of the loop cost before, for this directory: every name listed, filtered
+    // and sorted. Then the bounded look, the same directory, the best of five each.
+    const best = (look: () => unknown) =>
+      Math.min(
+        ...Array.from({ length: 5 }, () => {
+          const start = performance.now();
+          look();
+          return performance.now() - start;
+        }),
+      );
+    const whole = best(() =>
+      fs
+        .readdirSync(requests)
+        .filter((name) => /^[0-9a-z-]{1,60}\.json$/.test(name))
+        .sort(),
+    );
+    const bounded = best(() => outbox.drain(requests, /\.json$/, 50));
+    const looked = outbox.drain(requests, /\.json$/, 50);
+    assert.deepEqual(looked, { requests: [], more: true });
+    console.log(
+      `100,000 names: ${whole.toFixed(1)} ms to read them all, ${bounded.toFixed(1)} ms for the root's look`,
+    );
+    assert.ok(bounded < whole / 4, `${bounded} ms for the look, ${whole} ms for every name`);
+    // A request the look comes to is taken: with the names before it gone, as the workspace
+    // that was told would remove them.
+    fs.writeFileSync(`${requests}/r1.json`, JSON.stringify({ op: "fetch" }));
+    for (let i = 0; i < 100_000; i++) fs.rmSync(`${requests}/x${i}.txt`);
+    assert.deepEqual(outbox.drain(requests, /\.json$/, 50), {
+      requests: [{ name: "r1.json", data: { op: "fetch" } }],
+      more: false,
+    });
   });
 });
 

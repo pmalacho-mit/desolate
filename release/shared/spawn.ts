@@ -217,10 +217,7 @@ export const checkoutsRefusal = (value: unknown): string | null => {
   if (value.length > LIMIT.checkouts)
     return over("the spawn", LIMIT.checkouts, value.length, "--checkouts");
   for (const c of value) {
-    const m =
-      typeof c === "string"
-        ? /^([A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100})=(main|worktree:(.+))$/.exec(c)
-        : null;
+    const m = typeof c === "string" ? /^([^=]*)=(main|worktree:(.+))$/.exec(c) : null;
     if (!m || !parseRepo(m[1]))
       return `'${printable(c, 300)}' is not <owner/repo>=main or <owner/repo>=worktree:<branch>`;
     const branch = m[3] === undefined ? null : branchRefusal(m[3]);

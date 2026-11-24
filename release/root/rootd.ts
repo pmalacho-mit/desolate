@@ -33,39 +33,69 @@ import { printable } from "../shared/text.ts";
 import { domain as domainOf, domains, workspaces } from "./domains.ts";
 import { HOST_QUEUE } from "./layout.ts";
 import { fetchDomain, take } from "./offers.ts";
-import { drain, inbox, outbox } from "./outbox.ts";
+import { drain, inbox, outbox, REQUEST_NAMES_READ } from "./outbox.ts";
 import { waiting } from "./pushed.ts";
 import * as issues from "./issues.ts";
 import * as repos from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { aDomain, aWorkspace, emptyRoot, jsonFilesIn } from "../.harness/root-state.ts";
+import type {
+  aDomain,
+  aWorkspace,
+  emptyRoot,
+  jsonFilesIn,
+  queuedForHost,
+} from "../.harness/root-state.ts";
 
-const queuedFor = (
-  domain: string,
-): { kind: string; args: Record<string, string>; at: number }[] => {
+/** A domain's spawn and close requests waiting for the host, at most (R7: a bound against a
+ *  workspace, which may write as many as it likes, each with a command of up to
+ *  shared/spawn.ts's 200,000 characters). The host starts three of a domain's spawns at once
+ *  and refuses a fourth at once (host/spawn.ts, MOST_AT_ONCE), and a close is one for each
+ *  child: eight is three spawns under way and room for as many closes beside them. Past it the
+ *  domain's next request is refused here, saying so, and no other domain's is: each counts
+ *  only its own. A request waits from when it is queued until the host has answered it (the
+ *  state service then removes its file), or for half an hour. */
+const WAITING_MOST = 8;
+
+/** What waits in the host's queue: kind, domain and name of each request, by its file's name
+ *  without `.json` or `.taken` (the state service renames each as it hands it over, and
+ *  removes it once the host has answered, or after half an hour). Kept as this rootd writes
+ *  them, so that counting a domain's reads the queue's names and no file: reading every file
+ *  for each request was a cost on the loop every domain waits on. A file this rootd did not
+ *  write (it was started again) is read once. */
+type Queued = { kind: string; domain: string; workspace: string; at: number };
+const queue = new Map<string, Queued>();
+const queuedFor = (domain: string): Queued[] => {
+  let names: string[] = [];
   try {
-    // Waiting (.json), and handed to the host lately (.taken: the state service renames each
-    // as it hands it over, and sweeps them after half an hour), so a request between the two
-    // is still counted against the limit.
-    return fs
-      .readdirSync(HOST_QUEUE)
-      .filter((name) => name.endsWith(".json") || name.endsWith(".taken"))
-      .flatMap((name) => {
-        try {
-          const item = JSON.parse(fs.readFileSync(path.join(HOST_QUEUE, name), "utf8")) as {
-            kind: string;
-            args: Record<string, string>;
-            at: number;
-          };
-          return item.args?.domain === domain ? [item] : [];
-        } catch {
-          return [];
-        }
-      });
+    names = fs.readdirSync(HOST_QUEUE);
   } catch {
-    return [];
+    /* nothing queued yet */
   }
+  const here = new Set<string>();
+  for (const name of names) {
+    const stem = /^([0-9a-z]+-[0-9a-f]{10})\.(json|taken)$/.exec(name)?.[1];
+    if (!stem) continue;
+    here.add(stem);
+    if (queue.has(stem)) continue;
+    try {
+      const item = JSON.parse(fs.readFileSync(path.join(HOST_QUEUE, name), "utf8")) as {
+        kind: string;
+        args: Record<string, string>;
+        at: number;
+      };
+      queue.set(stem, {
+        kind: String(item.kind),
+        domain: String(item.args?.domain),
+        workspace: String(item.args?.workspace),
+        at: Number(item.at),
+      });
+    } catch {
+      /* renamed or removed meanwhile: looked at again next time */
+    }
+  }
+  for (const stem of queue.keys()) if (!here.has(stem)) queue.delete(stem);
+  return [...queue.values()].filter((q) => q.domain === domain);
 };
 
 /** How long a spawn in the host's queue holds its name and counts against the domain's limit.
@@ -83,6 +113,13 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
   const all = workspaces(domain);
   if (!all.some((w) => w.workspace === r.parent))
     return { ok: false, error: `${domain} has no workspace '${r.parent}'` };
+  const queued = queuedFor(domain);
+  if (queued.length >= WAITING_MOST)
+    return {
+      ok: false,
+      error: `${domain} has ${queued.length} spawn and close requests waiting for the host, the most a domain may have waiting: ask again once one is answered`,
+      fix: "desolate events --follow   (a `request` event says when each is answered)",
+    };
   if (r.op === "spawn" && r.name === "template")
     return {
       ok: false,
@@ -97,13 +134,13 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
         error: `${domain}'s workspaces cannot start workspaces: the person turned it off`,
         fix: `on the Mac: desolate domain ${domain} spawn --max none`,
       };
-    const pending = queuedFor(domain).filter(
+    const pending = queued.filter(
       (q) =>
         q.kind === "workspace.spawn" &&
         Date.now() - q.at < PENDING_MS &&
-        !all.some((w) => w.workspace === q.args.workspace),
+        !all.some((w) => w.workspace === q.workspace),
     );
-    if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.args.workspace === r.name))
+    if (all.some((w) => w.workspace === r.name) || pending.some((q) => q.workspace === r.name))
       return {
         ok: false,
         error: `${domain} already has a workspace '${r.name}'`,
@@ -173,6 +210,12 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
         error: `${domain}/${r.name} was not started by ${r.parent}: only the workspace that started it can close it`,
         fix: "ask the person: desolate rm on the Mac",
       };
+    if (queued.some((q) => q.kind === "workspace.close" && q.workspace === r.name))
+      return {
+        ok: false,
+        error: `a close of ${domain}/${r.name} is waiting for the host already`,
+        fix: "desolate events --follow   (a `request` event says when it is answered)",
+      };
   }
   const args: Record<string, string> = {
     domain,
@@ -189,11 +232,15 @@ const signed = (domain: string, request: Record<string, unknown>): Record<string
         }
       : {}),
   };
+  const stem = `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}`;
+  const item = {
+    kind: r.op === "spawn" ? "workspace.spawn" : "workspace.close",
+    args,
+    at: Date.now(),
+  };
   fs.mkdirSync(HOST_QUEUE, { recursive: true });
-  writeJson(
-    path.join(HOST_QUEUE, `${Date.now().toString(36)}-${randomBytes(5).toString("hex")}.json`),
-    { kind: r.op === "spawn" ? "workspace.spawn" : "workspace.close", args, at: Date.now() },
-  );
+  writeJson(path.join(HOST_QUEUE, `${stem}.json`), item);
+  queue.set(stem, { kind: item.kind, domain, workspace: r.name, at: item.at });
   return { ok: true, workspace: r.name };
 };
 
@@ -589,6 +636,122 @@ declare namespace signed {
       >,
     ]
   >;
+  type Beta = Invoke<typeof aDomain, [slug: "beta", repos: ["beta/app"]]>;
+  type B1 = Invoke<typeof aWorkspace, [domain: "beta", name: "b1", checkouts: ["beta/app=main"]]>;
+  /** a domain has at most eight requests waiting for the host: with seven, its next is queued
+   *  (the control for the next) */
+  export type RoomForOneMore = Given<
+    [Fresh, Acme, W1, W2, Beta, B1, Invoke<typeof queuedForHost, [domain: "acme", count: 7]>],
+    Expect<
+      Invoke<
+        typeof signed,
+        [
+          domain: "acme",
+          request: {
+            at: "2026-11-16T12:00:00.000Z";
+            nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+            mac: "abababababababababababababababababababababababababababababababab";
+            op: "close";
+            parent: "w1";
+            name: "w2";
+          },
+        ]
+      >,
+      "=",
+      { ok: true; workspace: "w2" }
+    >
+  >;
+  /** with eight, its next is refused, saying so, and another domain's is queued all the same */
+  export type Waiting = Given<
+    [Fresh, Acme, W1, W2, Beta, B1, Invoke<typeof queuedForHost, [domain: "acme", count: 8]>],
+    [
+      Expect<
+        Invoke<
+          typeof signed,
+          [
+            domain: "acme",
+            request: {
+              at: "2026-11-16T12:00:00.000Z";
+              nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+              mac: "abababababababababababababababababababababababababababababababab";
+              op: "close";
+              parent: "w1";
+              name: "w2";
+            },
+          ]
+        >,
+        "=",
+        {
+          ok: false;
+          error: "acme has 8 spawn and close requests waiting for the host, the most a domain may have waiting: ask again once one is answered";
+          fix: "desolate events --follow   (a `request` event says when each is answered)";
+        }
+      >,
+      Expect<
+        Invoke<
+          typeof signed,
+          [
+            domain: "beta",
+            request: {
+              at: "2026-11-16T12:00:00.000Z";
+              nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+              mac: "abababababababababababababababababababababababababababababababab";
+              op: "spawn";
+              parent: "b1";
+              name: "helper";
+            },
+          ]
+        >,
+        "=",
+        { ok: true; workspace: "helper" }
+      >,
+    ]
+  >;
+  /** a close already waiting for the host is not queued again */
+  export type CloseOnce = Given<
+    [
+      Fresh,
+      Acme,
+      W1,
+      W2,
+      Invoke<
+        typeof signed,
+        [
+          domain: "acme",
+          request: {
+            at: "2026-11-16T12:00:00.000Z";
+            nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+            mac: "abababababababababababababababababababababababababababababababab";
+            op: "close";
+            parent: "w1";
+            name: "w2";
+          },
+        ]
+      >,
+    ],
+    Expect<
+      Invoke<
+        typeof signed,
+        [
+          domain: "acme",
+          request: {
+            at: "2026-11-16T12:00:00.000Z";
+            nonce: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f";
+            mac: "abababababababababababababababababababababababababababababababab";
+            op: "close";
+            parent: "w1";
+            name: "w2";
+          },
+        ]
+      >,
+      "=",
+      {
+        ok: false;
+        error: "a close of acme/w2 is waiting for the host already";
+        fix: "desolate events --follow   (a `request` event says when it is answered)";
+      }
+    >
+  >;
 }
 
 const handle = async (
@@ -610,7 +773,7 @@ const handle = async (
     await run.result;
     return { ok: true };
   }
-  if (request.op === "offer") return inClone(String(request.repo), () => take(domain, request));
+  if (request.op === "offer") return take(domain, request);
   if (request.op === "issue")
     return issues.offer(
       domain,
@@ -761,23 +924,6 @@ declare namespace answer {
 
 const log = (line: string) => process.stderr.write(`${new Date().toISOString()} rootd: ${line}\n`);
 
-/** One piece of work at a time in a repository's root clone, in the order asked, whichever
- *  domain asked: an import (git fetch --prune <domain>) and an offer's take, from two domains'
- *  lanes at once, would meet on the clone's ref locks, and the later fail. In order, so a
- *  domain's work in a clone it shares with another waits for at most the one piece of the
- *  other's ahead of it (each domain's lane gives one at a time). */
-const clones = new Map<string, Promise<unknown>>();
-const inClone = <T>(id: string, work: () => Promise<T>): Promise<T> => {
-  const done = (clones.get(id) ?? Promise.resolve()).catch(() => {}).then(work);
-  clones.set(id, done);
-  void done
-    .catch(() => {})
-    .then(() => {
-      if (clones.get(id) === done) clones.delete(id);
-    });
-  return done;
-};
-
 /** A domain's branches, brought into the root clone as the domain writes them out (its list
  *  beside each bundle changes), not only when one is reviewed or offered: so `git fetch
  *  root` in the git VM, and the dashboard's review, have every branch. The import is the
@@ -801,7 +947,7 @@ const importChanged = async (slug: string, repoList: string[]) => {
     if (last && (last.mtime === mtime || Date.now() - last.at < IMPORT_GAP_MS)) continue;
     imported.set(key, { mtime, at: Date.now() });
     // (Why it was not, fetchDomain says in this log.)
-    await inClone(id, () => fetchDomain(slug, repo)).catch(() => {});
+    await fetchDomain(slug, repo).catch(() => {});
   }
 };
 
@@ -894,12 +1040,12 @@ const checkLanded = (everyMs: number) => {
 //                        again whenever what is being done changes; removed with the answer
 //   replies/<id>.json    the answer
 // So the workspace waits for as long as the root is there and on it, with no deadline (R4),
-// and is told at once when it is not. A workspace from before this reads only the reply, as
-// it always did; one after, facing a root from before (no beat), waits as it always did.
+// and is told at once when it is not.
 //
 // The loop never waits on a request's work. Each domain has one lane: its requests are worked
 // on one at a time, in the order they came, beside every other domain's lane. Its imports
-// (importChanged) go in the same lane, so the two never meet in a root clone. Fetches go to
+// (importChanged) go in the same lane, so the two never meet in a root clone; another
+// domain's, in the same clone, go on beside them (offers.ts, fetchDomain). Fetches go to
 // fetchOf instead, where any number of askers share one fetch: so an offer is never behind a
 // domain's fetches, nor refused for them.
 
@@ -1022,6 +1168,27 @@ const sweep = (domain: string) => {
   }
 };
 
+/** Whether a domain's outbox holds more names in requests/ than the root reads at a look
+ *  (outbox.ts, REQUEST_NAMES_READ), said in its inbox (`requests.crowded`) while it does, for
+ *  a workspace waiting on a request not yet taken to say why it may never be: the names read
+ *  first are the file system's choice, and a request past them waits until others go. Written
+ *  only when that changes (and once at a start, over whatever an earlier rootd left). */
+const said = new Map<string, boolean>();
+const crowded = (domain: string, now: boolean) => {
+  if (said.get(domain) === now) return;
+  const file = path.join(inbox(domain), "requests.crowded");
+  try {
+    if (now)
+      writeJson(file, {
+        said: `this domain's outbox holds more than ${REQUEST_NAMES_READ} names in requests/, the most the root reads at a time, so it may not come to this one: remove what is not a request there (each is <id>.json; ls -f /desolate/outbox/requests | head)`,
+      });
+    else fs.rmSync(file, { force: true });
+    said.set(domain, now);
+  } catch (error) {
+    log(`${domain}: cannot say its outbox is crowded: ${printable((error as Error).message)}`);
+  }
+};
+
 /** The beat, from a thread of its own: a count, after this start's `boot`, into each file it
  *  is given (the main loop gives it every domain's), each beat, whole (written beside and
  *  renamed over, so a reader never sees half of one). If the thread ends, rootd ends: a root
@@ -1077,13 +1244,15 @@ const main = async () => {
       // Each request is read once and removed, by name, in a directory that was checked to be
       // the outbox's own (outbox.ts): never through a path a workspace could have redirected.
       const room = MOST_HELD - heldBy(d.slug, false);
-      if (room > 0)
-        for (const { name, data } of drain<unknown>(
+      if (room > 0) {
+        const { requests, more } = drain<unknown>(
           path.join(outbox(d.slug), "requests"),
           /^[0-9a-z-]{1,60}\.json$/,
           room,
-        ))
-          taken(d.slug, d.repos, name, data);
+        );
+        for (const { name, data } of requests) taken(d.slug, d.repos, name, data);
+        crowded(d.slug, more);
+      }
       sweep(d.slug);
     }
     await sleep(250);

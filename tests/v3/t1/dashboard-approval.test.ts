@@ -10,6 +10,8 @@ import { describe, it } from "node:test";
 import * as vm from "node:vm";
 
 const SOURCE = path.resolve(import.meta.dirname, "../../../release/root/ui/dashboard.js");
+/** What the page loads before it (dashboard.html). */
+const SHOWN = path.resolve(import.meta.dirname, "../../../release/shared/ui/shown-text.js");
 
 /** Anything the script touches as it loads (the document, storage, the stream): a stand-in
  *  that answers every use with another, so only what it defines is exercised. */
@@ -39,7 +41,7 @@ const load = () => {
     console,
   };
   vm.runInNewContext(
-    `${fs.readFileSync(SOURCE, "utf8")}\nthis.approvalUrl = approvalUrl; this.setState = (s) => { state = s; };`,
+    `${fs.readFileSync(SHOWN, "utf8")}\n${fs.readFileSync(SOURCE, "utf8")}\nthis.approvalUrl = approvalUrl; this.setState = (s) => { state = s; };`,
     context,
   );
   return context as {

@@ -11,16 +11,18 @@
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { keptAt, newlinesThen, notKept, repeat } from "../.harness/shared-text.ts";
 
-/** Controls, format characters (bidirectional overrides, zero-width), private-use and
- *  unassigned code points, half of a surrogate pair, and the line and paragraph separators.
- *  Then the marks and letters that show nothing and are not format characters: the
- *  combining grapheme joiner, the Hangul and Mongolian fillers, the two Khmer vowels Unicode
- *  says not to use (they draw nothing: the second fresh review of #227 U5), and the variation selectors
- *  past the sixteen (U+E0100 on), which no text needs and which carry hidden bytes. The first
- *  sixteen choose how a character looks (U+FE0F: as an emoji), so one is kept after a
- *  character; a run of them is the same smuggling, and from the second on they are unsafe. */
-const UNSAFE =
-  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u3164\uffa0\u{e0100}-\u{e01ef}]|(?<=[\ufe00-\ufe0f])[\ufe00-\ufe0f]/gu;
+/** What hides or reorders text: the one rule wherever desolate shows text another wrote.
+ *  Controls, format characters (bidirectional overrides, zero-width), private-use and
+ *  unassigned code points, half of a surrogate pair, the line and paragraph separators; then
+ *  what draws nothing and is no format character: the combining grapheme joiner, the Hangul
+ *  and Mongolian fillers, the two Khmer vowels Unicode says not to use (#227 U5), the blank
+ *  Braille pattern, and every variation selector (each can carry hidden bits, one after a
+ *  character as well as a run) but one: the text or emoji presentation selector (U+FE0E,
+ *  U+FE0F) directly after a pictograph, where it hides nothing and only chooses how a "⚠"
+ *  looks (marking every "⚠️" made the mark noise people learn to ignore). The pages' copy,
+ *  shared/ui/shown-text.js, is compared in T1. */
+export const UNSAFE =
+  /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Zl}\p{Zp}\u034f\u115f\u1160\u17b4\u17b5\u180b-\u180f\u2800\u3164\ufe00-\ufe0d\uffa0\u{e0100}-\u{e01ef}]|(?<!\p{Extended_Pictographic})[\ufe0e\ufe0f]/gu;
 
 /** The most of a text printable passes when its caller names no bound: a bound against a
  *  flood (a megabyte of status would fill a terminal's scrollback and a page's memory), not
@@ -80,14 +82,18 @@ declare namespace printable {
       /** one spelling of each character (NFC) */
       [args: [value: "cafe\u0301"], expected: "caf\u00e9"],
       [args: [value: 42], expected: "42"],
-      /** what shows nothing and is no format character: half of a pair, a filler, a run of
-       *  variation selectors (one, after a character, chooses how it looks, and stays) */
+      /** what shows nothing and is no format character: half of a pair, a filler, the blank
+       *  Braille pattern, a variation selector; but an emoji's own, after a pictograph, stays */
       [args: [value: "a\ud800b"], expected: "a?b"],
       [args: [value: "a\u3164b\u034fc"], expected: "a?b?c"],
       [args: [value: "README.md\u17b4"], expected: "README.md?"],
+      [args: [value: "two\u2800words"], expected: "two?words"],
       [args: [value: "\u2764\ufe0f ok"], expected: "\u2764\ufe0f ok"],
-      [args: [value: "x\ufe00\ufe01\ufe02"], expected: "x\ufe00??"],
+      [args: [value: "a\ufe0f \u2764\ufe0f\ufe0f \ufe0f"], expected: "a? \u2764\ufe0f? ?"],
+      [args: [value: "x\ufe00\ufe01\ufe02"], expected: "x???"],
       [args: [value: "x\u{e0100}\u{e0101}"], expected: "x??"],
+      /** the control: a heart with no selector, and a letter past ASCII, are text */
+      [args: [value: "\u2764 ok \u00e9"], expected: "\u2764 ok \u00e9"],
     ]
   >;
   /** a cut is said: text over the bound ends in the mark, which counts toward the bound;
