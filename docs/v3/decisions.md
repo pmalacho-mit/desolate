@@ -1005,7 +1005,7 @@ exec`'s client never reaches into the container), and kills only when asked (`--
 "y" at its question).
 
 **What an agent prints, on the way to the Mac's terminal**, is filtered
-(`shared/terminal-filter.ts`, for `agent attach` and for `exec` to a terminal): text, C0
+(`host/terminal-filter.ts`, for `agent attach` and for `exec` to a terminal): text, C0
 controls, CSI and single-character escapes pass (a TUI draws); every OSC, DCS, APC, PM and
 SOS string is dropped (OSC 52 writes the clipboard, iTerm2's OSC 1337 offers files, DCS feeds
 tmux integration and sixel parsers). tmux used to stand there; the emulator is outside every

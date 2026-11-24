@@ -403,7 +403,7 @@ output and the Mac's terminal drops xterm's window operations and concealed text
 control byte, a DEL, or 256 bytes of parameters inside the sequence, and the filter gave up
 on it and let it go as text. The terminal, reading the same bytes by the DEC parser, carries
 out the control and finishes the sequence. The filter now reads a CSI as that parser does.
-(`release/shared/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
+(`release/host/terminal-filter.ts`, `terminalFilter > ControlInsideCsi`)
 
 **`desolate status` broken in every running devcontainer after an upgrade.** A devcontainer
 got `desolate`, `/desolate/status` and the two git remote helpers as binds of single files

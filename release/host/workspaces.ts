@@ -31,7 +31,7 @@ import type { ProjectSize, Size } from "../shared/size.ts";
 import { RUN_MAX } from "../shared/run.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import type { RunResult } from "../shared/run.ts";
-import { terminalFilter } from "../shared/terminal-filter.ts";
+import { terminalFilter } from "./terminal-filter.ts";
 import { BEAT_MS, elapsed } from "../shared/step.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { retiredAt, stale } from "./retired.ts";

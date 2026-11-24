@@ -19,7 +19,7 @@ import { Readable } from "node:stream";
 import type { Backend } from "../host/approve-web.ts";
 import type { backend } from "../host/stack.ts";
 import type { AccountLine, AccountRequest } from "../shared/review-account.ts";
-import { parseEnv, planEnv, rewriteEnv } from "../shared/envfile.ts";
+import { parseEnv, planEnv, rewriteEnv } from "../host/envfile.ts";
 
 /** `body`: text as it is sent, or an object sent as its JSON. */
 type Request = {
@@ -158,7 +158,7 @@ export const withSecrets = (): Backend => {
         return { settings, running: 0, applied: 0 };
       },
     },
-    // The real planner (shared/envfile.ts), and an import that keeps nothing.
+    // The real planner (host/envfile.ts), and an import that keeps nothing.
     envImport: {
       plan: async (_domain, text) => planEnv(parseEnv(text)),
       apply: async (_domain, text) => {
