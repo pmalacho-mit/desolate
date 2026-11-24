@@ -381,7 +381,8 @@ declare namespace inboundRoute {
   type W1 = Invoke<typeof ws, [at: "dev/w1", listening: [5173, 5432]]>;
   type W2 = Invoke<typeof ws, [at: "dev/w2", listening: [5173, 8080]]>;
   type Both = [W1, W2];
-  /** HTTP goes to the workspace its Host names, on the port it came to; so does TLS by its SNI */
+  /** HTTP goes to the workspace its Host names, on the port it came to; so does TLS by its SNI
+   *  @principle P5 */
   export type ByName = [
     Expect<
       Invoke<
@@ -448,7 +449,10 @@ declare namespace inboundRoute {
     >,
   ];
   /** a Host for another workspace reaches that workspace or nothing, never the one listening:
-   *  w1 has nothing on 8080. Nor is a workspace's editor reached by a dev port */
+   *  w1 has nothing on 8080. Nor is a workspace's editor reached by a dev port
+   *  @principle P1
+   *  @principle P5
+   *  @realIn T2 03-ports, "two workspaces on the same port: one URL each, each reaching its own server; HMR's upgrade too" */
   export type AnotherWorkspace = [
     Expect<
       Invoke<
@@ -504,7 +508,8 @@ declare namespace inboundRoute {
     >,
   ];
   /** a request that names no workspace reaches nothing: a workspace not running, an address,
-   *  no Host at all, a name with more after it, a Host after the head */
+   *  no Host at all, a name with more after it, a Host after the head
+   *  @principle P5 */
   export type NamesNoOne = [
     Expect<
       Invoke<
@@ -915,7 +920,8 @@ declare namespace inboundRoute {
     >,
   ];
   /** HTTP on a raw port is routed by its name like any, never to the port's first workspace:
-   *  a Host for w2, which has nothing there; no Host; a request line cut off by the wait; TLS */
+   *  a Host for w2, which has nothing there; no Host; a request line cut off by the wait; TLS
+   *  @incident 2026-11-16-forwarder-preconnect */
   export type RawSpeaksHttp = [
     Expect<
       Invoke<
@@ -1041,7 +1047,8 @@ declare namespace inboundRoute {
 /** What a client that was silent on a raw port said first, once it spoke: a browser's (TLS,
  *  a request line, HTTP that is not one short nameless line, or the cut-off start of one),
  *  on a socket it preconnected and would use for a request naming another workspace, with
- *  that workspace's cookies (third review). Both ends are closed then. */
+ *  that workspace's cookies (third review). Both ends are closed then.
+ *  {@link spokeAsBrowser.Browser} {@link spokeAsBrowser.Client} */
 const spokeAsBrowser = (first: Heard) =>
   first.sniffed.kind === "tls" ||
   REQUEST_LINE.test(first.head.toString("latin1")) ||
@@ -1049,7 +1056,8 @@ const spokeAsBrowser = (first: Heard) =>
   (first.undecided === true && cutOff(first.head));
 
 declare namespace spokeAsBrowser {
-  /** a browser's socket, used now: TLS, a request, HTTP too long for one line, the start of one */
+  /** a browser's socket, used now: TLS, a request, HTTP too long for one line, the start of one
+   *  @incident 2026-11-16-forwarder-preconnect */
   export type Browser = Table<
     typeof spokeAsBrowser,
     [
@@ -1089,14 +1097,15 @@ declare namespace spokeAsBrowser {
  *  could be read by a browser as the answer to the request it later sends on a preconnected
  *  socket, a page at another workspace's origin (final review; shared/sniff.ts, greetingIs).
  *  So: closed if it starts like an HTTP (or ICY) answer, held while it still could, sent once
- *  it can no longer become one. No database's greeting starts so. */
+ *  it can no longer become one. {@link greetingGoes.Greetings} No database's greeting starts so. */
 const greetingGoes = (greeting: Buffer): "close" | "hold" | "send" => {
   const verdict = greetingIs(greeting.toString("latin1"));
   return verdict === "answer" ? "close" : verdict === "more" ? "hold" : "send";
 };
 
 declare namespace greetingGoes {
-  /** a greeting that starts like an HTTP or ICY answer is closed; one that still could, held */
+  /** a greeting that starts like an HTTP or ICY answer is closed; one that still could, held
+   *  @incident 2026-11-16-forwarder-preconnect */
   export type Greetings = Table<
     typeof greetingGoes,
     [
@@ -1242,7 +1251,8 @@ declare namespace pagesRoute {
     ]
   >;
   /** this port is the editors': a workspace's dev name, a name of no one, no name, an
-   *  address, are refused; TLS, which no page here speaks, is closed */
+   *  address, are refused; TLS, which no page here speaks, is closed
+   *  @principle P1 */
   export type WrongHost = [
     Expect<
       Invoke<
@@ -1403,7 +1413,8 @@ declare namespace pagesRoute {
 }
 
 /** Which workspace a port spoken without a name reaches: the one that had it, while it still
- *  listens there; else the first that listens now. */
+ *  listens there; else the first that listens now. {@link rawOwnerFor.Owner}
+ *  {@link rawOwnerFor.Unasked} */
 const rawOwnerFor = (current: string | undefined, holders: { vm: string }[]) =>
   !current || !holders.some((entry) => entry.vm === current) ? holders[0]!.vm : current;
 
@@ -1521,11 +1532,12 @@ const unasked = <E extends { listeners: ReadonlySet<number>; answeredAt: number 
     : { ...entry, listeners: new Set<number>(), low: [], more: 0, past: 0 };
 
 /** The ports a workspace is asked to keep taken, so its servers move on: a raw port another
- *  workspace had first and the host forwards. (Not a port the Mac holds: kept taken in the VM,
- *  it stopped a program there from using it at all, though only forwarding was impossible
- *  (dogfooding: an API meant only for its own workspace's Vite proxy could not have 3000,
- *  which another macOS user held; Express 5 said "listening" while every request was reset,
- *  depending on which started first). Such a port is reported as not forwarded instead.) */
+ *  workspace had first and the host forwards. {@link reservedFor.Reserved} (Not a port the Mac
+ *  holds: kept taken in the VM, it stopped a program there from using it at all, though only
+ *  forwarding was impossible (dogfooding: an API meant only for its own workspace's Vite proxy
+ *  could not have 3000, which another macOS user held; Express 5 said "listening" while every
+ *  request was reset, depending on which started first). Such a port is reported as not forwarded
+ *  instead.) */
 const reservedFor = (
   entry: { vm: string; listeners: ReadonlySet<number> },
   forwarded: Iterable<number>,
@@ -1569,7 +1581,7 @@ const editorTokenOf = (value: unknown) =>
 const tokenEpochOf = (value: unknown) =>
   typeof value === "number" && Number.isSafeInteger(value) ? value : 0;
 /** The folder the editor opens: the workspace's word, if it is a path under /workspaces and
- *  the folder is not the workspace file register chose. */
+ *  the folder is not the workspace file register chose. {@link folderFrom.Folders} */
 const folderFrom = (current: string, value: unknown) =>
   !current.startsWith("workspace:") &&
   typeof value === "string" &&
@@ -1583,12 +1595,12 @@ const folderFrom = (current: string, value: unknown) =>
 const FORWARDS_MOST = 256;
 
 /** Fail closed on what the VM says: whole numbers from PORTS.min, and FORWARDS_MOST of them.
- *  The editor's two in-VM ports are never dev-server ports: a dev hostname must not
- *  reach the editor, and nothing may reach its server around its gate. Nor any port
- *  desolate itself uses on this machine (`ours`: a VM's ssh, a link): a workspace
- *  listening there must not get the host to bind it. What is left out for a bound's sake
- *  is said: `low`, the ports below PORTS.min (the Mac's system's), and `past`, how many
- *  came after the first FORWARDS_MOST. */
+ *  {@link listenersFrom.Listeners} {@link listenersFrom.Past} The editor's two in-VM ports are
+ *  never dev-server ports: a dev hostname must not reach the editor, and nothing may reach its
+ *  server around its gate. Nor any port desolate itself uses on this machine (`ours`: a VM's ssh, a
+ *  link): a workspace listening there must not get the host to bind it.
+ *  {@link listenersFrom.Listeners} What is left out for a bound's sake is said: `low`, the ports
+ *  below PORTS.min (the Mac's system's), and `past`, how many came after the first FORWARDS_MOST. */
 const listenersFrom = (ports: number[], ours: ReadonlySet<number>) => {
   const whole = ports.filter((port) => Number.isInteger(port) && port >= 1 && port <= PORTS.max);
   const may = whole.filter(
@@ -1776,7 +1788,11 @@ declare namespace folderFrom {
 declare namespace listenersFrom {
   /** what the VM says it listens on, kept only if the host may bind it: from 1024, a whole
    *  number, not the editor's ports (its server, its gate, the host's editors' port), not a
-   *  port desolate itself uses here */
+   *  port desolate itself uses here
+   *  @principle P5
+   *  @principle P1
+   *  @incident 2026-11-12-ports-desolate-uses
+   *  @realIn T2 03-ports, "the forwarder listens on 127.0.0.1 only, and never below port 1024" */
   export type Listeners = Expect<
     Invoke<
       typeof shown,
@@ -1862,7 +1878,8 @@ declare namespace folderFor {
 }
 
 /** A workspace's editor's address, with its token, for the dashboard: only while the editors'
- *  port is this daemon's, and the token was made after the last retiring. */
+ *  port is this daemon's, and the token was made after the last retiring.
+ *  {@link editorAddress.Address} {@link editorAddress.None} */
 const editorAddress = (
   entry: {
     domain: string;

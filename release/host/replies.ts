@@ -38,7 +38,7 @@ import type { answered, changed, cutOf } from "../.harness/host-replies.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 
 /** Where in an answer a part is not in its form: the path to it from the top ("keys[0].role"),
- *  in the Mac's own names and numbers, never the answer's bytes. */
+ *  in the Mac's own names and numbers, never the answer's bytes. {@link replyOf.Says} */
 class Unformed extends Error {}
 const unformed = (at: string): never => {
   throw new Unformed(at || "the answer itself");
@@ -60,7 +60,7 @@ const maybe = <T>(part: Part<T>): Maybe<T> =>
   Object.assign((value: unknown, at: string) => part(value, at), { maybe: true as const });
 
 /** An object of these fields, and of no others: a field it has that the Mac does not read is
- *  not passed on. Not an array, not null. */
+ *  not passed on. {@link replyOf.Drops} Not an array, not null. */
 const shape =
   <F extends Fields>(fields: F): Part<Shaped<F>> =>
   (value, at) => {
@@ -97,9 +97,9 @@ const text =
       : unformed(at);
 
 /** One line of text the Mac shows (a title, a name, a sentence): made printable here
- *  (shared/text.ts), so it holds no newline, tab or control, and cut at `most` with the mark
- *  rather than refused. A title from before a bound existed shows, cut; it does not refuse the
- *  list it is in. */
+ *  (shared/text.ts), so it holds no newline, tab or control, {@link line.OneLine} and cut at `most`
+ *  with the mark rather than refused. A title from before a bound existed shows, cut; it does not
+ *  refuse the list it is in. */
 const line =
   (most: number): Part<string> =>
   (value, at) =>
@@ -257,7 +257,7 @@ const listed = <T>(item: Part<T>) => shape({ items: list(item), total: count, fr
 
 /** One checkout of a workspace's: a worktree's name is one name (its branch with each `/` a
  *  `-`: root/domains.ts plan), and its path is the one the Mac builds from its repository, kind
- *  and name (shared/plan.ts), so never a path the root chose. */
+ *  and name (shared/plan.ts), so never a path the root chose. {@link workspaceRecord.Refuses} */
 const checkoutFields = shape({
   repo,
   kind: oneOf("main", "worktree"),
@@ -421,14 +421,16 @@ declare namespace workspaceRecord {
 }
 
 /** Whether a record of the root's names its own workspace's VM, in that domain: the VM is a
- *  hash of the domain and the workspace's name that the Mac computes itself. */
+ *  hash of the domain and the workspace's name that the Mac computes itself.
+ *  {@link isOwnVm.Records} */
 export const isOwnVm = (domain: string, w: { domain?: unknown; workspace: unknown; vm: unknown }) =>
   (w.domain === undefined || w.domain === domain) &&
   isSlug(w.workspace) &&
   w.vm === workspaceVmName(INSTANCE, domain, w.workspace);
 
 declare namespace isOwnVm {
-  /** the VM a record names is the one the host computes for that workspace, in that domain */
+  /** the VM a record names is the one the host computes for that workspace, in that domain
+   *  @incident 2026-11-16-root-named-vm */
   export type Records = Table<
     typeof isOwnVm,
     [
@@ -463,7 +465,8 @@ declare namespace isOwnVm {
 
 /** The root's word about one workspace, checked against what the host computes itself: a VM
  *  named in its answer is a VM the host stops, starts, destroys and writes state for (audit,
- *  2026-11-16: an answer naming another domain's VM would have had it removed). */
+ *  2026-11-16: an answer naming another domain's VM would have had it removed).
+ *  {@link vouched.Passes} {@link vouched.Refuses} */
 const vouched = <W extends { domain: string; workspace: string; vm: string }>(
   w: W,
   domain: unknown,
@@ -498,7 +501,8 @@ declare namespace vouched {
     "=",
     W
   >;
-  /** another domain's VM, another workspace, a plan named for another domain: refused */
+  /** another domain's VM, another workspace, a plan named for another domain: refused
+   *  @incident 2026-11-16-root-named-vm */
   export type Refuses = Table<
     typeof answered,
     [
@@ -773,7 +777,8 @@ const about =
 const GIT_PUSH_SAID = 50;
 
 /** One page of a diff: a later page starts past this one and within the diff, so asking for
- *  the next always moves on and ends (and a count of what was shown has a whole to be of). */
+ *  the next always moves on and ends (and a count of what was shown has a whole to be of).
+ *  {@link diffPage.Pages} */
 const diffPage: Part<{ text: string; from: number; next: number | null; total: number }> = (
   value,
   at,
@@ -996,7 +1001,7 @@ const ranked = listed(shape({ host: line(SAID.name), count }));
 
 /** Keys the root's answer says it made: their roles, which must be the ones asked for (a read
  *  key unless anonymous, a write key only to push). Their public halves are not taken from it:
- *  repos.ts reads them from the keyring itself. */
+ *  repos.ts reads them from the keyring itself. {@link prepared.Roles} */
 const prepared = (value: unknown, asked: Asked) => {
   const answer = shape({
     repo,
@@ -1069,7 +1074,8 @@ declare namespace prepared {
 
 /** Where the root's proxies listen (root/proxy/as-proxy.ts proxyOutDir, under root/layout.ts's
  *  ROOT.proxies): a workspace's is `<domain>/<vm>.sock` there. The link is wired to the socket
- *  the Mac names for the workspace it asked about, never to one an answer chose. */
+ *  the Mac names for the workspace it asked about, never to one an answer chose.
+ *  {@link proxySocket.Socket} */
 const PROXY_SOCKETS = "/var/lib/desolate-proxies/out";
 const proxySocket = (value: unknown, asked: Asked) => {
   const socket = `${PROXY_SOCKETS}/${String(asked.domain)}/${String(asked.vm)}.sock`;
@@ -1113,7 +1119,7 @@ declare namespace proxySocket {
 }
 
 /** A domain removed: the one asked about. Only then does the Mac remove its folder and its
- *  templates, by the name the person gave (workspaces.ts remove). */
+ *  templates, by the name the person gave (workspaces.ts remove). {@link removedDomain.Removed} */
 const removedDomain = (value: unknown, asked: Asked) => {
   const answer = shape({ domain: text(NAMES.slug), kept: line(SAID.sentence) })(value, "");
   if (answer.domain !== asked.slug || !isSlug(asked.slug))
@@ -1218,7 +1224,7 @@ declare namespace pushPlan {
   >;
 }
 
-/** An answer the Mac does not read: nothing of it is passed on. */
+/** An answer the Mac does not read: nothing of it is passed on. {@link replyOf.Ignored} */
 const ignored = (): void => {};
 
 type Asked = Record<string, unknown>;
@@ -1460,7 +1466,7 @@ export type Answer<O extends Op> = ReturnType<(typeof REPLIES)[O]>;
 export type Stated = Op extends infer O ? (O extends `stated.${infer K}` ? K : never) : never;
 
 /** The root's refusal, as the person is shown it: its words and its fix as text (printable),
- *  and an exit code from 1 to 255, so a refusal never exits 0. */
+ *  and an exit code from 1 to 255, so a refusal never exits 0. {@link opened.Envelope} */
 export const refusalIn = (reply: unknown): Refusal => {
   const r = (typeof reply === "object" && reply !== null ? reply : {}) as Record<string, unknown>;
   const code = r.code;
@@ -1475,7 +1481,7 @@ export const refusalIn = (reply: unknown): Refusal => {
 
 /** The root's envelope around an answer (root/rootctl.ts): `{ok: true, result}`, taken as
  *  replyOf takes `result`; `{ok: false, ...}`, its refusal (refusalIn); anything else, an
- *  answer not in its form. */
+ *  answer not in its form. {@link opened.Envelope} */
 export const opened = <O extends Op>(op: O, reply: unknown, asked: Asked = {}): Answer<O> => {
   const r = (typeof reply === "object" && reply !== null ? reply : {}) as Record<string, unknown>;
   if (r.ok === true) return replyOf(op, r.result, asked);
@@ -1521,7 +1527,7 @@ declare namespace opened {
 }
 
 /** The answer to `op`, asked with `asked`, as the Mac takes it; or a refusal that says which
- *  operation's answer was not in its form, and where. */
+ *  operation's answer was not in its form, and where. {@link replyOf.Says} */
 export const replyOf = <O extends Op>(op: O, value: unknown, asked: Asked = {}): Answer<O> => {
   try {
     return REPLIES[op](value, asked) as Answer<O>;

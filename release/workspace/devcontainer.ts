@@ -414,7 +414,8 @@ export const overrideOf = (
 
 declare namespace overrideOf {
   /** a single-container spec: the project's, with the VM's paths, the VM's network, and
-   *  desolate's shares, tools and environment added */
+   *  desolate's shares, tools and environment added
+   *  @incident 2026-11-16-status-bind */
   export type SingleContainer = Expect<
     Invoke<
       typeof overrideOf,
@@ -541,7 +542,8 @@ declare namespace overrideOf {
 
   /** a compose spec: the same shares in its primary service, read-only written in the target
    *  (the CLI drops every other option), the project's own mounts first and /workspaces last,
-   *  so it is mounted over whatever the compose file puts there. Its network stays its own. */
+   *  so it is mounted over whatever the compose file puts there. Its network stays its own.
+   *  @incident 2026-11-16-status-bind */
   export type Compose = Expect<
     Invoke<
       typeof overrideOf,

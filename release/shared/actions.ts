@@ -180,9 +180,9 @@ export const hostArgv = (kind: unknown, args: unknown): string[] | null => {
 };
 
 /** Why hostArgv refuses this action, as a sentence (R3: a bound that was hit is named, with
- *  its limit and the value), or null when it takes it. For whoever shows the refusal (the
- *  root's state service, the host's daemon): the bounds by name, and otherwise that the
- *  arguments are not ones the action takes. */
+ *  its limit and the value) {@link actionRefusal.Says}, or null when it takes it. For whoever shows
+ *  the refusal (the root's state service, the host's daemon): the bounds by name, and otherwise
+ *  that the arguments are not ones the action takes. */
 export const actionRefusal = (kind: unknown, args: unknown): string | null => {
   if (hostArgv(kind, args) !== null) return null;
   if (typeof kind !== "string" || !Object.hasOwn(HOST_ACTIONS, kind))
@@ -209,7 +209,8 @@ export const actionRefusal = (kind: unknown, args: unknown): string | null => {
 };
 
 declare namespace actionRefusal {
-  /** the bound that was hit, by name and number; and what the host does not do at all */
+  /** the bound that was hit, by name and number; and what the host does not do at all
+   *  @requirement R3 */
   export type Says = Table<
     typeof actionRefusal,
     [

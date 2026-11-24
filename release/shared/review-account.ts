@@ -336,7 +336,8 @@ declare namespace accountLines {
     [{ diff: { text: "+a\n"; from: 0; next: null; total: 3 } }]
   >;
   /** a reviewer that stopped before its answer (killed, crashed, cancelled) is said so, as
-   *  the answer: its reader never waits for one that will not come, or takes progress for it */
+   *  the answer: its reader never waits for one that will not come, or takes progress for it
+   *  @requirement R4 */
   export type EndedEarly = [
     Expect<
       Invoke<
@@ -453,7 +454,8 @@ declare namespace accountLines {
     >,
   ];
   /** a line with no end is not held without end: past the bound it is refused, as that
-   *  bound, when the bound is passed and not when the stream ends */
+   *  bound, when the bound is passed and not when the stream ends
+   *  @requirement R7 */
   export type TooLong = Expect<
     Invoke<
       typeof all,

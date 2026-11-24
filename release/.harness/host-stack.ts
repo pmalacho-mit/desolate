@@ -25,7 +25,9 @@ const read = <T>(name: string, fallback: T): T => {
   }
 };
 
-/** What the root answers, by op, from now on in this test (and nothing asked yet). */
+/** What the root answers, by op, from now on in this test (and nothing asked yet).
+ *  @standsIn release/root/rootctl.ts (the root's CLI service, as host/replies.ts reads its answers)
+ *  @realIn T2 01-root, "bootstrap: one command from an empty home to a working stack" */
 export const rootAnswers = (answers: Record<string, unknown>) => {
   fs.writeFileSync(file("answers"), JSON.stringify(answers));
   fs.writeFileSync(file("asked"), "[]");
@@ -84,7 +86,9 @@ const noVm = () => {
   });
 };
 
-/** host/stack.ts, with no VM behind it. */
+/** host/stack.ts, with no VM behind it.
+ *  @standsIn release/host/stack.ts
+ *  @realIn T2: every suite runs the real stack.ts against the fake backend, and T4 on real VMs (tests/v3/t3/01-boundaries.test.ts, "T3 bootstrap on real VMs: isolated, and doctor passes") */
 export const fakeStack = {
   rootctl,
   // A brief call is a call: here, nothing is waited on.
