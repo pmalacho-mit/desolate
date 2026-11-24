@@ -890,8 +890,14 @@ const watchDomains = () => {
   for (const [dir, names] of wanted) {
     if (watching.has(dir) || !fs.existsSync(dir)) continue;
     try {
+      // A push waiting for its approval is looked at at once: it is the person's own (a raw
+      // push from the root's terminal or the git VM; a workspace offers, it cannot push), so
+      // it needs no pace, and paced it could be approved before the state ever held it. Then
+      // `desolate events` never said approval-waiting (T2 11, traced on 2026-11-24: the
+      // request written, approved 868 ms later, no look between: one had begun just before).
+      const at = dir === APPROVALS ? changed : nudged;
       const watcher = fs.watch(dir, (_, file) => {
-        if (!file || !names || names.has(String(file))) nudged();
+        if (!file || !names || names.has(String(file))) at();
       });
       watcher.on("error", (error) => {
         console.error(`stated: no longer watching ${dir}: ${String(error)}`);

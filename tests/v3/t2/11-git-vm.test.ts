@@ -173,19 +173,30 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     after(() => listener.kill());
     await sleep(1500);
     // A line of 2 MiB in the pusher's log, past the daemon's look of 1 MiB: it once stopped
-    // every event after it, for good. Written once the daemon reads the log (its first look
-    // starts where the log is), as root, who writes that log. The push's event below is the
-    // test; the daemon's log saying it skipped the line is its control (the line was read).
-    await sleep(2500);
-    const long = stack.inRoot(
-      [
-        "bash",
-        "-c",
-        'f=/var/lib/desolate-root/pusher.log; [ -f "$f" ] && { head -c 2097152 /dev/zero | tr \'\\0\' x; echo; } >>"$f" && echo written',
-      ],
-      { root: true },
-    );
-    assert.equal(long.stdout.trim(), "written", long.stderr);
+    // every event after it, for good. Written as root, who writes that log, once the daemon
+    // reads the log: its first look starts where the log is, and comes when it comes (a look
+    // every 2 s, slower under load), so the line is written again until the daemon's log
+    // says it skipped one (the control: the line was read). The push's event below is the test.
+    const daemonLog = path.join(stack.home, "logs", "daemon.log");
+    const skipped = /the pusher's log has a line longer than 1\.0 MiB: skipped to its end/;
+    let read = false;
+    for (let i = 0; i < 5 && !read; i++) {
+      const from = fs.existsSync(daemonLog) ? fs.statSync(daemonLog).size : 0;
+      const long = stack.inRoot(
+        [
+          "bash",
+          "-c",
+          'f=/var/lib/desolate-root/pusher.log; [ -f "$f" ] && { head -c 2097152 /dev/zero | tr \'\\0\' x; echo; } >>"$f" && echo written',
+        ],
+        { root: true },
+      );
+      assert.equal(long.stdout.trim(), "written", long.stderr);
+      for (let waited = 0; waited < 8000 && !read; waited += 250) {
+        await sleep(250);
+        read = skipped.test(fs.readFileSync(daemonLog, "utf8").slice(from));
+      }
+    }
+    assert.ok(read, "control: the long line was read, and skipped");
     const terminal = client("desolate-git.localhost", port);
     await terminal.login(/(http:\S+)/.exec(stack.desolate("git", "acme/widgets").stdout)![1]!);
     const opened = await terminal.post("/session", { repo: "acme/widgets" });
@@ -292,16 +303,72 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
     assert.equal((await said("approval-waiting", "root")).branch, "from-git");
     assert.equal((await said("approved", "host")).branch, "from-git");
     const pushed = await said("pushed", "pusher");
-    assert.match(
-      fs.readFileSync(path.join(stack.home, "logs", "daemon.log"), "utf8"),
-      /the pusher's log has a line longer than 1\.0 MiB: skipped to its end/,
-      "control: the long line was read, and skipped",
-    );
     assert.deepEqual(
       [pushed.repo, pushed.branch, pushed.commit, pushed.onto],
       ["acme/widgets", "from-git", commit, null],
       "the pusher says what the remote now has",
     );
+  });
+
+  it("a push waiting for its approval is in `desolate events` at once, even just after another look (control: the look it came after)", async () => {
+    const heard: { at: number; event: Record<string, unknown> }[] = [];
+    const listener = spawn(path.join(REPO_ROOT, "release", "cli.sh"), ["events"], {
+      env: { ...process.env, ...stack.env },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let partial = "";
+    listener.stdout.on("data", (chunk: Buffer) => {
+      partial += chunk.toString();
+      for (let end = partial.indexOf("\n"); end >= 0; end = partial.indexOf("\n")) {
+        heard.push({ at: Date.now(), event: JSON.parse(partial.slice(0, end)) });
+        partial = partial.slice(end + 1);
+      }
+    });
+    after(() => listener.kill());
+    await sleep(2000);
+    // In the root: a file of the root's that the state is paced for (one in the host queue
+    // that is no request), so that the state service has just begun a look; 300 ms later a raw push's
+    // request, as root/raw-push.ts writes it, from a process that waits. Paced, it waited
+    // for the second after the first look, and was seen some 700 ms or more after it was
+    // written. (Not the push of the test above: its review takes as long as it takes.)
+    const nonce = "ab".repeat(16);
+    const made = stack.inRoot([
+      "node",
+      "-e",
+      `const fs = require("fs"), cp = require("child_process");
+const child = cp.spawn("sleep", ["120"], { detached: true, stdio: "ignore" });
+child.unref();
+const stat = fs.readFileSync("/proc/" + child.pid + "/stat", "latin1");
+const start = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+fs.writeFileSync("/var/lib/desolate/host-queue/pace-test", "[]");
+setTimeout(() => {
+  const message = "desolate push approval v2\\nrepo: acme/widgets\\nbranch: at-once\\ncommit: ${"1".repeat(40)}\\nonto: none\\nnonce: ${nonce}\\n";
+  const file = "/var/lib/desolate/approvals/${nonce}.json";
+  fs.writeFileSync(file + ".tmp", JSON.stringify({ message, summary: "a test", at: new Date().toISOString(), pid: child.pid, start }));
+  fs.renameSync(file + ".tmp", file);
+  console.log(Date.now() + " " + child.pid);
+}, 300);`,
+    ]);
+    assert.equal(made.code, 0, made.stderr);
+    const [written, pid] = made.stdout.trim().split(" ").map(Number) as [number, number];
+    try {
+      for (let i = 0; i < 40 && !heard.some((h) => h.event.branch === "at-once"); i++)
+        await sleep(250);
+      const seen = heard.find(
+        (h) => h.event.type === "approval-waiting" && h.event.branch === "at-once",
+      );
+      assert.ok(seen, `approval-waiting heard: ${JSON.stringify(heard.map((h) => h.event.type))}`);
+      console.log(
+        `# a push waiting for approval in the events ${seen!.at - written} ms after it was written`,
+      );
+      assert.ok(seen!.at - written <= 600, `at once: ${seen!.at - written} ms`);
+    } finally {
+      stack.inRoot([
+        "bash",
+        "-c",
+        `kill ${pid}; rm -f /var/lib/desolate/approvals/${nonce}.json /var/lib/desolate/host-queue/pace-test`,
+      ]);
+    }
   });
 
   it("the terminal answers nothing to another origin, or without its cookie", async () => {
@@ -743,8 +810,7 @@ describe("T2 the git VM: git in a browser tab, pushes through the approval page"
       60_000,
     );
     const left = `fetch("/sessions", { credentials: "same-origin", headers: window.desolateKey.headers }).then((r) => r.json()).then((b) => b.left)`;
-    await tab.evaluate("setTimeout(() => location.reload(), 50), true");
-    await sleep(1000);
+    await tab.reload();
     await tab.until(
       `document.body.innerText.includes("from-git is at dev/from-git") && document.getElementById("status").textContent === ""`,
       "the same shell, as it was",
