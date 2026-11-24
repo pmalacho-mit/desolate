@@ -6,7 +6,7 @@
 [subrepo]
 	remote = https://github.com/pmalacho-mit/isolated-devcontainers-suede
 	branch = release
-	commit = 6c8433ca16a0f6ea58a5cad4e40413da2e606c8e
-	parent = 7ea18b757e54bd0b5c0c9ce36e62fa8522cf3fb9
+	commit = 2fb4a35da5433382f48959672b640a5ed587692a
+	parent = cad9fe6cf6c4e8ee6eb9a467d570a99f873dd1b6
 	method = merge
 	cmdver = 0.4.9
