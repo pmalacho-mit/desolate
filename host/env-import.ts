@@ -13,7 +13,14 @@ import type { Decision, PlanRow } from "./envfile.ts";
 import { paths } from "./paths.ts";
 import type { SecretListed, SecretOps } from "./domains.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  Caught,
+  Expect,
+  Given,
+  Invoke,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Refusal } from "../shared/exit.ts";
 import type { emptyHome, readState } from "../.harness/home.ts";
 import type { quietOps } from "../.harness/host-env-import.ts";
 
@@ -92,14 +99,28 @@ declare namespace checkChoice {
     "=",
     { kind: "secret"; hosts: ["api.example.com"]; headers: null }
   >;
-  /** a secret with nowhere to go, or a host that is a whole domain's suffix, is refused */
-  export type NoHosts = Throws<
-    Invoke<typeof checkChoice, [choice: { key: "K"; kind: "secret"; hosts: [] }]>,
-    "K: a secret names the hosts it may go to (a name, or *. and a name), not ''"
+  /** a secret with nowhere to go, or a host that is a whole domain's suffix, is refused as a
+   *  usage error, with the flag written as it should be */
+  export type NoHosts = Expect<
+    Caught<Invoke<typeof checkChoice, [choice: { key: "K"; kind: "secret"; hosts: [] }]>, Refusal>,
+    "matches",
+    {
+      message: "K: a secret names the hosts it may go to (a name, or *. and a name), not ''";
+      fix: "--choose K=secret:api.example.com[@authorization]";
+      code: 64;
+    }
   >;
-  export type BareSuffix = Throws<
-    Invoke<typeof checkChoice, [choice: { key: "K"; kind: "secret"; hosts: ["*"] }]>,
-    "K: a secret names the hosts it may go to (a name, or *. and a name), not '*'"
+  export type BareSuffix = Expect<
+    Caught<
+      Invoke<typeof checkChoice, [choice: { key: "K"; kind: "secret"; hosts: ["*"] }]>,
+      Refusal
+    >,
+    "matches",
+    {
+      message: "K: a secret names the hosts it may go to (a name, or *. and a name), not '*'";
+      fix: "--choose K=secret:api.example.com[@authorization]";
+      code: 64;
+    }
   >;
 }
 
@@ -230,18 +251,20 @@ declare namespace decide {
       >,
     ]
   >;
-  /** a key the file does not set cannot be chosen */
+  /** a key the file does not set cannot be chosen: a usage error */
   export type NotThere = Given<
     [Fresh],
-    [
-      Throws<
+    Expect<
+      Caught<
         Invoke<
           typeof decide,
           [domain: "acme", text: "PORT=3000\n", choices: [{ key: "NOPE"; kind: "value" }]]
         >,
-        "NOPE is not in that .env"
+        Refusal
       >,
-    ]
+      "matches",
+      { message: "NOPE is not in that .env"; fix: "choose only keys the file sets"; code: 64 }
+    >
   >;
 }
 

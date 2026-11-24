@@ -435,7 +435,8 @@ declare namespace prepare {
     >,
     { instanceOf: Stop; message: "no clone of acme/app here" }
   >;
-  /** the consumer's clone, then the dependency's mirror: both are desolate's, made on the Mac */
+  /** the consumer's clone, then the dependency's mirror: both are desolate's, made on the Mac,
+   *  and the refusal says the command that makes each */
   export type NeedsCloneAndMirror = [
     Throws<
       Invoke<
@@ -451,7 +452,11 @@ declare namespace prepare {
           at: Invoke<typeof gitVm, [clones: [], mirrors: []]>,
         ]
       >,
-      { instanceOf: Stop; message: "no clone of acme/app here" }
+      {
+        instanceOf: Stop;
+        message: "no clone of acme/app here";
+        fix: "on the Mac: desolate git acme/app";
+      }
     >,
     Throws<
       Invoke<
@@ -467,7 +472,11 @@ declare namespace prepare {
           at: Invoke<typeof gitVm, [clones: ["acme/app"], mirrors: ["acme/other"]]>,
         ]
       >,
-      { instanceOf: Stop; message: "desolate holds no mirror of acme/lib" }
+      {
+        instanceOf: Stop;
+        message: "desolate holds no mirror of acme/lib";
+        fix: "on the Mac: desolate clone acme/lib";
+      }
     >,
   ];
   /** suede's `--remote` may only say again where the push goes: the dependency named. Never

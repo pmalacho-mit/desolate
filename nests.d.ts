@@ -37,6 +37,17 @@ declare module "*/dsl.import.meta.vitest" {
   export type Only<T = any> = any;
   export type Todo<Reason extends string = ""> = any;
   export type Configure<C = any, T = any> = any;
+  export type Caught<Expr = any, E = any> = any;
+  export type Spy<F = any, Impl = any> = any;
+  export type Calls<S = any> = any;
+  export type FakeTimers<Now = any> = any;
+  export type AdvanceTimers<Ms = any> = any;
+  export type StubEnv<Name extends string = string, Value = any> = any;
+  export type TempDir<Files = any> = any;
+  export type WriteFile<Path extends string = string, Text = any> = any;
+  export type Exists<Path extends string = string> = any;
+  export type ListDir<Path extends string = string> = any;
+  export type Repeat<Text = any, Count = any> = any;
   // Copied from the real DSL.
   export type Widen<T> = T extends string
     ? string
@@ -87,6 +98,17 @@ declare module "*/dsl.import.meta.vitest.ts" {
   export type Only<T = any> = any;
   export type Todo<Reason extends string = ""> = any;
   export type Configure<C = any, T = any> = any;
+  export type Caught<Expr = any, E = any> = any;
+  export type Spy<F = any, Impl = any> = any;
+  export type Calls<S = any> = any;
+  export type FakeTimers<Now = any> = any;
+  export type AdvanceTimers<Ms = any> = any;
+  export type StubEnv<Name extends string = string, Value = any> = any;
+  export type TempDir<Files = any> = any;
+  export type WriteFile<Path extends string = string, Text = any> = any;
+  export type Exists<Path extends string = string> = any;
+  export type ListDir<Path extends string = string> = any;
+  export type Repeat<Text = any, Count = any> = any;
   // Copied from the real DSL.
   export type Widen<T> = T extends string
     ? string

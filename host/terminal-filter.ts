@@ -10,8 +10,8 @@
 // tmux used to stand between the two, interpreting all of it itself; with the agent's terminal
 // streamed straight through, this does that part of tmux's job.
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { byteByByte, inChunks, repeat } from "../.harness/host-terminal.ts";
+import type { Expect, Invoke, Repeat, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { byteByByte, inChunks } from "../.harness/host-terminal.ts";
 
 const ESC = 0x1b;
 const BEL = 0x07;
@@ -191,10 +191,7 @@ declare namespace terminalFilter {
   export type NeverEnds = Expect<
     Invoke<
       typeof inChunks,
-      [
-        make: typeof terminalFilter,
-        chunks: ["\u001b]52;", Invoke<typeof repeat, [text: "x", count: 70000]>, "after"],
-      ]
+      [make: typeof terminalFilter, chunks: ["\u001b]52;", Repeat<"x", 70000>, "after"]]
     >["length"],
     "=",
     4471
@@ -232,10 +229,7 @@ declare namespace terminalFilter {
   export type TooLong = Expect<
     Invoke<
       typeof inChunks,
-      [
-        make: typeof terminalFilter,
-        chunks: ["a\u001b[", Invoke<typeof repeat, [text: "1;", count: 200]>, "8mb"],
-      ]
+      [make: typeof terminalFilter, chunks: ["a\u001b[", Repeat<"1;", 200>, "8mb"]]
     >,
     "=",
     "ab"
