@@ -74,9 +74,9 @@ What happens, in the git VM (no network, no keys):
    `downstream/you/app-<commit>`.
 5. **The pull request**: the dependency's Action rebuilds the branch onto its `main` and opens
    the pull request. On the Mac, `desolate upstream` waits for it (up to three minutes, through
-   GitHub's public API; `GH_TOKEN` lifts the rate limit) and prints its link: a draft if replaying
-   the change onto the current release had conflicts, "nothing new" if main already had it, the
-   Action's run if it failed. `--no-wait` skips the wait. In the git terminal there is no
+   GitHub's API, with `GH_TOKEN` if it is set, else your own `gh`'s token, sent only to
+   api.github.com) and prints its link: a draft if replaying the change onto the current
+   release had conflicts, "nothing new" if main already had it, the Action's run if it failed. `--no-wait` skips the wait. In the git terminal there is no
    network, so nothing waits: the pull request appears on the dependency.
 
 `--remote <address>` is suede's flag and is accepted only if it names the same repository;
