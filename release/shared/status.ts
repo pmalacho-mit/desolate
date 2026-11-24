@@ -517,7 +517,10 @@ const packedRef = (reposDir: string, file: string, branch: string): string | nul
     fs.closeSync(opened.fd);
   }
 };
-const refCommit = (reposDir: string, common: string, branch: string): string | null => {
+/** The commit `branch` names in the git directory `common` (its loose ref, else its line in
+ *  packed-refs), read as data under `reposDir`, or null. No process: also how the root knows a
+ *  mirror's branch has not moved (domains.ts, objectOnDefault). */
+export const refCommit = (reposDir: string, common: string, branch: string): string | null => {
   const loose = readPlain(reposDir, path.join(common, "refs", "heads", branch), 128, true);
   if (loose !== null) return COMMIT_LINE.exec(loose)?.[1] ?? null;
   return packedRef(reposDir, path.join(common, "packed-refs"), branch);
