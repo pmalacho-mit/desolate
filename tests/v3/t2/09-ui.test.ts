@@ -1842,7 +1842,11 @@ describe("T2 section 4.8: the root UI", () => {
     // window, found 2026-11-23), its buttons out of sight.
     const codeLine = "c".repeat(600);
     const word = "w".repeat(300);
-    const body = `A paragraph:\n\n${word}\n\n\`\`\`\n${codeLine}\n\`\`\`\n`;
+    // And links: one to a site by its plain name, which opens (the control); one whose text
+    // names a site it does not go to, one to a service on the Mac, one to this dashboard,
+    // which are text, where each goes shown as Chrome parses it (review of #281).
+    const links = `[the docs](https://github.com/acme) [home](https://github.com@evil.example/) [local](http://127.0.0.1:3000/x) [here](http://${HOST}:${port}/?review)`;
+    const body = `A paragraph:\n\n${word}\n\n\`\`\`\n${codeLine}\n\`\`\`\n\n${links}\n`;
     const offered = stack.quiet(
       "exec",
       "web/one",
@@ -1895,6 +1899,17 @@ describe("T2 section 4.8: the root UI", () => {
       assert.ok(seen.word, "the paragraph's word, whole");
       assert.ok(seen.code, "the code's line, whole");
       assert.ok(seen.codeScrolls > 0, "control: the code block scrolls in its own box");
+      const linked = await page.evaluate<[string[], string]>(
+        `[[...document.querySelectorAll("[data-issue] [data-preview] a")].map((a) => a.href), [...document.querySelectorAll("[data-issue] [data-preview] p")].pop().textContent]`,
+      );
+      assert.deepEqual(linked[0], ["https://github.com/acme"]);
+      for (const said of [
+        "the docs (goes to github.com: https://github.com/acme)",
+        'home (goes to evil.example: https://github.com@evil.example/; "github.com" before the "@" is not the site; not a link here',
+        "local (goes to 127.0.0.1:3000: http://127.0.0.1:3000/x; not a link here: it names an IP address, not a site)",
+        `here (goes to ${HOST}:${port}: http://${HOST}:${port}/?review; not a link here: it is this dashboard's own address)`,
+      ])
+        assert.ok(linked[1].includes(said), `${said} in ${linked[1]}`);
       // A picture of it, for a person to look at, beside the suite's own files.
       await page.shot(
         path.join(process.env.DESOLATE_SCREENSHOTS || os.tmpdir(), "issue-wide-preview.png"),
