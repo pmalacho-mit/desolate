@@ -222,8 +222,13 @@ export const ensureGitClone = async (repo: Repo) => {
   // workspaces wrote (<domain>/<branch>), and `git push <domain> <branch>` delivers a branch
   // to it (its workspaces see root/<branch>). (A domain named like a remote already here is
   // reached through `root` alone.)
-  const domainList = remoteDomains(await rootctlBrief("domain.list").catch(() => []), id, (slug) =>
-    fs.existsSync(paths.domain(slug)),
+  const domainList = remoteDomains(
+    await rootctlBrief("domain.list").then(
+      (l) => l.domains,
+      () => [],
+    ),
+    id,
+    (slug) => fs.existsSync(paths.domain(slug)),
   );
   // A remote of that name that desolate did not make (its push address is not desolate's
   // for that domain) is the person's, and is left as it is.

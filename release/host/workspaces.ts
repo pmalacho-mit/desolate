@@ -887,7 +887,7 @@ export const up = async (
 
 export const list = async (out: Out, json: boolean, only?: string) => {
   const b = backend();
-  const domains = (await rootctl("domain.list", {}, { quiet: true })).filter(
+  const domains = (await rootctl("domain.list", {}, { quiet: true })).domains.filter(
     (d) => !only || d.slug === only,
   );
   const vms = new Map((await b.list()).map((vm) => [vm.name, vm.status]));
@@ -966,7 +966,7 @@ export const reconnectRunning = async (): Promise<number> => {
   );
   const { connectWorkspace } = await import("./daemon.ts");
   let count = 0;
-  for (const d of await rootctl("domain.list", {}, { quiet: true }))
+  for (const d of (await rootctl("domain.list", {}, { quiet: true })).domains)
     for (const w of d.workspaces) {
       // (A record naming a VM that is not its own workspace's is not in the list: replies.ts.)
       if (!running.has(w.vm)) continue;

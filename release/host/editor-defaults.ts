@@ -147,7 +147,7 @@ export const applyAll = async (): Promise<{ running: number; applied: number }> 
   );
   let count = 0;
   let applied = 0;
-  for (const d of await rootctl("domain.list", {}, { quiet: true }))
+  for (const d of (await rootctl("domain.list", {}, { quiet: true })).domains)
     for (const w of d.workspaces)
       if (running.has(w.vm)) {
         count++;

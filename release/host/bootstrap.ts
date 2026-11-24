@@ -416,6 +416,43 @@ export const bootstrap = async (
 /** Checks, with v2 preflight's false-pass discipline: a check that could not be asked is a
  *  failure, never a pass, and every failure names the command that fixes it. Returns how
  *  many failed. */
+/** Doctor's line for the root's records: the domains and workspaces the root lists that this
+ *  Mac does not take, by name, and where their records are. */
+export const recordsCheck = (listed: {
+  domains: { slug: string; unformed?: string[] }[];
+  unformed: string[];
+}): Check => {
+  const named = [
+    ...listed.unformed.map((slug) => `the domain ${slug}`),
+    ...listed.domains.flatMap((d) => (d.unformed ?? []).map((w) => `${d.slug}/${w}`)),
+  ];
+  return {
+    name: "the root's records are in a form this Mac takes",
+    ok: named.length === 0,
+    detail: named.length ? `not: ${named.join(", ")}` : `${listed.domains.length} domain(s)`,
+    fix: `ls ${paths.domains}/*/workspaces   (each record the root keeps, on this Mac: one that is not in desolate's form was not written by it)`,
+  };
+};
+
+declare namespace recordsCheck {
+  /** every record taken is a pass; one left out is named, with its domain (the control first) */
+  export type Names = Table<
+    typeof recordsCheck,
+    [
+      [
+        args: [listed: { domains: [{ slug: "acme" }]; unformed: [] }],
+        condition: "matches",
+        expected: { ok: true; detail: "1 domain(s)" },
+      ],
+      [
+        args: [listed: { domains: [{ slug: "acme"; unformed: ["w?1"] }]; unformed: ["old"] }],
+        condition: "matches",
+        expected: { ok: false; detail: "not: the domain old, acme/w?1" },
+      ],
+    ]
+  >;
+}
+
 export const doctor = async (out: Out, json = false): Promise<number> => {
   const checks: Check[] = [];
   const kind = backendKind();
@@ -521,6 +558,11 @@ export const doctor = async (out: Out, json = false): Promise<number> => {
         detail: "could not be asked: the root does not answer",
         fix: "desolate bootstrap",
       });
+  // The root's records this Mac does not take (replies.ts): each named, as it may be printed.
+  if (rootUp) {
+    const listed = await rootctlBrief("domain.list").catch(() => null);
+    if (listed) checks.push(recordsCheck(listed));
+  }
   // The code the root runs is this desolate's: its share of the release is this folder. A
   // VM keeps the folder it was made with, so a stack made from another checkout (moved, or
   // a second clone) runs that one's code whatever this one says.

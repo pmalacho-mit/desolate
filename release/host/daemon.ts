@@ -2480,7 +2480,7 @@ const serve = async () => {
     try {
       const { stackDefaults } = await import("./workspaces.ts");
       const { merge } = await import("../shared/size.ts");
-      const all = await rootctlBrief("domain.list");
+      const all = (await rootctlBrief("domain.list")).domains;
       const up = new Set(
         (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
       );
@@ -2837,7 +2837,7 @@ const serve = async () => {
 
   // After a restart of the host: take up every workspace whose VM is running.
   try {
-    const domains = await rootctlBrief("domain.list");
+    const domains = (await rootctlBrief("domain.list")).domains;
     const running = new Set(
       (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
     );

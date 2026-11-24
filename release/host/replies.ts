@@ -15,7 +15,7 @@
 import { Refusal, refuse } from "../shared/exit.ts";
 import { LIMIT as ISSUE, ID as ISSUE_ID } from "../shared/issues.ts";
 import { NAMES } from "../shared/limits.ts";
-import { checkSize } from "../shared/size.ts";
+import { LIMITS } from "../shared/size.ts";
 import { printable } from "../shared/text.ts";
 import {
   characters,
@@ -199,33 +199,36 @@ const APPROVAL_TEXT = 1024;
  *  carried whole into the next. */
 const DIFF_PAGE_MOST = 1024 * 1024;
 
-/** A VM's size: each part a whole number within what desolate makes for a person (checkSize's
- *  ranges), since the Mac gives a VM that much of itself. */
-const sized =
-  <T extends Partial<Record<"cpus" | "memoryMiB" | "diskGiB", number>>>(part: Part<T>): Part<T> =>
-  (value, at) => {
-    const s = part(value, at);
-    return checkSize(s) ? unformed(at) : s;
-  };
-const sizePart = whole(1, 1 << 20);
-const size = sized(
-  shape({ cpus: maybe(sizePart), memoryMiB: maybe(sizePart), diskGiB: maybe(sizePart) }),
-);
-const fullSize = sized(shape({ cpus: sizePart, memoryMiB: sizePart, diskGiB: sizePart }));
+/** A VM's size: each part a whole number up to what desolate makes for a person (shared/size.ts
+ *  LIMITS), since the Mac gives a VM that much of itself. Only the most: a workspace an older
+ *  desolate made smaller than today's least is a real one, and is listed, started and removed
+ *  as any other (the least is the person's to keep to when asking: checkSize). */
+const upTo = (most: number) => whole(1, most);
+const parts = {
+  cpus: upTo(LIMITS.cpus[1]),
+  memoryMiB: upTo(LIMITS.memoryMiB[1]),
+  diskGiB: upTo(LIMITS.diskGiB[1]),
+};
+const size = shape({
+  cpus: maybe(parts.cpus),
+  memoryMiB: maybe(parts.memoryMiB),
+  diskGiB: maybe(parts.diskGiB),
+});
+const fullSize = shape(parts);
 
-declare namespace sized {
-  /** a size desolate makes for a person; a part past its range (as a person would be refused
-   *  it: checkSize) is not, however the root records it */
-  export type Ranges = Table<
+declare namespace size {
+  /** a size an older desolate made, under today's least, is kept; one past the most desolate
+   *  makes, and one of no CPUs, are refused */
+  export type Most = Table<
     typeof answered,
     [
       [
         args: [
           op: "domain.size",
-          value: { domain: "acme"; size: { cpus: 4; memoryMiB: 8192 } },
+          value: { domain: "acme"; size: { memoryMiB: 1000; diskGiB: 20 } },
           asked: {},
         ],
-        expected: { domain: "acme"; size: { cpus: 4; memoryMiB: 8192 } },
+        expected: { domain: "acme"; size: { memoryMiB: 1000; diskGiB: 20 } },
       ],
       [
         args: [
@@ -233,7 +236,7 @@ declare namespace sized {
           value: { domain: "acme"; size: { memoryMiB: 1048576 } },
           asked: {},
         ],
-        expected: "the root's answer to 'domain.size' is not in the form this Mac takes (size)",
+        expected: "the root's answer to 'domain.size' is not in the form this Mac takes (size.memoryMiB)",
       ],
       [
         args: [op: "domain.size", value: { domain: "acme"; size: { cpus: 0 } }, asked: {}],
@@ -532,10 +535,11 @@ declare namespace vouched {
   >;
 }
 
-/** A domain as the root lists it, with its workspaces: a workspace record that does not name
- *  its own VM in this domain is left out, as every caller once left it out itself (it would
- *  give one domain's VM another domain's names, rules and proxy), and so is one not in its form
- *  (one record does not take the list, and with it every command that reads it, down). */
+/** A domain as the root lists it, with its workspaces. A workspace record not in its form, or
+ *  that does not name its own VM in this domain (it would give one domain's VM another
+ *  domain's names, rules and proxy), is left out of `workspaces`, and named in `unformed`, as
+ *  it may be printed: one record does not take the list down, and with it every command that
+ *  reads it, and a workspace the person can no longer reach is said (unformedNotes, doctor). */
 const domainFields = shape({
   slug,
   title: line(200),
@@ -544,14 +548,76 @@ const domainFields = shape({
   env: maybe(repo),
   size: maybe(size),
   spawnMax: maybe(whole(0, 1000)),
-  workspaces: some(workspaceRecord),
+  workspaces: (value, at) => (Array.isArray(value) ? value : unformed(at)),
 });
+/** What may be printed of a record not in its form: its name, made printable and short. */
+const nameOf = (value: unknown, key: string) =>
+  printable(
+    typeof value === "object" && value !== null ? (value as Record<string, unknown>)[key] : "?",
+    NAMES.slug,
+  ) || "?";
 const domainRecord = (value: unknown, at: string) => {
   const d = domainFields(value, at);
-  return {
-    ...d,
-    workspaces: d.workspaces.kept.filter((w) => w.domain === d.slug && isOwnVm(d.slug, w)),
-  };
+  const workspaces: Of<typeof workspaceRecord>[] = [];
+  const unformedOnes: string[] = [];
+  for (const [i, entry] of d.workspaces.entries()) {
+    try {
+      const w = workspaceRecord(entry, `${at ? `${at}.` : ""}workspaces[${i}]`);
+      if (w.domain === d.slug && isOwnVm(d.slug, w)) workspaces.push(w);
+      else unformedOnes.push(nameOf(entry, "workspace"));
+    } catch (error) {
+      if (!(error instanceof Unformed)) throw error;
+      unformedOnes.push(nameOf(entry, "workspace"));
+    }
+  }
+  return { ...d, workspaces, ...(unformedOnes.length ? { unformed: unformedOnes } : {}) };
+};
+
+/** Every domain the root lists; one whose record is not in its form is left out of `domains`
+ *  and named in `unformed`, rather than refusing them all. */
+const domainList = (value: unknown, at: string) => {
+  if (!Array.isArray(value)) return unformed(at);
+  const domains: ReturnType<typeof domainRecord>[] = [];
+  const unformedOnes: string[] = [];
+  for (const [i, entry] of value.entries())
+    try {
+      domains.push(domainRecord(entry, `[${i}]`));
+    } catch (error) {
+      if (!(error instanceof Unformed)) throw error;
+      unformedOnes.push(nameOf(entry, "slug"));
+    }
+  return { domains, unformed: unformedOnes };
+};
+
+/** Whether `answer`, the answer to `op`, is a domain's record or the list of them. */
+export const listsDomains = (
+  op: string,
+  answer: unknown,
+): answer is ReturnType<typeof domainList> | ReturnType<typeof domainRecord> =>
+  (op === "domain.list" || op === "domain.show") && typeof answer === "object" && answer !== null;
+
+/** What a command says, once, of the records a domain list or record left out, each with the
+ *  command that names them. */
+export const unformedNotes = (
+  answer:
+    | { domains: { slug: string; unformed?: string[] }[]; unformed: string[] }
+    | {
+        slug: string;
+        unformed?: string[];
+      },
+): string[] => {
+  const domains = "domains" in answer ? answer.domains : [answer];
+  const notes = domains
+    .filter((d) => d.unformed?.length)
+    .map(
+      (d) =>
+        `${d.unformed!.length} workspace${d.unformed!.length === 1 ? "" : "s"} of ${d.slug} ${d.unformed!.length === 1 ? "was" : "were"} not in a form this Mac takes: desolate doctor`,
+    );
+  if ("domains" in answer && answer.unformed.length)
+    notes.push(
+      `${answer.unformed.length} domain${answer.unformed.length === 1 ? "" : "s"} ${answer.unformed.length === 1 ? "was" : "were"} not in a form this Mac takes: desolate doctor`,
+    );
+  return notes;
 };
 
 declare namespace domainRecord {
@@ -571,7 +637,8 @@ declare namespace domainRecord {
     repos: ["acme/web"];
     createdAt: "2026-11-16T09:00:00.000Z";
   };
-  /** a domain's workspaces, but a record naming another VM or another domain is left out */
+  /** a domain's workspaces; a record naming another VM or another domain, or not in its form,
+   *  is left out and named (the first row is the control) */
   export type Own = Table<
     typeof answered,
     [
@@ -581,7 +648,10 @@ declare namespace domainRecord {
           value: [Invoke<typeof changed, [value: D, changes: { workspaces: [W] }]>],
           asked: {},
         ],
-        expected: [Invoke<typeof changed, [value: D, changes: { workspaces: [W] }]>],
+        expected: {
+          domains: [Invoke<typeof changed, [value: D, changes: { workspaces: [W] }]>];
+          unformed: [];
+        },
       ],
       [
         args: [
@@ -595,6 +665,10 @@ declare namespace domainRecord {
                   workspaces: [
                     Invoke<typeof changed, [value: W, changes: { vm: "dsl-main-41eb634ef1" }]>,
                     Invoke<typeof changed, [value: W, changes: { domain: "beta" }]>,
+                    Invoke<
+                      typeof changed,
+                      [value: W, changes: { workspace: "w9\u001b[2J"; state: "gone" }]
+                    >,
                   ];
                 },
               ]
@@ -602,21 +676,36 @@ declare namespace domainRecord {
           ],
           asked: {},
         ],
-        expected: [Invoke<typeof changed, [value: D, changes: { workspaces: [] }]>],
+        expected: {
+          domains: [
+            Invoke<
+              typeof changed,
+              [value: D, changes: { workspaces: []; unformed: ["w1", "w1", "w9?[2J"] }]
+            >,
+          ];
+          unformed: [];
+        },
       ],
     ]
   >;
-  /** a domain that is not a slug, a repository that is not one, an object for a list */
+  /** a domain that is not a slug, or with a repository that is not one, is left out and named,
+   *  beside one that is kept; an object for the list is refused */
   export type Refuses = Table<
     typeof answered,
     [
       [
         args: [
           op: "domain.list",
-          value: [Invoke<typeof changed, [value: D, changes: { slug: "acme/x"; workspaces: [] }]>],
+          value: [
+            Invoke<typeof changed, [value: D, changes: { slug: "acme/x"; workspaces: [] }]>,
+            Invoke<typeof changed, [value: D, changes: { workspaces: [] }]>,
+          ],
           asked: {},
         ],
-        expected: "the root's answer to 'domain.list' is not in the form this Mac takes ([0].slug)",
+        expected: {
+          domains: [Invoke<typeof changed, [value: D, changes: { workspaces: [] }]>];
+          unformed: ["acme/x"];
+        },
       ],
       [
         args: [
@@ -624,7 +713,7 @@ declare namespace domainRecord {
           value: [Invoke<typeof changed, [value: D, changes: { repos: ["../x"]; workspaces: [] }]>],
           asked: {},
         ],
-        expected: "the root's answer to 'domain.list' is not in the form this Mac takes ([0].repos[0])",
+        expected: { domains: []; unformed: ["acme"] },
       ],
       [
         args: [
@@ -642,6 +731,23 @@ declare namespace domainRecord {
           asked: { slug: "beta" },
         ],
         expected: "the root's answer to 'domain.show' is not in the form this Mac takes (slug)",
+      ],
+    ]
+  >;
+}
+
+declare namespace unformedNotes {
+  /** once for each domain with workspaces left out, and once for the domains; none for none */
+  export type Notes = Table<
+    typeof unformedNotes,
+    [
+      [args: [answer: { domains: [{ slug: "acme" }]; unformed: [] }], expected: []],
+      [
+        args: [answer: { domains: [{ slug: "acme"; unformed: ["w1", "w2"] }]; unformed: ["old"] }],
+        expected: [
+          "2 workspaces of acme were not in a form this Mac takes: desolate doctor",
+          "1 domain was not in a form this Mac takes: desolate doctor",
+        ],
       ],
     ]
   >;
@@ -1157,7 +1263,7 @@ const REPLIES = {
       }),
     ),
   ),
-  "domain.list": of(list(domainRecord)),
+  "domain.list": of(domainList),
   "domain.show": about(domainRecord, "slug", "slug"),
   "domain.create": about(
     shape({ slug, title: line(200), repos: list(repo), createdAt: stamp }),

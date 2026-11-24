@@ -146,7 +146,7 @@ const domainFor = async (
   repo: string,
   named: string | undefined,
 ): Promise<{ slug: string; made: boolean; added: boolean } | { taken: string[] }> => {
-  const existing = await rootctl("domain.list", {}, { quiet: true });
+  const existing = (await rootctl("domain.list", {}, { quiet: true })).domains;
   const holding = (slug: string) => existing.find((d) => d.slug === slug);
   const join = async (slug: string) => {
     const there = holding(slug);

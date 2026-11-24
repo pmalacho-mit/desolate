@@ -127,7 +127,8 @@ export type SecretListed = {
  *  through the root's control socket, from the host. The value goes from here to the root's
  *  secret store, and nowhere else: not the dashboard, which the root's ordinary user serves. */
 export const secretOps = {
-  domains: async () => (await rootctl("domain.list", {}, { quiet: true })).map((d) => d.slug),
+  domains: async () =>
+    (await rootctl("domain.list", {}, { quiet: true })).domains.map((d) => d.slug),
   list: (domain: string) => rootctl("secret.list", { domain }, { quiet: true }),
   set: async (
     domain: string,

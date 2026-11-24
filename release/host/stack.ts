@@ -10,7 +10,7 @@ import { RUN_MAX } from "../shared/run.ts";
 import { define, valueOf, whole } from "../shared/settings.ts";
 import { forTerminal } from "../shared/text.ts";
 import { because } from "./failures.ts";
-import { opened, refusalIn } from "./replies.ts";
+import { listsDomains, opened, refusalIn, unformedNotes } from "./replies.ts";
 import type { Answer, Op } from "./replies.ts";
 import { guest, INSTANCE, paths, RELEASE_DIR } from "./paths.ts";
 import { fakeBackend } from "./vm/fake.ts";
@@ -474,8 +474,17 @@ const ask = async <O extends Op>(
   const reply =
     served ?? (await viaExec(op, args, { ...asked, totalMs: left, wholeMs: asked.totalMs }));
   // What the Mac takes of it is what replies.ts takes for this operation, and nothing else.
-  return opened(op, reply, args);
+  const answer = opened(op, reply, args);
+  if (listsDomains(op, answer))
+    for (const note of unformedNotes(answer))
+      if (!said.has(note)) {
+        said.add(note);
+        process.stderr.write(`desolate: ${note}\n`);
+      }
+  return answer;
 };
+/** What this process has said of records a list left out: each once. */
+const said = new Set<string>();
 
 /** One request over the CLI channel. The root's refusals arrive as Refusals, with their fix.
  *  Asked of the root's CLI service when it is up (a fraction of the time), else by running

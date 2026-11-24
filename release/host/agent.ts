@@ -451,7 +451,7 @@ const lostSaid = (a: Row) =>
 
 export const list = async (only: string | undefined, out: Out, json: boolean) => {
   const [domain, workspace] = String(only ?? "").split("/");
-  const all = await rootctl("domain.list", {}, { quiet: true });
+  const all = (await rootctl("domain.list", {}, { quiet: true })).domains;
   const b = backend();
   const running = new Set(
     (await b.list()).filter((vm) => vm.status === "running").map((vm) => vm.name),
