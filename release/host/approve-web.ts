@@ -54,7 +54,7 @@ import { printable } from "../shared/text.ts";
 import type { Account, AccountLine, AccountRequest, DiffPage } from "../shared/review-account.ts";
 import type { Listed } from "../shared/listed.ts";
 import type { PlanRow } from "./envfile.ts";
-import type { Expect, Given, Invoke } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Expect, Given, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { writeState } from "../.harness/home.ts";
 import type { mint } from "./signin.ts";
 import type {
@@ -207,11 +207,27 @@ export type PusherSaid = {
   repo: string;
   branch: string;
   commit: string;
+  onto: string | null;
   error?: string;
 };
-/** How a push this page approved ended, as the pusher said: told to the page by the token
- *  over the very text signed (another text under the same nonce is another push). */
-type Outcome = { token: string; pushed: boolean; error?: string; link?: string };
+/** An approval this page signed, as the page is told of it (/pending, `approved`): by the
+ *  token over the very text signed (another text under the same nonce is another push), the
+ *  move the Mac signed (the commit is the squash's when squashed, `squashes` the one it
+ *  squashes), when the host signed it (its clock: the page's, on the same Mac), and how it
+ *  ended once the pusher said (`endOf`). Nothing in it is the root's own word but `error`. */
+export type Approved = {
+  token: string;
+  repo: string;
+  branch: string;
+  commit: string;
+  onto: string | null;
+  squashes: string | null;
+  at: number;
+  pushed: boolean;
+  error?: string;
+  uncertain?: boolean;
+  link?: string;
+};
 export type Backend = {
   /** Pushes waiting for a person, as the root lists them (the root's word: only the message
    *  is used, and it is parsed here), once they are not the list `since` tags (root/
@@ -391,7 +407,9 @@ const ASKING_MOST = 4;
 /** Pushes the page keeps an account of: past it, a push is listed and said to wait. Far more
  *  than a person has waiting; at the account's own bound (8 MiB a line) it is 256 MiB. */
 const LISTED_MOST = 32;
-/** Approvals whose end the page is told of: the last few are all a person looks back at. */
+/** Approvals the page is told of: the last few are all a person looks back at. Each is made
+ *  by a person's click here, never by a report: a root that reports a million ends at most
+ *  these, each once (`endedBy`), with at most `printable`'s 4,000 characters of why. */
 const OUTCOMES_KEPT = 16;
 /** How long the pusher's log is followed for an approval it has not said the end of: a push
  *  ends in seconds, a large one in minutes. Past it, the dashboard's activity says. */
@@ -402,6 +420,184 @@ const HEARD_MS = 30 * 60_000;
  *  themselves. From the names the person signed, each part escaped. */
 const pullRequestPage = (repo: string, branch: string) =>
   `https://github.com/${[repo, "compare", branch].join("/").split("/").map(encodeURIComponent).join("/")}?expand=1`;
+
+/** Which approval signed here a word of the pusher's ends, or -1: the oldest still listened
+ *  for (`HEARD_MS` after its click, by `now`) and not ended, that names the very move the Mac
+ *  signed (repository, branch, commit, and the commit the branch moves from). The word names
+ *  no approval of its own (the pusher's event carries none: root/pusher.ts, `emit`), so
+ *  nothing it says picks another approval, and one already ended keeps its first word. */
+export const endedBy = (
+  approvals: readonly Approved[],
+  said: Pick<PusherSaid, "repo" | "branch" | "commit" | "onto">,
+  now: number,
+): number =>
+  approvals.findIndex(
+    (a) =>
+      !a.pushed &&
+      a.error === undefined &&
+      now - a.at < HEARD_MS &&
+      a.repo === said.repo &&
+      a.branch === said.branch &&
+      a.commit === said.commit &&
+      a.onto === (said.onto ?? null),
+  );
+
+declare namespace endedBy {
+  type A = "0123456789abcdef0123456789abcdef01234567";
+  type B = "fedcba9876543210fedcba9876543210fedcba98";
+  type Signed = {
+    token: "t1";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    squashes: null;
+    at: 1000;
+    pushed: false;
+  };
+  type Failed = {
+    token: "t0";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    squashes: null;
+    at: 500;
+    pushed: false;
+    error: "no";
+  };
+  type Pushed = {
+    token: "t1";
+    repo: "acme/widgets";
+    branch: "main";
+    commit: A;
+    onto: B;
+    squashes: null;
+    at: 1000;
+    pushed: true;
+  };
+  type Word = { repo: "acme/widgets"; branch: "main"; commit: A; onto: B };
+  /** the word on the move signed ends it; on any other move (another commit, branch,
+   *  repository, or what the branch moves from), nothing */
+  export type Moves = Table<
+    typeof endedBy,
+    [
+      [args: [approvals: [Signed], said: Word, now: 2000], expected: 0],
+      [
+        args: [
+          approvals: [Signed],
+          said: { repo: "acme/widgets"; branch: "main"; commit: B; onto: B },
+          now: 2000,
+        ],
+        expected: -1,
+      ],
+      [
+        args: [
+          approvals: [Signed],
+          said: { repo: "acme/widgets"; branch: "other"; commit: A; onto: B },
+          now: 2000,
+        ],
+        expected: -1,
+      ],
+      [
+        args: [
+          approvals: [Signed],
+          said: { repo: "acme/other"; branch: "main"; commit: A; onto: B },
+          now: 2000,
+        ],
+        expected: -1,
+      ],
+      [
+        args: [
+          approvals: [Signed],
+          said: { repo: "acme/widgets"; branch: "main"; commit: A; onto: null },
+          now: 2000,
+        ],
+        expected: -1,
+      ],
+    ]
+  >;
+  /** one already ended keeps its first word (the next word of the same move ends the next
+   *  approval of it, if there is one); one no longer listened for is not ended now */
+  export type Once = Table<
+    typeof endedBy,
+    [
+      [args: [approvals: [Failed, Signed], said: Word, now: 2000], expected: 1],
+      [args: [approvals: [Pushed], said: Word, now: 2000], expected: -1],
+      [args: [approvals: [Signed], said: Word, now: 1801000], expected: -1],
+    ]
+  >;
+}
+
+/** What a word of the pusher's says of the push it ends, for the page: pushed (with the page
+ *  to open its pull request on GitHub, built from the names the Mac signed), or not, with why
+ *  as printable text. It is the pusher's word, never a reason to act: the page only shows it. */
+export const endOf = (
+  said: Pick<PusherSaid, "type" | "repo" | "branch" | "error">,
+  github: boolean,
+): Pick<Approved, "pushed" | "error" | "uncertain" | "link"> =>
+  said.type === "pushed"
+    ? { pushed: true, ...(github ? { link: pullRequestPage(said.repo, said.branch) } : {}) }
+    : {
+        pushed: false,
+        error: printable(said.error || "the push failed"),
+        uncertain: said.type === "push-uncertain",
+      };
+
+declare namespace endOf {
+  /** landed: on GitHub, the page to open its pull request, each name escaped */
+  export type Pushed = Table<
+    typeof endOf,
+    [
+      [
+        args: [said: { type: "pushed"; repo: "acme/widgets"; branch: "fix/a b" }, github: true],
+        expected: {
+          pushed: true;
+          link: "https://github.com/acme/widgets/compare/fix/a%20b?expand=1";
+        },
+      ],
+      [
+        args: [said: { type: "pushed"; repo: "acme/widgets"; branch: "main" }, github: false],
+        expected: { pushed: true },
+      ],
+    ]
+  >;
+  /** not landed, or perhaps: why, made printable (a terminal's escape, a direction override
+   *  and markup are text, shown as such on the page); no word of why, said so */
+  export type Failed = Table<
+    typeof endOf,
+    [
+      [
+        args: [
+          said: {
+            type: "push-failed";
+            repo: "acme/widgets";
+            branch: "main";
+            error: "refused \u001b[2J<b>x</b> ‮evil";
+          },
+          github: true,
+        ],
+        expected: { pushed: false; error: "refused ?[2J<b>x</b> ?evil"; uncertain: false },
+      ],
+      [
+        args: [
+          said: {
+            type: "push-uncertain";
+            repo: "acme/widgets";
+            branch: "main";
+            error: "timed out";
+          },
+          github: true,
+        ],
+        expected: { pushed: false; error: "timed out"; uncertain: true },
+      ],
+      [
+        args: [said: { type: "push-failed"; repo: "acme/widgets"; branch: "main" }, github: true],
+        expected: { pushed: false; error: "the push failed"; uncertain: false },
+      ],
+    ]
+  >;
+}
 
 /** The one answer to a question asked of the reviewer, past what it says while it works. */
 const answerOf = async (lines: AsyncIterable<AccountLine>): Promise<AccountLine | null> => {
@@ -433,42 +629,25 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
     listed: boolean;
   };
   const reviews = new Map<string, Asking>();
-  // The approvals this page signed, newest last, and how each ended once the pusher said. Its
-  // log is followed while a page is open and has a push in front of it, and while one approved
-  // has not ended, page or not (the daemon reads it only while someone listens). A page asks
-  // again after each answer, so between two of its asks no page is open: an approval's word
-  // that came then was missed, and its card said "pushing" for good (T2 04, under load).
-  const approvals: {
-    repo: string;
-    branch: string;
-    commit: string;
-    at: number;
-    outcome: Outcome;
-  }[] = [];
-  const unsaid = (a: (typeof approvals)[number]) =>
-    !a.outcome.pushed && a.outcome.error === undefined && Date.now() - a.at < HEARD_MS;
+  // The approvals this page signed, newest last, and how each ended once the pusher said: the
+  // page draws each from here (a reload, another tab, a page opened after the click), so it is
+  // told of one being pushed as well as of one that ended. Its log is followed while a page is
+  // open and has a push in front of it, and while one approved has not ended, page or not (the
+  // daemon reads it only while someone listens). A page asks again after each answer, so
+  // between two of its asks no page is open: an approval's word that came then was missed,
+  // and its card said "pushing" for good (T2 04, under load).
+  const approvals: Approved[] = [];
+  const unsaid = (a: Approved) =>
+    !a.pushed && a.error === undefined && Date.now() - a.at < HEARD_MS;
   let pages = 0;
   let unhear: (() => void) | null = null;
   const hearPusher = () => {
     const want = (pages > 0 && reviews.size > 0) || approvals.some(unsaid);
     if (want && !unhear)
       unhear = backend.pushes((said) => {
-        const done = approvals.find(
-          (a) =>
-            a.repo === said.repo &&
-            a.branch === said.branch &&
-            a.commit === said.commit &&
-            unsaid(a),
-        );
-        if (!done) return;
-        if (said.type === "pushed") {
-          done.outcome.pushed = true;
-          if (backend.github()) done.outcome.link = pullRequestPage(said.repo, said.branch);
-        } else
-          done.outcome.error =
-            said.type === "push-uncertain"
-              ? `it may or may not have reached the remote (${printable(said.error ?? "")})`
-              : printable(said.error || "the push failed");
+        const at = endedBy(approvals, said, Date.now());
+        if (at < 0) return;
+        Object.assign(approvals[at]!, endOf(said, backend.github()));
         tell();
         hearPusher();
       });
@@ -908,11 +1087,10 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         for (;;) {
           const out = answerFor(root.pending, root.look, token);
           hearPusher();
-          const done = approvals
-            .map((a) => a.outcome)
-            .filter((o) => o.pushed || o.error !== undefined);
-          const tag = digestOf(tagOfAnswer(out) + JSON.stringify(done));
-          if (since === null || tag !== since) return json(res, 200, { pending: out, done, tag });
+          // (Each approval whole: its time is the click's, so the tag moves only with news.)
+          const tag = digestOf(tagOfAnswer(out) + JSON.stringify(approvals));
+          if (since === null || tag !== since)
+            return json(res, 200, { pending: out, approved: approvals, tag });
           fromRoot ??= rootListAfter(root.tag, gone.signal);
           const round = new AbortController();
           const next = await Promise.race([
@@ -1120,12 +1298,15 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           // Listened for before it is approved: the push can land before the keyring's answer
           // does, and its word was then missed, the card saying "pushing" for good (T2 04, the
           // pointer's push, under load).
-          const approval = {
+          const approval: Approved = {
+            token: given,
             repo: push.repo,
             branch: push.branch,
             commit: asked.squash === true ? reviewed!.squash!.commit : push.commit,
+            onto: push.onto,
+            squashes: asked.squash === true ? push.commit : null,
             at: Date.now(),
-            outcome: { token: given, pushed: false },
+            pushed: false,
           };
           approvals.push(approval);
           if (approvals.length > OUTCOMES_KEPT) approvals.shift();
@@ -1142,6 +1323,8 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
             tell();
             throw error;
           }
+          // Every page is told: another tab, too, shows it as being pushed.
+          tell();
           log(
             `approve page: approved ${push.repo} ${push.branch} ${push.commit}${asked.squash === true ? ` squashed into ${reviewed!.squash!.commit}` : ""}${push.onto ? ` (from ${push.onto}${reviewed!.fastForward === false ? ", replacing it" : ""})` : " (a new branch)"}`,
           );

@@ -22,7 +22,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; padding: 40px 16px 48px; background: var(--bg); color: var(--fg); font: 14px/1.55 var(--font); -webkit-font-smoothing: antialiased; }
-header, main, .status, .empty { max-width: 760px; margin: 0 auto; }
+header, main, .status, .empty, .pushed { max-width: 760px; margin: 0 auto; }
 header { display: grid; gap: var(--s2); }
 header > * { margin: 0; }
 .card.empty { margin: var(--s5) auto; }
@@ -164,6 +164,19 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 .card.asked { border-color: var(--k-branch); }
 .asked-note { color: var(--k-branch); font-weight: 600; }
 /* A card decided before a new one came: its names and what was decided, on one short card. */
-.card.folded > :not(.names):not(.actions), .card.folded .actions > :not(.hint) { display: none; }
+.card.folded > :not(.names):not(.actions), .card.folded .actions > :not(.hint):not(.dismiss) { display: none; }
 .card.folded .actions { position: static; border-top: 0; padding: 0; }
 .summary > p.working { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* After Approve (approve.js, showApproved): being pushed, not pushed or perhaps not (kept until
+   dismissed), or no word yet; and what the root's pusher reports the remote took. */
+.card.pushing { border-color: var(--muted); }
+.card.pushing .hint { color: var(--fg); }
+.card.failed, .card.uncertain { border-color: var(--danger); }
+.card.failed .hint, .card.uncertain .hint { color: var(--danger); }
+.card.unheard { border-color: var(--caution); }
+.card.unheard .hint { color: var(--caution); }
+.card:focus-visible, .pushed li:focus-visible, h1:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+.pushed h2 { font-size: 15px; font-weight: 650; margin: var(--s5) 0 var(--s2); }
+.pushed ul { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--s2); color: var(--muted); }
+.pushed li { overflow-wrap: anywhere; }
+.pushed li code:first-child { color: var(--fg); }

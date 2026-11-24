@@ -12,7 +12,7 @@
 </head>
 <body>
 <header>
-  <h1>Waiting for you</h1>
+  <h1 tabindex="-1">Waiting for you</h1>
   <p class="lede">Each push below leaves for the remote only if you approve it here. What it names is read from the text that gets signed; what it would send was worked out in the root by desolate's reviewer. Each issue below is created on GitHub, as you, with exactly the text shown, only if you publish it here.</p>
 </header>
 <section id="empty" class="card empty" hidden>
@@ -28,6 +28,10 @@
 </section>
 <main id="list" aria-live="polite"></main>
 <p id="status" class="status"></p>
+<section id="pushed" class="pushed" hidden>
+  <h2>Pushed</h2>
+  <ul aria-live="polite"></ul>
+</section>
 <template id="card">
   <section class="card">
     <dl class="names">
@@ -42,6 +46,7 @@
       <span class="arm"><button type="button" class="approve" disabled>Approve push</button></span>
       <span class="arm squash" hidden><button type="button" class="approve squash" disabled>Approve, squashed into one commit</button></span>
       <button type="button" class="refuse">Refuse</button>
+      <button type="button" class="dismiss" hidden>Dismiss</button>
       <span class="hint"></span>
     </div>
   </section>

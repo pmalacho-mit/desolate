@@ -419,7 +419,10 @@ const add = (push, issue) => {
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
   const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, overSince: 0, visible: VISIBILITY ? false : undefined }));
-  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
+  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false, approved: false, refuse: element.querySelector(".refuse"), dismiss: element.querySelector(".dismiss") };
+  // (Focused by the page alone, as a card's state changes: never a stop for Tab.)
+  element.tabIndex = -1;
+  if (card.dismiss) card.dismiss.addEventListener("click", () => dismiss(card));
   for (const arm of arms) {
     if (watcher) watcher.observe(arm.wrap);
     // (A disabled button gets no pointer events in every browser: these are on its wrapper,
@@ -440,12 +443,24 @@ const add = (push, issue) => {
       // A real pointer's click, on an armed button: not a key, not a script.
       if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
       card.busy = true;
-      const asked = performance.now();
       arm.button.disabled = true;
       arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); if (outcomesAt >= asked) for (const outcome of outcomes) ended(outcome); }
+      try {
+        const answer = await post("approve", card, arm.squash);
+        card.done = true;
+        tellTerminal({ desolateDecided: true });
+        if (issue) said(card, `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}`);
+        else {
+          // The focus stays on the card, not on a button that can no longer be pressed.
+          card.element.focus({ preventScroll: true });
+          approved(card, Date.now(), arm.squash ? push.commit : null);
+          // (The host's record of it may have come before this answer did.)
+          card.busy = false;
+          heard();
+        }
+      }
       catch (error) { said(card, `not approved: ${error.message}`); card.saidUntil = performance.now() + SAID_MS; }
       finally { card.busy = false; disarm(card); }
     });
@@ -464,22 +479,123 @@ const add = (push, issue) => {
   return card;
 };
 
-/** After a squash, how the workspace's branch goes on from it. */
-const carryOn = (card) => card.squashed ? ` Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "";
-/** How a push this page approved ended, as the host heard it from the pusher: said on its card,
- *  with the page to open its pull request (GitHub's, on github.com only). */
-const ended = (outcome) => {
-  const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.token === outcome.token);
-  if (!card) return;
-  card.ended = true;
-  if (!outcome.pushed) return void said(card, `approved, but the pusher said: ${outcome.error}`);
-  said(card, `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it. `);
-  // A suede proposal (docs/suede.md): the dependency's own Action opens its pull request.
-  if (/^downstream\//.test(card.push.branch)) card.hint.append("The dependency's own Action (suede-downstream-to-main) opens its pull request.");
-  else if (typeof outcome.link === "string" && outcome.link.startsWith("https://github.com/"))
-    card.hint.append(Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
-  card.hint.append(carryOn(card));
+/** After a squash (`squashes`: the commit squashed), how the workspace's branch goes on from it. */
+const carryOn = (branch, squashes) => squashes ? ` Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${branch} ${squashes}` : "";
+
+// After Approve. The page's word on a push it approved is the host's record of the approval
+// (approve-web.ts, `approved`): the names the Mac signed, and how the push ended once the
+// root's pusher said (its log, which only root writes: host/events.ts). The page says whose
+// word that is, shows its why as text, and acts on none of it: a card approved cannot arm
+// again, and a record names only an approval the host signed.
+/** How long a push approved here may go unheard of before its card says so. The approval
+ *  lasts two minutes unless the pusher takes it (root/keyring.ts, APPROVAL); an ordinary push
+ *  is then said to have landed within seconds (T2 04). A large one can take longer to upload:
+ *  its card changes whenever word comes. */
+const NO_WORD_MS = 3 * 60_000;
+/** The host's record of each approval signed here, as its last answer gave it. */
+let records = [];
+/** Failures, and pushes not heard of, the person put away in this tab: kept by the tab alone
+ *  (a reload does not bring them back; another tab still shows them), the last few. */
+const DISMISSED = "desolate-dismissed";
+const dismissed = new Set((() => { try { return JSON.parse(sessionStorage.getItem(DISMISSED) || "[]"); } catch { return []; } })());
+const pushedList = document.querySelector("#pushed ul");
+const pushedLines = new Map();
+
+/** A card is approved: it cannot be approved again (its buttons go), and it says what became
+ *  of the push from here on. `at`: when, by this Mac's clock. */
+const approved = (card, at, squashes) => {
+  card.done = card.approved = true;
+  card.approvedAt = at;
+  card.squashes = squashes;
+  for (const arm of card.arms) { arm.armedAt = 0; arm.button.disabled = true; }
+  card.refuse.disabled = true;
+  card.element.classList.remove("gone");
+  showApproved(card);
 };
+/** What a card approved says now: being pushed; not pushed, or perhaps not, in the pusher's
+ *  words, kept until dismissed; or no word yet. Pushed, it goes (`pushedLine`). */
+const showApproved = (card) => {
+  const record = card.record;
+  if (record && record.pushed) return void gone(card, pushedLine(record));
+  const failed = record && record.error !== undefined;
+  const minutes = Math.floor((Date.now() - card.approvedAt) / 60_000);
+  const state = failed ? (record.uncertain ? "uncertain" : "failed") : minutes * 60_000 >= NO_WORD_MS ? "unheard" : "pushing";
+  const branch = card.push.branch;
+  const text =
+    state === "failed" ? `Not pushed. The root's pusher reports: ${record.error}. To try again, push it again (the dashboard's Push, desolate push, or git push in the git VM) and approve it here.`
+    : state === "uncertain" ? `Perhaps not pushed. The root's pusher reports it may or may not have reached the remote: ${record.error}. See what the remote's ${branch} has (desolate fetch, then the dashboard) before you push it again.`
+    : state === "unheard" ? `No word from the root's pusher ${minutes} minutes after you approved this. A large push can take longer, and this changes when word comes. If none does, desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended; to try again, push it again.`
+    : `Approved${card.squashes ? ", squashed into one commit" : ""}: the root is pushing it to the remote now. This card goes when the root's pusher reports the remote has it.`;
+  for (const name of ["pushing", "failed", "uncertain", "unheard"]) card.element.classList.toggle(name, name === state);
+  // Pushing, a card approved here keeps its buttons (disabled): nothing moves under the
+  // pointer that clicked. Ended, or not heard of, Dismiss takes their place.
+  const bare = state !== "pushing" || card.drawn;
+  for (const arm of card.arms) if (bare) arm.wrap.hidden = true;
+  card.refuse.hidden = bare;
+  card.dismiss.hidden = state === "pushing";
+  // (Said only when it changes: a live region reads each change out.)
+  if (card.hint.textContent !== text) said(card, text);
+};
+/** A card leaves the page. The focus, if it was on it, goes to `to`, else to the card after
+ *  it (or before it), else to the heading: never to nothing. */
+const gone = (card, to) => {
+  const had = card.element.contains(document.activeElement);
+  const near = card.element.nextElementSibling || card.element.previousElementSibling;
+  card.element.remove();
+  cards.delete(card.push.token);
+  counted();
+  if (had) (to || near || document.querySelector("h1")).focus({ preventScroll: true });
+};
+const dismiss = (card) => {
+  dismissed.add(card.push.token);
+  try { sessionStorage.setItem(DISMISSED, JSON.stringify([...dismissed].slice(-16))); } catch { /* kept until a reload */ }
+  gone(card, null);
+};
+/** A pushed approval's line under "Pushed", newest first, once: what the pusher reports the
+ *  remote took, the page to open its pull request, and how to go on after a squash. */
+const pushedLine = (record) => {
+  if (pushedLines.has(record.token)) return pushedLines.get(record.token);
+  const li = el("li");
+  li.tabIndex = -1;
+  li.append(el("code", record.repo), " ", el("code", record.branch), " ", el("code", record.commit.slice(0, 12)), `: the root's pusher reports the remote has it${record.squashes ? ", squashed into one commit" : ""}. Approved at ${new Date(record.at).toTimeString().slice(0, 8)}.`);
+  // A suede proposal (docs/suede.md): the dependency's own Action opens its pull request.
+  if (/^downstream\//.test(record.branch)) li.append(" The dependency's own Action (suede-downstream-to-main) opens its pull request.");
+  else if (typeof record.link === "string" && record.link.startsWith("https://github.com/"))
+    li.append(" ", Object.assign(el("a", "Open a pull request"), { href: record.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
+  li.append(carryOn(record.branch, record.squashes));
+  pushedList.prepend(li);
+  pushedLines.set(record.token, li);
+  pushedList.parentElement.hidden = false;
+  return li;
+};
+/** Each record the host gave: the card it belongs to (by the token over the text signed),
+ *  drawn if this page has none (a reload, another tab's approval), and how it stands. A push
+ *  still waiting here, and not approved here, is its own card's until the root takes the
+ *  approval (it then leaves the list): a record never decides a card that can still arm. */
+const heard = () => {
+  for (const record of records) {
+    let card = cards.get(record.token);
+    if (card && (card.issue || card.busy || (!card.approved && !card.gone))) continue;
+    if (!card) {
+      if (dismissed.has(record.token)) continue;
+      if (record.pushed) { pushedLine(record); continue; }
+      card = add({ repo: record.repo, branch: record.branch, commit: record.commit, onto: record.onto, token: record.token });
+      card.gone = true;
+      cards.set(record.token, card);
+      list.append(card.element);
+    }
+    card.record = record;
+    // Approved, but not by a click in this tab: nothing of it was under this tab's pointer, so
+    // its buttons go at once.
+    if (!card.approved) { card.drawn = true; approved(card, record.at, record.squashes); }
+    else { card.approvedAt = record.at; showApproved(card); }
+  }
+  // The lines of approvals the host no longer keeps (OUTCOMES_KEPT) go.
+  for (const [token, li] of pushedLines) if (!records.some((r) => r.token === token)) { li.remove(); pushedLines.delete(token); }
+  pushedList.parentElement.hidden = pushedLines.size === 0;
+  counted();
+};
+setInterval(() => { for (const card of cards.values()) if (card.approved) showApproved(card); }, 1000);
 
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
 const choicesOf = (card, review) => {
@@ -515,6 +631,9 @@ const render = (pending, issues) => {
     seen.add(push.token);
     let card = cards.get(push.token);
     if (!card) {
+      // One the host has signed is not waiting for the person, whatever the root still lists:
+      // its record says what became of it (`heard`).
+      if (records.some((r) => r.token === push.token)) continue;
       card = add(push);
       cards.set(push.token, card);
       list.append(card.element);
@@ -551,7 +670,8 @@ const render = (pending, issues) => {
     if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
       if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; said(card, "no longer waiting (approved elsewhere, refused, or given up)"); }
-      card.element.classList.add("gone");
+      // (One approved says what became of it, at full strength.)
+      if (!card.approved) card.element.classList.add("gone");
       changed = true;
     }
   // Something new to decide: what was decided before folds to its names and its outcome, so
@@ -560,6 +680,10 @@ const render = (pending, issues) => {
   if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); card.changedAt = performance.now(); }
   if (scrollTo) scrollTo.scrollIntoView({ block: "start" });
   if (changed) disarmAll();
+  counted();
+};
+/** How many wait, in the tab's title and to the git terminal; and nothing on the page, said. */
+const counted = () => {
   const waiting = [...cards.values()].filter((card) => !card.gone).length;
   document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
@@ -579,10 +703,6 @@ const render = (pending, issues) => {
 // The issues to publish are asked for every second.
 let pending = null;
 let issues = [];
-/** How the pushes approved here ended, as the host last said: kept, as an approval's own
- *  answer can come after the word that it was pushed. */
-let outcomes = [];
-let outcomesAt = 0;
 const poll = async (tag) => {
   const began = performance.now();
   let next = null;
@@ -590,7 +710,7 @@ const poll = async (tag) => {
     const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
     if (!answer.ok) { current = false; moved(); say(body.error || `HTTP ${answer.status}`); }
-    else { pending = body.pending; render(pending, issues); outcomes = body.done || []; outcomesAt = performance.now(); for (const outcome of outcomes) ended(outcome); current = true; next = body.tag; }
+    else { pending = body.pending; records = body.approved; render(pending, issues); heard(); current = true; next = body.tag; }
   } catch (error) { current = false; moved(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };

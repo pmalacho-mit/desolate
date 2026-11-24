@@ -62,7 +62,14 @@ const published: string[] = [];
 const notNow: string[] = [];
 const refused: string[] = [];
 /** Who hears the pusher now (host/daemon.ts: the events it reads from the pusher's log). */
-type Said = { type: string; repo: string; branch: string; commit: string; error?: string };
+type Said = {
+  type: string;
+  repo: string;
+  branch: string;
+  commit: string;
+  onto: string | null;
+  error?: string;
+};
 let pusherHeard: ((said: Said) => void) | null = null;
 const pusherSays = (said: Said) => pusherHeard!(said);
 /** Every approval signed, across the tests (`approved` is emptied by each). */
@@ -881,7 +888,7 @@ describe("T1 the approval page", () => {
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
   });
 
-  it("after approving, the page is told how the push it signed ended, by the pusher's word on that commit alone", async () => {
+  it("after approving, the page is told how the push it signed ended, by the pusher's word on that very move alone", async () => {
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
     approved.length = 0;
     // An approval not yet heard of keeps the pusher's log followed with no page open: a page
@@ -889,8 +896,15 @@ describe("T1 the approval page", () => {
     assert.ok(pusherHeard, "the earlier tests' approvals, not heard of: followed, no page open");
     for (const signed of everSigned) {
       const field = (name: string) => new RegExp(`^${name}: (.+)$`, "m").exec(signed)![1]!;
-      const [repo, branch, commit] = [field("repo"), field("branch"), field("commit")];
-      pusherHeard?.({ type: "push-failed", repo, branch, commit, error: "ended by the test" });
+      const [repo, branch, commit, onto] = ["repo", "branch", "commit", "onto"].map(field);
+      pusherHeard?.({
+        type: "push-failed",
+        repo: repo!,
+        branch: branch!,
+        commit: commit!,
+        onto: onto === "none" ? null : onto!,
+        error: "ended by the test",
+      });
     }
     await moment();
     assert.equal(
@@ -902,20 +916,43 @@ describe("T1 the approval page", () => {
     const looking = held(`/pending?since=${await tagNow()}`);
     await moment();
     assert.ok(pusherHeard, "a page looks at a push: the pusher is heard");
+    const before = Date.now();
     assert.equal((await approve(good())).status, 200);
-    // The pusher's word on another commit of the branch, or another repository: not this push.
-    pusherSays({ type: "pushed", repo: push.repo, branch: push.branch, commit: "b".repeat(40) });
-    pusherSays({ type: "pushed", repo: "acme/other", branch: push.branch, commit: push.commit });
-    await moment();
-    assert.equal(looking.answer.done, false, "nothing said for a push this page did not sign");
-    pusherSays({ type: "pushed", repo: push.repo, branch: push.branch, commit: push.commit });
     await looking.asked;
-    // (What this test approved: the earlier approvals, of this message too, it ended itself.)
-    const mine = (done: { token: string; error?: string }[]) =>
-      done.filter((d) => d.token === pushToken(approveToken(), message) && !d.error);
-    assert.deepEqual(mine(looking.answer.body!.done as { token: string }[]), [
+    // Every page is told at once that it is being pushed: the names the Mac signed, and when.
+    const token = pushToken(approveToken(), message);
+    type Told = { token: string; pushed: boolean; error?: string; at: number };
+    const mine = (body: Record<string, unknown> | null) =>
+      (body!.approved as Told[]).filter((d) => d.token === token && !d.error);
+    const pushing = mine(looking.answer.body);
+    assert.equal(pushing.length, 1);
+    assert.ok(pushing[0]!.at >= before && pushing[0]!.at <= Date.now());
+    assert.deepEqual(pushing, [
       {
-        token: pushToken(approveToken(), message),
+        token,
+        repo: push.repo,
+        branch: push.branch,
+        commit: push.commit,
+        onto: null,
+        squashes: null,
+        at: pushing[0]!.at,
+        pushed: false,
+      },
+    ]);
+    const ending = held(`/pending?since=${await tagNow()}`);
+    // The pusher's word on another commit of the branch, another repository, or the same
+    // commit moved from elsewhere: not this push.
+    const move = { repo: push.repo, branch: push.branch, commit: push.commit, onto: null };
+    pusherSays({ type: "pushed", ...move, commit: "b".repeat(40) });
+    pusherSays({ type: "pushed", ...move, repo: "acme/other" });
+    pusherSays({ type: "pushed", ...move, onto: "c".repeat(40) });
+    await moment();
+    assert.equal(ending.answer.done, false, "nothing said for a push this page did not sign");
+    pusherSays({ type: "pushed", ...move });
+    await ending.asked;
+    assert.deepEqual(mine(ending.answer.body), [
+      {
+        ...pushing[0]!,
         pushed: true,
         link: "https://github.com/acme/widgets/compare/issue/12?expand=1",
       },
@@ -926,11 +963,13 @@ describe("T1 the approval page", () => {
       null,
       "no page looks and the push is heard of: the pusher is not heard",
     );
-    const later = JSON.parse((await call("GET", "/pending", asPage())).body) as { done: unknown };
-    assert.deepEqual(later.done, looking.answer.body!.done, "and what it said is kept");
+    const later = JSON.parse((await call("GET", "/pending", asPage())).body) as {
+      approved: unknown;
+    };
+    assert.deepEqual(later.approved, ending.answer.body!.approved, "and what it said is kept");
   });
 
-  it("a push's word that comes while no page asks (between two of a page's asks) is kept for its next ask", async () => {
+  it("a push's word that comes while no page asks (between two of a page's asks) is kept for its next ask, as a reload finds it", async () => {
     listed = [{ message, at: "2026-11-12T00:00:00Z" }];
     approved.length = 0;
     await listedNow();
@@ -941,16 +980,68 @@ describe("T1 the approval page", () => {
     looking.gone();
     await moment();
     assert.ok(pusherHeard, "an approval not heard of: the pusher is still followed");
-    pusherSays({ type: "pushed", repo: push.repo, branch: push.branch, commit: push.commit });
+    // What the forge said, as the pusher's log has it: the page is given it as text, made
+    // printable (host/events.ts made it so first; here again).
+    pusherSays({
+      type: "push-failed",
+      repo: push.repo,
+      branch: push.branch,
+      commit: push.commit,
+      onto: null,
+      error: "refused\u001b[2J <img src=x onerror=alert(1)> \u202eevil",
+    });
     await moment();
     assert.equal(pusherHeard, null, "heard of, and no page: no longer followed");
     const next = JSON.parse((await call("GET", "/pending", asPage())).body) as {
-      done: { token: string; pushed: boolean; error?: string }[];
+      approved: { token: string; pushed: boolean; error?: string; uncertain?: boolean }[];
     };
-    assert.ok(
-      next.done.some((d) => d.token === pushToken(approveToken(), message) && d.pushed && !d.error),
-      "the page's next ask is told it was pushed",
+    assert.deepEqual(
+      next.approved
+        .filter((d) => d.token === pushToken(approveToken(), message))
+        .map((d) => [d.pushed, d.error, d.uncertain])
+        .pop(),
+      [false, "refused?[2J <img src=x onerror=alert(1)> ?evil", false],
+      "the page's next ask (a reload's first) is told it failed, and why, as text",
     );
+  });
+
+  it("a flood of the pusher's words: what the page is told stays as many approvals as a person made, each ended once", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    await listedNow();
+    assert.equal((await approve(good())).status, 200);
+    const tagBefore = await tagNow();
+    const size = (await call("GET", "/pending", asPage())).body.length;
+    assert.ok(pusherHeard, "an approval not heard of: the pusher is followed");
+    // 100,000 words for moves nobody signed, each with 10,000 characters of why: nothing.
+    const long = "x".repeat(10_000);
+    for (let i = 0; i < 100_000; i++)
+      pusherSays({
+        type: "push-failed",
+        repo: push.repo,
+        branch: push.branch,
+        commit: i.toString(16).padStart(40, "0"),
+        onto: null,
+        error: long,
+      });
+    assert.equal(await tagNow(), tagBefore, "no word on a move signed here: the page is not told");
+    // CONTROL: the word on the move signed ends that approval, once, with at most
+    // printable's 4,000 characters of why; the many after it change nothing (ended, and no
+    // page open, the log is no longer followed: endedBy's own tests show the once).
+    for (let i = 0; i < 1000; i++)
+      pusherHeard?.({
+        type: i ? "pushed" : "push-failed",
+        repo: push.repo,
+        branch: push.branch,
+        commit: push.commit,
+        onto: null,
+        error: long,
+      });
+    const body = (await call("GET", "/pending", asPage())).body;
+    const told = (JSON.parse(body) as { approved: { error?: string }[] }).approved;
+    assert.ok(told.length <= 16, `${told.length} approvals told`);
+    assert.equal(told.at(-1)!.error!.length, 4000);
+    assert.ok(body.length < size + 4100, `${body.length} bytes, from ${size}`);
   });
 
   it("a push the reviewer could not describe is not signed, though the page listed it", async () => {
