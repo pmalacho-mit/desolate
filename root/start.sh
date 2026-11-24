@@ -224,6 +224,14 @@ cat >"$SYS/gitconfig.new" <<G
 	protectHFS = true
 	protectNTFS = true
 	fsmonitor = false
+# Two domains import into one root clone at once (offers.ts, fetchDomain), and git there
+# also packs its refs (auto gc, in the fetch that set it off): each holds a ref's lock, or
+# packed-refs', while it writes, and git gives up on one held after 100 ms (a ref) or 1 s
+# (packed-refs), by default. A minute waits out any honest holder, on a loaded VM too:
+# another domain's import is not a reason for a domain's to fail. (A lock left by a git that
+# was killed is waited on for that minute, then said.)
+	filesRefLockTimeout = 60000
+	packedRefsTimeout = 60000
 # What git shows in the person's terminal (a commit message, a file name, a diff an agent
 # wrote) goes through less, which passes colour and shows any other control as text.
 	pager = less

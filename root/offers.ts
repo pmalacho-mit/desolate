@@ -134,14 +134,21 @@ const toLog = () => {
     return false;
   }
 };
-/** The fetch running in each clone in this process. A domain's branches come in by a forced
- *  refspec, so of two fetches at once the one that read the domain first could write last and
- *  set a branch back (a review read 249 of a branch's 250 commits: the dashboard's count was
- *  fetching as the review did). One at a time, each after the last: a review's fetch reads
- *  the domain after any fetch already running has written. */
+/** The fetch of each domain running in each clone in this process. A domain's branches come
+ *  in by a forced refspec, so of two fetches of one domain at once the one that read the
+ *  domain first could write last and set a branch back (a review read 249 of a branch's 250
+ *  commits: the dashboard's count was fetching as the review did). One at a time, each after
+ *  the last: a review's fetch reads the domain after any fetch of it already running has
+ *  written. Another domain's runs beside it: it writes only its own refs (<domain>/*, and the
+ *  helper's scratch refs under its name), so one domain's import, however long a domain
+ *  makes it, never holds another's (it held every domain sharing the clone). git takes the
+ *  one lock they share, packed-refs, for a moment at each deletion, and waits up to a second
+ *  for it (core.packedRefsTimeout); measured with git 2.39: 80 rounds of two domains' fetch
+ *  --prune at once in one clone, each deleting and adding 30 branches, 40 of them beside a
+ *  `pack-refs --all --prune`, and none failed. */
 const fetching = new Map<string, Promise<void>>();
 export const fetchDomain = (domain: string, repo: Repo): Promise<void> => {
-  const key = clonePath(repo);
+  const key = `${domain}\0${clonePath(repo)}`;
   const mine = (fetching.get(key) ?? Promise.resolve())
     .catch(() => {})
     .then(() => fetchDomainNow(domain, repo));
