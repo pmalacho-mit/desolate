@@ -1059,8 +1059,8 @@ const REPLIES = {
   "issue.done": ignored,
   "approvals.pending": of(
     list(
- shape({ message: text(APPROVAL_TEXT), summary: text(SAID.sentence), at: text(SAID.name) }),
- ),
+      shape({ message: text(APPROVAL_TEXT), summary: text(SAID.sentence), at: text(SAID.name) }),
+    ),
   ),
   "approvals.wait": of(
     shape({
