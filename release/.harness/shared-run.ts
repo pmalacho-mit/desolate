@@ -53,10 +53,10 @@ export const leftRunning = async (cancelled: boolean): Promise<boolean> => {
 export const outlivesItsRunner = async (grouped: boolean, nested = false): Promise<boolean> => {
   const inner = `import { run } from ${JSON.stringify(RUN_TS)};
        const options = process.argv[1] === "grouped" ? { signal: new AbortController().signal } : {};
-       await run("sh", ["-c", "echo $$ >&2; exec sleep 30"], { ...options, inheritStderr: true });`;
+       await run("sh", ["-c", "echo $$ >&2; exec sleep 30"], { ...options, stderrLines: (line) => process.stderr.write(line + "\\n") });`;
   const outer = `import { run } from ${JSON.stringify(RUN_TS)};
        const options = process.argv[1] === "grouped" ? { signal: new AbortController().signal } : {};
-       await run(process.execPath, ["--disable-warning=ExperimentalWarning", "--input-type=module", "-e", process.argv[2], process.argv[1]], { ...options, inheritStderr: true });`;
+       await run(process.execPath, ["--disable-warning=ExperimentalWarning", "--input-type=module", "-e", process.argv[2], process.argv[1]], { ...options, stderrLines: (line) => process.stderr.write(line + "\\n") });`;
   const runner = spawn(
     process.execPath,
     [
@@ -100,7 +100,7 @@ export const answerWithAnEscapee = async (
       `const child = require("node:child_process").spawn("sleep", ["10"], { detached: true, stdio: "inherit" });
        process.stderr.write(child.pid + "\\n");`,
     ],
-    { idleMs, inheritStderr: false },
+    { idleMs },
   );
   const pid = Number(/^(\d+)\n/.exec(answer.stderr)?.[1]);
   if (pid > 1 && alive(pid)) process.kill(pid, "SIGKILL");

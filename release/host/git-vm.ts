@@ -49,6 +49,7 @@ import type {
   leaveSparse,
   linkInHome,
   outbox,
+  heldOnly,
 } from "../.harness/host-git-out.ts";
 import type { collect } from "../.harness/host-stack.ts";
 
@@ -171,6 +172,41 @@ export const ensureGitVm = async (log: (line: string) => void = () => {}) => {
     );
 };
 
+/** The domains whose remote the person's clone of `id` gets: each that has the repository, by
+ *  the root's list, and that this Mac itself holds a folder for (the list is the root's word;
+ *  a name in it becomes a remote in the person's clone). Never `origin` or `root`. */
+export const remoteDomains = (
+  domains: readonly { slug: string; repos: readonly string[] }[],
+  id: string,
+  held: (slug: string) => boolean,
+): string[] =>
+  domains
+    .filter((d) => d.repos.includes(id) && d.slug !== "origin" && d.slug !== "root")
+    .map((d) => d.slug)
+    .filter(held);
+
+declare namespace remoteDomains {
+  /** a domain the Mac holds and that has the repository; not one the Mac has no folder for,
+   *  one without it, or one named like a remote already in every clone */
+  export type Chosen = Expect<
+    Invoke<
+      typeof remoteDomains,
+      [
+        domains: [
+          { slug: "acme"; repos: ["acme/web"] },
+          { slug: "made-up"; repos: ["acme/web"] },
+          { slug: "other"; repos: ["acme/api"] },
+          { slug: "origin"; repos: ["acme/web"] },
+        ],
+        id: "acme/web",
+        held: Invoke<typeof heldOnly, [slugs: ["acme", "other", "origin"]]>,
+      ]
+    >,
+    "=",
+    ["acme"]
+  >;
+}
+
 /** The person's clone of a repository in the git VM: from the mirror, with `root` as a
  *  second remote (what the domains offered), and `origin`'s push going to the host.
  *
@@ -186,19 +222,24 @@ export const ensureGitClone = async (repo: Repo) => {
   // workspaces wrote (<domain>/<branch>), and `git push <domain> <branch>` delivers a branch
   // to it (its workspaces see root/<branch>). (A domain named like a remote already here is
   // reached through `root` alone.)
-  const domainList = (
-    await rootctlBrief<{ slug: string; repos: string[] }[]>("domain.list").catch(() => [])
-  )
-    .filter(
-      (d) => d.repos.includes(id) && isSlug(d.slug) && d.slug !== "origin" && d.slug !== "root",
-    )
-    .map((d) => d.slug);
+  const domainList = remoteDomains(
+    await rootctlBrief("domain.list").then(
+      (l) => l.domains,
+      () => [],
+    ),
+    id,
+    (slug) => fs.existsSync(paths.domain(slug)),
+  );
+  // A remote of that name that desolate did not make (its push address is not desolate's
+  // for that domain) is the person's, and is left as it is.
   const perDomain = domainList.flatMap((d) => [
+    `if ! git remote get-url ${d} >/dev/null 2>&1 || [ "$(git config --get remote.${d}.pushurl || true)" = "desolate-out::$3@${d}" ]; then`,
     `git remote get-url ${d} >/dev/null 2>&1 || git remote add ${d} "$4"`,
     `git config remote.${d}.url "$4"`,
     `git config --replace-all remote.${d}.fetch '+refs/remotes/${d}/*:refs/remotes/${d}/*'`,
     `git config remote.${d}.pushurl "desolate-out::$3@${d}"`,
     `git config remote.${d}.uploadpack "git -c core.alternateRefsCommand=true upload-pack"`,
+    "fi",
   ]);
   const script = [
     "set -euo pipefail",
@@ -589,7 +630,7 @@ const takeOne = async (
         : "desolate: handed to the root; nothing has gone to the remote. Approve it on the approval page (desolate approve --web; in the git terminal, beside the shell). Until it is approved, Ctrl-C withdraws it.",
     );
     note(id, `  ${repoId(repo)}  ${String(asked.branch)}  ${String(asked.commit)}`);
-    const reply = await rootctl<{ pushed: boolean; error?: string; said?: string[] }>(
+    const reply = await rootctl(
       "git.push",
       {
         repo: repoId(repo),

@@ -297,11 +297,7 @@ export const upstreamCommand = async (
     refuse(`'${printable(from, 100)}' is not a branch or a commit`, USAGE, EXIT.usage);
   const remote = typeof values.remote === "string" ? values.remote : null;
   // Which repositories desolate holds, and which it may push: the root's word.
-  const held = await rootctl<{ repo: string; pushable: boolean }[]>(
-    "repo.list",
-    {},
-    { quiet: true },
-  );
+  const held = await rootctl("repo.list", {}, { quiet: true });
   const find = (repo: Repo) =>
     held.find((r) => r.repo.toLowerCase() === repoId(repo).toLowerCase());
   if (!find(consumer))
@@ -439,7 +435,17 @@ declare namespace upstreamCommand {
       Call<
         Mocked<typeof rootctl>,
         "mockResolvedValue",
-        [value: [{ repo: "acme/lib"; pushable: true }]]
+        [
+          value: [
+            {
+              repo: "acme/lib";
+              pushable: true;
+              anonymous: false;
+              defaultBranch: "main";
+              fetchedAt: null;
+            },
+          ],
+        ]
       >,
     ],
     Expect<
@@ -461,7 +467,24 @@ declare namespace upstreamCommand {
       Call<
         Mocked<typeof rootctl>,
         "mockResolvedValue",
-        [value: [{ repo: "acme/app"; pushable: false }, { repo: "acme/lib"; pushable: false }]]
+        [
+          value: [
+            {
+              repo: "acme/app";
+              pushable: false;
+              anonymous: false;
+              defaultBranch: "main";
+              fetchedAt: null;
+            },
+            {
+              repo: "acme/lib";
+              pushable: false;
+              anonymous: false;
+              defaultBranch: "main";
+              fetchedAt: null;
+            },
+          ],
+        ]
       >,
     ],
     Expect<
@@ -486,7 +509,24 @@ declare namespace upstreamCommand {
       Call<
         Mocked<typeof rootctl>,
         "mockResolvedValue",
-        [value: [{ repo: "Acme/App"; pushable: false }, { repo: "acme/lib"; pushable: true }]]
+        [
+          value: [
+            {
+              repo: "Acme/App";
+              pushable: false;
+              anonymous: false;
+              defaultBranch: "main";
+              fetchedAt: null;
+            },
+            {
+              repo: "acme/lib";
+              pushable: true;
+              anonymous: false;
+              defaultBranch: "main";
+              fetchedAt: null;
+            },
+          ],
+        ]
       >,
       Call<
         Mocked<typeof backend>,

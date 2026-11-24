@@ -480,7 +480,7 @@ describe("T2 phase 1: the root VM", () => {
         silent
           ? "sleep 600"
           : `for i in 1 2 3 4 5 6; do sleep 1; echo "{\\"progress\\":\\"still fetching: $i of 6\\"}"; done`,
-        `echo '{"reply":{"ok":true,"result":{"branches":1,"lfsObjects":1}}}'`,
+        `echo '{"reply":{"ok":true,"result":{"repo":"acme/widgets","branches":1,"defaultBranch":"main","lfsObjects":1,"rootClone":"present"}}}'`,
       ].join("\n") + "\n";
     const serve = (silent: boolean) => {
       const put = stack.inRoot(["bash", "-c", "cat >/tmp/stand-in.sh"], { input: standIn(silent) });
