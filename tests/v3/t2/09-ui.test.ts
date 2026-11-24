@@ -1651,29 +1651,40 @@ describe("T2 section 4.8: the root UI", () => {
       /was not removed: uncommitted changes or untracked files/,
     );
     assert.ok(await spare(), "still there");
-    // A dashboard opened (a stream: the page's own) asks each workspace to look now: it is
-    // shown within seconds, not at the look every minute (by chance within 20 s: 1 in 3;
-    // the time is printed: a few seconds when the ask is what made it).
-    const untracked = (s: State) =>
-      ((ws(s, "web/spare") as Seen | undefined)?.host?.looked?.lost ?? []).some((l) =>
-        /untracked files/.test(l),
+    // A dashboard opened (a stream: the page's own) asks each workspace to look now. Shown
+    // within seconds, and by that ask: the workspace's daemon logs why it looked when the
+    // answer changed, and the cause is the host's watch line, not its look every minute
+    // (which would say so) and not git (an untracked file is no event there).
+    const vm = (ws(await state(), "web/spare") as unknown as { vm: string }).vm;
+    const causes = () =>
+      stack
+        .inVm(
+          vm,
+          ["bash", "-c", "grep -o 'changed, looked at on: .*' /var/lib/desolate/wsd.log || true"],
+          { root: true },
+        )
+        .stdout.trim()
+        .split("\n")
+        .filter(Boolean);
+    const before = causes().length;
+    const shown = async (wanted: (lost: string[]) => boolean, why: string) => {
+      const asked = performance.now();
+      const seen = await pushed(
+        (s) => wanted((ws(s, "web/spare") as Seen | undefined)?.host?.looked?.lost ?? ["?"]),
+        8_000,
       );
-    const asked = performance.now();
-    const seen = await pushed(untracked, 20_000);
-    assert.ok(seen, `seen: ${JSON.stringify(await lost())}`);
-    console.log(
-      `# an untracked file shown ${Math.round(seen.at - asked)} ms after a dashboard opened`,
-    );
-    // Nothing left in it: shown so when a dashboard opens (control: the same way, the other
-    // answer; by chance both within 20 s, 1 in 9), and removed.
+      assert.ok(seen, `${why}: seen ${JSON.stringify(await lost())}`);
+      const cause = causes().slice(before).at(-1) ?? "";
+      console.log(
+        `# ${why} shown ${Math.round(seen.at - asked)} ms after a dashboard opened (${cause})`,
+      );
+      assert.match(cause, /a watch line/, `${why}: looked at because the dashboard asked`);
+      assert.doesNotMatch(cause, /the minute/, `${why}: not by the look every minute`);
+    };
+    await shown((lost) => lost.some((l) => /untracked files/.test(l)), "an untracked file");
+    // Nothing left in it: shown so the same way (the other answer), and removed.
     assert.equal(stack.quiet("exec", "web/spare", "--", "rm", "notes.txt").code, 0);
-    assert.ok(
-      await pushed(
-        (s) => (ws(s, "web/spare") as Seen | undefined)?.host?.looked?.lost?.length === 0,
-        20_000,
-      ),
-      `seen: ${JSON.stringify(await lost())}`,
-    );
+    await shown((lost) => lost.length === 0, "its removal");
     const done = await removeIt();
     assert.equal(done.state, "done", done.lines.join("\n"));
     assert.ok(

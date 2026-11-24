@@ -737,17 +737,28 @@ const gitDirs = async (checkout: string): Promise<string[]> => {
 const lookAt = (tell: () => void) => {
   let asked: string[] = [];
   let watchers: fs.FSWatcher[] = [];
-  const checkouts = paced(async () => {
+  // Why each look was made: said in the log when it changed the answer, so that what a
+  // dashboard shows can be traced to its cause (T2 09-ui asserts on it).
+  const why = new Set<string>();
+  const pacer = paced(async () => {
     const at = asked;
+    const because = [...why].sort().join(", ");
+    why.clear();
     if (at.length === 0) return;
     const said = await run("bash", ["-c", LOOK_EACH, "_", ...at]);
     // (Asked about others meanwhile: their own look follows.)
     if (at !== asked) return;
     const now = said.code === 0 ? said.stdout : at.map((p) => `UNREADABLE ${p}\n`).join("");
     if (now === looked) return;
+    if (looked !== null)
+      console.error(`wsd: what a remove would lose changed, looked at on: ${because}`);
     looked = now;
     tell();
   });
+  const checkouts = (cause: string) => {
+    why.add(cause);
+    pacer.poke();
+  };
   const agentsLook = paced(async () => {
     const now = agentsNow();
     if (JSON.stringify(now) === JSON.stringify(agents)) return;
@@ -769,12 +780,12 @@ const lookAt = (tell: () => void) => {
   watched(AGENTS_DIR, agentsLook.poke, (file) => !file || file.endsWith(".json"));
   agentsLook.poke();
   setInterval(() => {
-    checkouts.poke();
+    checkouts("the minute");
     agentsLook.poke();
   }, LOOK_EVERY_MS);
   return {
     ask: (look: unknown) => {
-      checkouts.poke();
+      checkouts("a watch line");
       agentsLook.poke();
       const wanted = Array.isArray(look)
         ? [...new Set(look.filter((p): p is string => typeof p === "string"))].slice(
@@ -789,7 +800,7 @@ const lookAt = (tell: () => void) => {
       void (async () => {
         const dirs = new Set((await Promise.all(wanted.map(gitDirs))).flat());
         if (asked !== wanted) return;
-        for (const dir of dirs) watchers.push(...watched(dir, checkouts.poke));
+        for (const dir of dirs) watchers.push(...watched(dir, () => checkouts("git")));
       })();
     },
   };
