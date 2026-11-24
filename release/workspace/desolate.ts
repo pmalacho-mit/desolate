@@ -3,6 +3,7 @@
 //
 //   desolate fetch [<owner/repo>]          ask the root to refresh the mirror, then git fetch
 //   desolate offer [<owner/repo>] [<branch>]  bundle a branch for the root; a person pushes it
+//   desolate offer --check [<owner/repo>] [<branch>]  whether the branch as it is now is offered
 //   desolate sync                          write this domain's branches out for the root now
 //   desolate status ...                    /desolate/status (the wrapper, workspace/desolate, runs it)
 //   desolate spawn [--name <w>] [--branch <b>] [--checkout <owner/repo>=worktree:<b>]... [-- <command...>]
@@ -17,12 +18,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { EXIT } from "../shared/exit.ts";
+import { readJson } from "../shared/json.ts";
 import { NAMES } from "../shared/limits.ts";
 import { branchRefusal, isBranch, parseRepo, repoId, slugRefusal } from "../shared/names.ts";
 import { run, sleep } from "../shared/run.ts";
 import { checkoutsRefusal, commandRefusal, IDENTITY_FILE, KEY, sign } from "../shared/spawn.ts";
 import type { Signed } from "../shared/spawn.ts";
 import { statsLines } from "../shared/stats.ts";
+import { printable } from "../shared/text.ts";
 import {
   branches,
   domainRepos,
@@ -120,12 +124,22 @@ declare namespace fetchArgs {
   >;
 }
 
-/** `desolate offer [<owner/repo>] [<branch>] [--base <branch>]`: which repository (else the
- *  checkout's), which branch (else the checked-out one), and the base a pull request of it
- *  would go into. A first word that is a repository is the repository; any other is the branch. */
+/** `desolate offer [--check] [<owner/repo>] [<branch>] [--base <branch>]`: which repository
+ *  (else the checkout's), which branch (else the checked-out one), and the base a pull request
+ *  of it would go into; --check: only say whether it is offered as it is now. A first word that
+ *  is a repository is the repository; any other is the branch. */
 export const offerArgs = (
-  args: string[],
-): { base: string | undefined; repo: string | undefined; branch: string | undefined } | Refused => {
+  words: string[],
+):
+  | {
+      check: boolean;
+      base: string | undefined;
+      repo: string | undefined;
+      branch: string | undefined;
+    }
+  | Refused => {
+  const check = words.includes("--check");
+  const args = words.filter((w) => w !== "--check");
   const at = args.indexOf("--base");
   const base = at >= 0 ? args[at + 1] : undefined;
   if (at >= 0 && !isBranch(base))
@@ -137,6 +151,7 @@ export const offerArgs = (
   const isRepo = (word: string | undefined) =>
     !!word && word.includes("/") && parseRepo(word) !== null;
   return {
+    check,
     base,
     repo: isRepo(rest[0]) ? rest[0] : undefined,
     branch: rest[0] && !isRepo(rest[0]) ? rest[0] : rest[1],
@@ -148,27 +163,35 @@ declare namespace offerArgs {
   export type Words = Table<
     typeof offerArgs,
     [
-      [args: [args: []], expected: { base: undefined; repo: undefined; branch: undefined }],
       [
-        args: [args: ["acme/app"]],
-        expected: { base: undefined; repo: "acme/app"; branch: undefined },
+        args: [words: []],
+        expected: { check: false; base: undefined; repo: undefined; branch: undefined },
       ],
       [
-        args: [args: ["acme/app", "feature/greet"]],
-        expected: { base: undefined; repo: "acme/app"; branch: "feature/greet" },
+        args: [words: ["acme/app"]],
+        expected: { check: false; base: undefined; repo: "acme/app"; branch: undefined },
+      ],
+      [
+        args: [words: ["acme/app", "feature/greet"]],
+        expected: { check: false; base: undefined; repo: "acme/app"; branch: "feature/greet" },
       ],
       /** a branch with a slash that is no repository (three parts) is a branch */
       [
-        args: [args: ["feature/greet/now"]],
-        expected: { base: undefined; repo: undefined; branch: "feature/greet/now" },
+        args: [words: ["feature/greet/now"]],
+        expected: { check: false; base: undefined; repo: undefined; branch: "feature/greet/now" },
       ],
       [
-        args: [args: ["fix", "--base", "v3"]],
-        expected: { base: "v3"; repo: undefined; branch: "fix" },
+        args: [words: ["fix", "--base", "v3"]],
+        expected: { check: false; base: "v3"; repo: undefined; branch: "fix" },
       ],
       [
-        args: [args: ["--base", "v3", "acme/app", "fix"]],
-        expected: { base: "v3"; repo: "acme/app"; branch: "fix" },
+        args: [words: ["--base", "v3", "acme/app", "fix"]],
+        expected: { check: false; base: "v3"; repo: "acme/app"; branch: "fix" },
+      ],
+      /** --check, anywhere among them */
+      [
+        args: [words: ["acme/app", "--check", "fix"]],
+        expected: { check: true; base: undefined; repo: "acme/app"; branch: "fix" },
       ],
     ]
   >;
@@ -177,24 +200,116 @@ declare namespace offerArgs {
     typeof offerArgs,
     [
       [
-        args: [args: ["--base"]],
+        args: [words: ["--base"]],
         expected: {
           refused: "--base names the branch a pull request would go into";
           fix: "desolate offer --base main";
         },
       ],
       [
-        args: [args: ["--base", "--upload-pack=x"]],
+        args: [words: ["--base", "--upload-pack=x"]],
         expected: {
           refused: "--base names the branch a pull request would go into";
           fix: "desolate offer --base main";
         },
       ],
       [
-        args: [args: ["fix", "--base", "a..b"]],
+        args: [words: ["fix", "--base", "a..b"]],
         expected: {
           refused: "--base names the branch a pull request would go into";
           fix: "desolate offer --base main";
+        },
+      ],
+    ]
+  >;
+}
+
+/** This domain's offers, as the root last wrote them into its inbox (domain.json: the root's
+ *  word, so data here, its names made printable where shown), or null before it wrote one. */
+const offersNow = (): unknown =>
+  readJson<{ offers?: unknown } | null>(path.join(INBOX, "domain.json"), null)?.offers ?? null;
+
+/** `desolate offer --check`: whether `branch`, at `commit` (where it is now), is what the
+ *  person has in front of them, from `offers` (offersNow). An offer is of one commit (#278):
+ *  the branch moved since is not offered, and the person cannot push it. Exit 0 only when it
+ *  is offered as it is; EXIT.expectMismatch when what is offered is not what the branch is. */
+export const offerCheck = (
+  offers: unknown,
+  repo: string,
+  branch: string,
+  commit: string,
+): { code: number; line: string } => {
+  const found = (
+    Array.isArray(offers)
+      ? (offers as { repo?: unknown; branch?: unknown; commit?: unknown }[])
+      : []
+  ).find((o) => o?.repo === repo && o?.branch === branch);
+  const name = `${printable(repo)} ${printable(branch)}`;
+  const short = (id: unknown) => printable(id).slice(0, 12);
+  if (!found) return { code: EXIT.failed, line: `${name} is not offered: desolate offer` };
+  if (found.commit === commit)
+    return {
+      code: EXIT.ok,
+      line: `${name} is offered at ${short(commit)}: it is with the person for review`,
+    };
+  return {
+    code: EXIT.expectMismatch,
+    line: `${name} was offered at ${short(found.commit)}; the branch is at ${short(commit)} now, which is not offered: offer again (desolate offer)`,
+  };
+};
+
+declare namespace offerCheck {
+  type A = "0123456789abcdef0123456789abcdef01234567";
+  type B = "89abcdef0123456789abcdef0123456789abcdef";
+  type Offered = [{ repo: "acme/app"; branch: "fix"; commit: A }];
+  /** the three answers: offered as it is, offered and moved since, not offered */
+  export type Answers = Table<
+    typeof offerCheck,
+    [
+      [
+        args: [offers: Offered, repo: "acme/app", branch: "fix", commit: A],
+        expected: {
+          code: 0;
+          line: "acme/app fix is offered at 0123456789ab: it is with the person for review";
+        },
+      ],
+      [
+        args: [offers: Offered, repo: "acme/app", branch: "fix", commit: B],
+        expected: {
+          code: 79;
+          line: "acme/app fix was offered at 0123456789ab; the branch is at 89abcdef0123 now, which is not offered: offer again (desolate offer)";
+        },
+      ],
+      /** another branch's offer, another repository's, and no list yet: not this one's */
+      [
+        args: [offers: Offered, repo: "acme/app", branch: "other", commit: A],
+        expected: { code: 1; line: "acme/app other is not offered: desolate offer" },
+      ],
+      [
+        args: [offers: Offered, repo: "acme/lib", branch: "fix", commit: A],
+        expected: { code: 1; line: "acme/lib fix is not offered: desolate offer" },
+      ],
+      [
+        args: [offers: null, repo: "acme/app", branch: "fix", commit: A],
+        expected: { code: 1; line: "acme/app fix is not offered: desolate offer" },
+      ],
+    ]
+  >;
+  /** what the root wrote is printed as text: a hostile branch name, and a commit that is not
+   *  one, come out with nothing a terminal would act on */
+  export type Hostile = Table<
+    typeof offerCheck,
+    [
+      [
+        args: [
+          offers: [{ repo: "acme/app"; branch: "fix\u001b[2J\u202e"; commit: "\u001b]0;x\u0007" }],
+          repo: "acme/app",
+          branch: "fix\u001b[2J\u202e",
+          commit: A,
+        ],
+        expected: {
+          code: 79;
+          line: "acme/app fix?[2J? was offered at ?]0;x?; the branch is at 0123456789ab now, which is not offered: offer again (desolate offer)";
         },
       ],
     ]
@@ -589,7 +704,7 @@ const main = async (argv: string[]) => {
     // --base <branch>: the branch a pull request of this one would go into (else the default).
     const asked = offerArgs(args);
     if ("refused" in asked) return fail(asked.refused, asked.fix);
-    const { base, branch: named } = asked;
+    const { base, branch: named, check } = asked;
     const repo = await repoOf(asked.repo);
     const current = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"])).stdout.trim();
     const branch = named ?? current;
@@ -606,6 +721,18 @@ const main = async (argv: string[]) => {
       branch === current
         ? await run("git", ["status", "--porcelain", "--untracked-files=no"])
         : { stdout: "" };
+    const uncommitted = () => {
+      if (dirty.stdout.trim())
+        process.stdout.write(
+          "note: this checkout has uncommitted changes; only commits are offered.\n",
+        );
+    };
+    if (check) {
+      const answer = offerCheck(offersNow(), repo, branch, commit);
+      process.stdout.write(`${answer.line}\n`);
+      uncommitted();
+      process.exit(answer.code);
+    }
     const lfs = await stageLfs(repo, branch).catch((error: Error) =>
       fail(error.message, "git lfs fsck"),
     );
@@ -640,9 +767,18 @@ const main = async (argv: string[]) => {
       'It is under "Needs you" on the dashboard now (desolate ui, on the Mac), where the person reviews it and pushes it. Offering is not pushing: nothing in a workspace can push.\n' +
         "The offer is of this commit: after more commits, offer again (git push, or desolate offer), since only an offer tells the person there is something new to review.\n",
     );
-    if (dirty.stdout.trim())
+    uncommitted();
+    // The person sees it once the root's state service has published the offer, which is
+    // when it writes it into this domain's inbox too: waited for here, so that a `desolate
+    // offer --check` straight after says yes. (41 ms in T2 04, 2026-11-24: a publish follows the
+    // offer's write 40 ms after at the soonest, a second at the most; the slow look, every
+    // 10 s, catches one a watch missed.)
+    let shown = false;
+    for (const until = Date.now() + 12_000; Date.now() < until; await sleep(100))
+      if ((shown = offerCheck(offersNow(), repo, branch, commit).code === EXIT.ok)) break;
+    if (!shown)
       process.stdout.write(
-        "note: this checkout has uncommitted changes; only commits are offered.\n",
+        "note: the root took the offer, but the dashboard does not show it yet; desolate offer --check says when it does.\n",
       );
   } else if (verb === "spawn" || verb === "close") {
     // Signed with this workspace's own key, which only this VM and the host have: the host runs
@@ -785,7 +921,7 @@ const main = async (argv: string[]) => {
     }
   } else {
     process.stdout.write(
-      "desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n  desolate spawn [--name <w>] [--branch <b>] [--checkout <owner/repo>=worktree:<b>]... [-- <command...>]\n                                            another workspace in this domain, the command as its agent\n  desolate close <workspace>                remove one this workspace started, if nothing in it would be lost\n  desolate domain stats [--json]            this domain's workspaces, who started each, its limit, the Mac\n  desolate events [--follow] [--all]        what happens in this domain, one JSON object per line\n  desolate issue offer --title <t> [--body <b> | --body-file <f>] [--label <l>]... [--repo <owner/repo>]\n                                            a GitHub issue, for the person to edit and publish\n",
+      "desolate, inside a workspace:\n  desolate fetch [<owner/repo>]             ask the root to refresh the mirror, then git fetch\n  desolate offer [<owner/repo>] [<branch>]  offer a branch to the root; a person reviews and pushes it\n                    [--base <branch>]       (the branch a pull request of it would go into)\n                    [--check]               only say whether the branch as it is now is offered\n  desolate sync                             write this domain's branches out for the root now\n  desolate status set <colour> \"<message>\"  say how the work is going (also: note, board, show, clear)\n  desolate spawn [--name <w>] [--branch <b>] [--checkout <owner/repo>=worktree:<b>]... [-- <command...>]\n                                            another workspace in this domain, the command as its agent\n  desolate close <workspace>                remove one this workspace started, if nothing in it would be lost\n  desolate domain stats [--json]            this domain's workspaces, who started each, its limit, the Mac\n  desolate events [--follow] [--all]        what happens in this domain, one JSON object per line\n  desolate issue offer --title <t> [--body <b> | --body-file <f>] [--label <l>]... [--repo <owner/repo>]\n                                            a GitHub issue, for the person to edit and publish\n",
     );
     process.exit(usageExit(verb));
   }

@@ -2454,6 +2454,55 @@ echo "=====waits"; cat /tmp/waits.lines`,
     );
   });
 
+  it("desolate offer --check says whether the branch as it is now is offered: not, yes, moved, yes again", () => {
+    stack.step("desolate offer --check");
+    const inCheckout = (...argv: string[]) =>
+      stack.desolate("exec", "dev/w1", "--checkout", "acme/widgets", "--", "desolate", ...argv);
+    inWs(
+      "dev/w1",
+      `cd ${WT} && git switch -q --no-track -c checked origin/main && git commit -q --allow-empty -m 'to check'`,
+    );
+    const not = inCheckout("offer", "--check");
+    assert.equal(not.code, 1, not.stdout + not.stderr);
+    assert.match(not.stdout, /^acme\/widgets checked is not offered: desolate offer$/m);
+    assert.equal(inCheckout("offer").code, 0);
+    // How long the root took to say so in the inbox, after it took the offer: `desolate offer`
+    // waits that long (its offers.json written, then the state service's publish).
+    const at = stack
+      .inRoot(
+        [
+          "sh",
+          "-c",
+          "date -r /desolate/domains/dev/offers.json +%s%N; date -r /desolate/domains/dev/inbox/domain.json +%s%N",
+        ],
+        { root: true },
+      )
+      .stdout.trim()
+      .split("\n")
+      .map(Number);
+    const window = Math.round((at[1]! - at[0]!) / 1e6);
+    console.log(`offer --check: the inbox showed the offer ${window} ms after the root took it`);
+    assert.ok(window >= 0 && window < 12_000, String(window));
+    const yes = inCheckout("offer", "--check");
+    assert.equal(yes.code, 0, "straight after `desolate offer` returns: " + yes.stdout);
+    assert.match(
+      yes.stdout,
+      /^acme\/widgets checked is offered at [0-9a-f]{12}: it is with the person for review$/m,
+    );
+    inWs("dev/w1", `cd ${WT} && git commit -q --allow-empty -m 'after the offer'`);
+    const moved = inCheckout("offer", "--check");
+    assert.equal(moved.code, 79, moved.stdout + moved.stderr);
+    const [, was, now] =
+      /^acme\/widgets checked was offered at ([0-9a-f]{12}); the branch is at ([0-9a-f]{12}) now, which is not offered: offer again \(desolate offer\)$/m.exec(
+        moved.stdout,
+      ) ?? [];
+    assert.ok(was && now && was !== now, moved.stdout);
+    assert.equal(inCheckout("offer").code, 0);
+    const again = inCheckout("offer", "--check");
+    assert.equal(again.code, 0, again.stdout);
+    assert.match(again.stdout, new RegExp(`offered at ${now}: it is with the person`));
+  });
+
   it("an offer of more LFS objects than the old cap of 2,000 is taken whole, and reviewed whole", () => {
     stack.step("an offer of 2,001 LFS objects");
     // (Before, the root took the first 2,000 an offer named and then found the commits
