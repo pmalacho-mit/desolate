@@ -1799,6 +1799,9 @@ const serve = async () => {
   // socket's handler, which would end the daemon and every workspace's link with it.
   const dial = (vm: string, target: number | string): Duplex => {
     try {
+      // Only a workspace this daemon carries: what a dial makes for one that has gone would
+      // be nobody's to let go.
+      if (vm !== ROOT_VM && !entries.has(vm)) throw new Error("it is not a workspace carried here");
       return b.dial(vm, target);
     } catch (error) {
       log(`could not reach ${vm}: ${error instanceof Error ? error.message : String(error)}`);
@@ -2888,8 +2891,8 @@ const serve = async () => {
           editors.close();
           editors6.close();
           for (const server of [...forwards.values(), ...forwards6.values()]) server.close();
-          for (const entry of entries.values()) (entry.link?.(), b.release?.(entry.vm));
-          b.release?.(ROOT_VM);
+          for (const entry of entries.values()) entry.link?.();
+          b.release?.();
           fs.rmSync(SOCKET, { force: true });
           fs.rmSync(PIDFILE, { force: true });
           process.exit(0);
@@ -2903,6 +2906,9 @@ const serve = async () => {
   fs.writeFileSync(PIDFILE, String(process.pid));
   log(`daemon up, pid ${process.pid}`);
 
+  // The connections for channels a daemon before this one left (one that did not stop, but
+  // ended), ended: this one makes its own as it dials.
+  b.release?.();
   // After a restart of the host: take up every workspace whose VM is running.
   try {
     const domains = (await rootctlBrief("domain.list")).domains;

@@ -401,34 +401,180 @@ export const sharesWaited = async (
   };
 };
 
-/** What ssh makes of the arguments desolate's connection for channels is opened with
- *  (lima.ts masterArgs; `ours`), or of Lima's configuration alone, for a VM whose ssh.config is
- *  Lima's with `config` added to its Host: `ssh -G`, which reads the configuration and connects
- *  nowhere. The options that let a server open a channel to this side, and every forward. */
-export const channelsConfigured = async (config: string, ours: boolean) => {
-  const { masterArgs } = await import("../host/vm/lima.ts");
+/** What ssh makes (`ssh -G`, which reads the configuration and connects nowhere) of one of the
+ *  invocations of desolate's connection for channels (lima.ts masterArgs, and channelArgs with
+ *  the forward and cancel of 5173), for a VM whose Lima ssh.config asks for an agent, X11, a
+ *  local command, a tunnel and a forward of each kind: with the configuration channelConfig
+ *  writes from it (`ours`), or with that Lima file itself. The options that let a server open
+ *  a channel to this side, and every forward; the channel folder is written `<dir>`. */
+export const channelsConfigured = async (call: "master" | "forward" | "cancel", ours: boolean) => {
+  const { masterArgs, channelArgs, channelConfig, forwardSpec } =
+    await import("../host/vm/lima.ts");
   const name = "dsl-main-cfg";
-  const dir = path.join(limaHome(), name);
-  fs.mkdirSync(dir, { recursive: true });
-  const file = path.join(dir, "ssh.config");
+  const vm = path.join(limaHome(), name);
+  const dir = path.join(vm, "ch");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const lima = path.join(vm, "ssh.config");
   fs.writeFileSync(
-    file,
-    `Host lima-${name}\n  IdentityFile "${dir}/user"\n  PreferredAuthentications publickey\n  BatchMode yes\n  IdentitiesOnly yes\n  User desolate\n  ControlMaster auto\n  ControlPath "${dir}/ssh.sock"\n  ControlPersist yes\n  Hostname 127.0.0.1\n  Port 22\n${config}`,
+    lima,
+    `Host lima-${name}\n  IdentityFile "${vm}/user"\n  PreferredAuthentications publickey\n  BatchMode yes\n  IdentitiesOnly yes\n  StrictHostKeyChecking yes\n  UserKnownHostsFile "${vm}/ssh.known_hosts"\n  HostKeyAlias lima-${name}\n  User desolate\n  ControlMaster auto\n  ControlPath "${vm}/ssh.sock"\n  ControlPersist yes\n  Hostname 127.0.0.1\n  Port 52436\n  ForwardAgent yes\n  ForwardX11 yes\n  RemoteForward 9999 127.0.0.1:22\n  LocalForward 8888 127.0.0.1:22\n  DynamicForward 7777\n  PermitLocalCommand yes\n  LocalCommand true\n  Tunnel yes\n`,
   );
-  const args = ours ? masterArgs(name, path.join(dir, "ch", "ctl")) : ["-F", file, `lima-${name}`];
-  const shown = spawnSync("ssh", ["-G", ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  const lines = shown.stdout.split("\n");
+  const shown = (args: string[]) =>
+    spawnSync("ssh", ["-G", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] })
+      .stdout;
+  fs.writeFileSync(
+    path.join(dir, "ssh.config"),
+    channelConfig(name, shown(["-F", lima, `lima-${name}`])),
+  );
+  const local = path.join(dir, "5173.sock");
+  let args =
+    call === "master"
+      ? masterArgs(name, dir)
+      : channelArgs(name, dir, "-O", call, "-L", forwardSpec(local, 5173));
+  if (!ours) args = ["-F", lima, ...args.slice(2)];
+  const lines = shown(args).split("\n");
   const value = (key: string) =>
     lines.find((line) => line.startsWith(`${key} `))?.slice(key.length + 1) ?? null;
   return {
     forwardagent: value("forwardagent"),
     forwardx11: value("forwardx11"),
-    clearallforwardings: value("clearallforwardings"),
     permitlocalcommand: value("permitlocalcommand"),
     tunnel: value("tunnel"),
-    forwards: lines.filter((line) => /^(local|remote|dynamic)forward /.test(line)).sort(),
+    forwards: lines
+      .filter((line) => /^(local|remote|dynamic)forward /.test(line))
+      .map((line) => line.split(dir).join("<dir>"))
+      .sort(),
   };
+};
+
+/** ssh, for channelsAfter: a stand-in for desolate's connections for channels, with no VM.
+ *  `-G` prints the few values channelConfig takes; `-f -N` starts a "master" (this file again,
+ *  detached), which listens on the control socket and answers `check` (with its own pid, or
+ *  the one in `report-pid` in its folder), `forward` (an echo server on the local socket: what it
+ *  is sent comes back, then `EOF-SEEN` once it is ended), `cancel` and `exit`; `-O <op>` asks
+ *  it, as ssh's own client would. Each master notes its pid in `masters/`. */
+const STAND_IN_SSH = String.raw`
+import net from "node:net"; import fs from "node:fs"; import path from "node:path"; import { spawn } from "node:child_process";
+const args = process.argv.slice(2);
+const opt = (name) => args.map((a, i) => (args[i - 1] === "-o" && a.startsWith(name + "=") ? a.slice(name.length + 1) : null)).find(Boolean);
+if (args[0] === "--serve") {
+  const ctl = args[1]; const servers = new Map();
+  fs.mkdirSync(path.join(args[2], "masters"), { recursive: true }); fs.writeFileSync(path.join(args[2], "masters", String(process.pid)), "");
+  const server = net.createServer((c) => c.once("data", (d) => {
+    const q = JSON.parse(String(d));
+    if (q.op === "check") { let pid = process.pid; try { pid = Number(fs.readFileSync(path.join(args[2], "report-pid"), "utf8")); } catch {} return c.end(JSON.stringify({ ok: true, pid })); }
+    if (q.op === "forward") {
+      if (servers.has(q.local)) return c.end(JSON.stringify({ ok: true }));
+      const s = net.createServer({ allowHalfOpen: true }, (x) => { x.on("data", (b) => x.write(b)); x.on("end", () => x.end("EOF-SEEN\n")); x.on("error", () => {}); });
+      s.on("error", () => c.end(JSON.stringify({ ok: false })));
+      return s.listen(q.local, () => (servers.set(q.local, s), c.end(JSON.stringify({ ok: true }))));
+    }
+    if (q.op === "cancel") { servers.get(q.local)?.close(); servers.delete(q.local); return c.end(JSON.stringify({ ok: true })); }
+    if (q.op === "exit") { c.end(JSON.stringify({ ok: true })); for (const s of servers.values()) s.close(); server.close(); setTimeout(() => process.exit(0), 20); }
+  }));
+  server.listen(ctl);
+} else if (args.includes("-G")) {
+  const host = args.at(-1);
+  console.log(["hostname 127.0.0.1", "port 2222", "user desolate", "identityfile /stand-in/user", "userknownhostsfile /stand-in/known_hosts", "hostkeyalias " + host, "stricthostkeychecking true"].join("\n"));
+} else {
+  const ctl = opt("ControlPath"); const at = args.indexOf("-O");
+  if (at < 0 && args.includes("-f")) {
+    const master = spawn(process.execPath, [process.argv[1], "--serve", ctl, process.env.STAND_IN_HOME, "-o", "ControlPath=" + ctl], { detached: true, stdio: "ignore" }); master.unref();
+    const wait = () => (fs.existsSync(ctl) ? process.exit(0) : setTimeout(wait, 5)); wait();
+  } else {
+    const op = args[at + 1]; const spec = args[args.indexOf("-L") + 1] ?? ""; const local = spec.slice(0, spec.indexOf(":"));
+    const c = net.connect(ctl); let got = "";
+    c.on("error", (e) => { process.stderr.write("Control socket connect(" + ctl + "): " + e.message + "\n"); process.exit(255); });
+    c.on("connect", () => c.write(JSON.stringify({ op, local })));
+    c.on("data", (d) => (got += d));
+    c.on("end", () => { const r = JSON.parse(got || "{}"); if (op === "check" && r.ok) process.stderr.write("Master running (pid=" + r.pid + ")\n"); process.exit(r.ok ? 0 : 255); });
+  }
+}
+`;
+
+/** One VM's connections for channels (lima.ts channelsIn, as the backend's dial makes them),
+ *  with the stand-in ssh above,
+ *  after `what` happened to its master once a first connection was carried: nothing (the
+ *  control); its control socket removed while it lives; it killed, with the pid it gave when
+ *  it came up another live process's (this one's: a pid used again); or the VM let go while
+ *  a first dial is on its way. What the first connection (to 8080) and the next (to 8081, a
+ *  forward of its own) got, each sending `hi` and ending; whether the next came within 5 s;
+ *  and how many masters are left running. */
+export const channelsAfter = async (
+  what:
+    | "nothing"
+    | "control socket removed"
+    | "master killed, its pid another's"
+    | "let go while dialling",
+): Promise<{ first: string; next: string; inTime: boolean; left: number }> => {
+  const { channelsIn } = await import("../host/vm/lima.ts");
+  // A home of its own, short enough for the sockets (the test's own, under the system's
+  // temporary folder on a Mac, is not: channelsDontFit).
+  const lima = fs.mkdtempSync("/tmp/dsl-ch-");
+  const backend = channelsIn(lima, () => process.env);
+  const name = "dsl-main-chan";
+  const dir = path.join(lima, name);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(dir, "ssh.config"), `Host lima-${name}\n`);
+  const stands = path.join(home(), "stand-in-ssh");
+  fs.rmSync(stands, { recursive: true, force: true });
+  fs.mkdirSync(path.join(stands, "bin"), { recursive: true });
+  fs.writeFileSync(path.join(stands, "ssh.mjs"), STAND_IN_SSH);
+  fs.writeFileSync(
+    path.join(stands, "bin", "ssh"),
+    `#!/bin/sh\nexec '${process.execPath}' '${stands}/ssh.mjs' "$@"\n`,
+    { mode: 0o755 },
+  );
+  const before = { PATH: process.env.PATH, STAND_IN_HOME: process.env.STAND_IN_HOME };
+  process.env.PATH = `${path.join(stands, "bin")}:${before.PATH}`;
+  process.env.STAND_IN_HOME = stands;
+  const masters = () =>
+    fs.existsSync(path.join(stands, "masters"))
+      ? fs.readdirSync(path.join(stands, "masters")).filter((pid) => {
+          try {
+            process.kill(Number(pid), 0);
+            return true;
+          } catch {
+            return false;
+          }
+        })
+      : [];
+  const said = (stream: import("node:stream").Duplex) =>
+    new Promise<string>((resolve) => {
+      let got = "";
+      stream.on("data", (chunk) => (got += chunk));
+      stream.on("error", () => {});
+      stream.on("close", () => resolve(got));
+      stream.end("hi\n");
+    });
+  try {
+    if (what === "let go while dialling") {
+      const first = said(backend.dial(name, 8080));
+      backend.release!(name);
+      const got = await first;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return { first: got, next: "", inTime: true, left: masters().length };
+    }
+    if (what === "master killed, its pid another's")
+      fs.writeFileSync(path.join(stands, "report-pid"), String(process.pid));
+    const first = await said(backend.dial(name, 8080));
+    const [pid] = masters();
+    if (what === "control socket removed") fs.rmSync(path.join(dir, "ch", "ctl"));
+    if (what === "master killed, its pid another's") {
+      process.kill(Number(pid), "SIGKILL");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const began = performance.now();
+    const next = await said(backend.dial(name, 8081));
+    const inTime = performance.now() - began < 5000;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    return { first, next, inTime, left: masters().length };
+  } finally {
+    backend.release();
+    for (const pid of masters()) process.kill(Number(pid), "SIGKILL");
+    fs.rmSync(lima, { recursive: true, force: true });
+    process.env.PATH = before.PATH;
+    if (before.STAND_IN_HOME === undefined) delete process.env.STAND_IN_HOME;
+    else process.env.STAND_IN_HOME = before.STAND_IN_HOME;
+  }
 };

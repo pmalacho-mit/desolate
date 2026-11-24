@@ -11,7 +11,7 @@
 // make, and `doctor` fails while Lima's user-wide _config overrides, which could add a
 // network, are there.
 import { attachFiltered } from "./attach.ts";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
@@ -45,6 +45,7 @@ import type {
 import type {
   alone,
   baseYaml,
+  channelsAfter,
   channelsConfigured,
   cloneCall,
   confinement,
@@ -683,12 +684,45 @@ declare namespace vmStatus {
   >;
 }
 
-/** Where a VM's channels from the Mac are kept: its ssh control socket (`ctl`) and one local
- *  socket per target, in a folder of the VM's own Lima folder that only this Mac's user may
- *  enter (made 0700 here; Lima makes the VM's folder 0700 too). A folder that is anything else
- *  (a link, another user's, open to others) is refused, not used. */
-const channelDir = (name: string) => {
-  const dir = path.join(LIMA_HOME, name, "ch");
+/** Why `dir` cannot hold a VM's channels, or null: its control socket (`ctl`, which ssh binds
+ *  as `ctl.` and 16 characters, then renames) and its local sockets (16 hex and `.sock`) must
+ *  each fit a unix socket's path, or ssh refuses them and no connection to the VM is carried. */
+export const channelsDontFit = (dir: string) => {
+  const longest = Math.max(
+    Buffer.byteLength(path.join(dir, "ctl.0123456789abcdef")),
+    Buffer.byteLength(path.join(dir, "0123456789abcdef.sock")),
+  );
+  return longest <= SOCKET_PATH_MAX
+    ? null
+    : `${dir} is too long a folder for the sockets desolate carries a VM's connections on (${longest} bytes, more than a socket's path may have here): set DESOLATE_HOME to a shorter path (the default, ~/.desolate, fits unless your home's path is very long)`;
+};
+
+declare namespace channelsDontFit {
+  /** a folder under the default home fits; one whose sockets would pass the limit is refused,
+   *  saying how long and what to do */
+  export type Fits = Table<
+    typeof channelsDontFit,
+    [
+      [args: [dir: "/Users/someone/.desolate/lima/dsl-main-0123456789/ch"], expected: null],
+      [
+        args: [
+          dir: "/Users/someone/a-very-long-folder-name-for-a-home/.desolate/lima/dsl-main-0123456789/ch",
+        ],
+        expected: "/Users/someone/a-very-long-folder-name-for-a-home/.desolate/lima/dsl-main-0123456789/ch is too long a folder for the sockets desolate carries a VM's connections on (109 bytes, more than a socket's path may have here): set DESOLATE_HOME to a shorter path (the default, ~/.desolate, fits unless your home's path is very long)",
+      ],
+    ]
+  >;
+}
+
+/** Where a VM's channels from the Mac are kept: its ssh configuration and control socket and
+ *  one local socket per target, in a folder of the VM's own Lima folder that only this Mac's
+ *  user may enter (made 0700 here; Lima makes the VM's folder 0700 too). A folder that is
+ *  anything else (a link, another user's, open to others), or too long for its sockets, is
+ *  refused, not used. */
+const channelDir = (lima: string, name: string) => {
+  const dir = path.join(lima, name, "ch");
+  const long = channelsDontFit(dir);
+  if (long) throw new Error(long);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const seen = fs.lstatSync(dir);
   if (!seen.isDirectory() || seen.uid !== process.getuid?.() || (seen.mode & 0o077) !== 0)
@@ -761,96 +795,211 @@ declare namespace forwardSpec {
   ];
 }
 
-/** ssh to a VM on its connection for channels (`ctl`), with Lima's configuration for it, then
- *  `op`. What a VM's sshd could use to open a channel back to this Mac is off whatever the
- *  configuration says (on the command line, which ssh reads before -F's file, and the first
- *  value read wins): no agent, no X11, no local command. No remote forward (-R) is ever asked
- *  for, so the OpenSSH client refuses every channel a server opens of its own ("forwarded-tcpip"
- *  and "forwarded-streamlocal" name no forward it asked for; "x11" and "auth-agent" are off:
- *  clientloop.c). */
-export const channelArgs = (name: string, ctl: string, ...op: string[]) => [
+/** The ssh configuration of desolate's own connection to a VM, written by the Mac from the
+ *  few values it takes from Lima's (`shown`: what `ssh -G` makes of Lima's ssh.config for the
+ *  VM): where it is, who logs in with which key, and the host key it must present. Nothing
+ *  else of Lima's file rides along: ssh reads its configuration again for every `-O forward`
+ *  and sends the master every forward named there, and a master carries a forward asked over
+ *  its control socket whatever its own ClearAllForwardings (seen with ssh -G, 2026-11-24). A
+ *  value not in the form Lima writes is refused. */
+export const channelConfig = (name: string, shown: string) => {
+  const value = (key: string) =>
+    shown
+      .split("\n")
+      .find((line) => line.startsWith(`${key} `))
+      ?.slice(key.length + 1) ?? "";
+  const file = (key: string) => {
+    const at = value(key).split(" ")[0] ?? "";
+    if (!/^\/[^"\s\0]+$/.test(at))
+      throw new Error(`Lima's ssh ${key} for ${name} is not a plain path: ${printable(at, 120)}`);
+    return at;
+  };
+  const port = Number(value("port"));
+  if (value("hostname") !== "127.0.0.1" || !Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error(
+      `Lima's ssh for ${name} is not this Mac's loopback: ${printable(value("hostname"), 80)}:${printable(value("port"), 8)}`,
+    );
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(value("user")))
+    throw new Error(
+      `Lima's ssh user for ${name} is not a plain name: ${printable(value("user"), 40)}`,
+    );
+  if (value("hostkeyalias") !== `lima-${name}` || value("stricthostkeychecking") !== "true")
+    throw new Error(`Lima's ssh for ${name} does not check its host key as lima-${name}`);
+  return [
+    `Host lima-${name}`,
+    `  HostName 127.0.0.1`,
+    `  Port ${port}`,
+    `  User ${value("user")}`,
+    `  IdentityFile "${file("identityfile")}"`,
+    "  IdentitiesOnly yes",
+    "  PreferredAuthentications publickey",
+    "  BatchMode yes",
+    "  StrictHostKeyChecking yes",
+    `  UserKnownHostsFile "${file("userknownhostsfile")}"`,
+    `  HostKeyAlias lima-${name}`,
+    "",
+  ].join("\n");
+};
+
+declare namespace channelConfig {
+  type Shown =
+    "hostname 127.0.0.1\nport 52436\nuser desolate\nidentityfile /Users/d/.desolate/lima/_config/user\nuserknownhostsfile /Users/d/.desolate/lima/dsl-main-root/ssh.known_hosts\nhostkeyalias lima-dsl-main-root\nstricthostkeychecking true\nforwardagent yes\nremoteforward 9999 [127.0.0.1]:22\nlocalforward 8888 [127.0.0.1]:22\n";
+  /** the values a connection needs, and nothing else of what Lima's file said (here, an agent
+   *  and two forwards, which are not carried over) */
+  export type Written = Expect<
+    Invoke<typeof channelConfig, [name: "dsl-main-root", shown: Shown]>,
+    "=",
+    'Host lima-dsl-main-root\n  HostName 127.0.0.1\n  Port 52436\n  User desolate\n  IdentityFile "/Users/d/.desolate/lima/_config/user"\n  IdentitiesOnly yes\n  PreferredAuthentications publickey\n  BatchMode yes\n  StrictHostKeyChecking yes\n  UserKnownHostsFile "/Users/d/.desolate/lima/dsl-main-root/ssh.known_hosts"\n  HostKeyAlias lima-dsl-main-root\n'
+  >;
+  /** another host, no host key check, another VM's alias, a path that would end the quoted
+   *  value: refused */
+  export type Refuses = [
+    Throws<
+      Invoke<typeof channelConfig, [name: "dsl-main-root", shown: "hostname 10.0.0.1\nport 22\n"]>,
+      "Lima's ssh for dsl-main-root is not this Mac's loopback: 10.0.0.1:22"
+    >,
+    Throws<
+      Invoke<
+        typeof channelConfig,
+        [
+          name: "dsl-main-root",
+          shown: "hostname 127.0.0.1\nport 22\nuser desolate\nhostkeyalias lima-dsl-main-root\nstricthostkeychecking false\n",
+        ]
+      >,
+      "Lima's ssh for dsl-main-root does not check its host key as lima-dsl-main-root"
+    >,
+    Throws<
+      Invoke<
+        typeof channelConfig,
+        [
+          name: "dsl-main-root",
+          shown: "hostname 127.0.0.1\nport 22\nuser desolate\nhostkeyalias lima-dsl-main-w1\nstricthostkeychecking true\n",
+        ]
+      >,
+      "Lima's ssh for dsl-main-root does not check its host key as lima-dsl-main-root"
+    >,
+    Throws<
+      Invoke<
+        typeof channelConfig,
+        [
+          name: "dsl-main-root",
+          shown: 'hostname 127.0.0.1\nport 22\nuser desolate\nhostkeyalias lima-dsl-main-root\nstricthostkeychecking true\nidentityfile /a"b\n',
+        ]
+      >,
+      "Lima's ssh identityfile for dsl-main-root is not a plain path: /a\"b"
+    >,
+  ];
+}
+
+/** pkill's pattern for desolate's connections for channels under the Lima home `lima`: the
+ *  VM `name`'s, or every VM's. Each names its control socket on its command line; the home and
+ *  the name are matched as they are, whatever signs they hold. */
+export const mastersOf = (lima: string, name?: string) => {
+  const plain = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `ControlPath=${plain(lima)}/${name ? plain(name) : "[^/ ]+"}/ch/ctl( |$)`;
+};
+
+declare namespace mastersOf {
+  /** one VM's, its home's dots matched as dots; every VM's */
+  export type Patterns = Table<
+    typeof mastersOf,
+    [
+      [
+        args: [lima: "/Users/a.b/.desolate/lima", name: "dsl-main-root"],
+        expected: "ControlPath=/Users/a\\.b/\\.desolate/lima/dsl-main-root/ch/ctl( |$)",
+      ],
+      [args: [lima: "/h/lima"], expected: "ControlPath=/h/lima/[^/ ]+/ch/ctl( |$)"],
+    ]
+  >;
+}
+
+/** ssh to a VM on desolate's own connection for its channels (`dir`: its configuration and
+ *  control socket), then `op`. With `-F`, ssh reads no other configuration, and that file is
+ *  channelConfig's: no agent, no X11, no local command, no forward but the one an `op` names.
+ *  No remote forward (-R) is ever asked for, so the OpenSSH client refuses every channel a
+ *  server opens of its own ("forwarded-tcpip" and "forwarded-streamlocal" name no forward it
+ *  asked for; "x11" and "auth-agent" are off: clientloop.c). */
+export const channelArgs = (name: string, dir: string, ...op: string[]) => [
   "-F",
-  path.join(LIMA_HOME, name, "ssh.config"),
+  path.join(dir, "ssh.config"),
   "-o",
   "LogLevel=ERROR",
   "-o",
-  `ControlPath=${ctl}`,
-  "-o",
-  "ForwardAgent=no",
-  "-o",
-  "ForwardX11=no",
-  "-o",
-  "PermitLocalCommand=no",
+  `ControlPath=${path.join(dir, "ctl")}`,
   ...op,
   `lima-${name}`,
 ];
 
 /** The connection itself: desolate's own (not Lima's, which limactl, `exec` and refreshSessions
  *  share and end), as a master for `-O forward`, in the background once it is up (`-f`: ssh
- *  exits 0 when its control socket listens), with no session (`-N`) and no forward from any
- *  configuration (ClearAllForwardings: here only, since on `-O forward` it would clear the
- *  forward asked for, and the first value ssh reads is the one it keeps). */
-export const masterArgs = (name: string, ctl: string) =>
-  channelArgs(
-    name,
-    ctl,
-    "-o",
-    "ControlMaster=yes",
-    "-o",
-    "ControlPersist=no",
-    "-o",
-    "ClearAllForwardings=yes",
-    "-f",
-    "-N",
-  );
+ *  exits 0 when its control socket listens), with no session (`-N`). */
+export const masterArgs = (name: string, dir: string) =>
+  channelArgs(name, dir, "-o", "ControlMaster=yes", "-o", "ControlPersist=no", "-f", "-N");
 
 declare namespace masterArgs {
-  /** what ssh makes of them with Lima's own configuration (`ssh -G`, which reads it and
-   *  connects nowhere): agent and X11 forwarding off, no forward or tunnel of any kind, no local
-   *  command, with a configuration that asked for each of them; the control is that
-   *  configuration read alone, where ssh -G shows each (so one that turned them on is seen) */
+  /** what ssh makes of each invocation (`ssh -G`, which reads the configuration and connects
+   *  nowhere), with the configuration channelConfig writes from a Lima file that asks for an
+   *  agent, X11, a local command, a tunnel and a forward of each kind: agent and X11 off, no
+   *  tunnel or local command, and no forward but the one asked; the controls are the same
+   *  invocations with that Lima file itself, where each shows */
   export type Configured = Table<
     typeof channelsConfigured,
     [
       [
-        args: [config: "", ours: true],
+        args: [call: "master", ours: true],
         expected: {
           forwardagent: "no";
           forwardx11: "no";
-          clearallforwardings: "yes";
           permitlocalcommand: "no";
           tunnel: "false";
           forwards: [];
         },
       ],
       [
-        args: [
-          config: "  ForwardAgent yes\n  ForwardX11 yes\n  RemoteForward 9999 127.0.0.1:22\n  LocalForward 8888 127.0.0.1:22\n  DynamicForward 7777\n  PermitLocalCommand yes\n  Tunnel yes\n",
-          ours: true,
-        ],
+        args: [call: "forward", ours: true],
         expected: {
           forwardagent: "no";
           forwardx11: "no";
-          clearallforwardings: "yes";
           permitlocalcommand: "no";
           tunnel: "false";
-          forwards: [];
+          forwards: ["localforward <dir>/5173.sock [127.0.0.1]:5173"];
         },
       ],
       [
-        args: [
-          config: "  ForwardAgent yes\n  ForwardX11 yes\n  RemoteForward 9999 127.0.0.1:22\n  LocalForward 8888 127.0.0.1:22\n  DynamicForward 7777\n  PermitLocalCommand yes\n  Tunnel yes\n",
-          ours: false,
-        ],
+        args: [call: "cancel", ours: true],
+        expected: {
+          forwardagent: "no";
+          forwardx11: "no";
+          permitlocalcommand: "no";
+          tunnel: "false";
+          forwards: ["localforward <dir>/5173.sock [127.0.0.1]:5173"];
+        },
+      ],
+      [
+        args: [call: "master", ours: false],
         expected: {
           forwardagent: "yes";
           forwardx11: "yes";
-          clearallforwardings: "no";
           permitlocalcommand: "yes";
           tunnel: "point-to-point";
           forwards: [
             "dynamicforward 7777",
             "localforward 8888 [127.0.0.1]:22",
+            "remoteforward 9999 [127.0.0.1]:22",
+          ];
+        },
+      ],
+      [
+        args: [call: "forward", ours: false],
+        expected: {
+          forwardagent: "yes";
+          forwardx11: "yes";
+          permitlocalcommand: "yes";
+          tunnel: "point-to-point";
+          forwards: [
+            "dynamicforward 7777",
+            "localforward 8888 [127.0.0.1]:22",
+            "localforward <dir>/5173.sock [127.0.0.1]:5173",
             "remoteforward 9999 [127.0.0.1]:22",
           ];
         },
@@ -909,6 +1058,242 @@ const later = (ready: Promise<Socket>): Duplex => {
   return stream;
 };
 
+/** Every VM's connections for channels from this Mac, under the Lima home `lima` (ssh run
+ *  with `env`): `dial` a target, `release` what is kept for one, for one VM, or for every VM
+ *  (and any an earlier process left), and `exit` a VM's master, as refreshSessions does. The
+ *  backend's dial and release are these; a harness makes its own, in a short home. */
+export const channelsIn = (lima: string, env: () => NodeJS.ProcessEnv) => {
+  /** Each VM's connection for channels, as this process knows it: the pid its master gave
+   *  when it came up, and each target's forward (by its local socket). `closed` once let go
+   *  (released: a dial still on its way then makes nothing more; or `retired`: it no longer
+   *  answered, and the next dial makes another). Every ssh run against a VM's control
+   *  socket (making, forwarding, cancelling, ending) waits its turn behind the one before
+   *  (`turns`), so that what was let go is ended after it was made, never before. */
+  type Master = {
+    dir: string;
+    pid: number;
+    up: Promise<void>;
+    closed: boolean;
+    retired: boolean;
+    forwards: Map<string, Promise<void>>;
+    asking: Promise<boolean> | null;
+  };
+  const masters = new Map<string, Master>();
+  const turns = new Map<string, Promise<unknown>>();
+  const inTurn = <T>(name: string, step: () => Promise<T>): Promise<T> => {
+    const next = (turns.get(name) ?? Promise.resolve()).then(step);
+    turns.set(
+      name,
+      next.catch(() => {}),
+    );
+    return next;
+  };
+  const control = (name: string, dir: string, ...op: string[]) =>
+    run("ssh", channelArgs(name, dir, ...op), { env: env(), timeoutMs: 10_000 });
+  const released = (name: string) => new Error(`${name}'s connections were let go`);
+  /** A master ended: told to exit on its control socket; if that cannot be reached (removed,
+   *  or the master no longer answers), every process whose command names this control socket
+   *  is told to end: never a pid kept from before, which another process may have by now. */
+  const end = async (name: string, master: Master) => {
+    if ((await control(name, master.dir, "-O", "exit")).code !== 0)
+      await run("pkill", ["-f", mastersOf(lima, name)], { timeoutMs: 10_000 });
+  };
+  /** desolate's connection to `name` for channels, made if this process has none: its
+   *  configuration written from Lima's (channelConfig), and its folder emptied first (ssh
+   *  leaves a forward's socket behind when it goes, and will not bind over one). ssh -f
+   *  answers once the master listens: about 220 ms into the root VM (measured on the M1,
+   *  2026-11-24). */
+  const masterOf = (name: string): Master => {
+    const known = masters.get(name);
+    if (known) return known;
+    const dir = path.join(lima, name, "ch");
+    const made: Master = {
+      dir,
+      pid: 0,
+      up: Promise.resolve(),
+      closed: false,
+      retired: false,
+      forwards: new Map(),
+      asking: null,
+    };
+    made.up = inTurn(name, async () => {
+      if (made.closed) throw released(name);
+      channelDir(lima, name);
+      for (const entry of fs.readdirSync(dir))
+        fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
+      const shown = await run(
+        "ssh",
+        ["-G", "-F", path.join(lima, name, "ssh.config"), `lima-${name}`],
+        { env: env(), timeoutMs: 10_000 },
+      );
+      fs.writeFileSync(path.join(dir, "ssh.config"), channelConfig(name, shown.stdout), {
+        mode: 0o600,
+      });
+      const master = await run("ssh", masterArgs(name, dir), { env: env(), timeoutMs: 60_000 });
+      const check = master.code === 0 ? await control(name, dir, "-O", "check") : master;
+      made.pid = Number(/\(pid=(\d+)\)/.exec(check.stderr)?.[1]);
+      if (check.code !== 0 || !made.pid)
+        throw new Error(
+          `could not open desolate's connection to ${name}: ${printable(check.stderr || check.stdout, 300)}`,
+        );
+    });
+    made.up.catch(() => masters.get(name) === made && masters.delete(name));
+    masters.set(name, made);
+    return made;
+  };
+  /** Whether `master` still answers on its control socket as the process it came up as. Asked
+   *  only when a connection failed; the dials that failed at once share one asking. */
+  const answers = (name: string, master: Master) =>
+    (master.asking ??= control(name, master.dir, "-O", "check").then((check) => {
+      master.asking = null;
+      return check.code === 0 && check.stderr.includes(`(pid=${master.pid})`);
+    }));
+  /** A master that no longer answers, let go and ended: the next dial makes another. */
+  const retire = (name: string, master: Master) => {
+    if (master.retired) return;
+    master.closed = master.retired = true;
+    if (masters.get(name) === master) masters.delete(name);
+    void inTurn(name, () => end(name, master));
+  };
+  /** The local socket that reaches `target` in `name`, its forward added on desolate's
+   *  connection if it is not there (9 ms; once a target for as long as the connection lasts). */
+  const forwarded = async (
+    name: string,
+    master: Master,
+    target: number | string,
+    local: string,
+  ) => {
+    await master.up;
+    if (master.closed) throw released(name);
+    let added = master.forwards.get(local);
+    if (!added) {
+      const adding: Promise<void> = inTurn(name, async () => {
+        if (master.closed || master.forwards.get(local) !== adding) throw released(name);
+        fs.rmSync(local, { force: true });
+        const forward = await control(
+          name,
+          master.dir,
+          "-O",
+          "forward",
+          "-L",
+          forwardSpec(local, target),
+        );
+        if (forward.code !== 0)
+          throw new Error(
+            `could not open a channel to ${name}: ${printable(forward.stderr || forward.stdout, 300)}`,
+          );
+      });
+      added = adding;
+      master.forwards.set(local, adding);
+      adding.catch(() => master.forwards.get(local) === adding && master.forwards.delete(local));
+    }
+    await added;
+  };
+  const connected = (local: string) =>
+    new Promise<Socket>((resolve, reject) => {
+      const socket = net.connect({ path: local, allowHalfOpen: true });
+      socket.once("connect", () => (socket.removeListener("error", reject), resolve(socket)));
+      socket.once("error", reject);
+    });
+  /** A connection to `target` in `name`, as a channel on desolate's connection to it: no
+   *  process here or in the VM (sshd opens the channel itself). When one cannot connect, the
+   *  master is asked whether it still answers as itself. If not (gone, killed, its control
+   *  socket removed), it is ended and another made, once. If it does, a refusal is its listen
+   *  queue full (ssh listens with a backlog of 128: a burst of 800 connects at once had 262
+   *  refused on the M1, 2026-11-24, and with 64 at a time none), tried again for up to 2 s;
+   *  and a socket that is not there is forwarded again. */
+  const channel = async (name: string, target: number | string): Promise<Socket> => {
+    let remade = false;
+    let readded = false;
+    let answered = false;
+    for (let tries = 0; ; tries++) {
+      const master = masterOf(name);
+      const local = channelSocket(master.dir, target);
+      try {
+        await forwarded(name, master, target, local);
+        return await connected(local);
+      } catch (error) {
+        // Let go (its workspace went, the daemon stops), or never made: nothing more is made.
+        if ((master.closed && !master.retired) || !master.pid) throw error;
+        const code = (error as NodeJS.ErrnoException).code;
+        if (master.retired || (!answered && !(await answers(name, master)))) {
+          if (remade) throw error;
+          remade = true;
+          retire(name, master);
+          continue;
+        }
+        answered = true;
+        if (code === "ENOENT" && !readded) {
+          // The master would answer a forward it already has with yes, and not bind it again.
+          readded = true;
+          master.forwards.delete(local);
+          await inTurn(name, () =>
+            control(name, master.dir, "-O", "cancel", "-L", forwardSpec(local, target)),
+          );
+          continue;
+        }
+        if (code === "ECONNREFUSED" && tries < 200) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          continue;
+        }
+        throw error;
+      }
+    }
+  };
+  /** Every connection for channels this Mac has left under the Lima home, ended where they
+   *  are found (their control sockets) and their folders removed, at once: a daemon that
+   *  stops, and a daemon that starts after one that did not (a crash): its masters would
+   *  otherwise live on until their VMs stop. */
+  const releaseAll = () => {
+    for (const master of masters.values()) master.closed = true;
+    masters.clear();
+    spawnSync("pkill", ["-f", mastersOf(lima)], {
+      stdio: "ignore",
+      timeout: 10_000,
+    });
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(lima);
+    } catch {
+      return;
+    }
+    for (const name of names)
+      fs.rmSync(path.join(lima, name, "ch"), { recursive: true, force: true });
+  };
+
+  return {
+    dial: (name: string, target: number | string) => later(channel(name, target)),
+    release(name?: string, target?: number | string) {
+      if (name === undefined) return releaseAll();
+      const master = masters.get(name);
+      if (!master) return;
+      if (target === undefined) {
+        // The VM's connection and every channel on it, ended once whatever was on its way
+        // (making it, a forward) has been, and its folder removed unless another took its place.
+        master.closed = true;
+        masters.delete(name);
+        void inTurn(name, async () => {
+          await end(name, master);
+          if (!masters.has(name)) fs.rmSync(master.dir, { recursive: true, force: true });
+        });
+        return;
+      }
+      const local = channelSocket(master.dir, target);
+      if (!master.forwards.delete(local)) return;
+      void inTurn(name, async () => {
+        // Forwarded again meanwhile: kept.
+        if (master.closed || master.forwards.has(local)) return;
+        await control(name, master.dir, "-O", "cancel", "-L", forwardSpec(local, target));
+        fs.rmSync(local, { force: true });
+      });
+    },
+    exit: async (name: string) => {
+      const dir = path.join(lima, name, "ch");
+      if (fs.existsSync(path.join(dir, "ssh.config"))) await control(name, dir, "-O", "exit");
+    },
+  };
+};
+
 /** The one backend, and so the one place desolate is refused on a host that is not a Mac:
  *  its VMs are Apple's hypervisor's, run by Lima (vz), and every command that makes or starts
  *  one asks for this first (stack.ts, `backend`). */
@@ -937,6 +1322,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       delete out[key];
     return out;
   };
+  const channels = channelsIn(LIMA_HOME, env);
   const lima = (
     args: string[],
     options: {
@@ -1213,138 +1599,6 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     "--",
     `exec "$SHELL" -l -c ${quote(commandLine(argv, options, options.root === true, totalMs))}`,
   ];
-  /** Each VM's connection for channels, as this process knows it: the master's pid once it is
-   *  up, and each target's forward once added (by its local socket). A master that has gone (its
-   *  VM stopped, it was killed, refreshSessions ended it) is seen at the next dial: its sockets
-   *  refuse and its pid is not there. */
-  type Master = { up: Promise<number>; pid: number; forwards: Map<string, Promise<void>> };
-  const masters = new Map<string, Master>();
-  /** desolate's connection to `name` for channels, made if it is not up: a master of an
-   *  earlier daemon, or one that went, is ended and its sockets removed first (ssh leaves a
-   *  forward's socket behind when it goes, and does not bind over one), since nothing here
-   *  knows its forwards. ssh -f answers once the master listens: about 220 ms into the root
-   *  VM (measured on the M1, 2026-11-24). */
-  const masterOf = (name: string) => {
-    const known = masters.get(name);
-    if (known) return known;
-    const open = async (): Promise<number> => {
-      const dir = channelDir(name);
-      const ctl = path.join(dir, "ctl");
-      await run("ssh", channelArgs(name, ctl, "-O", "exit"), { env: env(), timeoutMs: 10_000 });
-      for (const file of fs.readdirSync(dir)) fs.rmSync(path.join(dir, file), { force: true });
-      const master = await run("ssh", masterArgs(name, ctl), { env: env(), timeoutMs: 60_000 });
-      const check =
-        master.code === 0
-          ? await run("ssh", channelArgs(name, ctl, "-O", "check"), {
-              env: env(),
-              timeoutMs: 10_000,
-            })
-          : master;
-      const pid = Number(/\(pid=(\d+)\)/.exec(check.stderr)?.[1]);
-      if (check.code !== 0 || !pid)
-        throw new Error(
-          `could not open desolate's connection to ${name}: ${printable(check.stderr || check.stdout, 300)}`,
-        );
-      return (made.pid = pid);
-    };
-    const made: Master = { pid: 0, up: Promise.resolve(0), forwards: new Map() };
-    made.up = open();
-    made.up.catch(() => masters.get(name) === made && masters.delete(name));
-    masters.set(name, made);
-    return made;
-  };
-  const alive = (pid: number) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (error) {
-      return (error as NodeJS.ErrnoException).code === "EPERM";
-    }
-  };
-  /** The local socket that reaches `target` in `name`, its forward added on desolate's
-   *  connection if it is not there (8 ms; once a target for as long as the connection lasts). */
-  const forwarded = async (name: string, target: number | string) => {
-    const master = masterOf(name);
-    const pid = await master.up;
-    const local = channelSocket(path.join(LIMA_HOME, name, "ch"), target);
-    let added = master.forwards.get(local);
-    if (!added) {
-      added = (async () => {
-        fs.rmSync(local, { force: true });
-        const forward = await run(
-          "ssh",
-          channelArgs(
-            name,
-            path.join(LIMA_HOME, name, "ch", "ctl"),
-            "-O",
-            "forward",
-            "-L",
-            forwardSpec(local, target),
-          ),
-          { env: env(), timeoutMs: 10_000 },
-        );
-        if (forward.code !== 0)
-          throw new Error(
-            `could not open a channel to ${name}: ${printable(forward.stderr || forward.stdout, 300)}`,
-          );
-      })();
-      master.forwards.set(local, added);
-      added.catch(() => master.forwards.get(local) === added && master.forwards.delete(local));
-    }
-    await added;
-    return { local, pid, master };
-  };
-  const connected = (local: string) =>
-    new Promise<Socket>((resolve, reject) => {
-      const socket = net.connect({ path: local, allowHalfOpen: true });
-      socket.once("connect", () => (socket.removeListener("error", reject), resolve(socket)));
-      socket.once("error", reject);
-    });
-  /** A connection to `target` in `name`, as a channel on desolate's connection to it: no
-   *  process here or in the VM (sshd opens the channel itself). A refusal while the master
-   *  lives is its listening queue full (ssh listens with a backlog of 128, and a burst of 800
-   *  connects at once had 262 refused on the M1, 2026-11-24; with 64 at a time, none), so it is
-   *  tried again shortly, for up to 2 s. A master gone is made again, once. */
-  const channel = async (name: string, target: number | string): Promise<Socket> => {
-    for (let tries = 0, again = true; ; tries++) {
-      const { local, pid, master } = await forwarded(name, target);
-      try {
-        return await connected(local);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (!alive(pid) && again) {
-          again = false;
-          if (masters.get(name) === master) masters.delete(name);
-          continue;
-        }
-        if (code === "ENOENT" && again) {
-          // Its socket removed while the master lives: added again (the master would answer a
-          // forward it already has with yes, without binding it again).
-          again = false;
-          await run(
-            "ssh",
-            channelArgs(
-              name,
-              path.join(LIMA_HOME, name, "ch", "ctl"),
-              "-O",
-              "cancel",
-              "-L",
-              forwardSpec(local, target),
-            ),
-            { env: env(), timeoutMs: 10_000 },
-          );
-          master.forwards.delete(local);
-          continue;
-        }
-        if (code === "ECONNREFUSED" && alive(pid) && tries < 200) {
-          await new Promise((resolve) => setTimeout(resolve, 10));
-          continue;
-        }
-        throw error;
-      }
-    }
-  };
-
   /** `name`, if it is one of this stack's VMs' names (`PREFIX`, then a VM's own part, as
    *  shared/names.ts and templates.ts make them): else a refusal, before it is used. */
   const named = (name: string) => {
@@ -1500,14 +1754,17 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       // macOS keeps a unix socket's path under 104 bytes, and Lima's ssh control socket (and
       // desolate's own, for root in the root VM) is under each VM's directory. The longest
       // is a workspace VM's (found on the M1, where a long home made Lima refuse to start).
+      // So are desolate's sockets for a VM's channels (channelsDontFit).
       const longest = path.join(LIMA_HOME, `${PREFIX}0123456789`, "ssh-root.sock.0123456789012345");
+      const channels = channelsDontFit(path.join(LIMA_HOME, `${PREFIX}0123456789`, "ch"));
+      const fits = Buffer.byteLength(longest) <= SOCKET_PATH_MAX && !channels;
       checks.push({
         name: "socket paths fit",
-        ok: Buffer.byteLength(longest) <= SOCKET_PATH_MAX,
-        detail:
-          Buffer.byteLength(longest) <= SOCKET_PATH_MAX
-            ? `the longest fits in ${SOCKET_PATH_MAX} bytes`
-            : `the longest is ${Buffer.byteLength(longest)} bytes, over ${SOCKET_PATH_MAX}: ${LIMA_HOME}`,
+        ok: fits,
+        detail: fits
+          ? `the longest fits in ${SOCKET_PATH_MAX} bytes`
+          : (channels ??
+            `the longest is ${Buffer.byteLength(longest)} bytes, over ${SOCKET_PATH_MAX}: ${LIMA_HOME}`),
         fix: "set DESOLATE_HOME to a shorter path (the default, ~/.desolate, fits unless your home's path is very long)",
       });
       // Every running VM refuses Lima's own forwarding (NO_FORWARDS): one made before the
@@ -1836,38 +2093,10 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       const why = unreachable(named(name), processesUp(path.join(LIMA_HOME, name)));
       if (why) throw new Error(why);
       socatAddress(target);
-      return later(channel(name, target));
+      return channels.dial(name, target);
     },
 
-    release(name, target) {
-      const master = masters.get(name);
-      if (target === undefined) {
-        // The VM's connection and every channel on it: its master told to end, no process
-        // started for it (a daemon that stops, a workspace that goes).
-        // (At once, when it is up: a daemon that stops exits right after.)
-        masters.delete(name);
-        const end = (pid: number) => alive(pid) && process.kill(pid, "SIGTERM");
-        if (master?.pid) end(master.pid);
-        else void master?.up.then(end, () => {});
-        fs.rmSync(path.join(LIMA_HOME, name, "ch"), { recursive: true, force: true });
-        return;
-      }
-      const local = channelSocket(path.join(LIMA_HOME, name, "ch"), target);
-      if (!master?.forwards.has(local)) return;
-      master.forwards.delete(local);
-      void run(
-        "ssh",
-        channelArgs(
-          name,
-          path.join(LIMA_HOME, name, "ch", "ctl"),
-          "-O",
-          "cancel",
-          "-L",
-          forwardSpec(local, target),
-        ),
-        { env: env(), timeoutMs: 10_000 },
-      ).then(() => fs.rmSync(local, { force: true }));
-    },
+    release: (name, target) => channels.release(name, target),
 
     link(name) {
       // The Mac's loopback, where the sandbox allows this VM one port.
@@ -1927,10 +2156,7 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       // And desolate's own connection for channels, which logged in with the same groups (a
       // channel to a proxy's socket needs the proxies' group): the daemon finds it gone at its
       // next dial, and opens it again.
-      await run("ssh", channelArgs(name, path.join(LIMA_HOME, name, "ch", "ctl"), "-O", "exit"), {
-        env: env(),
-        timeoutMs: 30_000,
-      });
+      await channels.exit(name);
     },
   };
   return backend;
@@ -2906,6 +3132,33 @@ declare namespace limaBackend {
           code: 1;
           stderr: "dsl-main-w1 is running, but Lima's ssh configuration for it (<home>/lima/dsl-main-w1/ssh.config) is not there: desolate doctor\n";
         },
+      ],
+    ]
+  >;
+  /** dial's connections are channels on a master of desolate's own (here a stand-in ssh, with
+   *  no VM), which is made again when it no longer answers as itself: its control socket gone
+   *  while it lives, or it killed while the pid it gave is another live process's (this
+   *  test's): each time the next connection is carried within 5 s, on a new master, and the
+   *  old one is ended. A VM let go while its first dial is on its way gets no master. The
+   *  control: nothing happened, and the one master carries both. */
+  export type ChannelsRecover = Table<
+    typeof channelsAfter,
+    [
+      [
+        args: [what: "nothing"],
+        expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; inTime: true; left: 1 },
+      ],
+      [
+        args: [what: "control socket removed"],
+        expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; inTime: true; left: 1 },
+      ],
+      [
+        args: [what: "master killed, its pid another's"],
+        expected: { first: "hi\nEOF-SEEN\n"; next: "hi\nEOF-SEEN\n"; inTime: true; left: 1 },
+      ],
+      [
+        args: [what: "let go while dialling"],
+        expected: { first: ""; next: ""; inTime: true; left: 0 },
       ],
     ]
   >;

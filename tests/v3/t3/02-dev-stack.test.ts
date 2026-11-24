@@ -254,10 +254,11 @@ echo "vm_store=$(${call("vm-store", "-v /etc/ssl/certs:/desolate-certs:ro -e SSL
         const dir = path.join(lima, name, "ch");
         assert.equal(fs.lstatSync(dir).mode & 0o777, 0o700, dir);
         const sockets = fs.readdirSync(dir);
-        assert.ok(sockets.length >= 2, `${dir}: ${sockets.join(" ")}`);
+        assert.ok(sockets.length >= 3, `${dir}: ${sockets.join(" ")}`);
         for (const file of sockets) {
           const seen = fs.lstatSync(path.join(dir, file));
-          assert.ok(seen.isSocket(), file);
+          // The connection's own configuration (lima.ts channelConfig) and its sockets.
+          assert.ok(file === "ssh.config" ? seen.isFile() : seen.isSocket(), file);
           assert.equal(seen.mode & 0o777, 0o600, file);
           assert.equal(seen.uid, process.getuid!(), file);
         }

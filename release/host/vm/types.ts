@@ -102,9 +102,10 @@ export interface Backend {
    *  proxies and the root's user can reach it). */
   dial(name: string, target: number | string): Duplex;
   /** What dial keeps open to a VM, let go: the channel to `target`, or with none every one
-   *  and the connection they ride (a workspace that goes, a port no longer listened on, a
-   *  daemon that stops). A backend that keeps nothing between dials has none. */
-  release?(name: string, target?: number | string): void;
+   *  and the connection they ride (a workspace that goes, a port no longer listened on); with
+   *  no name, every VM's, and any an earlier process left (a daemon that starts or stops). A
+   *  backend that keeps nothing between dials has none. */
+  release?(name?: string, target?: number | string): void;
   /** A workspace's link to its proxy: the address the guest connects to, and, where the
    *  backend carries it over a loopback port on the host, that port (the host daemon then
    *  listens there as well as on the socket). */

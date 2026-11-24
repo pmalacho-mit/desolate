@@ -171,26 +171,42 @@ here and 1.2 MB there); half-close and an end from either side behave as before.
 
 - **Which connection.** Desolate's own, not Lima's (`ssh.sock`), which `limactl`, every exec
   and `refreshSessions` share and end: `refreshSessions` ends this one too (a channel to a
-  proxy's socket needs the groups the login had), and the daemon makes it again at the next
-  dial. A master that has gone is seen at the next dial (its socket refuses and its pid is not
-  there) and made again: a forward's socket is left behind by ssh, which will not bind over it,
-  so the folder is emptied first. One of an earlier daemon is ended (`-O exit`) for the same
-  reason. A refusal while the master lives is its listen queue full (ssh listens with 128:
-  262 of a burst of 800 at once were refused, none with 64 at a time), tried again for up to
-  2 s; 600 at once through `dial` all answered. When a workspace goes, its VM's master is
-  ended and its proxy's forward on the root's cancelled; a port no longer listened on has its
-  forward cancelled; a daemon that stops ends every master. T4 `02-dev-stack` kills both
-  masters and connects again.
+  proxy's socket needs the groups the login had). Its configuration is desolate's own
+  (`channelConfig`, `ch/ssh.config`), written by the Mac at each start from the seven values it
+  takes from `ssh -G` of Lima's file (host, port, user, key, known-hosts file, host-key alias,
+  strict checking): ssh reads its configuration again for every `-O forward` and sends the
+  master every forward named there, and a master carries a forward asked on its control socket
+  whatever its own ClearAllForwardings (both seen with `ssh -G`, review of 2026-11-24), so
+  nothing of Lima's file but those may ride along. A check of each invocation's `ssh -G`
+  instead would have to be run, and kept right, before every forward.
+- **A master that no longer answers.** When a connection cannot be made (or a forward cannot
+  be added), the master is asked on its control socket (`-O check`) whether it still answers
+  as the pid it gave; if not (gone, killed, its control socket removed under it), it is ended
+  (`-O exit`, else every process whose command names that control socket: never a pid kept
+  from before) and another made, once. Its pid alone decided this before, and a pid can be
+  another process's by then. While it answers, a refusal is its listen queue full (ssh
+  listens with 128: 262 of a burst of 800 at once were refused, none with 64 at a time),
+  tried again for up to 2 s. In-source, with a stand-in ssh: the control socket removed, the
+  master killed while its pid is another live process's; each next connection carried within
+  5 s on one new master.
+- **Lifetimes.** Every ssh run on a VM's control socket waits its turn, so one let go is ended
+  after what was on its way (its making, a forward) and never before; a dial for a workspace
+  the daemon no longer carries is refused. When a workspace goes, its VM's master is ended and
+  its proxy's forward on the root's cancelled; a port no longer listened on has its forward
+  cancelled. A daemon that stops ends every master under the Lima home, and so does one that
+  starts (by the control sockets their commands name), so a crashed daemon's masters live
+  until the next daemon starts or their VMs stop. A folder too long for the sockets is refused
+  in words, and `doctor` says so ("socket paths fit").
 - **Who can connect.** The folder is 0700 (Lima's VM folder is too) and each socket 0600
   (ssh's StreamLocalBindMask), owned by the Mac's user: that user, who can already use Lima's
   key and control socket, and root. No other user on the Mac.
 - **What a channel reaches.** The target is the Mac's own (`forwardSpec`: a port 1 to 65535 on
   the VM's loopback, or a path of plain names, checked as `socatAddress` did; a workspace's
   proxy path is rebuilt by the Mac, replies.ts `proxySocket`), fixed when the forward is added.
-- **A hostile VM's sshd gets nothing new.** No remote forward is asked for, and the master is
-  made with ForwardAgent, ForwardX11 and PermitLocalCommand off and ClearAllForwardings on, on
-  the command line, which wins over any configuration (`masterArgs`, in-source with `ssh -G`
-  beside a configuration asking for each: Lima's asks for none). The OpenSSH client refuses a
+- **A hostile VM's sshd gets nothing new.** No remote forward is asked for, and desolate's
+  configuration names no agent, X11, local command, tunnel or forward (`masterArgs`, in-source:
+  `ssh -G` of the master, a forward and a cancel, beside the same with a Lima file that asks for
+  each). The OpenSSH client refuses a
   server's channel of its own ("forwarded-tcpip" or "forwarded-streamlocal" for a forward it did
   not ask for, "x11", "auth-agent").
 - **What bounds channels.** sshd's MaxSessions counts sessions, not channels. sshd's process
