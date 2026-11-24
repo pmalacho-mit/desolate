@@ -29,7 +29,6 @@ export const paths = {
   state: path.join(HOME, "state"),
   /** Sockets the host shows to VMs (each workspace's link to its proxy). */
   run: path.join(HOME, "run"),
-  images: path.join(HOME, "images"),
   tools: path.join(HOME, "tools"),
   logs: path.join(HOME, "logs"),
   /** The git VM's clones, the person's own (host/git-vm.ts). */

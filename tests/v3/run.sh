@@ -10,17 +10,15 @@
 #   tests/v3/run.sh affected [<base>]
 #                           T1, then the T2 suites a change since <base> (origin/main)
 #                           touches (tests/v3/affected.ts). The whole of T2 before a merge.
-#   tests/v3/run.sh t3      end to end on real VMs (the qemu backend: KVM if /dev/kvm exists,
-#                           software emulation if not). Tens of minutes under emulation.
-#   tests/v3/run.sh t4      the same end-to-end boundary tests on a Mac (the vz backend).
-#                           About 3 minutes on an M1.
-#   tests/v3/run.sh all     t1, t2, t3
+#   tests/v3/run.sh t4      end to end on real VMs, on a Mac (the vz backend): the boundary
+#                           tests in t3/ (named for the tier that was). About 5 minutes on an M1.
+#   tests/v3/run.sh all     t1, t2
 #
 # A tier whose needs are not met FAILS and says what to install: it does not skip, because a
 # suite that did not run is not a suite that passed.
 #
 #   UPDATE_TRANSCRIPTS=1    accept changed command output (review the diff first)
-#   DESOLATE_IMAGE_DIR      where release/image/build.sh wrote the base image (t2, t3)
+#   DESOLATE_IMAGE_DIR      where release/image/build.sh wrote the base image (t2)
 #   DESOLATE_TIMINGS=<file> append each step's wall-clock time (t2 prints the slowest anyway)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -87,11 +85,11 @@ t1() {
   else
     need "prettier is not installed, so nothing checks the TypeScript is formatted" "npm install"
   fi
-  for script in release/cli.sh release/image/*.sh release/root/*.sh release/root/hooks/* release/root/keyring-askpass release/root/git-remote-desolate release/workspace/*.sh release/workspace/desolate release/host/vm/*.sh tests/v3/*.sh tests/v3/forge/*.sh tests/probes/v3/*.sh; do
+  for script in release/cli.sh release/image/*.sh release/root/*.sh release/root/hooks/* release/root/keyring-askpass release/root/git-remote-desolate release/workspace/*.sh release/workspace/desolate tests/v3/*.sh tests/v3/forge/*.sh tests/probes/v3/*.sh; do
     bash -n "$script" || { echo "syntax: $script" >&2; failed=1; }
   done
   if command -v shellcheck >/dev/null 2>&1; then
-    shellcheck -S warning release/cli.sh release/image/*.sh release/root/*.sh release/workspace/*.sh release/host/vm/*.sh tests/v3/*.sh tests/v3/forge/*.sh tests/probes/v3/*.sh || failed=1
+    shellcheck -S warning release/cli.sh release/image/*.sh release/root/*.sh release/workspace/*.sh tests/v3/*.sh tests/v3/forge/*.sh tests/probes/v3/*.sh || failed=1
   else
     echo "   (shellcheck not installed: shell scripts were syntax-checked only)"
   fi
@@ -162,20 +160,9 @@ affected() {
   t2 $suites
 }
 
-t3() {
-  echo "== T3: end to end, real VMs (qemu backend)"
-  docker_ready
-  command -v limactl >/dev/null 2>&1 || need "limactl is not on PATH (the qemu backend drives QEMU through Lima)" "install Lima 2.0 or newer: https://lima-vm.io"
-  command -v "qemu-system-$(uname -m)" >/dev/null 2>&1 || need "qemu-system-$(uname -m) is not installed" "apt-get install qemu-system-x86 qemu-utils"
-  local image=${DESOLATE_IMAGE_DIR:-$HOME/.desolate/images/$(uname -m)}
-  [ -f "$image/disk.raw" ] || need "the base VM image is not at $image" "sudo release/image/build.sh --out <dir>, then DESOLATE_IMAGE_DIR=<dir> tests/v3/run.sh t3"
-  [ -e /dev/kvm ] || echo "   no /dev/kvm: software emulation. Each VM takes minutes to boot; this tier takes tens of minutes."
-  DESOLATE_TIER=T3 DESOLATE_IMAGE_DIR=$image detached_node_tests tests/v3/t3/*.test.ts
-}
-
 t4() {
   echo "== T4: end to end, the product backend (vz) on a Mac"
-  [ "$(uname -s)" = Darwin ] || need "T4 is the Mac's tier" "run it on macOS; on Linux the real-VM tier is t3"
+  [ "$(uname -s)" = Darwin ] || need "T4 is the Mac's tier: desolate runs on macOS only, for now" "run it on a Mac"
   docker_ready
   command -v limactl >/dev/null 2>&1 || need "limactl is not on PATH" "brew install lima"
   DESOLATE_TIER=T4 detached_node_tests tests/v3/t3/*.test.ts
@@ -185,8 +172,7 @@ case "${1:-t1}" in
   t1) t1 ;;
   t2) shift; t2 "$@" ;;
   affected) shift; affected "$@" ;;
-  t3) t3 ;;
   t4) t4 ;;
-  all) t1 && t2 && t3 ;;
-  *) sed -n '2,25p' "$0"; exit 64 ;;
+  all) t1 && t2 ;;
+  *) sed -n '2,23p' "$0"; exit 64 ;;
 esac
