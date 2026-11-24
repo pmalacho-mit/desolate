@@ -2,15 +2,16 @@
 // workspace names, and the restart loop that keeps the root's services running.
 //
 // Shell cannot import shared/names.ts, so the slug rule is written again in three scripts
-// (root/start.sh, root/proxy-user.sh, completion.bash). This reads each copy out of its
-// script and runs it, in bash, beside isSlug, on the same names: one rule, kept one by this.
+// (root/start.sh, root/proxy-user.sh, completion.bash), and the repository rule in one
+// (completion.bash). This reads each copy out of its script
+// and runs it, in bash, beside isSlug or parseRepo, on the same names: one rule, kept one.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, before, describe, it } from "node:test";
-import { isSlug } from "../../../release/shared/names.ts";
+import { isSlug, parseRepo } from "../../../release/shared/names.ts";
 
 const RELEASE = path.resolve(import.meta.dirname, "../../../release");
 let work = "";
@@ -84,6 +85,65 @@ describe("T1 the slug rule's shell copies are shared/names.ts's isSlug", () => {
       );
       assert.equal(old.status, 0, "control: the old copy takes what isSlug refuses");
       assert.equal(isSlug("a--b--c") || isSlug("acme-"), false);
+    });
+});
+
+/** The repositories every copy of the repository rule is tried on: parseRepo's own table, each
+ *  edge of it (a part of 100 and 101, what may start and end one), and many more made from
+ *  the characters that matter. */
+const repos = (): string[] => {
+  const part = (n: number) => "a".repeat(n);
+  const edges = [
+    ...["acme/widgets", "pmalacho-mit/suede.nests", "acme/my_app", "_acme/x", "a/b", "A/B"],
+    ...["acme", "acme/widgets/x", "../widgets", "acme/..", "acme/widgets.git", "-acme/widgets"],
+    ...[".hidden/widgets", "acme/widgets.", "acme/a..b", "acme/my widgets", "acme/", "/widgets"],
+    ...["acme/.github", "acme.git/x", "acme./x", "acme/x.gitx", "acme/-x", "acme/x-", "a/b\n"],
+    ...["acmé/x", "acme/ｘ", "acme/$(id)", "acme/a;b", "", "/"],
+    ...[`${part(100)}/x`, `${part(101)}/x`, `x/${part(100)}`, `x/${part(101)}`],
+  ];
+  const alphabet = "aZ0._-/.a";
+  let seed = 11;
+  const next = () => (seed = (seed * 1103515245 + 12345) % 2 ** 31);
+  const made = Array.from({ length: 3000 }, () => {
+    const length = 1 + (next() % 12);
+    return Array.from({ length }, () => alphabet[next() % alphabet.length]).join("");
+  });
+  return [...edges, ...made];
+};
+
+describe("T1 the repository rule's shell copies are shared/names.ts's parseRepo", () => {
+  for (const [script, fn] of [["completion.bash", "_desolate_repo"]] as const)
+    it(`${script}'s ${fn}, in the C locale and in a UTF-8 one`, () => {
+      const all = repos();
+      for (const locale of ["C", "C.UTF-8", "en_US.UTF-8"]) {
+        const ran = spawnSync(
+          "bash",
+          [
+            "--norc",
+            "--noprofile",
+            "-c",
+            `${copyOf(script, fn)}\nwhile IFS= read -r -d '' name; do if ${fn} "$name"; then echo 1; else echo 0; fi; done`,
+          ],
+          {
+            input: all.map((name) => `${name}\0`).join(""),
+            encoding: "utf8",
+            env: { PATH: process.env.PATH, LC_ALL: locale },
+          },
+        );
+        assert.equal(ran.status, 0, ran.stderr);
+        const said = ran.stdout.split("\n").slice(0, -1);
+        assert.equal(said.length, all.length);
+        const differ = all.filter((name, i) => (said[i] === "1") !== (parseRepo(name) !== null));
+        assert.deepEqual(differ, [], `${fn} and parseRepo disagree (${locale})`);
+      }
+      // Control: the check would see a copy that drifted (the recipes' old copy took `..`).
+      const old = spawnSync(
+        "bash",
+        ["-c", `f() { [[ $1 =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; }; f acme/.. && f ../x`],
+        { env: { PATH: process.env.PATH, LC_ALL: "C" } },
+      );
+      assert.equal(old.status, 0, "control: the old copy takes what parseRepo refuses");
+      assert.equal(parseRepo("acme/..") ?? parseRepo("../x"), null);
     });
 });
 

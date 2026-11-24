@@ -23,7 +23,7 @@ import * as readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { FORGE, LFS_POINTER_BYTES, over } from "../shared/limits.ts";
 import { named, newId, requester, requestRefusal } from "../shared/git-out-box.ts";
-import { lfsPointer } from "../shared/names.ts";
+import { lfsPointer, parseRepo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
@@ -42,8 +42,7 @@ export const remoteOf = (
 ): { repo: string; domain: string | null } | { refused: string } => {
   const [repo = "", domain = null, ...more] = address.split("@") as [string?, string?, ...string[]];
   if (more.length > 0) return { refused: `'${address}' is not a remote's address` };
-  if (!/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/.test(repo))
-    return { refused: `'${repo}' is not a repository` };
+  if (!parseRepo(repo)) return { refused: `'${repo}' is not a repository` };
   if (domain !== null && !/^[a-z0-9][a-z0-9-]{0,39}$/.test(domain))
     return { refused: `'${domain}' is not a domain` };
   return { repo, domain };
@@ -65,6 +64,8 @@ declare namespace remoteOf {
       [args: [address: ""], expected: { refused: "'' is not a repository" }],
       [args: [address: "acme"], expected: { refused: "'acme' is not a repository" }],
       [args: [address: "acme/app/x"], expected: { refused: "'acme/app/x' is not a repository" }],
+      /** each becomes a path in the request (/desolate/mirrors/<repo>.git): none that climbs */
+      [args: [address: "acme/.."], expected: { refused: "'acme/..' is not a repository" }],
       [args: [address: "acme/app@Dev"], expected: { refused: "'Dev' is not a domain" }],
       [args: [address: "acme/app@"], expected: { refused: "'' is not a domain" }],
       [args: [address: "acme/app@../x"], expected: { refused: "'../x' is not a domain" }],

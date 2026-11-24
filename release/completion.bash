@@ -33,12 +33,14 @@ _desolate_workspaces() {
     done
     return 0
 }
+# A repository as shared/names.ts parseRepo reads one (tests/v3/t1/scripts.test.ts keeps them one).
+_desolate_repo() { [[ $1 =~ ^[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_][-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._]{0,99}/[abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_][-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._]{0,99}$ && $1 != *..* && $1 != *.git/* && $1 != *.git && $1 != *./* && $1 != *. ]]; }
 _desolate_repos() {
     local dir owner name
     for dir in "$_desolate_home"/mirrors/*/*.git/; do
         [ -d "$dir" ] || continue
         name=${dir%.git/}; owner=${name%/*}; owner=${owner##*/}; name=${name##*/}
-        if [[ "$owner/$name" =~ ^[A-Za-z0-9_][A-Za-z0-9._-]*/[A-Za-z0-9_][A-Za-z0-9._-]*$ ]]; then printf '%s/%s\n' "$owner" "$name"; fi
+        if _desolate_repo "$owner/$name"; then printf '%s/%s\n' "$owner" "$name"; fi
     done
     return 0
 }

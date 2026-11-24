@@ -139,6 +139,10 @@ declare namespace parseRepo {
       [args: [value: "acme/a..b"], expected: null],
       [args: [value: "acme/my widgets"], expected: null],
       [args: [value: 42], expected: null],
+      /** GitHub allows a name that starts with a dot (an owner's `.github`), and this refuses
+       *  it: every copy of this rule now refuses it too (the git VM's and the recipes' took it,
+       *  though the host refused it before they were reached) */
+      [args: [value: "acme/.github"], expected: null],
     ]
   >;
 }

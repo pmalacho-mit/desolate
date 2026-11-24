@@ -38,7 +38,7 @@ done
 [ "${1:-}" = -- ] && shift
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || usage
 [ -z "$from" ] || [[ $from =~ ^[0-9a-f]{40}$ ]] || usage
-[[ $project =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || usage
+# (The project is a repository by shared/names.ts parseRepo, or desolate refuses it below.)
 
 # Only a push to the project's default branch asks the question.
 if [ -n "$pushed_to" ]; then
