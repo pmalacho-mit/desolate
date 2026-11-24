@@ -847,8 +847,9 @@ const stateTag = () => createHash("sha256").update(last).digest("hex").slice(0, 
 //                                       a VM's own writes to a share are its events, another
 //                                       VM's are not
 //   what workspaces write (their checkouts' statuses, notes and HEADs; each repository's list
-//     of branches in the outbox)        the host's nudge (`nudged`): their VMs' writes are
-//                                       the Mac's file events (host/daemon.ts, register)
+//     of branches in the outbox)        the host's nudge, paced there (`changed`): their
+//                                       VMs' writes are the Mac's file events (host/daemon.ts,
+//                                       register)
 //   time: whether the host has gone quiet (hostConnected), a secret's end, a raw push whose
 //     process was killed (its approval file stays, its pid does not)
 //                                       the slow look, every 10 s
@@ -918,9 +919,11 @@ const changed = () => {
     look();
   }, 40);
 };
-/** A file changed, or the host nudged (a workspace wrote): looked at 40 ms after, and never
- *  more than once a second. A workspace writing its outbox in a loop is the host's nudges in
- *  a loop, and costs one look a second (it was the look every second, and one per nudge). */
+/** A file of the root's changed (rootd, rootctl and the pusher write them, on what domains
+ *  ask), or a workspace's request was queued: looked at 40 ms after, and never more than once
+ *  a second. (The host's nudges, which a workspace writing its outbox in a loop makes, are
+ *  paced by the host at one a second: `changed`. It was the look every second, and one per
+ *  nudge.) */
 const nudged = paced(async () => look(), undefined, undefined, 40).poke;
 
 // ------------------------------------------------------------------ each domain's own view
@@ -1489,7 +1492,8 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/host/nudge") {
-      nudged();
+      // The host paces its nudges (host/daemon.ts, nudge): looked at at once.
+      changed();
       return json(res, 200, { ok: true });
     }
     if (req.method === "POST" && url.pathname === "/host/progress") {

@@ -636,8 +636,8 @@ declare namespace paced {
       [args: [bursts: [[0, 0, 1], [400, 400, 1]]], expected: [300, 1300]],
     ]
   >;
-  /** the root's state service's pace (root/stated.ts): 40 ms after an event, still at most
-   *  once a second, however many the host's nudges are */
+  /** the root's state service's pace for its own files (root/stated.ts): 40 ms after an
+   *  event, still at most once a second, however many there are */
   export type StateService = Table<
     typeof pacedLooks,
     [

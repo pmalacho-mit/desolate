@@ -2362,9 +2362,13 @@ const serve = async () => {
     });
 
   let nudging: NodeJS.Timeout | null = null;
-  // At most two a second: a workspace touching its refs in a loop costs the state service
-  // two looks a second, not one per touch (found by the audit of #92). The first change in a
-  // while is passed on at once.
+  // At most one a second: a workspace touching its refs in a loop costs the state service
+  // one look a second, not one per touch (found by the audit of #92). The first change after
+  // a quiet second is passed on at once (60 ms, for the rest of its burst of events). This is
+  // the only pace between a workspace's write and the dashboard: the state service looks at
+  // once on a nudge. So a change waits at most a second after the nudge before it, and a
+  // change after a quiet second about 100 ms. (Paced at both ends, 0.5 s here and 1 s there,
+  // a change could wait 1.5 s: T2 09-ui's budget of a second was missed at 1.1 s.)
   let nudgedAt = 0;
   const nudge = () => {
     if (nudging) return;
@@ -2374,7 +2378,7 @@ const serve = async () => {
         nudgedAt = Date.now();
         rootHttp("POST", "/host/nudge", {}).catch(() => {});
       },
-      Math.max(60, 500 - (Date.now() - nudgedAt)),
+      Math.max(60, 1000 - (Date.now() - nudgedAt)),
     );
   };
 
