@@ -866,31 +866,36 @@ const watching = new Map<string, fs.FSWatcher>();
  *  on real VMs only, where the timing allows it (found by tier T3). So: no recursion, and
  *  every watcher has a listener. One that fails is dropped, and tried again at the next look. */
 const watchDomains = () => {
-  const wanted = new Set([
-    ROOT.state,
-    APPROVALS,
-    path.join(ROOT.state, "refused"),
-    path.join(ROOT.state, "issues"),
-    HOST_QUEUE,
-    SECRETS_DIR,
-    ROOT.domains,
-    ...domains
-      .domains()
-      .flatMap((d) => [
-        domainPath(d.slug),
-        path.join(domainPath(d.slug), "workspaces"),
-        proxyDomainDir(d.slug),
-      ]),
+  // Each directory, and the names in it that the state is read from (null: any). Not the
+  // logs beside them: rootd's, rootctl's and this service's own are in /var/lib/desolate,
+  // and a look for each line they wrote would be a look a second whenever the root works.
+  const any = null;
+  const only = (...names: string[]) => new Set(names);
+  const wanted = new Map<string, Set<string> | null>([
+    [ROOT.state, only("registry.json", "pushed.json", "forge.json")],
+    [APPROVALS, any],
+    [path.join(ROOT.state, "refused"), any],
+    [path.join(ROOT.state, "issues"), any],
+    [HOST_QUEUE, any],
+    [SECRETS_DIR, any],
+    [ROOT.domains, any],
+    ...domains.domains().flatMap((d): [string, Set<string> | null][] => [
+      [domainPath(d.slug), only("domain.json", "offers.json")],
+      [path.join(domainPath(d.slug), "workspaces"), any],
+      [proxyDomainDir(d.slug), only("policy.json")],
+    ]),
   ]);
   for (const [dir, watcher] of watching)
     if (!wanted.has(dir)) {
       watcher.close();
       watching.delete(dir);
     }
-  for (const dir of wanted) {
+  for (const [dir, names] of wanted) {
     if (watching.has(dir) || !fs.existsSync(dir)) continue;
     try {
-      const watcher = fs.watch(dir, nudged);
+      const watcher = fs.watch(dir, (_, file) => {
+        if (!file || !names || names.has(String(file))) nudged();
+      });
       watcher.on("error", (error) => {
         console.error(`stated: no longer watching ${dir}: ${String(error)}`);
         watcher.close();
