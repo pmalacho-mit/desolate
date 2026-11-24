@@ -113,8 +113,8 @@ doctor: 1 of 22 checks FAILED.
 ## the fake backend is never a default
 
 $ desolate repos
-desolate: this stack was bootstrapped on the fake backend, which gives no isolation and runs only when asked for by name
-  fix: set DESOLATE_BACKEND=fake for each command (tests only), or `desolate destroy --all` and bootstrap a real backend
+desolate: this stack was bootstrapped on the tests' fake backend, which gives no isolation and runs only when a test run loads it
+  fix: run each command as the tests do, with NODE_OPTIONS=--import=<checkout>/tests/v3/lib/fake-backend.ts, or `desolate destroy --all` that way and bootstrap a real backend
 [exit 1]
 
 ## clone a pushable repository

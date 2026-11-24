@@ -6,11 +6,12 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, "../../..");
 const CLI = path.join(REPO_ROOT, "release", "cli.sh");
+const FAKE_BACKEND = path.join(HERE, "fake-backend.ts");
 const FORGE_SRC = path.join(REPO_ROOT, "tests", "v3", "forge");
 const TRANSCRIPTS = path.join(REPO_ROOT, "tests", "v3", "transcripts");
 
@@ -239,7 +240,10 @@ export const newStack = (label: string): Stack => {
     ...process.env,
     DESOLATE_HOME: home,
     DESOLATE_INSTANCE: instance,
-    DESOLATE_BACKEND: backend,
+    // The fake backend is not in release/: each command loads it (lib/fake-backend.ts).
+    ...(backend === "fake"
+      ? { NODE_OPTIONS: `--import=${pathToFileURL(FAKE_BACKEND).href}` }
+      : { DESOLATE_BACKEND: backend }),
     DESOLATE_TEST_RUN: "1",
     // Beside a real stack, and beside other test stacks: the editors on a port of this
     // stack's own (doctor fails a daemon that could not take its port).

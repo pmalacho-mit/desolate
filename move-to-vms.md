@@ -577,7 +577,7 @@ v3 installs beside v2: a different VM and different ports. Projects move one at 
 
 The VM layer is one interface: create, boot, stop, suspend, resume, destroy, clone a disk, attach a share read-write or read-only, attach the network link to a proxy, report listening ports, exec, logs. It has three kinds of backend:
 
-- **`fake`:** each "VM" is a container (or a process namespace) on any Docker host, implementing the whole interface: read-only shares as read-only binds, the network link as a container network whose only route is the proxy, exec, port events. It gives **no hypervisor isolation**, and says so: it runs only when `DESOLATE_BACKEND=fake` is set explicitly; every workspace on it is labelled `not isolated` in the CLI and the dashboard; and `doctor` fails on it outside a test run.
+- **`fake`:** each "VM" is a container (or a process namespace) on any Docker host, implementing the whole interface: read-only shares as read-only binds, the network link as a container network whose only route is the proxy, exec, port events. It gives **no hypervisor isolation**, and says so: it is not in `release/`, and runs only when a test run loads it into each command (`tests/v3/lib/fake-backend.ts`, by `node --import`); every workspace on it is labelled `not isolated` in the CLI and the dashboard; and `doctor` fails on it outside a test run.
 - **`qemu`:** a Linux backend on QEMU (through Lima's QEMU driver, or QEMU directly), with KVM where the host has `/dev/kvm` (GitHub's Ubuntu runners do: foldyard's CI boots Lima VMs there), and software emulation (TCG) where it does not. TCG is slow (minutes to boot, everything inside crawls) but it is a real hypervisor boundary.
 - **The product backend**, Lima/vz or Apple Container (Phase 0 decides), on a Mac.
 

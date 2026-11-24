@@ -158,11 +158,12 @@ the second one.
 ## An inner stack, and its pages in your browser
 
 To work on the dashboard, the approval page or anything else a browser shows, run a stack
-inside the workspace (on the fake backend, which isolates nothing; it is for development):
+inside the workspace (on the tests' fake backend, which isolates nothing; it is for development,
+and is loaded from this checkout's `tests/`, which an install does not have):
 
 ```bash
 # in the workspace (desolate exec desolate/<w> -- bash, or its editor's terminal)
-export DESOLATE_BACKEND=fake DESOLATE_TEST_RUN=1 DESOLATE_INSTANCE=inner \
+export NODE_OPTIONS=--import=$PWD/tests/v3/lib/fake-backend.ts DESOLATE_TEST_RUN=1 DESOLATE_INSTANCE=inner \
        DESOLATE_HOME=/desolate/scratch/inner DESOLATE_EDITOR_PORT=32581 \
        DESOLATE_HOSTNAME_SUFFIX=$DESOLATE_DEV_HOSTNAME
 release/cli.sh bootstrap
