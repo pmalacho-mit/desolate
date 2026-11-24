@@ -2257,7 +2257,9 @@ const serve = async () => {
     // directories only, by the names of the repositories this host knows the workspace has,
     // each by itself. Nothing in them is read or listed, and no file name is looked at: any
     // event is a nudge, which the state service paces. One not made yet (before the first
-    // sync) is watched once its parent changes.
+    // sync) is watched once its parent changes. (Without the outbox's own watch, a workspace
+    // registered before its first sync was never watched there: T2 09-ui, 2026-11-23, a
+    // branch move shown at the state service's slow look, 9 s after.)
     const sync = path.join(paths.outbox(r.domain), "sync");
     const outbox = [
       ...new Set(
@@ -2268,7 +2270,8 @@ const serve = async () => {
     ];
     const held = new Set<string>();
     const hold = () => {
-      for (const dir of [sync, ...outbox])
+      // (From the outbox itself, which the domain's making made: sync/ is made at the first sync.)
+      for (const dir of [paths.outbox(r.domain), sync, ...outbox])
         if (!held.has(dir) && watch(dir, () => (hold(), true))) held.add(dir);
     };
     hold();
