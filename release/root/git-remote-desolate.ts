@@ -120,7 +120,9 @@ const main = async () => {
   // this helper's input: ended, or killed by whoever ran it), what is under way here is
   // ended and nothing more is taken. A helper does not outlive its fetch, so a domain that
   // writes bundles made to be slow, as fast as they are taken, holds one fetch's helper at
-  // most. (`untilGone` false: tidying the root clone, which is done all the same.)
+  // most, and holds up only its own domain's work: another domain's in the same clone goes on
+  // beside it (offers.ts, fetchDomain). (`untilGone` false: tidying the root clone, which is
+  // done all the same.)
   const gone = new AbortController();
   const git = (args: string[], input?: string, untilGone = true) =>
     run("git", args, { env: process.env, input, signal: untilGone ? gone.signal : undefined });

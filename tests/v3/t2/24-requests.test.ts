@@ -19,6 +19,9 @@
 // - A domain's requests folder holding 100,000 names that are not requests costs the root's
 //   loop a look at 1,000: another domain's round trip is as fast as without it (the
 //   control), and the domain is told why its own request may wait.
+// - One domain's import held for a minute in a root clone it shares with another holds up
+//   none of the other's work there: its offer is answered as fast as with nothing held (the
+//   control), while the hold is still on.
 // - A root that is down is said to be down within the beat's 10 s, and the request is
 //   withdrawn; the same offer once it runs again is answered (the control).
 import assert from "node:assert/strict";
@@ -89,7 +92,12 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
     for (const repo of ["acme/widgets", "acme/gadgets"])
       assert.equal(stack.quiet("clone", repo, "--no-domain").code, 0);
     assert.equal(stack.quiet("domain", "create", "alpha", "--repo", "acme/widgets").code, 0);
-    assert.equal(stack.quiet("domain", "create", "beta", "--repo", "acme/gadgets").code, 0);
+    // beta shares acme/widgets with alpha: one root clone, two domains' imports into it.
+    assert.equal(
+      stack.quiet("domain", "create", "beta", "--repo", "acme/gadgets", "--repo", "acme/widgets")
+        .code,
+      0,
+    );
     for (const [domain, name, branch] of [
       ["alpha", "a1", "task/a"],
       ["beta", "b1", "task/b"],
@@ -345,6 +353,87 @@ describe("T2 the request channel: taken, then waited on, and one domain never sl
       ),
       "the note went with the names",
     );
+  });
+
+  it("one domain's import held for a minute in a root clone another domain shares does not hold the other's offer to it (the control: the same offer with nothing held)", async () => {
+    const BT = "/workspaces/acme/widgets/.worktrees/task-b";
+    const offerWidgets = (note: string) =>
+      inside(
+        "beta/b1",
+        `cd ${BT} && echo '${note}' >> notes.txt && git add notes.txt && git commit -qm '${note}' && desolate offer`,
+      );
+    const control = offerWidgets("before the hold");
+    assert.equal(control.code, 0, control.stderr);
+    assert.match(control.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+    // The root's helper for git fetch <domain>, for rootd's next import of alpha only: a
+    // minute before it starts, as a domain's import of bundles made to be slow would be.
+    const helper = [
+      "#!/bin/sh",
+      // (git runs it from `git remote-desolate`, under the `git fetch` rootd started.)
+      "p=$PPID; from=''; for i in 1 2 3 4; do p=$(awk '/^PPid:/{print $2}' /proc/$p/status 2>/dev/null); from=\"$from $(tr '\\0' ' ' </proc/$p/cmdline 2>/dev/null)\"; done",
+      'echo "$* <-$from" >> /slow/log',
+      'case "$2 $from" in "alpha "*rootd.ts*) if mv /slow/armed /slow/used 2>/dev/null; then sleep 60; fi;; esac',
+      'exec node --disable-warning=ExperimentalWarning /desolate/release/root/git-remote-desolate.ts "$@"',
+    ].join("\n");
+    const armed = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        "mkdir -p /slow && touch /slow/armed && chmod -R 777 /slow && rm /usr/local/bin/git-remote-desolate && cat > /usr/local/bin/git-remote-desolate && chmod 755 /usr/local/bin/git-remote-desolate",
+      ],
+      { root: true, input: `${helper}\n` },
+    );
+    assert.equal(armed.code, 0, armed.stderr);
+    try {
+      // alpha commits and syncs: rootd's import of it is the one held.
+      const commit = inside(
+        "alpha/a1",
+        "echo held >> notes.txt && git commit -qam 'held' && desolate sync >/dev/null && git rev-parse HEAD",
+      );
+      assert.equal(commit.code, 0, commit.stderr);
+      assert.ok(
+        await until(() => stack.inRoot(["test", "-e", "/slow/used"]).code === 0, 90_000),
+        `rootd did not import alpha: the helper ran for ${stack.inRoot(["cat", "/slow/log"]).stdout || "nothing"}; rootd said ${stack.inRoot(["bash", "-c", "tail -5 /var/lib/desolate/rootd.log 2>&1"]).stdout}`,
+      );
+      const during = offerWidgets("during the hold");
+      assert.equal(during.code, 0, during.stderr);
+      assert.match(during.stdout, /offered acme\/widgets task\/b at [0-9a-f]{12}/);
+      console.log(
+        `beta's offer to the shared clone: ${control.ms} ms, and ${during.ms} ms while alpha's import was held`,
+      );
+      assert.ok(
+        during.ms < control.ms + 15_000,
+        `beta's offer took ${during.ms} ms while alpha's import was held, ${control.ms} ms without`,
+      );
+      // The hold was real: alpha's import was still held when beta's offer was answered.
+      const holding = stack.inRoot([
+        "bash",
+        "-c",
+        `for p in /proc/[0-9]*; do [ "$(tr '\\0' ' ' < $p/cmdline 2>/dev/null)" = "sleep 60 " ] && exit 0; done; exit 1`,
+      ]);
+      assert.equal(holding.code, 0, "alpha's import was not held");
+      // And it lands once it is let go.
+      const alphaHas = () =>
+        stack
+          .inRoot([
+            "git",
+            "-C",
+            "/desolate/root/acme/widgets",
+            "rev-parse",
+            "refs/remotes/alpha/task/a",
+          ])
+          .stdout.trim();
+      assert.ok(await until(() => alphaHas() === commit.stdout.trim(), 120_000), alphaHas());
+    } finally {
+      stack.inRoot(
+        [
+          "bash",
+          "-c",
+          "ln -sf /desolate/release/root/git-remote-desolate /usr/local/bin/git-remote-desolate; rm -rf /slow",
+        ],
+        { root: true },
+      );
+    }
   });
 
   it("a root that is down is said to be within the beat's 10 s, and the request withdrawn (the control: answered once it runs)", () => {

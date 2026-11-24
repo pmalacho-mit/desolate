@@ -773,7 +773,7 @@ const handle = async (
     await run.result;
     return { ok: true };
   }
-  if (request.op === "offer") return inClone(String(request.repo), () => take(domain, request));
+  if (request.op === "offer") return take(domain, request);
   if (request.op === "issue")
     return issues.offer(
       domain,
@@ -924,23 +924,6 @@ declare namespace answer {
 
 const log = (line: string) => process.stderr.write(`${new Date().toISOString()} rootd: ${line}\n`);
 
-/** One piece of work at a time in a repository's root clone, in the order asked, whichever
- *  domain asked: an import (git fetch --prune <domain>) and an offer's take, from two domains'
- *  lanes at once, would meet on the clone's ref locks, and the later fail. In order, so a
- *  domain's work in a clone it shares with another waits for at most the one piece of the
- *  other's ahead of it (each domain's lane gives one at a time). */
-const clones = new Map<string, Promise<unknown>>();
-const inClone = <T>(id: string, work: () => Promise<T>): Promise<T> => {
-  const done = (clones.get(id) ?? Promise.resolve()).catch(() => {}).then(work);
-  clones.set(id, done);
-  void done
-    .catch(() => {})
-    .then(() => {
-      if (clones.get(id) === done) clones.delete(id);
-    });
-  return done;
-};
-
 /** A domain's branches, brought into the root clone as the domain writes them out (its list
  *  beside each bundle changes), not only when one is reviewed or offered: so `git fetch
  *  root` in the git VM, and the dashboard's review, have every branch. The import is the
@@ -964,7 +947,7 @@ const importChanged = async (slug: string, repoList: string[]) => {
     if (last && (last.mtime === mtime || Date.now() - last.at < IMPORT_GAP_MS)) continue;
     imported.set(key, { mtime, at: Date.now() });
     // (Why it was not, fetchDomain says in this log.)
-    await inClone(id, () => fetchDomain(slug, repo)).catch(() => {});
+    await fetchDomain(slug, repo).catch(() => {});
   }
 };
 
@@ -1062,7 +1045,8 @@ const checkLanded = (everyMs: number) => {
 //
 // The loop never waits on a request's work. Each domain has one lane: its requests are worked
 // on one at a time, in the order they came, beside every other domain's lane. Its imports
-// (importChanged) go in the same lane, so the two never meet in a root clone. Fetches go to
+// (importChanged) go in the same lane, so the two never meet in a root clone; another
+// domain's, in the same clone, go on beside them (offers.ts, fetchDomain). Fetches go to
 // fetchOf instead, where any number of askers share one fetch: so an offer is never behind a
 // domain's fetches, nor refused for them.
 
