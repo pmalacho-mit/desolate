@@ -55,6 +55,7 @@ from mitmproxy import http
 
 log = logging.getLogger("desolate-secrets")
 
+# (Both are always set by the proxy's start, secrets.ts: the defaults name no file there is.)
 SETTINGS_PATH = os.environ.get("DESOLATE_SECRETS", "/var/lib/desolate/secrets/unset.json")
 POLICY_PATH = os.environ.get("DESOLATE_POLICY", "/var/lib/desolate/proxy/policy/unset.json")
 # The domain's audit log: a directory of files every proxy of the domain writes, by the rule
