@@ -38,6 +38,7 @@ import { sharedFolderRefusal } from "./install-folder.ts";
 import { backend, ensureProxyUser, rootctl } from "./stack.ts";
 import type { VmSpec } from "./vm/types.ts";
 import type {
+  Caught,
   Expect,
   Given,
   Invoke,
@@ -45,6 +46,7 @@ import type {
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Refusal } from "../shared/exit.ts";
 import type { setEnv } from "../.harness/env.ts";
 import type { emptyHome, homeHas, writeInHome } from "../.harness/home.ts";
 import type {
@@ -212,9 +214,13 @@ declare namespace stackDefaults {
    *  taken for the default */
   export type Refuses = Given<
     Invoke<typeof setEnv, [name: "DESOLATE_WORKSPACE_CPUS", value: "1.5"]>,
-    Throws<
-      Invoke<typeof stackDefaults>,
-      "DESOLATE_WORKSPACE_CPUS must be a whole number from 1 to 64, not '1.5'"
+    Expect<
+      Caught<Invoke<typeof stackDefaults>, Refusal>,
+      "matches",
+      {
+        message: "DESOLATE_WORKSPACE_CPUS must be a whole number from 1 to 64, not '1.5'";
+        fix: "unset DESOLATE_WORKSPACE_CPUS (or set it to what it takes)";
+      }
     >
   >;
 }

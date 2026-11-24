@@ -12,8 +12,7 @@ import { over } from "./limits.ts";
 import { printable } from "./text.ts";
 import { characters, parseRepo } from "./names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { bodied, titled } from "../.harness/shared-issues.ts";
+import type { Expect, Invoke, Repeat, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
 /** What an offered issue may hold (R7: an agent writes it; R8: characters are code points).
  *  `title` 256, `body` 65,536 and `label` 50 characters are GitHub's own limits, which it
@@ -144,23 +143,29 @@ declare namespace draftOf {
   /** characters are counted as GitHub counts them: 256 emoji are a title (512 UTF-16 units),
    *  and one more is not (the control) */
   export type TitleInCharacters = Expect<
-    Invoke<typeof draftOf, [value: Invoke<typeof titled, [text: "\u{1f600}", count: 256]>]>,
+    Invoke<typeof draftOf, [value: { repo: "acme/app"; title: Repeat<"\u{1f600}", 256> }]>,
     "matches",
     { repo: "acme/app"; labels: [] }
   >;
   export type TitleOver = Expect<
-    Invoke<typeof draftOf, [value: Invoke<typeof titled, [text: "\u{1f600}", count: 257]>]>,
+    Invoke<typeof draftOf, [value: { repo: "acme/app"; title: Repeat<"\u{1f600}", 257> }]>,
     "=",
     { error: "the title is 257 characters, over the 256 GitHub takes" }
   >;
   /** a body of 65,536 characters outside the basic plane is taken; one more is not */
   export type BodyInCharacters = Expect<
-    Invoke<typeof draftOf, [value: Invoke<typeof bodied, [text: "\u{1f600}", count: 65536]>]>,
+    Invoke<
+      typeof draftOf,
+      [value: { repo: "acme/app"; title: "x"; body: Repeat<"\u{1f600}", 65536> }]
+    >,
     "matches",
     { repo: "acme/app"; title: "x" }
   >;
   export type BodyOver = Expect<
-    Invoke<typeof draftOf, [value: Invoke<typeof bodied, [text: "\u{1f600}", count: 65537]>]>,
+    Invoke<
+      typeof draftOf,
+      [value: { repo: "acme/app"; title: "x"; body: Repeat<"\u{1f600}", 65537> }]
+    >,
     "=",
     { error: "the body is 65537 characters, over the 65536 GitHub takes" }
   >;

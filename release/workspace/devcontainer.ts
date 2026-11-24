@@ -52,8 +52,8 @@ import { printable } from "../shared/text.ts";
 import { urlRules } from "./git-urls.ts";
 import { requester, saying } from "../shared/step.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { projectWith, specWithSettingsOf } from "../.harness/workspace-files.ts";
+import type { Expect, Invoke, Table, TempDir } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { specWithSettingsOf } from "../.harness/workspace-files.ts";
 
 export const STATE = "/run/desolate/devcontainer.json";
 export type State =
@@ -95,18 +95,13 @@ declare namespace locate {
   export type Nested = Expect<
     Invoke<
       typeof locate,
-      [
-        dir: Invoke<
-          typeof projectWith,
-          [files: [".devcontainer/devcontainer.json", ".devcontainer.json"]]
-        >,
-      ]
+      [dir: TempDir<{ ".devcontainer/devcontainer.json": "{}\n"; ".devcontainer.json": "{}\n" }>]
     >,
     "endsWith",
     "/.devcontainer/devcontainer.json"
   >;
   export type Flat = Expect<
-    Invoke<typeof locate, [dir: Invoke<typeof projectWith, [files: [".devcontainer.json"]]>]>,
+    Invoke<typeof locate, [dir: TempDir<{ ".devcontainer.json": "{}\n" }>]>,
     "endsWith",
     "/.devcontainer.json"
   >;
@@ -116,10 +111,10 @@ declare namespace locate {
     Invoke<
       typeof locate,
       [
-        dir: Invoke<
-          typeof projectWith,
-          [files: [".devcontainer/python/devcontainer.json", "devcontainer.json"]]
-        >,
+        dir: TempDir<{
+          ".devcontainer/python/devcontainer.json": "{}\n";
+          "devcontainer.json": "{}\n";
+        }>,
       ]
     >,
     "=",

@@ -17,16 +17,18 @@ import { clonePath, domainPath, mirrorPath, ROOT } from "./layout.ts";
 import { recordOf, registry } from "./repos.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
+  Caught,
   Expect,
   Given,
   Invoke,
   Mock,
+  Repeat,
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Refusal } from "../shared/exit.ts";
 import type { refusalOf } from "../.harness/refusal.ts";
 import type { aMirrorCommit, countingGit, gitStarts } from "../.harness/root-mirrors.ts";
-import type { repeat } from "../.harness/shared-text.ts";
 import type {
   aDomain,
   aRegistry,
@@ -171,10 +173,7 @@ declare namespace create {
       Expect<
         Invoke<
           typeof refusalOf,
-          [
-            f: typeof create,
-            args: [slugArg: "acme", title: Invoke<typeof repeat, [text: "é", count: 201]>],
-          ]
+          [f: typeof create, args: [slugArg: "acme", title: Repeat<"é", 201>]]
         >,
         "=",
         {
@@ -185,12 +184,9 @@ declare namespace create {
       >,
       Expect<Invoke<typeof namesIn, [where: "domains", dir: "."]>, "=", []>,
       Expect<
-        Invoke<
-          typeof create,
-          [slugArg: "acme", title: Invoke<typeof repeat, [text: "é", count: 200]>]
-        >,
+        Invoke<typeof create, [slugArg: "acme", title: Repeat<"é", 200>]>,
         "matches",
-        { title: Invoke<typeof repeat, [text: "é", count: 200]> }
+        { title: Repeat<"é", 200> }
       >,
     ]
   >;
@@ -199,17 +195,20 @@ declare namespace create {
     Fresh,
     Expect<Invoke<typeof create, [slugArg: "acme", title: undefined]>, "matches", { title: "acme" }>
   >;
-  /** `origin` and `root` are remotes in every clone already, and a domain is one too */
+  /** `origin` and `root` are remotes in every clone already, and a domain is one too: the
+   *  person is told to choose another */
   export type Reserved = Given<
     Fresh,
     [
-      Throws<
-        Invoke<typeof create, [slugArg: "origin", title: undefined]>,
-        "a domain cannot be called 'origin'"
+      Expect<
+        Caught<Invoke<typeof create, [slugArg: "origin", title: undefined]>, Refusal>,
+        "matches",
+        { message: "a domain cannot be called 'origin'"; fix: "choose another name"; code: 1 }
       >,
-      Throws<
-        Invoke<typeof create, [slugArg: "root", title: undefined]>,
-        "a domain cannot be called 'root'"
+      Expect<
+        Caught<Invoke<typeof create, [slugArg: "root", title: undefined]>, Refusal>,
+        "matches",
+        { message: "a domain cannot be called 'root'"; fix: "choose another name"; code: 1 }
       >,
     ]
   >;

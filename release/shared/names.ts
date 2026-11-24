@@ -7,14 +7,16 @@ import { define, valueOf, whole } from "./settings.ts";
 import { printable } from "./text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type {
+  Caught,
   Expect,
   Given,
   Invoke,
+  Repeat,
   Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type { Refusal } from "./exit.ts";
 import type { setEnv } from "../.harness/env.ts";
-import type { branchOf } from "../.harness/shared-names.ts";
 
 /** A domain's, a workspace's or an agent's name (limits.ts NAMES.slug: how long, and why). At
  *  most one `--`: the separator in a domain named `owner--repo`, which clone makes. Never
@@ -247,12 +249,12 @@ declare namespace branchRefusal {
         expected: "'--upload-pack=x' is not a branch desolate will carry",
       ],
       /** the control: at the bound, a branch */
-      [args: [value: Invoke<typeof branchOf, [length: 200]>], expected: null],
+      [args: [value: `b${Repeat<"x", 199>}`], expected: null],
     ]
   >;
   /** one past it: the bound, by its number */
   export type Long = Expect<
-    Invoke<typeof branchRefusal, [value: Invoke<typeof branchOf, [length: 201]>]>,
+    Invoke<typeof branchRefusal, [value: `b${Repeat<"x", 200>}`]>,
     "includes",
     "is not a branch desolate will carry: it is 201 characters, over the 200 allowed"
   >;
@@ -610,13 +612,18 @@ declare namespace editorHostPort {
     Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "41581"]>,
     Expect<Invoke<typeof editorHostPort>, "=", 41581>
   >;
-  /** a port that needs root, or is not a port: refused, saying what was given */
+  /** a port that needs root, or is not a port: refused, saying what was given and how to put
+   *  it right */
   export type Refuses = [
     Given<
       Invoke<typeof setEnv, [name: "DESOLATE_EDITOR_PORT", value: "80"]>,
-      Throws<
-        Invoke<typeof editorHostPort>,
-        "DESOLATE_EDITOR_PORT must be a whole number from 1024 to 65535, not '80'"
+      Expect<
+        Caught<Invoke<typeof editorHostPort>, Refusal>,
+        "matches",
+        {
+          message: "DESOLATE_EDITOR_PORT must be a whole number from 1024 to 65535, not '80'";
+          fix: "unset DESOLATE_EDITOR_PORT (or set it to what it takes)";
+        }
       >
     >,
     Given<
