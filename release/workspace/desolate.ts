@@ -595,10 +595,7 @@ const main = async (argv: string[]) => {
     const branch = named ?? current;
     const notBranch = branchRefusal(branch);
     if (notBranch)
-      fail(
-        notBranch,
-        "check out the branch to offer, or name it: desolate offer <owner>/<repo> <branch>",
-      );
+      fail(notBranch, "rename it with letters, digits and . _ / - only: git branch -m <new-name>");
     const commit =
       (await branches(repo))[branch] ??
       fail(`${repo} has no branch '${branch}' in this domain`, "git branch --list");

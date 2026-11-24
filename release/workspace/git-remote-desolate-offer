@@ -37,9 +37,9 @@ while IFS= read -r line; do
         [ "$src" = "$dst" ] && own=1
         [ "$src" = HEAD ] && [ "$(git symbolic-ref -q HEAD 2>/dev/null)" = "$dst" ] && own=1
         if [ -z "$src" ]; then
-          printf 'error %s not deleted: a workspace changes nothing on the remote; the person deletes branches there (desolate git, on the Mac)\n' "$dst"
+          printf 'error %s not deleted: a workspace changes nothing on the remote; the person deletes branches there, in desolate git on the Mac\n' "$dst"
         elif [ -z "$own" ] || [ "$branch" = "$dst" ]; then
-          printf 'error %s not offered: only a branch is offered, under its own name (git push origin <branch>)\n' "$dst"
+          printf 'error %s not offered: only a branch is offered, under its own name: git push origin <branch>\n' "$dst"
         elif desolate offer "$repo" "$branch" >&2; then
           offered=1
           printf 'error %s offered for review, not pushed: this is the expected result, the person reviews and pushes it\n' "$dst"
