@@ -228,8 +228,10 @@ export const openBrowser = async (
       sessionId: string;
     };
     const said: string[] = [];
+    let loads = 0;
     listeners.set(sessionId, (method, p) => {
-      if (method === "Page.javascriptDialogOpening")
+      if (method === "Page.loadEventFired") loads++;
+      else if (method === "Page.javascriptDialogOpening")
         void send("Page.handleJavaScriptDialog", { accept: true }, sessionId).catch(() => {});
       else if (method === "Runtime.exceptionThrown")
         said.push(
@@ -255,6 +257,15 @@ export const openBrowser = async (
     const self = {
       said,
       evaluate,
+      /** The page loaded again, as a person's reload does, and once it has: not on a timer
+       *  in the page, where a reload under a question asked of it lost the answer ("Failed
+       *  to fetch") or left it unanswered for 120 s (T2 11, 2026-11-23). */
+      reload: async () => {
+        const before = loads;
+        await send("Page.reload", {}, sessionId);
+        for (const end = Date.now() + 30_000; loads === before; await sleep(50))
+          if (Date.now() > end) throw new Error("the page did not load again in 30 s");
+      },
       goto: async (to: string) => {
         await send("Page.navigate", { url: to }, sessionId);
         await sleep(1000);
