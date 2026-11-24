@@ -155,10 +155,9 @@ const startRootServices = async () => {
     );
 };
 
-/** Give the root the approver's PUBLIC key, and the token the host's daemon shows the
- *  root's state service, both as root: files the root VM's ordinary users cannot replace
- *  (the token is theirs to read: the state service runs as one). Returns whether either
- *  changed. */
+/** Give the root the approver's PUBLIC key, and the dashboard's credential, both as root:
+ *  files the root VM's ordinary users cannot replace (the credential is theirs to read: the
+ *  state service runs as one). Returns whether either changed. */
 const installApprover = async (): Promise<boolean> => {
   const pem = approver.publicKey();
   if (!pem) refuse("this stack has no approver key", "desolate bootstrap");
@@ -168,9 +167,10 @@ const installApprover = async (): Promise<boolean> => {
       fs.writeFileSync(file, randomBytes(24).toString("hex") + "\n", { mode: 0o600 });
     return fs.readFileSync(file, "utf8").trim();
   };
-  const token = made("host-token");
   // The dashboard's credential: the person's browser gets it from `desolate ui`'s address.
   const uiToken = made("ui-token");
+  // The host's token for the state service is retired (it asks on its own socket): removed.
+  fs.rmSync(path.join(paths.state, "host-token"), { force: true });
   const put =
     'put() { new=$(cat); if [ "$new" = "$(cat "$1" 2>/dev/null)" ]; then echo same; else printf "%s\\n" "$new" >"$1.new" && chown "root:$3" "$1.new" && chmod "$2" "$1.new" && mv "$1.new" "$1" && echo changed; fi; }; install -d -m 0755 -o root -g root /etc/desolate; ';
   const group = `$(id -gn "$(getent passwd ${process.getuid!()} | cut -d: -f1)")`;
@@ -179,17 +179,12 @@ const installApprover = async (): Promise<boolean> => {
     ["bash", "-c", `${put}put /etc/desolate/approver.pub 0644 root`],
     { root: true, input: pem!.trim(), timeoutMs: 60_000 },
   );
-  const tok = await backend().exec(
-    ROOT_VM,
-    ["bash", "-c", `${put}put /etc/desolate/host-token 0640 ${group}`],
-    { root: true, input: token, timeoutMs: 60_000 },
-  );
   const ui = await backend().exec(
     ROOT_VM,
     ["bash", "-c", `${put}put /etc/desolate/ui-token 0640 ${group}`],
     { root: true, input: uiToken, timeoutMs: 60_000 },
   );
-  for (const result of [key, tok, ui])
+  for (const result of [key, ui])
     if (result.code !== 0)
       throw new Error(
         because(
@@ -200,7 +195,7 @@ const installApprover = async (): Promise<boolean> => {
       );
   // Only now, with the root holding it, is a dashboard token made after a retiring served.
   (await import("./retired.ts")).dashboardMade();
-  return [key, tok, ui].some((result) => result.stdout.trim() === "changed");
+  return [key, ui].some((result) => result.stdout.trim() === "changed");
 };
 
 /** From a clean machine to a working stack. Idempotent: run twice, the second run changes
@@ -380,7 +375,7 @@ export const bootstrap = async (
   // Once, on a stack made before page keys: its page tokens made again (retired.ts says why).
   if (remakeForPageKeys())
     step(true, "the pages' tokens made again for page keys: sign in again, `desolate ui --open`");
-  step(await installApprover(), "root: the approver's public key and the host daemon's token");
+  step(await installApprover(), "root: the approver's public key and the dashboard's credential");
   // The host daemon carries the dashboard, and tells the root's state service what only
   // the host knows.
   const { ensureDaemon } = await import("./daemon.ts");
