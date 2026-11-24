@@ -45,7 +45,10 @@ describe(
         dropped: [],
         more: false,
       });
-      assert.deepEqual(mod.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), []);
+      assert.deepEqual(mod.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), {
+        requests: [],
+        more: false,
+      });
       assert.deepEqual(
         fs.readdirSync(dir).sort(),
         ["a.bundle", "refs.json"],
@@ -495,7 +498,10 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.symlinkSync(path.join(work, "roots-own-tree"), `${domains}/t1-dom/outbox/requests`);
     fs.mkdirSync(path.join(work, "roots-own-tree"), { recursive: true });
     fs.writeFileSync(path.join(work, "roots-own-tree", "r.json"), JSON.stringify({ op: "fetch" }));
-    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), []);
+    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), {
+      requests: [],
+      more: false,
+    });
     assert.ok(
       fs.existsSync(path.join(work, "roots-own-tree", "r.json")),
       "nothing was drained from, or removed in, the directory the symlink led to",
@@ -511,9 +517,10 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.rmSync(`${domains}/t1-dom/outbox/requests`);
     fs.mkdirSync(`${domains}/t1-dom/outbox/requests`);
     fs.writeFileSync(`${domains}/t1-dom/outbox/requests/a1.json`, JSON.stringify({ op: "fetch" }));
-    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), [
-      { name: "a1.json", data: { op: "fetch" } },
-    ]);
+    assert.deepEqual(outbox.drain(`${domains}/t1-dom/outbox/requests`, /\.json$/, 50), {
+      requests: [{ name: "a1.json", data: { op: "fetch" } }],
+      more: false,
+    });
     assert.deepEqual(fs.readdirSync(`${domains}/t1-dom/outbox/requests`), []);
   });
 
@@ -523,7 +530,7 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     fs.writeFileSync(`${requests}/big.json`, pad(1024 * 1024));
     fs.writeFileSync(`${requests}/fits.json`, pad(1024 * 1024 - 100));
     fs.writeFileSync(`${requests}/notjson.json`, "{");
-    const drained = outbox.drain<{ op: string }>(requests, /\.json$/, 50);
+    const drained = outbox.drain<{ op: string }>(requests, /\.json$/, 50).requests;
     assert.deepEqual(
       drained.map((d) => [d.name, d.data?.op ?? null, "why" in d ? d.why : null]),
       [
@@ -554,6 +561,53 @@ describe("T1 outbox", { skip: ON_LINUX ? false : NEEDS_LINUX }, () => {
     outbox.takeBundles("t1-dom", "acme/many", 1);
     const last = outbox.takeBundles("t1-dom", "acme/many", 1);
     assert.deepEqual([last.copies.length, last.more, fs.readdirSync(many)], [1, false, []]);
+  });
+
+  it("a requests directory of 100,000 names costs a look 1,000 of them, says there are more, and a request among them is taken (control: three requests, read whole, nothing more)", () => {
+    const requests = `${domains}/t1-crowd/outbox/requests`;
+    fs.mkdirSync(requests, { recursive: true });
+    for (const name of ["b.json", "a.json", "c.json"])
+      fs.writeFileSync(`${requests}/${name}`, JSON.stringify({ op: "fetch" }));
+    assert.deepEqual(
+      outbox.drain(requests, /\.json$/, 50),
+      {
+        requests: ["a.json", "b.json", "c.json"].map((name) => ({ name, data: { op: "fetch" } })),
+        more: false,
+      },
+      "the control: every request, oldest name first, and nothing more said",
+    );
+    for (let i = 0; i < 100_000; i++) fs.writeFileSync(`${requests}/x${i}.txt`, "");
+    // What a pass of the loop cost before, for this directory: every name listed, filtered
+    // and sorted. Then the bounded look, the same directory, the best of five each.
+    const best = (look: () => unknown) =>
+      Math.min(
+        ...Array.from({ length: 5 }, () => {
+          const start = performance.now();
+          look();
+          return performance.now() - start;
+        }),
+      );
+    const whole = best(() =>
+      fs
+        .readdirSync(requests)
+        .filter((name) => /^[0-9a-z-]{1,60}\.json$/.test(name))
+        .sort(),
+    );
+    const bounded = best(() => outbox.drain(requests, /\.json$/, 50));
+    const looked = outbox.drain(requests, /\.json$/, 50);
+    assert.deepEqual(looked, { requests: [], more: true });
+    console.log(
+      `100,000 names: ${whole.toFixed(1)} ms to read them all, ${bounded.toFixed(1)} ms for the root's look`,
+    );
+    assert.ok(bounded < whole / 4, `${bounded} ms for the look, ${whole} ms for every name`);
+    // A request the look comes to is taken: with the names before it gone, as the workspace
+    // that was told would remove them.
+    fs.writeFileSync(`${requests}/r1.json`, JSON.stringify({ op: "fetch" }));
+    for (let i = 0; i < 100_000; i++) fs.rmSync(`${requests}/x${i}.txt`);
+    assert.deepEqual(outbox.drain(requests, /\.json$/, 50), {
+      requests: [{ name: "r1.json", data: { op: "fetch" } }],
+      more: false,
+    });
   });
 });
 

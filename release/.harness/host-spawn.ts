@@ -26,3 +26,10 @@ export const signed = (key: string, request: Signed): Signed & { mac: string } =
 /** The backend's answer to "does this VM exist?": every one does, or none does. */
 export const everyVmExists = (_vm: string) => true;
 export const noVmExists = (_vm: string) => false;
+
+/** The backend's list of VMs, for a check that asks for it: none; or one that must not be
+ *  asked for, and fails the test that asks. */
+export const noVms = async (): Promise<string[]> => [];
+export const neverListed = async (): Promise<string[]> => {
+  throw new Error("the VMs were listed");
+};

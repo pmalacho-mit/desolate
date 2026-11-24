@@ -89,6 +89,11 @@ declare namespace deliverySpec {
  *  disk) busy for ever. What is left is taken by the next fetch, and that is said. */
 const ROUNDS_MOST = 1000;
 
+/** What git says when another git in the clone holds a lock it needs, a ref's or packed-refs'
+ *  ("Unable to create '<path>.lock': File exists", git 2.39 and 2.43). Not text a bundle can
+ *  put there: a ref's name holds no space and no quote. */
+const LOCKED = /Unable to create '[^']*\.lock': File exists/;
+
 /** Of branch names desolate carries (names.ts, isBranch), the ones git takes as refs too:
  *  isBranch's characters and rules leave out every name git refuses but two kinds, a part
  *  that starts with a dot and a part that ends in ".lock" (git-check-ref-format(1), rule 1).
@@ -120,7 +125,9 @@ const main = async () => {
   // this helper's input: ended, or killed by whoever ran it), what is under way here is
   // ended and nothing more is taken. A helper does not outlive its fetch, so a domain that
   // writes bundles made to be slow, as fast as they are taken, holds one fetch's helper at
-  // most. (`untilGone` false: tidying the root clone, which is done all the same.)
+  // most, and holds up only its own domain's work: another domain's in the same clone goes on
+  // beside it (offers.ts, fetchDomain). (`untilGone` false: tidying the root clone, which is
+  // done all the same.)
   const gone = new AbortController();
   const git = (args: string[], input?: string, untilGone = true) =>
     run("git", args, { env: process.env, input, signal: untilGone ? gone.signal : undefined });
@@ -168,22 +175,40 @@ const main = async () => {
           break;
         }
         if (why === null) {
-          const fetched = await git([
-            "-c",
-            "fetch.fsckObjects=true",
-            "-c",
-            "transfer.fsckObjects=true",
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--no-recurse-submodules",
-            copy,
-            `+refs/heads/*:refs/desolate/incoming/${slug}/*`,
-          ]);
+          const fetch = () =>
+            git([
+              "-c",
+              "fetch.fsckObjects=true",
+              "-c",
+              "transfer.fsckObjects=true",
+              "fetch",
+              "--quiet",
+              "--no-tags",
+              "--no-write-fetch-head",
+              "--no-recurse-submodules",
+              copy,
+              `+refs/heads/*:refs/desolate/incoming/${slug}/*`,
+            ]);
+          // A lock git could not get is held by other work in this clone (another domain's
+          // import, a packing of refs), never a verdict on the bundle: asked again, and if
+          // it is still held, said as busy, with nothing recorded against the domain. Its
+          // next sync writes a bundle of every branch again (workspace/sync.ts).
+          let fetched = await fetch();
+          for (
+            let tries = 1;
+            fetched.code !== 0 && LOCKED.test(fetched.stderr) && tries < 3;
+            tries++
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 5000 * tries));
+            fetched = await fetch();
+          }
           // What git says about a bundle is in part the bundle's author's text: shown as text.
-          if (fetched.code !== 0) refused(`did not import: ${gitSaid(fetched, 1)}`);
-          else clearRefusal(slug, repo);
+          if (fetched.code === 0) clearRefusal(slug, repo);
+          else if (LOCKED.test(fetched.stderr))
+            process.stderr.write(
+              `git-remote-desolate: a bundle from ${slug} was not imported: the root clone was busy (${printable(gitSaid(fetched, 1), WHY_MOST)}); its next sync brings the same branches\n`,
+            );
+          else refused(`did not import: ${gitSaid(fetched, 1)}`);
         } else refused(why);
         fs.rmSync(copy, { force: true });
       }

@@ -63,7 +63,12 @@ export const WHY_MOST = 300;
 //
 // (Found the hard way: the first version removed "the bundle it had just read" by path, and
 // a symlinked directory made that path one of the root's own files. tests/v3/t2/10.)
-type Dir = { at: (name: string) => string; names: () => string[]; close: () => void };
+type Dir = {
+  at: (name: string) => string;
+  names: () => string[];
+  first: (most: number) => { names: string[]; more: boolean };
+  close: () => void;
+};
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 
 /** Open a directory under the domains' share and prove it is the one asked for; else why
@@ -171,11 +176,8 @@ const openOnce = (dir: string): Dir | string => {
         if (!NAME.test(name)) throw new Error("not a file name");
         return `/proc/self/fd/${held}/${name}`;
       },
-      names: () =>
-        fs
-          .readdirSync(`/proc/self/fd/${held}`)
-          .filter((name) => NAME.test(name))
-          .sort(),
+      names: () => listed(held, Infinity).names,
+      first: (most: number) => listed(held, most),
       close: () => fs.closeSync(held),
     };
   } catch {
@@ -183,6 +185,24 @@ const openOnce = (dir: string): Dir | string => {
     return "not opened";
   } finally {
     if (fd !== null) fs.closeSync(fd);
+  }
+};
+/** The names in an open directory that NAME takes, sorted, among its first `most` entries,
+ *  read entry by entry as the kernel gives them, so that a directory of a million names
+ *  costs `most` of them (which entries come first is the file system's order, not the
+ *  names'); `more`: there were others. */
+const listed = (fd: number, most: number): { names: string[]; more: boolean } => {
+  const listing = fs.opendirSync(`/proc/self/fd/${fd}`);
+  const names: string[] = [];
+  try {
+    for (let read = 0; read < most; read++) {
+      const entry = listing.readSync();
+      if (!entry) return { names: names.sort(), more: false };
+      if (NAME.test(entry.name)) names.push(entry.name);
+    }
+    return { names: names.sort(), more: listing.readSync() !== null };
+  } finally {
+    listing.closeSync();
   }
 };
 
@@ -255,19 +275,34 @@ const readIn = (dir: Dir, name: string, max: number, what: string): Buffer | str
   }
 };
 
-/** Every JSON file waiting in a directory of an outbox whose name matches, oldest name
- *  first, each read once and removed (its name, in that directory). One that could not be
- *  taken (past JSON_BYTES, a link, not JSON) is `data: null`, with `why`, to answer with. */
+/** How many names of a directory of requests the root reads at one look (R7: a bound against
+ *  a workspace, which can put any number of names there, of anything: reading them all was a
+ *  cost, every pass, on the one loop every domain waits on). A workspace writes one name a
+ *  request, and its writes are atomic
+ *  (shared/json.ts: a temporary name beside it, renamed), so a directory holds no more than
+ *  a domain asks at once: the root holds 50 of a domain's at a time (rootd.ts, MOST_HELD),
+ *  and a thousand is twenty times that. Past it, what is not read waits, and `more` says
+ *  so, for the domain to be told (rootd.ts). */
+export const REQUEST_NAMES_READ = 1000;
+
+/** The JSON files waiting in a directory of an outbox whose name matches, oldest name first
+ *  of those among its first REQUEST_NAMES_READ names, at most `most`, each read once and
+ *  removed (its name, in that directory). One that could not be taken (past JSON_BYTES, a
+ *  link, not JSON) is `data: null`, with `why`, to answer with. `more`: the directory held
+ *  more names than were read. */
 export const drain = <T>(
   directory: string,
   pattern: RegExp,
   most: number,
-): ({ name: string; data: T } | { name: string; data: null; why: string })[] => {
+): {
+  requests: ({ name: string; data: T } | { name: string; data: null; why: string })[];
+  more: boolean;
+} => {
   const dir = openDir(directory);
-  if (typeof dir === "string") return [];
+  if (typeof dir === "string") return { requests: [], more: false };
   try {
-    return dir
-      .names()
+    const { names, more } = dir.first(REQUEST_NAMES_READ);
+    const requests = names
       .filter((name) => pattern.test(name))
       .slice(0, most)
       .map((name) => {
@@ -281,6 +316,7 @@ export const drain = <T>(
           return { name, data: null, why: `${what} is not JSON` };
         }
       });
+    return { requests, more };
   } finally {
     dir.close();
   }
