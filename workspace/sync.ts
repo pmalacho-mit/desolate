@@ -8,7 +8,7 @@ import * as path from "node:path";
 import { readJson, writeJson } from "../shared/json.ts";
 import { LFS_POINTER_BYTES } from "../shared/limits.ts";
 import { BEAT } from "../shared/lock.ts";
-import { isBranch, isCommit, parseRepo } from "../shared/names.ts";
+import { isBranch, isCommit, lfsPointer, parseRepo } from "../shared/names.ts";
 import { run, sleep } from "../shared/run.ts";
 import { failure, printable } from "../shared/text.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
@@ -188,9 +188,6 @@ export const syncRepo = async (repo: string): Promise<{ branches: number; bundle
   return { branches: names.length, bundled };
 };
 
-const POINTER =
-  /^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})\nsize (\d+)\n$/;
-
 /** The LFS objects that `branch`'s commits reference and the mirror does not hold, copied to
  *  the outbox by oid. Pointers are found in every new commit, not only at the tip: the
  *  remote refuses a push that references an object it was never sent. */
@@ -224,9 +221,9 @@ export const stageLfs = async (
   const mirror = `/desolate/mirrors/${repo}.git/lfs/objects`;
   for (const id of small) {
     const blob = await git(repo, ["cat-file", "blob", id]);
-    const match = POINTER.exec(blob.out + "\n");
-    if (!match) continue;
-    const [, oid, size] = match as unknown as [string, string, string];
+    const pointer = lfsPointer(blob.out + "\n");
+    if (!pointer) continue;
+    const { oid, size } = pointer;
     const where = path.join(oid.slice(0, 2), oid.slice(2, 4), oid);
     if (fs.existsSync(path.join(mirror, where)) || staged.some((s) => s.oid === oid)) continue;
     const local = path.join(clone(repo), ".git", "lfs", "objects", where);
@@ -237,7 +234,7 @@ export const stageLfs = async (
     const target = path.join(OUTBOX, "lfs", repo, oid);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(local, target);
-    staged.push({ oid, size: Number(size) });
+    staged.push({ oid, size });
   }
   return staged;
 };
@@ -269,41 +266,6 @@ declare namespace stageLfs {
               "1111111111111111111111111111111111111111 commit 200\naaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 120\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 5000\n",
             ],
             ["cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "# app\nA small file.\n"],
-          ],
-        ]
-      >,
-    ],
-    Expect<Invoke<typeof stageLfs, [repo: "acme/app", branch: "main"]>, "=", []>
-  >;
-  /** a pointer is exactly git-lfs's three lines: another spec, an id that is not sha256 hex
-   *  in lower case, or a line more is a file that happens to look like one */
-  export type NotQuitePointers = Given<
-    [
-      Mock<"../shared/run.ts", typeof scriptedGit>,
-      Invoke<
-        typeof gitAnswers,
-        [
-          answers: [
-            [
-              "rev-list",
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa a\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb b\ndddddddddddddddddddddddddddddddddddddddd d\n",
-            ],
-            [
-              "cat-file --batch-check",
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa blob 130\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb blob 130\ndddddddddddddddddddddddddddddddddddddddd blob 140\n",
-            ],
-            [
-              "cat-file blob aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "version https://git-lfs.github.com/spec/v2\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\n",
-            ],
-            [
-              "cat-file blob bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF\nsize 12\n",
-            ],
-            [
-              "cat-file blob dddddddddddddddddddddddddddddddddddddddd",
-              "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 12\nx-extra 1\n",
-            ],
           ],
         ]
       >,

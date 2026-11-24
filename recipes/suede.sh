@@ -20,8 +20,8 @@
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 desolate() { "$here/../cli.sh" "$@"; }   # the same as typing `desolate`, from this checkout
-# Text from a repository, GitHub or a VM, printed: what a terminal would act on is replaced.
-say() { printf '%s\n' "$*" | jq -Rr 'gsub("[\\p{Cc}\\p{Cf}\\p{Co}\\p{Cn}\\p{Zl}\\p{Zp}]"; "?")'; }
+# Text from a repository, GitHub or a VM, printed: shared/text.ts's UNSAFE replaced (T1 compares).
+say() { printf '%s\n' "$*" | jq -Rr 'gsub("[\\p{Cc}\\p{Cf}\\p{Co}\\p{Cn}\\p{Cs}\\p{Zl}\\p{Zp}\\x{034f}\\x{115f}\\x{1160}\\x{17b4}\\x{17b5}\\x{180b}-\\x{180f}\\x{2800}\\x{3164}\\x{fe00}-\\x{fe0d}\\x{ffa0}\\x{e0100}-\\x{e01ef}]|(?<!\\p{Extended_Pictographic})[\\x{fe0e}\\x{fe0f}]"; "?")'; }
 usage() { echo "usage: $0 <owner/repo>@<commit> [--from <commit>] [--branch <pushed to>] [--domain <d>] [-- <command...>]" >&2; exit 64; }
 [ $# -ge 1 ] || usage
 project=${1%@*} commit=${1#*@}
@@ -38,7 +38,7 @@ done
 [ "${1:-}" = -- ] && shift
 [[ $commit =~ ^[0-9a-f]{40}$ ]] || usage
 [ -z "$from" ] || [[ $from =~ ^[0-9a-f]{40}$ ]] || usage
-[[ $project =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || usage
+# (The project is a repository by shared/names.ts parseRepo, or desolate refuses it below.)
 
 # Only a push to the project's default branch asks the question.
 if [ -n "$pushed_to" ]; then

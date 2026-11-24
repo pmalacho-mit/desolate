@@ -19,39 +19,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { newId, requester } from "../shared/git-out-box.ts";
+import { parseRepo } from "../shared/names.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
 import type { Expect, Invoke, Table } from "../../suede.nests/dsl.import.meta.vitest.ts";
 
-const REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const fail = (message: string, fix?: string): never => {
   process.stderr.write(`desolate: ${message}\n${fix ? `  fix: ${fix}\n` : ""}`);
   process.exit(1);
 };
-
-/** A repository as the person names it: the request carries it to the host, and it becomes
- *  a path (/git/<owner>/<repo>) here. */
-export const isRepo = (named: string) => REPO.test(named);
-
-declare namespace isRepo {
-  export type Names = Table<
-    typeof isRepo,
-    [
-      [args: [named: "acme/app"], expected: true],
-      [args: [named: "pmalacho-mit/suede.nests"], expected: true],
-      [args: [named: "acme"], expected: false],
-      [args: [named: "acme/app/x"], expected: false],
-      [args: [named: "acme/app;id"], expected: false],
-      [args: [named: "acme/app name"], expected: false],
-      [args: [named: "acme/app\n"], expected: false],
-    ]
-  >;
-  /** dots are allowed in a part, so `..` is too, which as a path would leave /git. The host
-   *  reads the request's name with parseRepo (host/git-vm.ts), which refuses it */
-  export type Dots = Table<
-    typeof isRepo,
-    [[args: [named: "../app"], expected: true], [args: [named: "acme/.."], expected: true]]
-  >;
-}
 
 /** The clone a working tree's top is: /git/<owner>/<repo>. */
 export const cloneOf = (toplevel: string): string | null =>
@@ -72,7 +47,8 @@ declare namespace cloneOf {
 /** The clone the current directory is in (/git/<owner>/<repo>), or the one named. */
 const repoOf = (named: string | undefined): string => {
   if (named)
-    return isRepo(named)
+    // (It becomes a path here, /git/<owner>/<repo>: names.ts's rule leaves none that climbs.)
+    return parseRepo(named)
       ? named
       : fail(`'${named}' is not a repository`, "name it as <owner>/<repo>");
   const top = spawnSync("git", ["rev-parse", "--show-toplevel"], {
@@ -139,7 +115,7 @@ const remotesHere = (): Record<string, string[]> => {
     if (!owner.isDirectory()) continue;
     for (const name of fs.readdirSync(`/git/${owner.name}`, { withFileTypes: true })) {
       const repo = `${owner.name}/${name.name}`;
-      if (!name.isDirectory() || !isRepo(repo) || !fs.existsSync(`/git/${repo}/.git`)) continue;
+      if (!name.isDirectory() || !parseRepo(repo) || !fs.existsSync(`/git/${repo}/.git`)) continue;
       const listed = spawnSync("git", ["-C", `/git/${repo}`, "remote"], { encoding: "utf8" });
       found[repo] = listed.stdout.split("\n").filter(Boolean);
     }
