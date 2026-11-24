@@ -192,6 +192,7 @@ export const FEATURES: Feature[] = [
       "t2/18-size",
       "t3/01-boundaries",
       "t3/02-dev-stack",
+      "t3/05-host-keys",
     ],
     docs: [
       "release/docs/getting-started.md: 3. Clone a repository, 4. Start a workspace",

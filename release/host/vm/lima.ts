@@ -348,6 +348,185 @@ declare namespace provisionStep {
   >;
 }
 
+/** The host keys a Lima `ssh.known_hosts` accepts: each line's key (its type and base64),
+ *  whatever hosts it names. Lima writes one line, `lima-<vm>,[127.0.0.1]:<port> <key>`, and
+ *  reads back the first key (pkg/sshutil/hostkey.go, v2.3.0); ssh accepts any line that names
+ *  the alias, so every line counts here. */
+const keysIn = (knownHosts: string): string[] =>
+  knownHosts
+    .split("\n")
+    .map((line) => /^[^#@\s]\S* (\S+ \S+)\s*$/.exec(line.trim())?.[1])
+    .filter((key): key is string => key !== undefined);
+
+/** Which VMs accept an ssh host key that another VM in the same Lima home accepts too, each
+ *  with those others, from each one's `ssh.known_hosts` (`known`, by VM). A clone starts with
+ *  the key of what it was cloned from (Lima copies both the disk and this file) until its
+ *  first start gives it one of its own. */
+export const sharedHostKeys = (known: Record<string, string>): Record<string, string[]> => {
+  const holders = new Map<string, Set<string>>();
+  for (const [name, text] of Object.entries(known))
+    for (const key of keysIn(text)) holders.set(key, (holders.get(key) ?? new Set()).add(name));
+  const shared: Record<string, string[]> = {};
+  for (const names of holders.values())
+    if (names.size > 1)
+      for (const name of names)
+        shared[name] = [...new Set([...(shared[name] ?? []), ...names])]
+          .filter((other) => other !== name)
+          .sort();
+  return shared;
+};
+
+declare namespace sharedHostKeys {
+  /** every VM with a key of its own: none shared (the control for the rows below) */
+  export type Own = Expect<
+    Invoke<
+      typeof sharedHostKeys,
+      [
+        known: {
+          "dsl-main-root": "lima-dsl-main-root,[127.0.0.1]:52436 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\n";
+          "dsl-main-git": "lima-dsl-main-git,[127.0.0.1]:49704 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDcKyDrVxoAU5CYkk5mX3v4SMXrJF+c0G8NwEQNAQwXl\n";
+        },
+      ]
+    >,
+    "=",
+    {}
+  >;
+  /** a clone not yet given its own key has its source's, whatever its alias and port; the
+   *  base, which is never given one, is named too */
+  export type Cloned = Expect<
+    Invoke<
+      typeof sharedHostKeys,
+      [
+        known: {
+          "dsl-main-base": "lima-dsl-main-base,[127.0.0.1]:51376 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H\n";
+          "dsl-main-root": "lima-dsl-main-root,[127.0.0.1]:52436 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\n";
+          "dsl-main-1646e35410": "lima-dsl-main-1646e35410,[127.0.0.1]:50001 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H\n";
+        },
+      ]
+    >,
+    "=",
+    { "dsl-main-base": ["dsl-main-1646e35410"]; "dsl-main-1646e35410": ["dsl-main-base"] }
+  >;
+  /** a second line counts, as ssh accepts it; a comment, a marker line and a file that holds
+   *  no key accept nothing */
+  export type EveryLine = Expect<
+    Invoke<
+      typeof sharedHostKeys,
+      [
+        known: {
+          a: "lima-a,[127.0.0.1]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\nlima-a ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDcKyDrVxoAU5CYkk5mX3v4SMXrJF+c0G8NwEQNAQwXl\n";
+          b: "lima-b,[127.0.0.1]:2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDcKyDrVxoAU5CYkk5mX3v4SMXrJF+c0G8NwEQNAQwXl\n";
+          c: "# lima-c ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\n@revoked * ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\n";
+          d: "";
+        },
+      ]
+    >,
+    "=",
+    { a: ["b"]; b: ["a"] }
+  >;
+}
+
+/** A VM's `ssh.known_hosts` (`current`, as Lima wrote it) accepting only `publicKey` (a host
+ *  key file's one line, as the VM printed it: an ed25519 key, then any comment), for the same
+ *  hosts; null if either is not that. What a VM prints is not trusted to be a key: a line
+ *  with anything more in it is not one. */
+export const knownHostsWith = (current: string, publicKey: string): string | null => {
+  const hosts = /^(\S+) \S+ \S+$/.exec(current.split("\n")[0]!.trim())?.[1];
+  const key = /^(ssh-ed25519 AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]{48})(?: [ -~]*)?$/.exec(
+    publicKey.trim(),
+  )?.[1];
+  return hosts && key ? `${hosts} ${key}\n` : null;
+};
+
+declare namespace knownHostsWith {
+  /** Lima's line, its hosts kept, with the VM's new key (its comment left out) */
+  export type Recorded = Expect<
+    Invoke<
+      typeof knownHostsWith,
+      [
+        current: "lima-dsl-main-root,[127.0.0.1]:52436 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H\n",
+        publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y root@lima-dsl-main-root\n",
+      ]
+    >,
+    "=",
+    "lima-dsl-main-root,[127.0.0.1]:52436 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\n"
+  >;
+  /** not a key: another type, a second line (a host pattern of its own), a key cut short; and
+   *  a file with no line of Lima's to take the hosts from */
+  export type Refused = Table<
+    typeof knownHostsWith,
+    [
+      [
+        args: [
+          current: "lima-a,[127.0.0.1]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H\n",
+          publicKey: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          current: "lima-a,[127.0.0.1]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H\n",
+          publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y\n* ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDcKyDrVxoAU5CYkk5mX3v4SMXrJF+c0G8NwEQNAQwXl",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          current: "lima-a,[127.0.0.1]:1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIifSSU/i37Vd79NFJoy3q7e8izZ+5TT2hZGlUUBy55H\n",
+          publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr",
+        ],
+        expected: null,
+      ],
+      [
+        args: [
+          current: "",
+          publicKey: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFM8xLr+qw7yTqHEeSPf/tFGY2pYJGKsqfTxD3VcPq5y",
+        ],
+        expected: null,
+      ],
+    ]
+  >;
+}
+
+/** Whether `lsof -Fpn` (of the listeners on one TCP port) says that process `pid` listens on
+ *  127.0.0.1:`port`. A VM's ssh port on the Mac is its Lima host process's own listener
+ *  (measured on the M1, Lima 2.3.0: `limactl`, the pid in the VM's ha.pid, on
+ *  127.0.0.1:<its port>), and while that process holds it nothing else can bind that address
+ *  and port; a listener on another address of the port (`*:port`) is not what a connection to
+ *  127.0.0.1 reaches. */
+export const ownListener = (lsof: string, pid: string, port: number): boolean => {
+  let at = "";
+  for (const line of lsof.split("\n")) {
+    if (line.startsWith("p")) at = line.slice(1);
+    else if (line === `n127.0.0.1:${port}` && /^[0-9]+$/.test(pid) && at === pid) return true;
+  }
+  return false;
+};
+
+declare namespace ownListener {
+  /** the VM's own process on 127.0.0.1 at its port (the control); another process there; only
+   *  on the wildcard address; at another port; nothing listening; no pid read */
+  export type Listeners = Table<
+    typeof ownListener,
+    [
+      [args: [lsof: "p14904\nf25\nn127.0.0.1:52436\n", pid: "14904", port: 52436], expected: true],
+      [args: [lsof: "p777\nf3\nn127.0.0.1:52436\n", pid: "14904", port: 52436], expected: false],
+      [args: [lsof: "p14904\nf25\nn*:52436\n", pid: "14904", port: 52436], expected: false],
+      [
+        args: [
+          lsof: "p777\nf3\nn*:52436\np14904\nf25\nn127.0.0.1:52436\n",
+          pid: "14904",
+          port: 52436,
+        ],
+        expected: true,
+      ],
+      [args: [lsof: "p14904\nf25\nn127.0.0.1:52437\n", pid: "14904", port: 52436], expected: false],
+      [args: [lsof: "", pid: "14904", port: 52436], expected: false],
+      [args: [lsof: "p\nf25\nn127.0.0.1:52436\n", pid: "", port: 52436], expected: false],
+    ]
+  >;
+}
+
 /** Whether a pid file of Lima's names a process that is alive now, read as Lima's own
  *  `ReadPIDFile` reads it (pkg/store/instance.go, v2.3.0): a file that is not there, or
  *  holds no number, names nothing; a number whose process is gone names nothing (Lima
@@ -1161,6 +1340,127 @@ export const limaBackend = (platform: string = process.platform): Backend => {
     );
   };
 
+  /** Every `ssh.known_hosts` in this Lima home, by VM folder: the keys the Mac accepts. */
+  const knownHosts = (): Record<string, string> => {
+    const known: Record<string, string> = {};
+    let entries: string[] = [];
+    try {
+      entries = fs.readdirSync(LIMA_HOME);
+    } catch {
+      return known;
+    }
+    for (const entry of entries)
+      try {
+        known[entry] = fs.readFileSync(path.join(LIMA_HOME, entry, "ssh.known_hosts"), "utf8");
+      } catch {
+        /* not a VM, or one Lima has never started */
+      }
+    return known;
+  };
+  /** A VM the Mac still knows by a host key another VM has: a clone before its first start
+   *  (Lima copies the source's disk, host keys and all, and its `ssh.known_hosts`), or any VM
+   *  made before each was given its own. Never the base: its key is on the disk of every VM
+   *  ever cloned from it, so no key of its could be one no workspace has seen. */
+  const needsOwnKey = (name: string) =>
+    name !== BASE && sharedHostKeys(knownHosts())[name] !== undefined;
+  /** Why what answers at a VM's ssh port on this Mac may not be that VM, or null: it is that
+   *  VM's own Lima process (ha.pid) listening on 127.0.0.1 at the port its ssh.config names.
+   *  That process carries a connection only to its own VM, and holds the address and port for
+   *  as long as it runs. Asked before a session whose other end the host key cannot tell
+   *  (one the Mac knows by a key other VMs have). */
+  const notItself = async (name: string): Promise<string | null> => {
+    const dir = path.join(LIMA_HOME, name);
+    let config = "";
+    let pid = "";
+    try {
+      config = fs.readFileSync(path.join(dir, "ssh.config"), "utf8");
+      pid = fs.readFileSync(path.join(dir, "ha.pid"), "utf8").trim();
+    } catch {
+      /* said below */
+    }
+    const port = /^\s*Hostname 127\.0\.0\.1\s*$/m.test(config)
+      ? Number(/^\s*Port (\d+)\s*$/m.exec(config)?.[1])
+      : NaN;
+    if (!Number.isInteger(port)) return `${name}'s ssh.config names no port on 127.0.0.1`;
+    const listening = await run("/usr/sbin/lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpn"]);
+    return ownListener(listening.stdout, pid, port)
+      ? null
+      : `what listens at ${name}'s ssh port (127.0.0.1:${port}) is not its own Lima process (${pid || "no ha.pid"})`;
+  };
+  /** Lima's control connection to a VM, and root's in the root VM, take no more sessions
+   *  (`-O stop`: the sessions they carry go on), so that the next session connects anew and
+   *  checks the host key as the VM's ssh.known_hosts says now. No master: nothing to stop. */
+  const stopMasters = async (name: string) => {
+    for (const socket of ["ssh.sock", "ssh-root.sock"])
+      await run(
+        "ssh",
+        [
+          "-F",
+          path.join(LIMA_HOME, name, "ssh.config"),
+          "-o",
+          `ControlPath=${path.join(LIMA_HOME, name, socket)}`,
+          "-O",
+          "stop",
+          `lima-${name}`,
+        ],
+        { env: env(), timeoutMs: 30_000 },
+      );
+  };
+  /** New host keys of every type, made in the VM by root, each put in place by a rename on
+   *  the same file system (so sshd never reads half a key), then the new ed25519 one printed.
+   *  sshd reads its keys afresh for each connection. Every type: with none missing, cloud-init
+   *  (which sees a new instance id at each boot, Lima gives one) makes none. */
+  const REKEY =
+    'set -eu\nnew=$(mktemp -d /etc/ssh/.desolate-host-keys.XXXXXX)\nmkdir -p "$new/etc/ssh"\nssh-keygen -A -f "$new" >/dev/null\nfor key in "$new"/etc/ssh/ssh_host_*; do mv -f "$key" /etc/ssh/; done\nrm -rf "$new"\ncat /etc/ssh/ssh_host_ed25519_key.pub';
+  /** Give a running VM an ssh host key of its own, made in it, and make it the only one the
+   *  Mac accepts for it. The session that makes it cannot be told from another VM's by its
+   *  key (it is one other VMs have), so it is had only once `notItself` says the VM's own
+   *  Lima process holds its port, and on a connection made after that (the masters stopped
+   *  first). For a clone at its first start no project code has run in it yet, so what it
+   *  prints is its own new key. A VM that has run project code may print anything: what it
+   *  prints is taken only as an ed25519 key no other VM is known by, and only once a new
+   *  connection, its host key checked against what was recorded, is let in (so it holds
+   *  that key's private half). Recorded in its ssh.known_hosts, Lima's line with the new key,
+   *  by a rename: Lima rewrites that file at each start from the first key in it, and checks
+   *  that the VM presents it (pkg/sshutil/hostkey.go, v2.3.0). */
+  const ownKey = async (name: string) => {
+    const why = await notItself(name);
+    if (why) throw new Error(why);
+    await stopMasters(name);
+    const made = await backend.exec(name, ["bash", "-c", REKEY], { root: true, timeoutMs: 60_000 });
+    const file = path.join(LIMA_HOME, name, "ssh.known_hosts");
+    const next =
+      made.code === 0
+        ? knownHostsWith(fs.readFileSync(file, "utf8"), made.stdout.trim().split("\n").pop()!)
+        : null;
+    if (!next)
+      throw new Error(
+        because(
+          `${name} did not make an ssh host key of its own`,
+          "host-key",
+          made.stderr || made.stdout,
+        ),
+      );
+    if (sharedHostKeys({ ...knownHosts(), [name]: next })[name])
+      throw new Error(`${name} answered with an ssh host key another VM is known by`);
+    fs.writeFileSync(`${file}.tmp`, next, { mode: 0o600 });
+    fs.renameSync(`${file}.tmp`, file);
+    // A master made while the key was being changed was checked against the old one.
+    await stopMasters(name);
+    const again = await run("ssh", ["-o", "ControlPath=none", ...sessionArgs(name, ["true"])], {
+      env: env(),
+      timeoutMs: 60_000,
+    });
+    if (again.code !== 0)
+      throw new Error(
+        because(
+          `${name}'s new ssh host key was recorded, and a new connection checked against it was refused`,
+          "host-key",
+          again.stderr,
+        ),
+      );
+  };
+
   const backend: Backend = {
     kind: "vz",
     isolated: true,
@@ -1255,6 +1555,29 @@ export const limaBackend = (platform: string = process.platform): Backend => {
           ? "xcode-select --install (the command line tools, which give /usr/bin/python3), then desolate doctor"
           : "restart each: desolate stop <domain>/<workspace> && desolate start <domain>/<workspace> (the root VM: desolate down, then desolate bootstrap)",
       });
+      // Each running VM is known by a key no other VM has. A stopped one is given its own as it
+      // starts (`start`), before any session of desolate's.
+      const shared = sharedHostKeys(knownHosts());
+      const vms = await backend.list();
+      const titled = (name: string) => vms.find((vm) => vm.name === name)?.labels.title ?? name;
+      const sharing = vms.filter((vm) => vm.status === "running" && shared[vm.name]);
+      const later = vms.filter(
+        (vm) => vm.status !== "running" && vm.name !== BASE && shared[vm.name],
+      ).length;
+      checks.push({
+        name: "VMs have ssh host keys of their own",
+        ok: sharing.length === 0,
+        detail:
+          sharing.length > 0
+            ? sharing
+                .map(
+                  (vm) =>
+                    `${titled(vm.name)} accepts the same ssh host key as ${shared[vm.name]!.map(titled).join(", ")}`,
+                )
+                .join("; ")
+            : `no running VM is known by a key another VM has${later > 0 ? `; ${later} stopped VM(s) are given their own when they start` : ""}`,
+        fix: "desolate bootstrap (it gives each running VM a key of its own, made in it)",
+      });
       const haveBase = fs.existsSync(path.join(LIMA_HOME, BASE, "lima.yaml"));
       const stamp = baseStamp();
       const current = haveBase && stamp === imageFingerprint();
@@ -1283,6 +1606,10 @@ export const limaBackend = (platform: string = process.platform): Backend => {
       fs.mkdirSync(LIMA_HOME, { recursive: true });
       const fingerprint = imageFingerprint();
       const provision = async (what: string) => {
+        // As root, in a VM every workspace has the host key of (they are cloned from it): what
+        // answers is taken to be the base only if the base's own Lima process holds its port.
+        const why = await notItself(BASE);
+        if (why) return { code: 1, stdout: "", stderr: why };
         log(`provisioning it${what} (packages, node, docker, the editor server): several minutes`);
         // No timer (R4): it downloads packages over this Mac's link, however slow, and the
         // person at the terminal is the one waiting. It says each step as it starts it
@@ -1357,6 +1684,11 @@ export const limaBackend = (platform: string = process.platform): Backend => {
         linkPort: await freePort(),
         linkToken: randomBytes(16).toString("hex"),
       };
+      // The clone has `from`'s host keys on its disk and in its ssh.known_hosts until its first
+      // start gives it its own (`start`). Something could take its port between freePort and
+      // Lima's binding it: that first session waits until Lima's own process holds it
+      // (`notItself`). A template, the one VM cloned from besides the base, is not started
+      // again once it is (templates.ts): its key is on its clones' disks.
       const args = [
         "clone",
         ...settings(spec, m.sshPort).flatMap((assignment) => ["--set", assignment]),
@@ -1393,7 +1725,32 @@ export const limaBackend = (platform: string = process.platform): Backend => {
             result.stderr || result.stdout,
           ),
         );
+      // Before any session of desolate's, and so before any project code runs in a new clone.
+      if (needsOwnKey(name))
+        await ownKey(name).catch(async (error: Error) => {
+          await lima(["stop", "-f", name], { timeoutMs: 120_000 });
+          throw new Error(`${name} was stopped: ${error.message}`);
+        });
       await sharesReady(name, m);
+    },
+
+    async ownHostKeys(log) {
+      // Which, decided before any is given one: of VMs that shared a key, the last one left
+      // with it would share it with nothing, and still be known by a key the others had.
+      const shared = sharedHostKeys(knownHosts());
+      for (const vm of await backend.list())
+        if (vm.status === "running" && vm.name !== BASE && shared[vm.name]) {
+          const title = vm.labels.title ?? vm.name;
+          try {
+            await ownKey(vm.name);
+            log(`${title}: given an ssh host key of its own, made in it`);
+          } catch (error) {
+            await lima(["stop", "-f", vm.name], { timeoutMs: 120_000 });
+            log(
+              `${title} was stopped: ${printable((error as Error).message, 300)}. It is given a key of its own when it starts again.`,
+            );
+          }
+        }
     },
 
     async stop(name) {
