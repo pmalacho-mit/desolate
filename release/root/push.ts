@@ -526,7 +526,11 @@ const main = async () => {
   const link = afterPush({ repo: r.repo, branch, commit: signed.commit, base }, (line) =>
     process.stderr.write(`${line}\n`),
   );
-  withdraw(domain, r.repo, branch);
+  await withdraw(domain, r.repo, branch).catch((error: Error) =>
+    process.stderr.write(
+      `desolate: pushed, but its offer was not withdrawn (${error.message}): dismiss it\n`,
+    ),
+  );
   // What the remote now has, the mirror has: origin/* in every clone follows.
   await repos.fetch(repo).catch(() => {});
   // How many went: those the remote's branch did not have (r.commits counts from the default

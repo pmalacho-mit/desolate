@@ -15,14 +15,26 @@ import { git } from "./git.ts";
 import { startOf } from "../shared/lock.ts";
 import { hold } from "./keyring-client.ts";
 import { APPROVALS, clonePath, KEYRING } from "./layout.ts";
-import { allOffers } from "./offers.ts";
+import { allOffers, withdraw } from "./offers.ts";
 import { afterPush } from "./pushed.ts";
 import * as repos from "./repos.ts";
 import { submitForReview } from "./review-client.ts";
 import { send } from "./send.ts";
 // In-source tests (suede.nests: `npm run test:nests`). Types only: erased when node runs this.
-import type { Expect, Given, Invoke, Throws } from "../../suede.nests/dsl.import.meta.vitest.ts";
-import type { aRegistry, emptyRoot } from "../.harness/root-state.ts";
+import type {
+  Expect,
+  Given,
+  Invoke,
+  Mock,
+  Throws,
+} from "../../suede.nests/dsl.import.meta.vitest.ts";
+import type {
+  aDomain,
+  aRegistry,
+  emptyRoot,
+  mirrorsAndClonesHere,
+  writeJsonIn,
+} from "../.harness/root-state.ts";
 
 /** Returns null when pushed, or why not (one line). `say` is for the person waiting.
  *  It waits for the person for as long as it is waited for (R4): until they approve or refuse
@@ -176,11 +188,91 @@ const pushed = async (
     repos.registry().repos[name]?.defaultBranch ??
     null;
   const link = afterPush({ repo: name, branch, commit: sent, base }, say);
+  // What was offered at exactly this commit leaves "Needs you", whichever domain offered it.
+  for (const o of allOffers())
+    if (o.repo === name && o.branch === branch && o.commit === commit)
+      await withdraw(o.domain, name, branch, commit).catch((error: Error) =>
+        say(
+          `desolate: pushed, but ${o.domain}'s offer of it was not withdrawn (${error.message}): dismiss it`,
+        ),
+      );
   await repos.fetch(repo).catch(() => {});
   if (link)
     say(`desolate: open a pull request into ${base}, in your browser, as yourself: ${link}`);
   return null;
 };
+
+declare namespace pushed {
+  /** a raw push (the root's terminal, the git VM, the dashboard's) withdraws every domain's
+   *  offer of exactly what it pushed: it was left under "Needs you" (the review of 2026-11-22,
+   *  A1). The control: another domain's offer of the branch at another commit stays */
+  export type Withdraws = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof emptyRoot>,
+      Invoke<typeof aRegistry, [repos: { "acme/app": {} }]>,
+      Invoke<typeof aDomain, [slug: "acme", repos: ["acme/app"]]>,
+      Invoke<typeof aDomain, [slug: "beta", repos: ["acme/app"]]>,
+      Invoke<
+        typeof writeJsonIn,
+        [
+          where: "domains",
+          name: "acme/offers.json",
+          value: [
+            {
+              domain: "acme";
+              repo: "acme/app";
+              branch: "fix";
+              commit: "0123456789abcdef0123456789abcdef01234567";
+              workspace: "w1";
+              lfs: 0;
+              at: "2026-11-16T12:00:00.000Z";
+            },
+          ],
+        ]
+      >,
+      Invoke<
+        typeof writeJsonIn,
+        [
+          where: "domains",
+          name: "beta/offers.json",
+          value: [
+            {
+              domain: "beta";
+              repo: "acme/app";
+              branch: "fix";
+              commit: "89abcdef0123456789abcdef0123456789abcdef";
+              workspace: "w1";
+              lfs: 0;
+              at: "2026-11-16T12:00:00.000Z";
+            },
+          ],
+        ]
+      >,
+    ],
+    [
+      Expect<
+        Invoke<
+          typeof pushed,
+          [
+            repo: { owner: "acme"; name: "app" },
+            commit: "0123456789abcdef0123456789abcdef01234567",
+            branch: "fix",
+            sent: "0123456789abcdef0123456789abcdef01234567",
+            say: typeof console.error,
+          ]
+        >,
+        "=",
+        null
+      >,
+      Expect<
+        Invoke<typeof allOffers>,
+        "matches",
+        [{ domain: "beta"; commit: "89abcdef0123456789abcdef0123456789abcdef" }]
+      >,
+    ]
+  >;
+}
 
 declare namespace pushCommit {
   type Fresh = Invoke<typeof emptyRoot>;

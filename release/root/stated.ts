@@ -672,9 +672,14 @@ const pullRequestOf = (p: Pushed): string | null => {
 /** A page of a domain's branches (branchesPage), each marked with the base it has landed in,
  *  if it has, or else with what was pushed of it and its pull request's page (pushed.ts):
  *  the link was only in the activity log, at the foot of the page (dogfooding, 2026-11-21). */
-const branchesFor = (d: { slug: string; repos: string[] }, from: number, pushed = pushedList()) => {
+const branchesFor = (
+  d: { slug: string; repos: string[] },
+  from: number,
+  pushed = pushedList(),
+  listed = branchesOf(d.slug, d.repos),
+) => {
   const page = branchesPage(
-    branchesOf(d.slug, d.repos),
+    listed,
     domains.workspaces(d.slug).flatMap((w) => w.checkouts.map((c) => `${c.repo}\n${c.branch}`)),
     from,
   );
@@ -696,6 +701,8 @@ const snapshot = () => {
   // What was pushed and has since landed in the branch it was for (pushed.ts): a branch
   // still at that commit is marked "merged into <base>".
   const pushed = pushedList();
+  // Each domain's own list of branches, read once: its branches, and each offer's branch now.
+  const lists = new Map(domains.domains().map((d) => [d.slug, branchesOf(d.slug, d.repos)]));
   const list = domains.domains().map((d) => ({
     slug: d.slug,
     title: d.title,
@@ -710,7 +717,7 @@ const snapshot = () => {
       }) ?? null,
     // Their first page, and how many there are (R2): `desolate branches <domain>` and the
     // dashboard's Show more (GET /branches) have the rest.
-    branches: branchesFor(d, 0, pushed),
+    branches: branchesFor(d, 0, pushed, lists.get(d.slug)),
     net: proxy.policy(d.slug).mode,
     secrets: secrets.list(d.slug).map((s) => ({ name: s.name, on: s.on })),
     // Whose devcontainer New workspace runs, and which it may choose instead (null: not read yet).
@@ -767,7 +774,13 @@ const snapshot = () => {
     })),
     domains: list,
     spawnMax: Object.fromEntries(domains.domains().map((d) => [d.slug, d.spawnMax ?? null])),
-    offers: offers.allOffers(),
+    // Each with the commit its branch is at now (null: gone): one it has left is "moved".
+    offers: offers.allOffers().map((o) => ({
+      ...o,
+      now:
+        lists.get(o.domain)?.find((b) => b.repo === o.repo && b.branch === o.branch)?.commit ??
+        null,
+    })),
     // Issues workspaces offered: every one still waiting, and the last few done with.
     issues: (() => {
       const all = issues.list();
@@ -1255,6 +1268,13 @@ const push = (
     return {
       error: `${kept.branch} is no longer offered at ${kept.commit.slice(0, 12)}: it moved, or was withdrawn. Review it again.`,
     };
+  // Offered there, and the branch has left it since (a commit after, or rewritten): the old
+  // commit is not pushed. The workspace offers it again, as the dashboard's card says.
+  const now = branchesOf(kept.domain, [kept.repo]).find((b) => b.branch === kept.branch)?.commit;
+  if (now !== kept.commit)
+    return {
+      error: `${kept.branch} has moved since it was offered at ${kept.commit.slice(0, 12)} (it is ${now ? `at ${now.slice(0, 12)}` : "gone"} now): the workspace offers it again, then review it again`,
+    };
   const action = record(
     `desolate push ${kept.domain} ${kept.repo} ${kept.branch} --expect ${kept.commit}`,
     kept,
@@ -1281,8 +1301,8 @@ const push = (
       action.state = failed ? "failed" : "done";
       if (failed) say(failed);
       else {
-        offers.withdraw(kept.domain, kept.repo, kept.branch);
-        // What the remote got: the commit, or the squash of it the person chose.
+        // (The push withdrew its offer: raw-push.ts.) What the remote got: the commit, or the
+        // squash of it the person chose.
         const sent = pushedList().find((p) => p.repo === kept.repo && p.branch === kept.branch);
         say(`pushed ${kept.repo} ${kept.branch} at ${sent?.commit ?? kept.commit}`);
         action.link = sent ? (pullRequestOf(sent) ?? undefined) : undefined;
@@ -1672,11 +1692,12 @@ const handle = async (req: IncomingMessage, res: ServerResponse) => {
       domain?: unknown;
       repo?: unknown;
       branch?: unknown;
+      commit?: unknown;
       do?: unknown;
     };
     const result =
       asked.do === "dismiss"
-        ? offers.dismiss(asked.domain, asked.repo, asked.branch)
+        ? await offers.dismiss(asked.domain, asked.repo, asked.branch, asked.commit)
         : { error: "dismiss" };
     changed();
     return "error" in result ? json(res, 400, result) : json(res, 200, result);
