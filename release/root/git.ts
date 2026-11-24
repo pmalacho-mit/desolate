@@ -314,6 +314,22 @@ export const git = (dir: string, args: string[], options: RunOptions = {}): Prom
 };
 
 declare namespace git {
+  /** in a root clone, git runs: the control for the refusal below */
+  export type InARootClone = Given<
+    [
+      Mock<"./layout.ts", typeof mirrorsAndClonesHere>,
+      Invoke<typeof emptyRoot>,
+      Invoke<typeof makeDirIn, [where: "clones", name: "acme/app"]>,
+    ],
+    Expect<
+      Invoke<
+        typeof git,
+        [dir: Invoke<typeof pathIn, [where: "clones", name: "acme/app"]>, args: ["init", "-q"]]
+      >,
+      "matches",
+      { code: 0 }
+    >
+  >;
   /** git is never run anywhere but a mirror or a root clone: refused before anything runs
    *  @principle P4 */
   export type Refuses = Throws<

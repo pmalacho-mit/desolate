@@ -34,6 +34,21 @@ export const get = (id: unknown): Issue | null =>
   typeof id === "string" && ID.test(id) ? readJson<Issue | null>(fileOf(id), null) : null;
 
 declare namespace get {
+  type Fresh = Invoke<typeof emptyRoot>;
+  type Offered = Invoke<
+    typeof offer,
+    [
+      domain: "acme",
+      repos: ["acme/app"],
+      workspaces: ["w1"],
+      request: { repo: "acme/app"; title: "Login loops" },
+    ]
+  >;
+  /** an issue the root kept is found by its id: the control for the ones below */
+  export type Kept = Given<
+    [Fresh, Offered],
+    Expect<Invoke<typeof get, [id: Offered["id"]]>, "matches", { title: "Login loops" }>
+  >;
   /** an id is a name the root made, never a path: one that climbs out finds nothing */
   export type OnlyIds = Table<
     typeof get,
