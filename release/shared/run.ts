@@ -13,6 +13,7 @@ import type {
   Configure,
   Expect,
   Invoke,
+  Table,
   Throws,
 } from "../../suede.nests/dsl.import.meta.vitest.ts";
 import type { never, throwsUntil, trueOnCall } from "../.harness/shared-probe.ts";
@@ -23,6 +24,7 @@ import type {
   leftRunning,
   nestedLeftRunning,
   outlivesItsRunner,
+  pacedLooks,
 } from "../.harness/shared-run.ts";
 import type { stderrSaid, toFile } from "../.harness/shared-run-output.ts";
 
@@ -592,4 +594,98 @@ declare namespace waitFor {
     "=",
     false
   >;
+}
+
+/** Look after things change: `poke` for each event. A look starts `quietMs` after the last
+ *  event (a commit touches several files within milliseconds, a rebase moves a branch many
+ *  times in a second), or `gapMs` after the first it answers if they keep coming; never
+ *  sooner than `gapMs` after the last look began, never two at once. So a flood of events
+ *  (a loop touching a ref) costs at most a look a second. `look` does not throw; `later`
+ *  sets a timer and answers what cancels it. */
+export const paced = (
+  look: () => Promise<void>,
+  now = () => performance.now(),
+  later = (fn: () => void, ms: number) => clearTimeout.bind(null, setTimeout(fn, ms)),
+  quietMs = 300,
+  gapMs = 1000,
+) => {
+  let first: number | null = null;
+  let last = 0;
+  let began = -Infinity;
+  let cancel = () => {};
+  let looking = false;
+  const arm = () => {
+    cancel();
+    if (first === null || looking) return;
+    const at = Math.max(began + gapMs, Math.min(last + quietMs, first + gapMs));
+    cancel = later(async () => {
+      [first, looking, began] = [null, true, now()];
+      await look();
+      looking = false;
+      arm();
+    }, at - now());
+  };
+  return {
+    poke: () => {
+      last = now();
+      first ??= last;
+      arm();
+    },
+    /** what was poked and not looked at yet is dropped */
+    close: () => {
+      first = null;
+      arm();
+    },
+  };
+};
+
+declare namespace paced {
+  /** when it looks, given when events came (bursts: from, to, every ms) and how long a look
+   *  takes. One event: a look 300 ms after it. A commit's few events within milliseconds:
+   *  one look, 300 ms after the last. Two events seconds apart: two looks (the control) */
+  export type Quiet = Table<
+    typeof pacedLooks,
+    [
+      [args: [bursts: [[0, 0, 1]]], expected: [300]],
+      [args: [bursts: [[0, 20, 5]]], expected: [320]],
+      [args: [bursts: [[0, 0, 1], [2000, 2000, 1]]], expected: [300, 2300]],
+    ]
+  >;
+  /** at most one look a second: events every 10 ms for 3 s look three times, not never (a
+   *  flood would otherwise keep the quiet from coming) and not once each; two quick changes
+   *  a look apart wait out the second's rest */
+  export type AtMostOneASecond = Table<
+    typeof pacedLooks,
+    [
+      [args: [bursts: [[0, 2990, 10]]], expected: [1000, 2000, 3000]],
+      [args: [bursts: [[0, 0, 1], [400, 400, 1]]], expected: [300, 1300]],
+    ]
+  >;
+  /** the root's state service's pace for its own files (root/stated.ts): 40 ms after an
+   *  event, still at most once a second, however many there are */
+  export type StateService = Table<
+    typeof pacedLooks,
+    [
+      [args: [bursts: [[0, 0, 1]], lookMs: 0, closeAt: 99999, quietMs: 40], expected: [40]],
+      [
+        args: [bursts: [[0, 0, 1], [400, 400, 1]], lookMs: 0, closeAt: 99999, quietMs: 40],
+        expected: [40, 1040],
+      ],
+      [
+        args: [bursts: [[0, 2990, 10]], lookMs: 0, closeAt: 99999, quietMs: 40],
+        expected: [1000, 2000, 3000],
+      ],
+    ]
+  >;
+  /** never two at once: an event during a slow look (1.5 s) is looked at when it ends */
+  export type OneAtATime = Expect<
+    Invoke<typeof pacedLooks, [bursts: [[0, 0, 1], [400, 400, 1]], lookMs: 1500]>,
+    "=",
+    [300, 1800]
+  >;
+  /** closed, what was poked is dropped: no look (the control: the same poke, not closed) */
+  export type Closed = [
+    Expect<Invoke<typeof pacedLooks, [bursts: [[0, 0, 1]], lookMs: 0, closeAt: 100]>, "=", []>,
+    Expect<Invoke<typeof pacedLooks, [bursts: [[0, 0, 1]], lookMs: 0, closeAt: 400]>, "=", [300]>,
+  ];
 }

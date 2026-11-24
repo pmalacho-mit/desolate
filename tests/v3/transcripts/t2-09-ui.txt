@@ -51,6 +51,8 @@ doctor: all checks passed.
 
 ## the dashboard in a browser
 
+## events, not a timer
+
 ## stop and start
 
 ## new workspace in another repository's environment
