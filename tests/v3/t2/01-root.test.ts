@@ -49,10 +49,32 @@ describe("T2 phase 1: the root VM", () => {
 
   it("bootstrap is idempotent: the second run changes nothing and says so", () => {
     stack.step("bootstrap again");
+    // An install from before the host asked on its own socket has the host's token on both
+    // sides: a credential nothing reads. Bootstrap removes it; the dashboard's stays (the control).
+    const hostToken = path.join(stack.home, "state", "host-token");
+    fs.writeFileSync(hostToken, `${"0".repeat(48)}\n`, { mode: 0o600 });
+    const planted = stack.inRoot(
+      [
+        "bash",
+        "-c",
+        "printf '%048d\\n' 0 > /etc/desolate/host-token && chmod 0640 /etc/desolate/host-token",
+      ],
+      { root: true },
+    );
+    assert.equal(planted.code, 0, planted.stderr);
     const second = bootstrap(stack);
     assert.equal(second.code, 0, second.stderr);
     assert.match(second.stdout, /nothing changed/);
     assert.doesNotMatch(second.stdout, /^ {2}\+ /m, "no step may report a change");
+    assert.equal(fs.existsSync(hostToken), false, "the Mac's host token is removed");
+    assert.ok(
+      fs.existsSync(path.join(stack.home, "state", "ui-token")),
+      "control: the Mac's ui-token stays",
+    );
+    const left = stack.inRoot(["ls", "/etc/desolate"], { root: true });
+    assert.equal(left.code, 0, left.stderr);
+    assert.doesNotMatch(left.stdout, /host-token/, "the root's host token is removed");
+    assert.match(left.stdout, /ui-token/, "control: the root's ui-token stays");
   });
 
   it("doctor fails on the fake backend outside a test run", () => {

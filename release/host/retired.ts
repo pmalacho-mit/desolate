@@ -91,11 +91,11 @@ declare namespace remakeForPageKeys {
       Invoke<typeof writeState, [name: "approve-token", text: "a"]>,
       Invoke<typeof writeState, [name: "git-token", text: "g"]>,
       Invoke<typeof writeState, [name: "ui-token", text: "u"]>,
-      Invoke<typeof writeState, [name: "host-token", text: "h"]>,
+      Invoke<typeof writeState, [name: "config.json", text: "{}"]>,
     ],
     [
       Expect<Invoke<typeof remakeForPageKeys>, "=", true>,
-      Expect<Invoke<typeof stateFiles>, "=", ["host-token", "tokens-page-keys"]>,
+      Expect<Invoke<typeof stateFiles>, "=", ["config.json", "tokens-page-keys"]>,
     ]
   >;
   /** a new stack: nothing to make again, and nothing said */

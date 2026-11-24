@@ -286,6 +286,8 @@ P
 # approver on the HOST, checked against the public key the host installs here (a directory
 # and file only root writes; keyring.ts refuses a key anyone else could have replaced).
 install -d -m 0755 -o root -g root /etc/desolate
+# The host's token for the state service is retired (stated.ts: the host's own socket).
+rm -f /etc/desolate/host-token
 # ($STATE/approvals, where a raw `git push` in the root's terminal leaves its request for
 # `desolate approve`, was made above, by the user.)
 

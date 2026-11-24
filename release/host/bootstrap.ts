@@ -169,6 +169,8 @@ const installApprover = async (): Promise<boolean> => {
   };
   // The dashboard's credential: the person's browser gets it from `desolate ui`'s address.
   const uiToken = made("ui-token");
+  // The host's token for the state service is retired (it asks on its own socket): removed.
+  fs.rmSync(path.join(paths.state, "host-token"), { force: true });
   const put =
     'put() { new=$(cat); if [ "$new" = "$(cat "$1" 2>/dev/null)" ]; then echo same; else printf "%s\\n" "$new" >"$1.new" && chown "root:$3" "$1.new" && chmod "$2" "$1.new" && mv "$1.new" "$1" && echo changed; fi; }; install -d -m 0755 -o root -g root /etc/desolate; ';
   const group = `$(id -gn "$(getent passwd ${process.getuid!()} | cut -d: -f1)")`;

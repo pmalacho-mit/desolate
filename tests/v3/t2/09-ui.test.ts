@@ -697,6 +697,23 @@ describe("T2 section 4.8: the root UI", () => {
 
   it("the state is pushed when it changes, not looked for: a branch at once, a flood at most once a second", async () => {
     stack.step("events, not a timer");
+    // How large the state is, and what of it a workspace and a listed branch take: the host
+    // reads it as one line, behind which its other answers wait (host/daemon.ts heldAsker).
+    {
+      const text = (await http("GET", "/state")).body;
+      const ds = (
+        JSON.parse(text) as { domains: { workspaces: object[]; branches: { items: object[] } }[] }
+      ).domains;
+      const each = (items: object[]) => [
+        items.length,
+        items.reduce((n, i) => n + JSON.stringify(i).length, 0),
+      ];
+      const [w, wBytes] = each(ds.flatMap((d) => d.workspaces));
+      const [b, bBytes] = each(ds.flatMap((d) => d.branches.items));
+      console.log(
+        `# the state: ${Buffer.byteLength(text)} bytes; ${w} workspaces, ${Math.round(wBytes! / Math.max(1, w!))} bytes each; ${b} branches listed, ${Math.round(bBytes! / Math.max(1, b!))} bytes each`,
+      );
+    }
     // A branch moved in the workspace: its daemon writes the list to the outbox, which the
     // host watches and nudges the state service for. The service's own look is every 10 s,
     // so six moves each pushed within 2 s would have to land in its first fifth every time
