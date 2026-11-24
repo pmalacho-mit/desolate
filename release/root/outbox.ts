@@ -399,13 +399,15 @@ const sweep = (incoming: string) => {
  *  from the outbox (its name, in the checked directory) whether or not it could be taken.
  *  The caller removes the copies. With `most`, at most that many are copied at once and
  *  `more` says whether others wait: the root's own disk then holds one bundle at a time,
- *  however many a domain leaves. */
+ *  however many a domain leaves. Only the remote helper takes bundles, so the directory is
+ *  opened as its list is (settle): else, in the second after a link there is replaced, the
+ *  bundles were not seen while the list was, and the fetch took nothing (T4, 2026-11-23). */
 export const takeBundles = (
   domain: string,
   repo: string,
   most = Infinity,
 ): { copies: string[]; dropped: string[]; more: boolean } => {
-  const dir = openDir(syncDir(domain, repo));
+  const dir = openDir(syncDir(domain, repo), true);
   if (typeof dir === "string") return { copies: [], dropped: [], more: false };
   const copies: string[] = [];
   const dropped: string[] = [];
