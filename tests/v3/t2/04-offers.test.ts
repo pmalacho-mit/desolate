@@ -89,8 +89,8 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const pushedLine = (branch: string, commit = "") =>
   `[...document.querySelectorAll('#pushed li')].find((li) => li.textContent.startsWith(${JSON.stringify(`acme/widgets ${branch} ${commit.slice(0, 12)}`)}))`;
 /** A button pressed as a person does on the approval page: the pointer comes to it, rests until
- *  it arms (or `card`, an expression, has already decided: approving, approved, not pushed),
- *  and presses where it is. */
+ *  it arms (or `card`, an expression, has already decided: approving, approved, not pushed;
+ *  `card` "" for Dismiss, which is pressed on a card that has), and presses where it is. */
 const armedPress = async (
   page: {
     move: (s: string, t?: string) => Promise<unknown>;
@@ -103,7 +103,9 @@ const armedPress = async (
   card = "document.querySelector('.card.asked')",
 ) => {
   await page.move(selector, label);
-  const decided = `/^(approving|Approved|Not pushed)/.test(${card}?.querySelector('.hint')?.textContent ?? '')`;
+  const decided = card
+    ? `/^(approving|Approved|Not pushed)/.test(${card}?.querySelector('.hint')?.textContent ?? '')`
+    : "false";
   const button = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((b) => b.offsetParent && b.innerText.includes(${JSON.stringify(label)}))`;
   await page.until(`${button}?.disabled === false || ${decided}`, `${label} armed`, 10_000);
   if (!(await page.evaluate<boolean>(decided))) await page.pressHere();
@@ -1775,7 +1777,7 @@ echo "=====waits"; cat /tmp/waits.lines`,
     /** Dismissed as a person does (it arms as Approve does), and its place gone once the
      *  pointer is off the list. */
     const dismissed = async (page: Page, branch: string) => {
-      await armedPress(page, `.card .dismiss button`, "Dismiss", cardOf(branch));
+      await armedPress(page, `.card .dismiss button`, "Dismiss", "");
       await page.until(
         `!${cardOf(branch)} && document.querySelector('.card.kept')`,
         "its place kept",
@@ -1968,9 +1970,9 @@ echo "=====waits"; cat /tmp/waits.lines`,
         inRootClone(
           `setsid nohup git push origin ${commit}:refs/heads/${branch} >/tmp/${branch}.log 2>&1 </dev/null & sleep 0.5`,
         );
-      const page = await browser.tab(
-        `${origin}/#repo=acme%2Fwidgets&branch=web-a&commit=${commit}`,
-      );
+      // (Signed in by the page's own address first, as `desolate approve --web --open` does.)
+      const page = await browser.tab(address);
+      await page.goto(`${origin}/#repo=acme%2Fwidgets&branch=web-a&commit=${commit}`);
       await page.until(
         ["web-a", "web-b"]
           .map((b) => `${cardOf(b)} && !${cardOf(b)}.innerText.includes('working out')`)
