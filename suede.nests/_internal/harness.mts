@@ -335,3 +335,13 @@ export const failsLater = async (ms: number, message: string): Promise<never> =>
 
 /** The library's own folder, for a test that names one of its files. */
 export const libraryRoot = () => path.dirname(import.meta.dirname);
+
+/** A fixture's file with tests read as a whole project, its references and harnesses included. */
+export const projectAt = (file: string) => {
+  const abs = path.join(import.meta.dirname, "fixtures", file);
+  return projectDocs({
+    root: path.dirname(abs),
+    files: [abs],
+    program: ts.createProgram([abs], OPTIONS),
+  });
+};

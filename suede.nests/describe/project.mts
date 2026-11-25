@@ -33,6 +33,8 @@ import {
 import { resolved } from "./lookup.mts";
 
 import type { ResultRecord } from "../vite-plugin/reporter.mts";
+import type { Expect, Invoke } from "../dsl.import.meta.vitest.ts";
+import type * as harness from "../_internal/harness.mts";
 import type { FileDocs } from "./model.mts";
 
 export type Reference = {
@@ -213,6 +215,57 @@ function usesOf(program: ts.Program, root: string, read: Read[]) {
     harnessUse,
     boundaries: [...boundaries.values()].sort((a, b) => b.claims - a.claims),
   };
+}
+
+const isTypeOnly = (statement: ts.ImportDeclaration | ts.ExportDeclaration) =>
+  ts.isImportDeclaration(statement)
+    ? !!statement.importClause &&
+      (!!statement.importClause.isTypeOnly ||
+        statement.importClause.phaseModifier === ts.SyntaxKind.TypeKeyword ||
+        (!statement.importClause.name &&
+          !!statement.importClause.namedBindings &&
+          ts.isNamedImports(statement.importClause.namedBindings) &&
+          statement.importClause.namedBindings.elements.length > 0 &&
+          statement.importClause.namedBindings.elements.every(
+            (e) => e.isTypeOnly,
+          )))
+    : statement.isTypeOnly;
+
+/**
+ * Every module a module with tests of its own runs: itself, and what it
+ * imports as a value, all the way down. That is the code under test. The tests
+ * also import some of it as a type to call it (a production function setting
+ * up what another's test needs), and that does not make it a harness.
+ */
+function codeUnderTest(program: ts.Program, tested: ts.SourceFile[]) {
+  const options = program.getCompilerOptions();
+  const reached = new Set<string>();
+  const queue = tested.map((s) => s.fileName);
+  while (queue.length) {
+    const file = queue.pop()!;
+    if (reached.has(file)) continue;
+    reached.add(file);
+    const source = program.getSourceFile(file);
+    if (!source) continue;
+    for (const statement of source.statements) {
+      if (
+        !(ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)) ||
+        !statement.moduleSpecifier ||
+        !ts.isStringLiteral(statement.moduleSpecifier) ||
+        isTypeOnly(statement)
+      )
+        continue;
+      const resolved = ts.resolveModuleName(
+        statement.moduleSpecifier.text,
+        file,
+        options,
+        ts.sys,
+      ).resolvedModule;
+      if (resolved && !resolved.isExternalLibraryImport)
+        queue.push(resolved.resolvedFileName);
+    }
+  }
+  return reached;
 }
 
 type Candidate = {
@@ -397,6 +450,13 @@ export function projectDocs({
   if (filesOnly) return model;
 
   const { harnessUse, boundaries } = usesOf(program, root, read);
+  // a module the tests import as a type to call is a harness, unless it is code under test
+  const underTest = codeUnderTest(
+    program,
+    read.filter((r) => r.docs.claims.length).map((r) => r.source),
+  );
+  for (const file of [...harnessUse.keys()])
+    if (underTest.has(path.resolve(root, file))) harnessUse.delete(file);
   const harnessFiles = new Set(harnessUse.keys());
 
   // every top-level value of a file with tests, so references to the untested are counted too
@@ -471,4 +531,17 @@ export function projectDocs({
   model.links = linksIn(checker, read);
   model.results = readResults(root);
   return model;
+}
+
+declare namespace projectDocs {
+  /**
+   * a harness is a module only the tests reach: store.ts is imported as a type
+   * by the tests and called, as desolate's release/host/signin.ts was, but code
+   * under test imports it as a value, so it is not one (it was listed as one)
+   */
+  export type Harnesses = Expect<
+    Invoke<typeof harness.projectAt, [file: "harnessed/code.ts"]>,
+    "matches",
+    { harnesses: [{ file: "harness.ts" }] }
+  >;
 }

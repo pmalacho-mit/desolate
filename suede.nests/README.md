@@ -497,7 +497,10 @@ is an answer, `null`, `false` and `undefined` included, since which of them
 means "refused" is the function's own convention), and what it leaned on
 (harness functions, mocks, setups, the DSL values above). Then what only the
 whole program knows: who calls each function, from where, and whether from
-code, a test or a harness; which harness modules the tests speak through; which
+code, a test or a harness; which harness modules the tests speak through (a
+module the tests import as a type and call, unless it is code under test: one
+with tests of its own, or one such a module imports as a value, however far
+down); which
 modules they replace; and how the last run went, from `.derived/results.json`.
 
 `--exclude` takes a glob, as the plugin's `exclude` does, and is written once
