@@ -13,6 +13,7 @@ import {
   isExported,
   isFunctionLike,
   statementOf,
+  tagsOf,
   topLevelDeclarations,
 } from "../vite-plugin/emit/declarations.mts";
 import { configFor } from "../vite-plugin/minimal.mts";
@@ -36,6 +37,7 @@ import type { ResultRecord } from "../vite-plugin/reporter.mts";
 import type { Expect, Invoke } from "../dsl.import.meta.vitest.ts";
 import type * as harness from "../_internal/harness.mts";
 import type { FileDocs } from "./model.mts";
+import type { Tag } from "../vite-plugin/emit/ir.mts";
 
 export type Reference = {
   file: string;
@@ -51,7 +53,8 @@ export type HarnessDoc = {
   file: string;
   /** The comment the module opens with: what it stands in for. */
   purpose: string | null;
-  exports: { name: string; doc: string | null; claims: number }[];
+  /** Each function the tests call, its own words and tags (`@standsIn`, `@realIn`), and how many claims call it. */
+  exports: { name: string; doc: string | null; tags: Tag[]; claims: number }[];
 };
 
 export type BoundaryDoc = {
@@ -520,6 +523,7 @@ export function projectDocs({
           return {
             name,
             doc: declaration ? docTextOf(declaration) : null,
+            tags: declaration ? tagsOf(declaration) : [],
             claims,
           };
         })
@@ -543,5 +547,26 @@ declare namespace projectDocs {
     Invoke<typeof harness.projectAt, [file: "harnessed/code.ts"]>,
     "matches",
     { harnesses: [{ file: "harness.ts" }] }
+  >;
+
+  /** a harness function's tags are carried with it: what it stands in for, and where the real thing is shown */
+  export type HarnessTags = Expect<
+    Invoke<typeof harness.projectAt, [file: "harnessed/code.ts"]>,
+    "matches",
+    {
+      harnesses: [
+        {
+          exports: [
+            {
+              name: "fakeItems";
+              tags: [
+                { name: "standsIn"; text: "store.ts" },
+                { name: "realIn"; text: "T2" },
+              ];
+            },
+          ];
+        },
+      ];
+    }
   >;
 }

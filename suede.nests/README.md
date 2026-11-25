@@ -475,7 +475,7 @@ read these:
 | -------------------------------------- | ------------------------------------------------------------------------------------- |
 | `@control`                             | this case shows the tests would notice: it passes where the refusals beside it do not |
 | `@standsIn <module>`                   | on a harness function or a test: what it stands in for                                |
-| `@realIn <test or tier>`               | where the real thing (not the stand-in) is shown                                      |
+| `@realIn <test or tier>`               | where the real thing (not the stand-in) is shown; on a harness function, the cards say both beside each use of it |
 | `@principle <id>`, `@requirement <id>` | which principle or requirement the claim is evidence for                              |
 | `@incident <id>`                       | the incident the claim was written to pin                                             |
 

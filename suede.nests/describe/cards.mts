@@ -4,9 +4,11 @@
 // stood in for it.
 import { claimWords, groupClaims, subjectId } from "./model.mts";
 import { codeBlock, codeSpan } from "./shorthand.mts";
+import path from "node:path";
 
 import type { ClaimDoc, FileDocs, SubjectDoc } from "./model.mts";
-import type { ProjectDocs, Reference } from "./project.mts";
+import type { HarnessDoc, ProjectDocs, Reference } from "./project.mts";
+import type { Tag } from "../vite-plugin/emit/ir.mts";
 import type * as harness from "../_internal/harness.mts";
 import type { Expect, Invoke, Table } from "../dsl.import.meta.vitest.ts";
 
@@ -131,11 +133,31 @@ const callersOf = (refs: Reference[], limit = 8) => {
     : "**Used by** no other code: an entry point, or reached in a way references do not show (a dynamic `import()`, a table of commands)";
 };
 
-const standsIn = (claims: ClaimDoc[]) => {
+const tagText = (tags: Tag[]) =>
+  tags.map((t) => ` \`@${t.name}${t.text ? ` ${t.text}` : ""}\``).join("");
+
+// a harness function, with what its own tags say it stands in for and where the real thing is shown
+const standsIn = (
+  claims: ClaimDoc[],
+  file: string,
+  harnesses: HarnessDoc[],
+) => {
+  const tagsOf = (from: string, name: string) => {
+    const module = path.posix.normalize(
+      path.posix.join(path.posix.dirname(file), from),
+    );
+    return (
+      harnesses
+        .find((h) => h.file === module)
+        ?.exports.find((e) => e.name === name)?.tags ?? []
+    );
+  };
   const harness = [
     ...new Set(
       claims.flatMap((c) =>
-        c.uses.harness.map((h) => `\`${h.name}\` (${h.from})`),
+        c.uses.harness.map(
+          (h) => `\`${h.name}\` (${h.from})${tagText(tagsOf(h.from, h.name))}`,
+        ),
       ),
     ),
   ];
@@ -157,6 +179,10 @@ const standsIn = (claims: ClaimDoc[]) => {
   return parts.length ? [`**Stands in for it** ${parts.join("; ")}`, ""] : [];
 };
 
+/** What a card shows from the whole project: callers, the last run, and its harnesses' own tags. */
+export type Shown = Pick<ProjectDocs, "references" | "results"> &
+  Partial<Pick<ProjectDocs, "harnesses">>;
+
 export type SectionOptions = {
   /** An `id` for each claim's first appearance, so prose can link to it: `claim-Reads`. */
   anchor?: (alias: string) => string;
@@ -166,7 +192,7 @@ export type SectionOptions = {
 export function claimSections(
   s: SubjectDoc,
   file: FileDocs,
-  project: Pick<ProjectDocs, "references" | "results"> | null,
+  project: Shown | null,
   { anchor }: SectionOptions = {},
 ): string[] {
   const claims = file.claims.filter((c) => s.claims.includes(c.name));
@@ -193,7 +219,7 @@ export function claimSections(
     ...(project
       ? [callersOf(project.references[subjectId(file.file, s.name)] ?? []), ""]
       : []),
-    ...standsIn(claims),
+    ...standsIn(claims, file.file, project?.harnesses ?? []),
   ];
 }
 
@@ -201,7 +227,7 @@ export function claimSections(
 export function subjectCard(
   s: SubjectDoc,
   file: FileDocs,
-  project: Pick<ProjectDocs, "references" | "results"> | null,
+  project: Shown | null,
 ): string[] {
   return [
     `## \`${s.name}\``,
@@ -218,7 +244,7 @@ export function subjectCard(
 /** A file's cards, as one Markdown page. */
 export const fileCards = (
   file: FileDocs,
-  project: Pick<ProjectDocs, "references" | "results"> | null = null,
+  project: Shown | null = null,
 ) =>
   [
     `# ${file.file}`,
@@ -230,6 +256,18 @@ export const fileCards = (
     .replace(/\n+$/, "\n");
 
 declare namespace fileCards {
+  type Harnessed = Invoke<typeof harness.projectAt, [file: "harnessed/code.ts"]>;
+
+  /** what the tests stood in for it, in the harness function's own tags (the model had dropped them) */
+  export type StandsIn = Expect<
+    Invoke<
+      typeof fileCards,
+      [file: Harnessed["files"][0], project: Harnessed]
+    >,
+    "includes",
+    "**Stands in for it** harness `fakeItems` (./harness.ts) `@standsIn store.ts` `@realIn T2`"
+  >;
+
   type Suite = `
     /** Memory in MiB. */
     export const parseMemory = (value: string): number | null => (value === "8g" ? 8192 : value ? null : fail());
