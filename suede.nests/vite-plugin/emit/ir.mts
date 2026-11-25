@@ -8,7 +8,13 @@ export type Expr =
   | { kind: "array"; elements: Expr[] }
   | { kind: "object"; entries: [key: string, value: Expr][] }
   // `imported`: a value the test imports as a type (a harness function), re-imported to run
-  | { kind: "name"; name: string; imported?: { from: string; name: string } }
+  // `awaited`: an alias of an async call, which names the call started once: each use awaits it
+  | {
+      kind: "name";
+      name: string;
+      imported?: { from: string; name: string };
+      awaited?: boolean;
+    }
   // awaited only when what it returns is thenable
   // `labels`: what each argument is, as the tuple names it or else the parameter
   | {
@@ -203,7 +209,19 @@ export const some = (e: Expr, test: (e: Expr) => boolean): boolean =>
 
 // every node that prints `await` says so where it is lowered
 export const awaits = (e: Expr): boolean =>
-  some(e, (n) => "awaited" in n && n.awaited);
+  some(e, (n) => "awaited" in n && !!n.awaited);
+
+/** Awaited as a whole, so it can be started now and awaited later: an async call, or an alias of one. */
+export const startable = (e: Expr): boolean =>
+  (e.kind === "call" ||
+    e.kind === "method" ||
+    e.kind === "caught" ||
+    e.kind === "name") &&
+  !!e.awaited;
+
+/** The same expression, started and not awaited. */
+export const started = (e: Expr): Expr =>
+  startable(e) ? ({ ...e, awaited: false } as Expr) : e;
 
 /** What each DSL value is called where a test writes it, and what its printed form needs. */
 export const DSL_KINDS: Partial<

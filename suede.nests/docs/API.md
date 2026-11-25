@@ -9,7 +9,9 @@
 > **AdvanceTimers**\<`Ms`\> = [`EffectNode`](Namespace.Internal.md#effectnode)\<`"advanceTimers"`, `Ms`\>
 
 Move fake time forward, running every timer that falls due, as one of a
-`Given`'s effects. Needs `FakeTimers`.
+`Given`'s effects. Needs `FakeTimers`. It runs while the effect before it
+waits: an async call written just before it is started, the time moved,
+and only then is the call awaited, where its value is next used.
 
 ```ts
 export type Fires = Given<

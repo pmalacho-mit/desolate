@@ -340,6 +340,39 @@ root and then makes the offer, whether `Offered` is written inline or named. An
 alias the effects do not name is reached after them, just before the first
 expectation (or the alias) that uses it; one only a setup uses comes first.
 
+**Async calls, and fake time.** An alias of an async call names that one call:
+it is started where the test reaches it, and each use awaits it, so the code
+and the expectation see the same answer. An effect is awaited before the next
+one runs, with one exception: an `AdvanceTimers` runs _while the effect before
+it waits_. That effect is started, the time moved, and only then is it awaited,
+by the next statement that uses it (an `Expect`, a `Throws`), or else just
+before the next statement. Without that, a call that waits on a fake timer
+could never finish, because the time that runs the timer would not move until
+it had:
+
+```ts
+declare namespace withRetry {
+  type Sent = Invoke<typeof withRetry, [attempt: Flaky]>; // waits 500 ms between tries
+
+  /** a refused connection is asked again, after a pause */
+  export type Retries = Given<
+    [FakeTimers, Sent, AdvanceTimers<1_000>],
+    Expect<Sent, "=", { ok: true }>
+  >;
+}
+```
+
+```ts
+const Sent = withRetry(Flaky); // started
+Sent.catch(() => {}); // a rejection meanwhile is the test's to see
+await vi.advanceTimersByTimeAsync(1_000);
+const actual = await Sent;
+```
+
+So, under fake time, write the call, then the `AdvanceTimers` that moves the
+time it waits on, then what you expect of it. A rejection while the time moves
+is not an unhandled one: a `Throws` after it sees it.
+
 A `Throws` matcher's fields beyond `instanceOf`, `name`, `message` and
 `matches` are the error's own, compared as `"matches"` compares:
 `Throws<Invoke<typeof parsePort, [text: "0"]>, { instanceOf: Refusal; code: 64 }>`.

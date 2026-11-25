@@ -9,6 +9,9 @@ import {
   exprsOf,
   exprsOfTest,
   placed,
+  some,
+  startable,
+  started,
 } from "./ir.mts";
 
 import type { Assertion as VitestAssertion } from "vitest";
@@ -26,8 +29,18 @@ import type {
   TestCase,
 } from "./ir.mts";
 
-import type { Table, Expect, Invoke } from "../../dsl.import.meta.vitest.ts";
 import type {
+  AdvanceTimers,
+  FakeTimers,
+  Given,
+  Table,
+  Expect,
+  Invoke,
+  Throws,
+} from "../../dsl.import.meta.vitest.ts";
+import type {
+  failsLater,
+  later,
   printAlias,
   printMatcher,
   printStatements,
@@ -61,7 +74,7 @@ export function printExpr(e: Expr): string {
         ? `{ ${e.entries.map(([k, v]) => `${propKey(k)}: ${printExpr(v)}`).join(", ")} }`
         : "{}";
     case "name":
-      return e.name;
+      return `${e.awaited ? "await " : ""}${e.name}`;
     case "call":
       return `${e.awaited ? "await " : ""}${receiver(e.callee)}(${list(e.args)})`;
     case "construct":
@@ -669,29 +682,132 @@ export const printStatement = (
     ? [`${printExpr(s.expr)};`]
     : printAssertion(s, scope, nth);
 
-// one scope across the body; ordinals only when there are several to tell apart
-export function printBody(body: Statement[], scope = names([])): string[][] {
+const isAdvance = (s: Statement | undefined) =>
+  s?.kind === "effect" && s.expr.kind === "advanceTimers";
+
+const usesName = (s: Statement, name: string) =>
+  exprsOf(s).some((e) => some(e, (n) => n.kind === "name" && n.name === name));
+
+/**
+ * One scope across the body; ordinals only when there are several to tell apart.
+ * `before[i]` are the aliases declared just before the `i`th statement.
+ *
+ * An effect is awaited before the next one runs, except that an `AdvanceTimers`
+ * runs while the effect before it waits: that effect is started, the time
+ * moved, and only then is it awaited (by the next statement that uses it, or
+ * else just before the next statement). A call that waits on a fake timer
+ * could never finish before the time that runs it had moved.
+ */
+export function printBody(
+  body: Statement[],
+  scope = names([]),
+  before: Binding[][] = [],
+): Line[][] {
   const assertions = body.filter((s) => s.kind === "assert").length;
   let asserted = 0;
-  return body.map((s) =>
-    printStatement(
-      s,
-      scope,
-      // counted over assertions alone: the effects of a `Given` are not ones,
-      // and `actual3` for the first thing asserted reads as a bug
-      s.kind === "assert" && assertions > 1 ? `${++asserted}` : "",
-    ),
+  // started before an AdvanceTimers and not yet awaited
+  let waiting: string[] = [];
+  const out = body.map((s, i): Line[] => {
+    const at = (code: string): Line => ({ code, line: s.line });
+    const owed = isAdvance(s)
+      ? []
+      : waiting.splice(0).filter((name) => !usesName(s, name));
+    const lines = [
+      ...owed.map((name) => at(`await ${name};`)),
+      ...(before[i] ?? []).map((b) => ({ code: printBinding(b), line: b.line })),
+    ];
+    if (s.kind === "effect" && isAdvance(body[i + 1]) && startable(s.expr)) {
+      // a rejection while the time moves is the test's to see, not an unhandled one
+      if (s.expr.kind === "name") {
+        waiting.push(s.expr.name);
+        return [...lines, at(`${s.expr.name}.catch(() => {});`)];
+      }
+      const name = scope.take("pending");
+      waiting.push(name);
+      return [
+        ...lines,
+        at(`const ${name} = ${printExpr(started(s.expr))};`),
+        at(`${name}.catch(() => {});`),
+      ];
+    }
+    return [
+      ...lines,
+      ...printStatement(
+        s,
+        scope,
+        // counted over assertions alone: the effects of a `Given` are not ones,
+        // and `actual3` for the first thing asserted reads as a bug
+        s.kind === "assert" && assertions > 1 ? `${++asserted}` : "",
+      ).map(at),
+    ];
+  });
+  out.at(-1)?.push(
+    ...waiting.map((name) => ({ code: `await ${name};`, line: body.at(-1)!.line })),
   );
+  return out;
+}
+
+declare namespace printBody {
+  type Later = `
+    const later = (ms: number): Promise<string> => new Promise((r) => setTimeout(() => r("done"), ms));
+    declare namespace later {
+      type Waited = Invoke<typeof later, [ms: 1000]>;
+      export type Named = Given<[FakeTimers, Waited, AdvanceTimers<1_000>], Expect<Waited, "=", "done">>;
+      export type Inline = Given<[FakeTimers, Invoke<typeof later, [ms: 10]>, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type RealTime = Given<[Waited, Invoke<typeof later, [ms: 1]>], Expect<Waited, "=", "done">>;
+    }
+  `;
+
+  /**
+   * an async alias followed by AdvanceTimers is started, the time moved, then
+   * awaited where it is used: it was awaited where it was declared, before the
+   * time that would finish it could move, and the test hung
+   */
+  export type StartedThenAwaited = Expect<
+    Invoke<typeof printAlias, [Later, "Named"]>,
+    "=",
+    'test("later > Named", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Waited = later(1000);\n  Waited.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1_000);\n  const actual = await Waited;\n  const expected = "done";\n  expect(actual).toEqual(expected);\n});'
+  >;
+
+  /** an inline one the same, awaited as soon as the time has moved */
+  export type InlineToo = Expect<
+    Invoke<typeof printAlias, [Later, "Inline"]>,
+    "startsWith",
+    'test("later > Inline", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending;\n'
+  >;
+
+  /** @control without an AdvanceTimers after it, an async effect is awaited before the next one runs */
+  export type AwaitedInTurn = Expect<
+    Invoke<typeof printAlias, [Later, "RealTime"]>,
+    "startsWith",
+    'test("later > RealTime", async () => {\n  const Waited = later(1000);\n  await Waited;\n  await later(1);\n'
+  >;
+
+  type Waits = Invoke<typeof later, [ms: 1000, value: "done"]>;
+  type Fails = Invoke<typeof failsLater, [ms: 1000, message: "late"]>;
+
+  /** run under fake time: the call waits on a timer only the AdvanceTimers after it moves */
+  export type UnderFakeTime = Given<
+    [FakeTimers, Waits, AdvanceTimers<1_000>],
+    Expect<Waits, "=", "done">
+  >;
+
+  /** and one that rejects meanwhile is the Throws' to see */
+  export type RejectsUnderFakeTime = Given<
+    [FakeTimers, Fails, AdvanceTimers<1_000>],
+    Throws<Fails, "late">
+  >;
 }
 
 const printParam = (p: Param) =>
   `${p.name}: ${p.type}${p.fallback ? ` = ${printExpr(p.fallback)}` : ""}`;
 
+// an alias of an async call holds the call, started here; each use awaits it
 const printBinding = (b: Binding) =>
   b.params
     ? // an object literal as an arrow's body reads as a block: parenthesise it
       `const ${b.name} = ${awaits(b.value) ? "async " : ""}(${b.params.map(printParam).join(", ")}) => ${b.value.kind === "object" ? `(${printExpr(b.value)})` : printExpr(b.value)};`
-    : `const ${b.name}${b.annotation ? `: ${b.annotation}` : ""} = ${printExpr(b.value)};`;
+    : `const ${b.name}${b.annotation ? `: ${b.annotation}` : ""} = ${printExpr(started(b.value))};`;
 
 export type Needs = {
   /** `readFileSync`, for `FromFile`. */
@@ -867,16 +983,9 @@ export function printTest(t: TestCase): EmittedTest {
             line,
           })),
           // each alias declared where the test first reaches it, so the effects run as written
-          ...printBody(t.body, scope).flatMap((lines, index) => [
-            ...(before[index] ?? []).map((b) => ({
-              code: `  ${printBinding(b)}`,
-              line: b.line,
-            })),
-            ...lines.map((code) => ({
-              code: `  ${code}`,
-              line: t.body[index]!.line,
-            })),
-          ]),
+          ...printBody(t.body, scope, before)
+            .flat()
+            .map(({ code, line }) => ({ code: `  ${code}`, line })),
           // a test with no statements still declares what it names
           ...(t.body.length ? [] : before[0]!).map((b) => ({
             code: `  ${printBinding(b)}`,

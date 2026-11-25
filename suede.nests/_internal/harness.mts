@@ -215,7 +215,9 @@ export const moduleWarnings = (code: string, root?: string): string[] =>
 
 /** The statements `type Subject = …` compiles to, read as a Test node. */
 export const printStatements = (code: string, alias = "Subject"): string[] =>
-  printBody(lowerBody(contextFor(code), typeIn(code, alias), false)).flat();
+  printBody(lowerBody(contextFor(code), typeIn(code, alias), false))
+    .flat()
+    .map((l) => l.code);
 
 /**
  * The `expect` statement alone, for tests about which matcher a condition
@@ -318,3 +320,15 @@ export const projectOf = (code: string) => {
 
 /** The rule each finding broke, in order. */
 export const ruleNames = (findings: Finding[]) => findings.map((f) => f.rule);
+
+// ── time ───────────────────────────────────────────────────────────────────
+
+/** `value`, after a timer of `ms`: an async call that waits on a timer, for fake time to run. */
+export const later = (ms: number, value: string): Promise<string> =>
+  new Promise((resolve) => setTimeout(() => resolve(value), ms));
+
+/** A rejection with `message`, after a timer of `ms`. */
+export const failsLater = async (ms: number, message: string): Promise<never> => {
+  await later(ms, "");
+  throw new Error(message);
+};
