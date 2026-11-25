@@ -340,7 +340,9 @@ error.
 that is where it stands, so `[Invoke<typeof emptyRoot>, Offered]` empties the
 root and then makes the offer, whether `Offered` is written inline or named. An
 alias the effects do not name is reached after them, just before the first
-expectation (or the alias) that uses it; one only a setup uses comes first.
+expectation (or the alias) that uses it. A setup cannot use an alias: setups
+run before any alias is declared, so `StubEnv<"HOME", Home>` with an alias
+`Home` fails with a ReferenceError. Write a setup's value inline.
 
 **Async calls, and fake time.** An alias of an async call is awaited where it
 is declared, like any alias's value, so nothing after it runs while it is still
