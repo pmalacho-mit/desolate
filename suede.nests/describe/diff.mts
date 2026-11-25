@@ -105,7 +105,7 @@ export function behaviorDiff(
     }
     if (!was) out.added.push(now);
     else if (runs(was.claim) && !runs(now.claim)) out.skipped.push(now);
-    else if (was.claim.code !== now.claim.code)
+    else if (was.claim.fingerprint !== now.claim.fingerprint)
       (onlySetup(was.claim, now.claim) ? out.setupChanged : out.changed).push({
         file: now.file,
         before: was.claim,
@@ -270,6 +270,53 @@ declare namespace behaviorDiff {
       ];
       reworded: [{ after: { doc: "lowercase letters, said differently" } }];
       needsReview: 2;
+    }
+  >;
+
+  type Sync = `
+    const load = (id: string) => id;
+    const refuse = (id: string): string => { throw new Error(id); };
+    declare namespace load {
+      /** an id is itself */
+      export type Same = Expect<Invoke<typeof load, [id: "a"]>, "=", "a">;
+      /** and a bad one is refused */
+      export type Refused = Throws<Invoke<typeof refuse, [id: "b"]>, "b">;
+      /** a value */
+      export type Other = Expect<Invoke<typeof load, [id: "a"]>, "=", "a">;
+    }
+  `;
+  type Async = `
+    const load = async (id: string) => id;
+    const refuse = async (id: string): Promise<string> => { throw new Error(id); };
+    declare namespace load {
+      /** an id is itself */
+      export type Same = Expect<Invoke<typeof load, [id: "a"]>, "=", "a">;
+      /** and a bad one is refused */
+      export type Refused = Throws<Invoke<typeof refuse, [id: "b"]>, "b">;
+      /** a value */
+      export type Other = Expect<Invoke<typeof load, [id: "a"]>, "=", "b">;
+    }
+  `;
+
+  /**
+   * a function that became async gives the same claims: its test awaits, and
+   * checks the same value (it read "changed" with the same evidence before and
+   * after); a throw that became a rejection is said differently, so it is
+   * reworded. The control: a different value is still changed
+   */
+  export type BecameAsync = Expect<
+    Invoke<typeof harness.diffOf, [before: Sync, after: Async]>,
+    "matches",
+    {
+      changed: [{ after: { name: "load > Other" } }];
+      setupChanged: [];
+      reworded: [
+        {
+          before: { shorthand: ['refuse("b") throws /b/'] };
+          after: { shorthand: ['refuse("b") rejects /b/'] };
+        },
+      ];
+      needsReview: 1;
     }
   >;
 

@@ -526,6 +526,12 @@ claim line that differs (an argument written inline in it counts, since it is
 on that line), one more or fewer, or a printed test that differs where the
 shorthand shows no difference.
 
+Whether a call is awaited is not compared: a function that became async gives
+its test an `await`, and the test checks the same value, so it makes the same
+claim (the type checker holds every caller to the new signature). A throw that
+became a rejection is said differently in shorthand (`throws` and `rejects`),
+so it is listed as reworded.
+
 A claim's tags are compared too, as written (`@principle P4`): each one removed
 or added is listed under "Retagged". A removed `@control`, `@principle`,
 `@requirement` or `@incident` is a weaker statement of what the test is evidence

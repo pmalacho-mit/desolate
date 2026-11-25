@@ -2,6 +2,7 @@
 // for a whole project by `cli.mts docs model` (project.mts), which adds what
 // only the whole program knows: who calls what.
 import ts from "@typescript/typescript6";
+import { createHash } from "node:crypto";
 
 import { printExpr, printTest } from "../vite-plugin/emit/print.mts";
 import { children, DSL_KINDS, exprsOfTest } from "../vite-plugin/emit/ir.mts";
@@ -49,6 +50,12 @@ export type ClaimDoc = {
   kind: "refuses" | "answers";
   /** The evidence: the test Vitest runs, without the words above it. */
   code: string;
+  /**
+   * What a diff compares two readings of the test by: its code printed with
+   * every `await` left out, hashed. A function that became async is checked for
+   * the same value, so its test makes the same claim.
+   */
+  fingerprint: string;
   /** The evidence in shorthand: what the printed test sets up, does and checks, a line of code each. */
   shorthand: string[];
   /** The lines of `shorthand` that are claims, one per assertion; the rest are what the test sets up. */
@@ -221,6 +228,19 @@ function harnessOf(t: TestCase): ClaimDoc["uses"]["harness"] {
   return [...found.values()];
 }
 
+// every call as if it answered at once: AdvanceTimers is awaited in both readings alike
+const unawaited = <T,>(value: T): T => {
+  if (Array.isArray(value)) return value.map(unawaited) as T;
+  if (!value || typeof value !== "object" || value instanceof Map) return value;
+  const kind = (value as { kind?: string }).kind;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, v]) => [
+      key,
+      key === "awaited" && kind !== "advanceTimers" ? false : unawaited(v),
+    ]),
+  ) as T;
+};
+
 /** One test, as documentation. */
 export function claimOf(t: TestCase, file: string, lookup: Lookup): ClaimDoc {
   return {
@@ -236,6 +256,10 @@ export function claimOf(t: TestCase, file: string, lookup: Lookup): ClaimDoc {
     mode: t.mode,
     kind: isRefusal(t) ? "refuses" : "answers",
     code: printTest({ ...t, doc: null, rowDoc: null }).code,
+    fingerprint: createHash("sha256")
+      .update(printTest(unawaited({ ...t, doc: null, rowDoc: null })).code)
+      .digest("hex")
+      .slice(0, 16),
     shorthand: shorthand(t, lookup),
     checks: claimLines(t, lookup),
     cells: cellsOf(t),
