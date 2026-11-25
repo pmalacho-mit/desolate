@@ -2,7 +2,14 @@ import { fileURLToPath } from "node:url";
 
 import { DISPLAY } from "../codec.mts";
 import { importPath } from "../paths.mts";
-import { awaits, children, DSL_KINDS, exprsOf, exprsOfTest } from "./ir.mts";
+import {
+  awaits,
+  children,
+  DSL_KINDS,
+  exprsOf,
+  exprsOfTest,
+  placed,
+} from "./ir.mts";
 
 import type { Assertion as VitestAssertion } from "vitest";
 import type { Line } from "./context.mts";
@@ -835,6 +842,7 @@ const testFunction = (t: TestCase) => {
 export function printTest(t: TestCase): EmittedTest {
   const needs = needsOf(t);
   const scope = names(namesIn(t));
+  const before = placed(t);
   // a row says what it shows; one that says nothing is described by its table
   const shown = t.rowDoc ?? t.doc;
   const doc: Line[] = shown
@@ -858,16 +866,22 @@ export function printTest(t: TestCase): EmittedTest {
             code: `  ${code}`,
             line,
           })),
-          ...t.bindings.map((b) => ({
-            code: `  ${printBinding(b)}`,
-            line: b.line,
-          })),
-          ...printBody(t.body, scope).flatMap((lines, index) =>
-            lines.map((code) => ({
+          // each alias declared where the test first reaches it, so the effects run as written
+          ...printBody(t.body, scope).flatMap((lines, index) => [
+            ...(before[index] ?? []).map((b) => ({
+              code: `  ${printBinding(b)}`,
+              line: b.line,
+            })),
+            ...lines.map((code) => ({
               code: `  ${code}`,
               line: t.body[index]!.line,
             })),
-          ),
+          ]),
+          // a test with no statements still declares what it names
+          ...(t.body.length ? [] : before[0]!).map((b) => ({
+            code: `  ${printBinding(b)}`,
+            line: b.line,
+          })),
           { code: `});`, line: t.line },
         ];
   return { ...t, lines, code: lines.map((l) => l.code).join("\n"), needs };

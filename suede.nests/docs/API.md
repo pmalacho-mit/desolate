@@ -396,7 +396,8 @@ export type Parses = Expect<Invoke<typeof parseCsv, [text: Csv]>, "isNotEmpty">;
 > **Given**\<`Effects`, `Then`\> = [`Sequence`](Namespace.Internal.md#sequence)\<`Effects`, `Then`\>
 
 Run `Effects` (an expression, or a tuple of expressions, evaluated in order
-purely for their side effects), then evaluate `Then`.
+purely for their side effects), then evaluate `Then`. An alias among the
+effects runs where it stands, as an inline one does.
 
 ```ts
 export type Rename = Given<

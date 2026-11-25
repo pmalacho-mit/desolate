@@ -334,6 +334,12 @@ any alias, a `Spy`, a `TempDir` or a `Caught` named once is one value in a test:
 the code and the expectation hold the same spy, the same directory, the same
 error.
 
+**An alias runs where the test first reaches it.** Among a `Given`'s effects,
+that is where it stands, so `[Invoke<typeof emptyRoot>, Offered]` empties the
+root and then makes the offer, whether `Offered` is written inline or named. An
+alias the effects do not name is reached after them, just before the first
+expectation (or the alias) that uses it; one only a setup uses comes first.
+
 A `Throws` matcher's fields beyond `instanceOf`, `name`, `message` and
 `matches` are the error's own, compared as `"matches"` compares:
 `Throws<Invoke<typeof parsePort, [text: "0"]>, { instanceOf: Refusal; code: 64 }>`.

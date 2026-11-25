@@ -1488,6 +1488,31 @@ declare namespace lowerAlias {
     'test("kind > Fake", () => {\n  vi.stubEnv("BACKEND", "fake");\n  vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00.000Z") });\n  onTestFinished(() => { vi.useRealTimers(); });\n  onTestFinished(() => { vi.unstubAllEnvs(); });\n  kind();\n  const actual = kind();\n  const expected = "fake";\n  expect(actual).toEqual(expected);\n});'
   >;
 
+  type Effects = `
+    const said: string[] = [];
+    const say = (what: string) => { said.push(what); };
+    declare namespace say {
+      type Offered = Invoke<typeof say, [what: "offer"]>;
+      type Seen = Invoke<typeof say, [what: "seen"]>;
+      export type InOrder = Given<
+        [Invoke<typeof say, [what: "root"]>, Offered],
+        Expect<Seen, "=", undefined>
+      >;
+    }
+  `;
+
+  /**
+   * the effects run in the order they are written, an alias among them where it
+   * stands; an alias the effects never name is reached after them, where it is
+   * first used (an alias was declared at the top of the test, so `Offered` ran
+   * before the `say("root")` written ahead of it)
+   */
+  export type EffectsInOrder = Expect<
+    Invoke<typeof harness.printAlias, [Effects, "InOrder"]>,
+    "=",
+    'test("say > InOrder", () => {\n  say("root");\n  const Offered = say("offer");\n  Offered;\n  const Seen = say("seen");\n  expect(Seen).toEqual(undefined);\n});'
+  >;
+
   /** `Todo` has no body at all */
   export type Pending = Expect<
     Invoke<typeof harness.printAlias, [Suite, "Later"]>,

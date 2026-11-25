@@ -238,6 +238,42 @@ export const exprsOfTest = (t: TestCase): Expr[] => [
   ...t.setup.flatMap(setupExprs),
 ];
 
+/**
+ * Where each binding is declared: `[i]` holds the ones declared just before the
+ * test's `i`th statement. A binding is declared before the first statement that
+ * uses it, or that uses a binding that does, so an alias among a `Given`'s
+ * effects runs where it stands, in the order the effects are written. One no
+ * statement reaches (only a setup does, or nothing) comes first.
+ */
+export function placed(t: TestCase): Binding[][] {
+  const at = new Map<Binding, number>();
+  const valuesOf = (b: Binding) => [
+    ...(b.params ?? []).flatMap((p) => (p.fallback ? [p.fallback] : [])),
+    b.value,
+  ];
+  // dependencies come first in `bindings`, so every dependent is placed before them
+  for (let k = t.bindings.length - 1; k >= 0; k--) {
+    const b = t.bindings[k]!;
+    const uses = (e: Expr) =>
+      some(e, (n) => n.kind === "name" && !n.imported && n.name === b.name);
+    const first = t.body.findIndex((s) => exprsOf(s).some(uses));
+    let position = first < 0 ? Infinity : first;
+    for (const later of t.bindings.slice(k + 1))
+      if (valuesOf(later).some(uses))
+        position = Math.min(position, at.get(later)!);
+    at.set(b, position);
+  }
+  const out: Binding[][] = Array.from(
+    { length: Math.max(t.body.length, 1) },
+    () => [],
+  );
+  for (const b of t.bindings) {
+    const position = at.get(b)!;
+    out[position === Infinity ? 0 : position]!.push(b);
+  }
+  return out;
+}
+
 export const exprsOf = (s: Statement): Expr[] =>
   s.kind === "effect"
     ? [s.expr]

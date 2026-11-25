@@ -17,7 +17,7 @@
 // `was called with`). A harness function with a JSDoc that names its
 // parameters keeps those words, filled in, as a comment on its line.
 import { printExpr } from "../vite-plugin/emit/print.mts";
-import { awaits } from "../vite-plugin/emit/ir.mts";
+import { awaits, placed } from "../vite-plugin/emit/ir.mts";
 
 import type {
   Assertion,
@@ -463,18 +463,29 @@ const text = ({ code, notes }: Line) =>
 export function shorthand(t: TestCase, lookup: Lookup = () => null): string[] {
   if (t.mode === "test.todo") return [];
   const at = (render: (scope: Scope) => string) => line(lookup, render);
-  const effects: Line[] = [];
-  const claims: Line[] = [];
-  for (const s of t.body)
+  const before = placed(t);
+  const body: Line[] = [];
+  let effects: Line[] = [];
+  let checked = false;
+  // each alias where the test first reaches it, as the printed test declares it
+  t.body.forEach((s, i) => {
+    const aliases = before[i]!.map((b) => at((scope) => bindingLine(b, scope)));
+    if (aliases.length) body.push(...counted(effects.splice(0)), ...aliases);
     if (s.kind === "effect")
       effects.push(at((scope) => expression(s.expr, scope)));
-    else claims.push(at((scope) => assertionLine(s, scope)));
+    else {
+      body.push(...counted(effects.splice(0)), at((scope) => assertionLine(s, scope)));
+      checked = true;
+    }
+  });
+  effects = counted(effects);
   return [
     ...t.mocks.map((m) => at(() => mockLine(m))),
     ...t.setup.map((s) => at((scope) => setupLine(s, scope))),
-    ...t.bindings.map((b) => at((scope) => bindingLine(b, scope))),
-    ...counted(effects),
-    ...(claims.length ? claims : [{ code: "// nothing is checked", notes: [] }]),
+    ...(t.body.length ? [] : before[0]!).map((b) => at((scope) => bindingLine(b, scope))),
+    ...body,
+    ...effects,
+    ...(checked ? [] : [{ code: "// nothing is checked", notes: [] }]),
   ].map(text);
 }
 
@@ -515,6 +526,21 @@ declare namespace shorthand {
         "calls(Run).length → 1",
       ],
     ]
+  >;
+
+  type Said = `
+    const say = (what: string) => what;
+    declare namespace say {
+      type Offered = Invoke<typeof say, [what: "offer"]>;
+      export type T = Given<[Invoke<typeof say, [what: "root"]>, Offered], Expect<Offered, "=", "offer">>;
+    }
+  `;
+
+  /** an alias among the effects is written where it runs, after the effects before it */
+  export type InOrder = Expect<
+    Invoke<typeof harness.shorthandOf, [Said, "T"]>,
+    "=",
+    [['say("root")', 'Offered = say("offer")', "Offered", 'Offered → "offer"']]
   >;
 
   type Visits = `
