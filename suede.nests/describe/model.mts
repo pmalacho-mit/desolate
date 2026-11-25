@@ -23,7 +23,8 @@ import type { Lookup } from "./shorthand.mts";
 import type { Expect, Invoke, Table } from "../dsl.import.meta.vitest.ts";
 import type * as harness from "../_internal/harness.mts";
 
-export const MODEL_VERSION = 1;
+// 2: a claim's checks and fingerprint, harness exports' tags, the project's stale stubs
+export const MODEL_VERSION = 2;
 
 /** What every join between a claim and its run, its diff or its links goes by. */
 export const claimId = (file: string, name: string) => `${file} > ${name}`;
