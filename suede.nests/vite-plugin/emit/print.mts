@@ -884,6 +884,79 @@ declare namespace printBody {
     [FakeTimers, Late, AdvanceTimers<1_000>],
     Expect<Late, "matches", { message: "late" }>
   >;
+
+  type AsMain = `
+    const f = async (x: string): Promise<string> => x;
+    const g = (x: string): string => x + "!";
+    const sthrow = (x: string): string => { throw new Error("s"); };
+    declare namespace f {
+      type A = Invoke<typeof f, [x: "a"]>;
+      type AA = A;
+      type P<T extends string = "z"> = Invoke<typeof sthrow, [A]>;
+      type R<T extends string = "z"> = Invoke<typeof g, [A]>;
+      export type ThrowsP = Throws<P, "s">;
+      export type ExpectR = Expect<R, "=", "a!">;
+      export type CaughtP = Expect<Caught<P>, "matches", { message: "s" }>;
+      export type OfAlias = Expect<AA, "=", "a">;
+      export type AsArgument = Expect<Invoke<typeof g, [A]>, "=", "a!">;
+    }
+  `;
+
+  /**
+   * with nothing started, a test is lowered and printed exactly as it was
+   * before async aliases could be started: a parameterised alias that uses an
+   * async one is a plain arrow (it printed `await P()` and `.rejects`), an alias
+   * of an alias and one handed as an argument are had where declared
+   */
+  export type AsBefore = Table<
+    typeof printAlias,
+    [
+      [args: [source: AsMain, alias: "ThrowsP"], expected: "test(\"f > ThrowsP\", async () => {\n  const A = await f(\"a\");\n  const P = (T: string = \"z\") => sthrow(A);\n  expect(() => (P())).toThrow(\"s\");\n});"],
+      [args: [source: AsMain, alias: "ExpectR"], expected: "test(\"f > ExpectR\", async () => {\n  const A = await f(\"a\");\n  const R = (T: string = \"z\") => g(A);\n  const actual = R();\n  const expected = \"a!\";\n  expect(actual).toEqual(expected);\n});"],
+      [args: [source: AsMain, alias: "CaughtP"], expected: "test(\"f > CaughtP\", async () => {\n  const A = await f(\"a\");\n  const P = (T: string = \"z\") => sthrow(A);\n  const actual = nt.caught(() => (P()), \"P\");\n  const expected = { message: \"s\" };\n  expect(actual).toMatchObject(expected);\n});"],
+      [args: [source: AsMain, alias: "OfAlias"], expected: "test(\"f > OfAlias\", async () => {\n  const A = await f(\"a\");\n  const AA = A;\n  const expected = \"a\";\n  expect(AA).toEqual(expected);\n});"],
+      [args: [source: AsMain, alias: "AsArgument"], expected: "test(\"f > AsArgument\", async () => {\n  const A = await f(\"a\");\n  const actual = g(A);\n  const expected = \"a!\";\n  expect(actual).toEqual(expected);\n});"],
+    ]
+  >;
+
+  type Timed = `
+    const f = async (x: string): Promise<string> => x;
+    declare namespace f {
+      type A = Invoke<typeof f, [x: "a"]>;
+      type AA = A;
+      type E = Caught<A>;
+      export type OfAlias = Given<[FakeTimers, AA, AdvanceTimers<1>], Expect<AA, "=", "a">>;
+      export type OfCaught = Given<[FakeTimers, E, AdvanceTimers<1>], Expect<E, "matches", {}>>;
+    }
+  `;
+
+  /**
+   * an alias started before an AdvanceTimers takes the alias it names or
+   * catches with it: that is the same call (A was awaited before the time
+   * moved, and `.catch` was called on its answer)
+   */
+  export type StartedWithIt = [
+    Expect<Invoke<typeof printAlias, [Timed, "OfAlias"]>, "=", "test(\"f > OfAlias\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = f(\"a\");\n  const AA = A;\n  AA.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const actual = await AA;\n  const expected = \"a\";\n  expect(actual).toEqual(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Timed, "OfCaught"]>, "=", "test(\"f > OfCaught\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = f(\"a\");\n  const E = nt.caught(async () => (await A), \"A\");\n  E.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const actual = await E;\n  const expected = {};\n  expect(actual).toMatchObject(expected);\n});">,
+  ];
+
+
+  type Waits_ = Invoke<typeof later, [ms: 1000, value: "done"]>;
+  type OfWaits = Waits_;
+  type Fails_ = Invoke<typeof failsLater, [ms: 1000, message: "late"]>;
+  type FailsCaught = Caught<Fails_>;
+
+  /** run under fake time: an alias of an alias waits on the timer the AdvanceTimers moves */
+  export type OfAliasUnderFakeTime = Given<
+    [FakeTimers, OfWaits, AdvanceTimers<1_000>],
+    Expect<OfWaits, "=", "done">
+  >;
+
+  /** and a Caught of an alias catches the rejection the moved time brings */
+  export type CaughtAliasUnderFakeTime = Given<
+    [FakeTimers, FailsCaught, AdvanceTimers<1_000>],
+    Expect<FailsCaught, "matches", { message: "late" }>
+  >;
 }
 
 const printParam = (p: Param) =>

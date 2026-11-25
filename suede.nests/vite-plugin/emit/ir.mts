@@ -8,7 +8,8 @@ export type Expr =
   | { kind: "array"; elements: Expr[] }
   | { kind: "object"; entries: [key: string, value: Expr][] }
   // `imported`: a value the test imports as a type (a harness function), re-imported to run
-  // `awaited`: an alias of an async call started before an AdvanceTimers (`settled`): each use awaits it
+  // `awaited`: an alias of an async call started before an AdvanceTimers (`settled`): each use awaits it.
+  // Lowering never sets it, so a test with nothing started is as lowered
   | {
       kind: "name";
       name: string;
@@ -225,55 +226,90 @@ export const startable = (e: Expr): boolean =>
 export const started = (e: Expr): Expr =>
   startable(e) ? ({ ...e, awaited: false } as Expr) : e;
 
-// every name node in a value, rewritten; anything else copied as it is
-const renamed = <T,>(value: T, f: (e: Expr & { kind: "name" }) => Expr): T => {
-  if (Array.isArray(value)) return value.map((v) => renamed(v, f)) as T;
+// a node and everything under it, rebuilt from the leaves up; anything not an expression copied as it is
+const rebuilt = <T,>(value: T, f: (e: Expr) => Expr): T => {
+  if (Array.isArray(value)) return value.map((v) => rebuilt(v, f)) as T;
   if (!value || typeof value !== "object" || value instanceof Map) return value;
   const copy = Object.fromEntries(
-    Object.entries(value).map(([k, v]) => [k, renamed(v, f)]),
+    Object.entries(value).map(([k, v]) => [k, rebuilt(v, f)]),
   ) as T;
-  return (copy as { kind?: string }).kind === "name"
-    ? (f(copy as Expr & { kind: "name" }) as T)
+  return typeof (copy as { kind?: unknown }).kind === "string"
+    ? (f(copy as Expr) as T)
     : copy;
 };
 
+const aliasName = (e: Expr) =>
+  e.kind === "name" && !e.imported ? e.name : null;
+
 /**
  * Where each alias of an async call is awaited, once the test's body is known.
- * Where it is declared, as any alias's value is had there: the calls after it
- * never overlap it. The one exception is an alias declared on its own effect
- * just before an `AdvanceTimers`, whose time it waits on: that one is started
- * there, and awaited at each use after the time has moved.
+ * Lowering awaits every alias where it is declared, as any alias's value is had
+ * there, so the calls after it never overlap it, and a test with nothing to
+ * start is returned as it was lowered. The one exception is an alias declared
+ * on its own effect just before an `AdvanceTimers`, whose time it waits on:
+ * that one is started there, and awaited at each use after the time has moved.
+ * It takes with it the alias it names or catches (`AA = A`, `E = Caught<A>`),
+ * which is that same call; an alias handed to it as an argument is had before
+ * the call begins, so it is not started.
  */
 export function settled(t: TestCase): TestCase {
-  const before = placed(t);
-  const starts = new Set(
-    t.bindings
-      .filter((b) => {
-        if (b.params || !startable(b.value)) return false;
-        const i = before.findIndex((list) => list.includes(b));
-        const [at, next] = [t.body[i], t.body[i + 1]];
-        return (
-          at?.kind === "effect" &&
-          at.expr.kind === "name" &&
-          at.expr.name === b.name &&
-          next?.kind === "effect" &&
-          next.expr.kind === "advanceTimers"
-        );
-      })
-      .map((b) => b.name),
+  const byName = new Map(
+    t.bindings.filter((b) => !b.params).map((b) => [b.name, b]),
   );
+  // what an alias stands for as a whole: the alias it names, or the one it catches
+  const wrapped = (b: Binding) => {
+    const name =
+      aliasName(b.value) ??
+      (b.value.kind === "caught" ? aliasName(b.value.inner) : null);
+    return name === null ? undefined : byName.get(name);
+  };
+  const isAsync = (b: Binding | undefined, seen = new Set<Binding>()): boolean =>
+    !!b &&
+    !seen.has(b) &&
+    (startable(b.value) || isAsync(wrapped(b), seen.add(b)));
+  const starts = new Set<string>();
+  const start = (b: Binding | undefined) => {
+    if (!b || starts.has(b.name) || !isAsync(b)) return;
+    starts.add(b.name);
+    start(wrapped(b));
+  };
+  const before = placed(t);
+  for (const b of byName.values()) {
+    const i = before.findIndex((list) => list.includes(b));
+    const [at, next] = [t.body[i], t.body[i + 1]];
+    if (
+      at?.kind === "effect" &&
+      aliasName(at.expr) === b.name &&
+      next?.kind === "effect" &&
+      next.expr.kind === "advanceTimers"
+    )
+      start(b);
+  }
+  if (!starts.size) return t;
+  // the started aliases' names are awaited at each use, and what awaits because of them is recomputed
+  const generic = new Map<string, boolean>();
   const settle = <T,>(value: T) =>
-    renamed(value, (e) => {
-      if (!e.awaited || starts.has(e.name)) return e;
-      const { awaited: _, ...name } = e;
-      return name;
+    rebuilt(value, (e) => {
+      const name = aliasName(e);
+      if (name !== null && starts.has(name)) return { ...e, awaited: true };
+      if (e.kind === "caught") return { ...e, awaited: awaits(e.inner) };
+      const callee = e.kind === "call" ? aliasName(e.callee) : null;
+      return e.kind === "call" && callee !== null && generic.has(callee)
+        ? { ...e, awaited: generic.get(callee)! }
+        : e;
     });
-  return {
-    ...t,
-    bindings: t.bindings.map((b) => ({
+  // in order, so an alias is settled before the ones that use it
+  const bindings = t.bindings.map((b) => {
+    const settledBinding = {
       ...settle(b),
       ...(starts.has(b.name) ? { started: true } : {}),
-    })),
+    };
+    if (b.params) generic.set(b.name, awaits(settledBinding.value));
+    return settledBinding;
+  });
+  return {
+    ...t,
+    bindings,
     body: settle(t.body),
     setup: settle(t.setup),
   };

@@ -373,6 +373,10 @@ await vi.advanceTimersByTimeAsync(1_000);
 const actual = await Sent;
 ```
 
+An alias started so takes with it the alias it names or catches (`AA = A`,
+`E = Caught<A>`), since that is the same call; an alias handed to it as an
+argument is had before the call begins, awaited where it is declared.
+
 So, under fake time, write the call, then the `AdvanceTimers` that moves the
 time it waits on, then what you expect of it. A rejection while the time moves
 is not an unhandled one: a `Throws` after it sees it.

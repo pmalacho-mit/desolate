@@ -1,7 +1,7 @@
 import ts from "@typescript/typescript6";
 
 import { isFirstPartySpecifier } from "../fork.mts";
-import { awaits, settled, startable } from "./ir.mts";
+import { awaits, settled } from "./ir.mts";
 import { isCondition } from "./print.mts";
 
 import { docTextOf, tagsIn, tagsOf } from "./declarations.mts";
@@ -579,12 +579,7 @@ function lowerReference(cx: EmitContext, node: ts.TypeReferenceNode): Expr {
     !isIntrinsic(declaration)
   ) {
     const binding = register(cx, target, declaration);
-    // an alias of an async call names the call: started where it is declared, awaited at each use
-    const name: Expr = {
-      kind: "name",
-      name: binding.name,
-      ...(!binding.params && startable(binding.value) ? { awaited: true } : {}),
-    };
+    const name: Expr = { kind: "name", name: binding.name };
     return binding.params
       ? {
           kind: "call",
