@@ -880,8 +880,8 @@ export type FakeTimers<Now extends string | number | undefined = undefined> =
 /**
  * Move fake time forward, running every timer that falls due, as one of a
  * `Given`'s effects. Needs `FakeTimers`. It runs while the effect just before
- * it waits: an async call written there is started, the time moved, and only
- * then is the call awaited (an alias at each use after it).
+ * it waits: an async call written there (or an alias of one) is started, the
+ * time moved, and only then is the call awaited.
  *
  * ```ts
  * export type Fires = Given<[FakeTimers, Invoke<typeof later, [run: Run]>, AdvanceTimers<1_000>], Expect<Calls<Run>, "isNotEmpty">>;

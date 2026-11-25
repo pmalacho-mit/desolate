@@ -345,16 +345,12 @@ run before any alias is declared, so `StubEnv<"HOME", Home>` with an alias
 `Home` fails with a ReferenceError. Write a setup's value inline.
 
 **Async calls, and fake time.** An alias of an async call is awaited where it
-is declared, like any alias's value, so nothing after it runs while it is still
-going; and an effect is awaited before the next one runs. There is one
-exception, for fake time: an `AdvanceTimers` runs _while the effect just before
-it waits_. That effect is started, the time moved, and only then is it awaited,
-before the next statement: by that statement when it uses the alias; waited for
-without throwing when only a later one does, so a later `Throws` still sees a
-rejection; and awaited outright when nothing uses it again, so a rejection fails
-the test there. Without that, a call that waits on a fake timer
-could never finish, because the time that runs the timer would not move until
-it had:
+is declared, like any alias's value, and an effect is awaited before the next
+one runs, so nothing overlaps. The one exception is for fake time: the effect
+just before an `AdvanceTimers` waits on the time it moves, so it is started
+there, the time moved, and only then is it awaited. That effect is an inline
+async call, or an alias of one (through aliases that only name another, or of a
+`Caught` of an inline call) that the test names there first:
 
 ```ts
 declare namespace withRetry {
@@ -369,25 +365,21 @@ declare namespace withRetry {
 ```
 
 ```ts
-const Sent = withRetry(Flaky); // started
-Sent.catch(() => {}); // a rejection meanwhile is the test's to see
+const pending = withRetry(Flaky); // started
+pending.then(undefined, () => {}); // a rejection meanwhile is the test's to see
 await vi.advanceTimersByTimeAsync(1_000);
-const actual = await Sent;
+const Sent = await pending; // the alias, declared where it is next used
+expect(Sent).toEqual({ ok: true });
 ```
 
-An alias started so takes with it the alias it names or catches (`AA = A`,
-`E = Caught<A>`), and any other alias that only names it, since each is that
-same call; an alias handed to it as an argument is had before the call begins,
-awaited where it is declared. A parameterised alias's default cannot wait for
-a started alias (a default may not await), so one that names it is refused:
-the printer says so, and the test fails saying why. An alias that is declared
-or awaited before the effect just ahead of the `AdvanceTimers` (used earlier in
-the test) is not started, and waits on time that has not moved: as before
-there was a way to start it, that test hangs until Vitest's timeout.
-
-So, under fake time, write the call, then the `AdvanceTimers` that moves the
-time it waits on, then what you expect of it. A rejection while the time moves
-is not an unhandled one: a `Throws` after it sees it.
+The alias is then an ordinary value, usable anywhere an alias is. A `Throws` or
+a `Caught` of it checks the started call itself, so a rejection meanwhile is
+what it sees. Before the next statement the call is awaited (or, when only a
+later statement uses it, waited for without throwing, so that one still sees a
+rejection); one that nothing uses again is awaited there, so its rejection fails
+the test. An effect before an `AdvanceTimers` that waits but is not that shape
+(an alias used earlier in the test, a `Caught` of an alias) is said where it is
+written: it would be awaited before the time moves, and hang.
 
 Outside that shape an alias of a call that throws (or rejects) throws where it
 is declared, so `Throws<Boom>` with `type Boom = Invoke<typeof boom>` fails the

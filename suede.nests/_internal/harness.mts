@@ -370,6 +370,22 @@ export const aStore = () => {
   };
 };
 
+/** `value`, after a timer of `ms` set when it is made, as a thenable with no `catch` (a `PromiseLike`). */
+export const aThenable = (ms: number, value: string): PromiseLike<string> => {
+  const waiting: ((value: string) => void)[] = [];
+  let done = false;
+  setTimeout(() => {
+    done = true;
+    waiting.splice(0).forEach((ok) => ok(value));
+  }, ms);
+  return {
+    then: (ok?: ((value: string) => unknown) | null) => {
+      if (ok) done ? ok(value) : waiting.push(ok);
+      return undefined as never;
+    },
+  };
+};
+
 /** A rejection with `message`, after a timer of `ms`. */
 export const failsLater = async (ms: number, message: string): Promise<never> => {
   await later(ms, "");

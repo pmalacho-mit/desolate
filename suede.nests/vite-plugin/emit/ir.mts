@@ -8,13 +8,13 @@ export type Expr =
   | { kind: "array"; elements: Expr[] }
   | { kind: "object"; entries: [key: string, value: Expr][] }
   // `imported`: a value the test imports as a type (a harness function), re-imported to run
-  // `awaited`: an alias of an async call started before an AdvanceTimers (`settled`): each use awaits it.
-  // Lowering never sets it, so a test with nothing started is as lowered
+  // `pending`: a Throws' or a Caught's subject that is an alias started before an AdvanceTimers
+  // (`settled`): it checks that started call, `await <pending>`, not the alias's answer
   | {
       kind: "name";
       name: string;
       imported?: { from: string; name: string };
-      awaited?: boolean;
+      pending?: string;
     }
   // awaited only when what it returns is thenable
   // `labels`: what each argument is, as the tuple names it or else the parameter
@@ -100,8 +100,13 @@ export type Assertion = {
   display: { page: string; meta: Expr | null } | null;
 };
 
-// the `Given` half of a test
-export type Effect = { kind: "effect"; expr: Expr };
+// the `Given` half of a test; `start`: run just before an AdvanceTimers, `call` is
+// started under `name` and awaited once the time has moved (`settled`)
+export type Effect = {
+  kind: "effect";
+  expr: Expr;
+  start?: { name: string; call: Expr };
+};
 
 export type Statement = (Assertion | Effect) & { line: number | null };
 
@@ -116,8 +121,8 @@ export type Param = {
 // a user alias the test reaches: a `const`, or an arrow when generic
 export type Binding = {
   name: string;
-  // an alias of an async call started and not awaited where it is declared (`settled`)
-  started?: boolean;
+  // its call was started before an AdvanceTimers under this name: declared `await <pending>`
+  pending?: string;
   params: Param[] | null;
   // `Fixture<T, …>` keeps `T`
   annotation: string | null;
@@ -212,26 +217,26 @@ export const some = (e: Expr, test: (e: Expr) => boolean): boolean =>
 
 // every node that prints `await` says so where it is lowered
 export const awaits = (e: Expr): boolean =>
-  some(e, (n) => "awaited" in n && !!n.awaited);
+  some(
+    e,
+    (n) => ("awaited" in n && !!n.awaited) || (n.kind === "name" && !!n.pending),
+  );
 
-/** Awaited as a whole, so it can be started now and awaited later: an async call, or an alias of one. */
+/** Awaited as a whole, so it can be started now and awaited later: an async call, or a Caught of one. */
 export const startable = (e: Expr): boolean =>
-  (e.kind === "call" ||
-    e.kind === "method" ||
-    e.kind === "caught" ||
-    e.kind === "name") &&
+  (e.kind === "call" || e.kind === "method" || e.kind === "caught") &&
   !!e.awaited;
 
 /** The same expression, started and not awaited. */
 export const started = (e: Expr): Expr =>
   startable(e) ? ({ ...e, awaited: false } as Expr) : e;
 
-// a node and everything under it, rebuilt from the leaves up; anything not an expression copied as it is
-const rebuilt = <T,>(value: T, f: (e: Expr) => Expr): T => {
-  if (Array.isArray(value)) return value.map((v) => rebuilt(v, f)) as T;
+// every expression in a value, rewritten from the leaves up; anything else copied as it is
+const rewritten = <T,>(value: T, f: (e: Expr) => Expr): T => {
+  if (Array.isArray(value)) return value.map((v) => rewritten(v, f)) as T;
   if (!value || typeof value !== "object" || value instanceof Map) return value;
   const copy = Object.fromEntries(
-    Object.entries(value).map(([k, v]) => [k, rebuilt(v, f)]),
+    Object.entries(value).map(([k, v]) => [k, rewritten(v, f)]),
   ) as T;
   return typeof (copy as { kind?: unknown }).kind === "string"
     ? (f(copy as Expr) as T)
@@ -239,121 +244,135 @@ const rebuilt = <T,>(value: T, f: (e: Expr) => Expr): T => {
 };
 
 const aliasName = (e: Expr) =>
-  e.kind === "name" && !e.imported ? e.name : null;
+  e.kind === "name" && !e.imported && !e.pending ? e.name : null;
 
-/** What a refused default says when the test runs, and the printer where it is written. */
-export const DEFAULT_WAITS = (param: string) =>
-  `the default of ${param} names an alias started before an AdvanceTimers, which a default cannot wait for: pass it where the alias with ${param} is used`;
-
-/** Every alias in the test started for an AdvanceTimers, with the ones that only name it: one promise each. */
-export const startedGroups = (t: TestCase): Map<string, Set<string>> => {
-  const started = t.bindings.filter((b) => b.started);
-  const group = new Map(started.map((b) => [b.name, new Set([b.name])]));
-  for (const b of started) {
-    const named = aliasName(b.value);
-    const other = named === null ? undefined : group.get(named);
-    if (!other) continue;
-    const merged = new Set([...group.get(b.name)!, ...other]);
-    for (const n of merged) group.set(n, merged);
-  }
-  return group;
-};
+const isAdvance = (s: Statement | undefined) =>
+  s?.kind === "effect" && s.expr.kind === "advanceTimers";
 
 /**
- * Where each alias of an async call is awaited, once the test's body is known.
- * Lowering awaits every alias where it is declared, as any alias's value is had
- * there, so the calls after it never overlap it, and a test with nothing to
- * start is returned as it was lowered. The one exception is an alias declared
- * on its own effect just before an `AdvanceTimers`, whose time it waits on:
- * that one is started there, and awaited at each use after the time has moved.
- * It takes with it the alias it names or catches (`AA = A`, `E = Caught<A>`),
- * which is that same call; an alias handed to it as an argument is had before
- * the call begins, so it is not started.
+ * The effects started for fake time, once the test's body is known. An effect
+ * is awaited before the next one runs, but one just before an `AdvanceTimers`
+ * waits on the time that moves, so it is started there and awaited once the
+ * time has moved: an inline async call, or an alias that is (through aliases
+ * that only name another) one of an async call or of a `Caught` of one, when
+ * none of those aliases is declared before the effect. Such an alias is then
+ * declared as `await <pending>` where it is next used, like any alias, and a
+ * `Throws` or `Caught` of it checks the started call itself. A test with
+ * nothing to start is returned as it was lowered.
  */
 export function settled(t: TestCase): TestCase {
+  if (!t.body.some((s, i) => isAdvance(t.body[i + 1]) && !isAdvance(s)))
+    return t;
   const byName = new Map(
     t.bindings.filter((b) => !b.params).map((b) => [b.name, b]),
   );
-  // what an alias stands for as a whole: the alias it names, or the one it catches
-  const wrapped = (b: Binding) => {
-    const name =
-      aliasName(b.value) ??
-      (b.value.kind === "caught" ? aliasName(b.value.inner) : null);
-    return name === null ? undefined : byName.get(name);
-  };
-  const isAsync = (b: Binding | undefined, seen = new Set<Binding>()): boolean =>
-    !!b &&
-    !seen.has(b) &&
-    (startable(b.value) || isAsync(wrapped(b), seen.add(b)));
-  const starts = new Set<string>();
-  const start = (b: Binding | undefined) => {
-    if (!b || starts.has(b.name) || !isAsync(b)) return;
-    starts.add(b.name);
-    start(wrapped(b));
+  const taken = new Set(namesIn(t));
+  const fresh = () => {
+    let name = "pending";
+    for (let n = 2; taken.has(name); n++) name = `pending${n}`;
+    taken.add(name);
+    return name;
   };
   const before = placed(t);
-  for (const b of byName.values()) {
-    const i = before.findIndex((list) => list.includes(b));
-    const [at, next] = [t.body[i], t.body[i + 1]];
-    if (
-      at?.kind === "effect" &&
-      aliasName(at.expr) === b.name &&
-      next?.kind === "effect" &&
-      next.expr.kind === "advanceTimers"
-    )
-      start(b);
-  }
-  if (!starts.size) return t;
-  // an alias that only names a started one is that same call, started with it
-  for (let grew = true; grew; ) {
-    grew = false;
-    for (const b of byName.values()) {
-      const named = aliasName(b.value);
-      if (!starts.has(b.name) && named !== null && starts.has(named)) {
-        starts.add(b.name);
-        grew = true;
-      }
+  let body = [...t.body];
+  let bindings = [...t.bindings];
+  const chains: Binding[] = [];
+  for (let i = 0; i < body.length; i++) {
+    const s = body[i]!;
+    if (s.kind !== "effect" || isAdvance(s) || !isAdvance(body[i + 1])) continue;
+    if (startable(s.expr)) {
+      body[i] = { ...s, start: { name: fresh(), call: s.expr } };
+      continue;
     }
-  }
-  // the started aliases' names are awaited at each use, and what awaits because of them is recomputed
-  const generic = new Map<string, boolean>();
-  const settle = <T,>(value: T, own: Set<string> = new Set()) =>
-    rebuilt(value, (e) => {
-      const name = aliasName(e);
-      // a binding's own parameter is not the alias it shadows
-      if (name !== null && starts.has(name) && !own.has(name))
-        return { ...e, awaited: true };
-      if (e.kind === "caught") return { ...e, awaited: awaits(e.inner) };
-      const callee = e.kind === "call" ? aliasName(e.callee) : null;
-      return e.kind === "call" && callee !== null && generic.has(callee)
-        ? { ...e, awaited: generic.get(callee)! }
+    const chain: Binding[] = [];
+    for (
+      let b = byName.get(aliasName(s.expr) ?? "");
+      b && !chain.includes(b);
+      b = byName.get(aliasName(b.value) ?? "")
+    )
+      chain.push(b);
+    const root = chain.at(-1);
+    const call = root?.value;
+    if (
+      !root ||
+      !call ||
+      aliasName(call) !== null ||
+      !startable(call) ||
+      (call.kind === "caught" && aliasName(call.inner) !== null) ||
+      chain.some((b) => !before[i]!.includes(b))
+    )
+      continue;
+    const name = fresh();
+    body[i] = { ...s, start: { name, call } };
+    bindings = bindings.map((b) => (b === root ? { ...b, pending: name } : b));
+    chains.push(...chain);
+    if (call.kind === "caught") continue;
+    // a Throws or a Caught of the alias checks the started call itself
+    const aliases = new Set(chain.map((b) => b.name));
+    const checked = (e: Expr): Expr =>
+      e.kind === "name" && aliases.has(aliasName(e) ?? "")
+        ? { ...e, pending: name }
         : e;
-    });
-  // a parameter's default cannot wait for a call (an arrow's default may not
-  // await), so one that names a started alias is refused where the test runs
-  const defaulted = (p: Param): Param =>
-    p.fallback &&
-    some(p.fallback, (e) => aliasName(e) !== null && starts.has(aliasName(e)!))
-      ? { ...p, fallback: { kind: "unsupported", source: DEFAULT_WAITS(p.name) } }
-      : p;
-  // in order, so an alias is settled before the ones that use it
-  const bindings = t.bindings.map((b) => {
-    const settledBinding: Binding = {
-      ...b,
-      params: b.params?.map(defaulted) ?? null,
-      value: settle(b.value, new Set(b.params?.map((p) => p.name))),
-      ...(starts.has(b.name) ? { started: true } : {}),
-    };
-    if (b.params) generic.set(b.name, awaits(settledBinding.value));
-    return settledBinding;
-  });
-  return {
-    ...t,
-    bindings,
-    body: settle(t.body),
-    setup: settle(t.setup),
-  };
+    body = body.map((st) =>
+      st.kind === "assert" && st.condition === "throws"
+        ? { ...st, actual: checked(st.actual) }
+        : st,
+    );
+    const caught = <T,>(value: T) =>
+      rewritten(value, (e) =>
+        e.kind === "caught" && aliasName(e.inner) !== null && aliases.has(aliasName(e.inner)!)
+          ? { ...e, inner: checked(e.inner), awaited: true }
+          : e,
+      );
+    body = caught(body);
+    bindings = bindings.map((b) =>
+      aliases.has(b.name) ? b : { ...b, value: caught(b.value) },
+    );
+  }
+  if (body.every((s, i) => s === t.body[i])) return t;
+  // an alias of a started call that nothing after it reaches is not declared at all
+  for (let dropped = true; dropped; ) {
+    const kept = { ...t, body, bindings };
+    const used = new Set(namesReached(kept));
+    const count = bindings.length;
+    bindings = bindings.filter(
+      (b) => !chains.some((c) => c.name === b.name) || used.has(b.name),
+    );
+    dropped = bindings.length < count;
+  }
+  return { ...t, body, bindings };
 }
+
+/** Every name a test refers to, its own aliases and their parameters included. */
+export const namesIn = (t: TestCase): string[] => {
+  const found: string[] = [];
+  const walk = (e: Expr): void => {
+    if (e.kind === "name") found.push(e.name.split(".")[0]!);
+    children(e).forEach(walk);
+  };
+  for (const b of t.bindings) {
+    found.push(b.name);
+    b.params?.forEach((p) => found.push(p.name));
+  }
+  exprsOfTest(t).forEach(walk);
+  return found;
+};
+
+// the aliases a statement or another alias uses: a started alias's own value is the started call's
+const namesReached = (t: TestCase) => {
+  const found: string[] = [];
+  const walk = (e: Expr) =>
+    some(e, (n) => {
+      const name = aliasName(n);
+      if (name !== null) found.push(name);
+      return false;
+    });
+  t.body.forEach((s) => exprsOf(s).forEach(walk));
+  t.bindings.forEach((b) => {
+    if (!b.pending) dependencies(b).forEach(walk);
+  });
+  return found;
+};
 
 /** What each DSL value is called where a test writes it, and what its printed form needs. */
 export const DSL_KINDS: Partial<
@@ -397,19 +416,20 @@ export const exprsOfTest = (t: TestCase): Expr[] => [
  */
 export function placed(t: TestCase): Binding[][] {
   const at = new Map<Binding, number>();
-  const valuesOf = (b: Binding) => [
-    ...(b.params ?? []).flatMap((p) => (p.fallback ? [p.fallback] : [])),
-    b.value,
-  ];
+
   // dependencies come first in `bindings`, so every dependent is placed before them
   for (let k = t.bindings.length - 1; k >= 0; k--) {
     const b = t.bindings[k]!;
     const uses = (e: Expr) =>
-      some(e, (n) => n.kind === "name" && !n.imported && n.name === b.name);
+      some(
+        e,
+        (n) =>
+          n.kind === "name" && !n.imported && !n.pending && n.name === b.name,
+      );
     const first = t.body.findIndex((s) => exprsOf(s).some(uses));
     let position = first < 0 ? Infinity : first;
     for (const later of t.bindings.slice(k + 1))
-      if (valuesOf(later).some(uses))
+      if (dependencies(later).some(uses))
         position = Math.min(position, at.get(later)!);
     at.set(b, position);
   }
@@ -424,9 +444,18 @@ export function placed(t: TestCase): Binding[][] {
   return out;
 }
 
+// what an alias's declaration evaluates: a started one's is the started call, evaluated before it
+const dependencies = (b: Binding): Expr[] =>
+  b.pending
+    ? []
+    : [
+        ...(b.params ?? []).flatMap((p) => (p.fallback ? [p.fallback] : [])),
+        b.value,
+      ];
+
 export const exprsOf = (s: Statement): Expr[] =>
   s.kind === "effect"
-    ? [s.expr]
+    ? [s.start?.call ?? s.expr]
     : [
         s.actual,
         ...(s.expected ? [s.expected] : []),

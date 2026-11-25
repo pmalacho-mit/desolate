@@ -477,7 +477,16 @@ export const claimLines = (t: TestCase, lookup: Lookup = () => null) =>
 export function shorthand(t: TestCase, lookup: Lookup = () => null): string[] {
   if (t.mode === "test.todo") return [];
   const at = (render: (scope: Scope) => string) => line(lookup, render);
-  const before = placed(t);
+  // where each alias is written, a started one with the effect that starts it
+  const before = placed({
+    ...t,
+    body: t.body.map((s) => {
+      if (s.kind !== "effect" || !s.start) return s;
+      const { start: _, ...written } = s;
+      return written;
+    }),
+    bindings: t.bindings.map(({ pending: _, ...b }) => b),
+  });
   const body: Line[] = [];
   let effects: Line[] = [];
   let checked = false;

@@ -1,13 +1,7 @@
 import ts from "@typescript/typescript6";
 
 import { isFirstPartySpecifier } from "../fork.mts";
-import {
-  awaits,
-  children,
-  DEFAULT_WAITS,
-  exprsOfTest,
-  settled,
-} from "./ir.mts";
+import { awaits, children, exprsOfTest, settled } from "./ir.mts";
 import { isCondition } from "./print.mts";
 
 import { docTextOf, tagsIn, tagsOf } from "./declarations.mts";
@@ -935,10 +929,9 @@ declare namespace throwsAtDeclaration {
       export type Literal = Throws<One, "no">;
       export type Parameterised = Throws<Later, "no">;
       type Named = Boom;
-      type Held = Caught<Boom>;
       export type NamesStarted = Given<
-        [FakeTimers, Held, AdvanceTimers<5>],
-        [Expect<Held, "matches", {}>, Throws<Named, "no">]
+        [FakeTimers, Named, AdvanceTimers<5>],
+        [Expect<1, "=", 1>, Throws<Named, "no">]
       >;
     }
   `;
@@ -1441,21 +1434,41 @@ export function lowerAlias(
   const cases = casesOf(cx, decl, path).map(settled);
   for (const name of new Set(cases.flatMap(throwsAtDeclaration)))
     cx.warn(decl, THROWS_ALIAS(name));
-  for (const why of new Set(
-    cases.flatMap((t) =>
-      t.bindings.flatMap((b) =>
-        (b.params ?? []).flatMap((p) =>
-          p.fallback?.kind === "unsupported" &&
-          p.fallback.source === DEFAULT_WAITS(p.name)
-            ? [`\`${b.name}\`: ${p.fallback.source}`]
-            : [],
-        ),
-      ),
-    ),
-  ))
-    cx.warn(decl, why);
+  for (const name of new Set(cases.flatMap(unstarted)))
+    cx.warn(decl, UNSTARTED(name));
   return cases;
 }
+
+// an effect just before an AdvanceTimers that waits, yet is not one `settled` could start:
+// it is awaited before the time it waits on moves, and the test hangs
+const unstarted = (t: TestCase) => {
+  const byName = new Map(t.bindings.map((b) => [b.name, b]));
+  return t.body.flatMap((s, i) => {
+    const next = t.body[i + 1];
+    if (
+      s.kind !== "effect" ||
+      s.start ||
+      s.expr.kind !== "name" ||
+      next?.kind !== "effect" ||
+      next.expr.kind !== "advanceTimers"
+    )
+      return [];
+    return waits(s.expr.name) ? [written(s.expr.name)] : [];
+  });
+  // through the aliases it names or catches, to an async call had where it is declared
+  function waits(name: string, seen = new Set<string>()): boolean {
+    const b = byName.get(name);
+    if (!b || b.pending || seen.has(name)) return false;
+    seen.add(name);
+    const v = b.value;
+    const named =
+      v.kind === "name" ? v : v.kind === "caught" && v.inner.kind === "name" ? v.inner : null;
+    return awaits(v) || (!!named && !named.pending && waits(named.name, seen));
+  }
+};
+
+const UNSTARTED = (name: string) =>
+  `\`${name}\` waits on the time the AdvanceTimers after it moves, but is awaited before it: only an alias of an async call (or of a Caught of one, written inline), named here first, is started there. Write the call inline in the alias, or inline here`;
 
 // `Throws<Boom>` or `Caught<Boom>` with `type Boom = Invoke<…>` (or an alias of it): the call
 // runs where Boom is declared, before either can check it
@@ -1463,12 +1476,14 @@ const throwsAtDeclaration = (t: TestCase) => {
   const byName = new Map(
     t.bindings.filter((b) => !b.params).map((b) => [b.name, b]),
   );
-  const nameOf = (e: Expr) => (e.kind === "name" && !e.imported ? e.name : null);
+  // a subject that checks a started call (`pending`) is not one had where it is declared
+  const nameOf = (e: Expr) =>
+    e.kind === "name" && !e.imported && !e.pending ? e.name : null;
   // through aliases of aliases, to an alias of a call that is had where it is declared
   const callAt = (name: string | null) => {
     const seen = new Set<string>();
     for (let b = name === null ? undefined : byName.get(name); b; ) {
-      if (seen.has(b.name) || b.started) return false;
+      if (seen.has(b.name)) return false;
       seen.add(b.name);
       const next = nameOf(b.value);
       if (next === null)

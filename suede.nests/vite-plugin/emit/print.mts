@@ -8,11 +8,10 @@ import {
   DSL_KINDS,
   exprsOf,
   exprsOfTest,
+  namesIn,
   placed,
   some,
-  startable,
   started,
-  startedGroups,
 } from "./ir.mts";
 
 import type { Assertion as VitestAssertion } from "vitest";
@@ -43,6 +42,7 @@ import type {
 } from "../../dsl.import.meta.vitest.ts";
 import type {
   aStore,
+  aThenable,
   failsLater,
   later,
   moduleWarnings,
@@ -80,7 +80,7 @@ export function printExpr(e: Expr): string {
         ? `{ ${e.entries.map(([k, v]) => `${propKey(k)}: ${printExpr(v)}`).join(", ")} }`
         : "{}";
     case "name":
-      return `${e.awaited ? "await " : ""}${e.name}`;
+      return e.pending ? `await ${e.pending}` : e.name;
     case "call":
       return `${e.awaited ? "await " : ""}${receiver(e.callee)}(${list(e.args)})`;
     case "construct":
@@ -559,19 +559,7 @@ export const names = (taken: Iterable<string>): Names => {
   };
 };
 
-export const namesIn = (t: TestCase): string[] => {
-  const found: string[] = [];
-  const walk = (e: Expr): void => {
-    if (e.kind === "name") found.push(e.name.split(".")[0]!);
-    children(e).forEach(walk);
-  };
-  for (const b of t.bindings) {
-    found.push(b.name);
-    b.params?.forEach((p) => found.push(p.name));
-  }
-  exprsOfTest(t).forEach(walk);
-  return found;
-};
+export { namesIn };
 
 // first in the test, so nothing the test does runs without them, and each undone when it ends
 export const printSetup = (setup: Setup[]): Line[] => {
@@ -692,49 +680,31 @@ export const printStatement = (
 const isAdvance = (s: Statement | undefined) =>
   s?.kind === "effect" && s.expr.kind === "advanceTimers";
 
-// whether a statement, or an alias declared just before it, names any of `names`
-// (a parameterised alias's own parameter is not the alias it shadows)
-const usesAny = (s: Statement, bindings: Binding[], names: Set<string>) => {
-  const named = (e: Expr, own: Param[] = []) =>
-    some(
-      e,
-      (n) =>
-        n.kind === "name" &&
-        names.has(n.name) &&
-        !own.some((p) => p.name === n.name),
-    );
-  return (
-    exprsOf(s).some((e) => named(e)) ||
-    bindings.some((b) => named(b.value, b.params ?? []))
-  );
-};
+// where the alias of a started call is declared, or a Throws or a Caught checks the call
+const reaches = (s: Statement, bindings: Binding[], pending: string) =>
+  bindings.some((b) => b.pending === pending) ||
+  exprsOf(s).some((e) => some(e, (n) => n.kind === "name" && n.pending === pending));
 
 /**
  * One scope across the body; ordinals only when there are several to tell apart.
- * `before[i]` are the aliases declared just before the `i`th statement, and
- * `groups` each started alias with the ones that only name it (one promise).
+ * `before[i]` are the aliases declared just before the `i`th statement.
  *
- * An effect is awaited before the next one runs, except that an `AdvanceTimers`
- * runs while the effect before it waits: that effect is started, the time
- * moved, and only then is it awaited, before the next statement. A call that
- * waits on a fake timer could never finish before the time that runs it had
- * moved. A started alias the next statement uses is awaited by it; one a later
- * statement uses is waited for without throwing (`await X.catch(…)`), so the
- * later Throws or Caught still sees a rejection; one nothing uses again is
- * awaited, so a rejection fails the test there.
+ * An effect `settled` started, just before an AdvanceTimers, is started under
+ * its name and guarded, and once the time has moved it is owed, before the next
+ * statement: an inline call is awaited; a started alias is awaited by the
+ * statement that declares or checks it, waited for without throwing when a
+ * later one does (so that one sees a rejection), and awaited when none does.
  */
 export function printBody(
   body: Statement[],
   scope = names([]),
   before: Binding[][] = [],
-  groups: Map<string, Set<string>> = new Map(),
 ): Line[][] {
   const assertions = body.filter((s) => s.kind === "assert").length;
   let asserted = 0;
-  // started before an AdvanceTimers and not yet awaited: an alias, or an inline call's `pending`
   let waiting: { name: string; alias: boolean }[] = [];
-  const uses = (j: number, name: string) =>
-    usesAny(body[j]!, before[j] ?? [], groups.get(name) ?? new Set([name]));
+  const reached = (j: number, name: string) =>
+    reaches(body[j]!, before[j] ?? [], name);
   const out = body.map((s, i): Line[] => {
     const at = (code: string): Line => ({ code, line: s.line });
     const owed = isAdvance(s)
@@ -742,28 +712,24 @@ export function printBody(
       : waiting.splice(0).flatMap(({ name, alias }) =>
           !alias
             ? [`await ${name};`]
-            : uses(i, name)
+            : reached(i, name)
               ? []
-              : body.some((_, j) => j > i && uses(j, name))
-                ? [`await ${name}.catch(() => {});`]
+              : body.some((_, j) => j > i && reached(j, name))
+                ? [`await ${name}.then(undefined, () => {});`]
                 : [`await ${name};`],
         );
     const lines = [
       ...owed.map(at),
       ...(before[i] ?? []).map((b) => ({ code: printBinding(b), line: b.line })),
     ];
-    if (s.kind === "effect" && isAdvance(body[i + 1]) && startable(s.expr)) {
-      // a rejection while the time moves is the test's to see, not an unhandled one
-      if (s.expr.kind === "name") {
-        waiting.push({ name: s.expr.name, alias: true });
-        return [...lines, at(`${s.expr.name}.catch(() => {});`)];
-      }
-      const name = scope.take("pending");
-      waiting.push({ name, alias: false });
+    if (s.kind === "effect" && s.start) {
+      const { name, call } = s.start;
+      waiting.push({ name, alias: s.expr.kind === "name" });
+      // a rejection while the time moves is the test's to see; `then`, since a thenable may have no `catch`
       return [
         ...lines,
-        at(`const ${name} = ${printExpr(started(s.expr))};`),
-        at(`${name}.catch(() => {});`),
+        at(`const ${name} = ${printExpr(started(call))};`),
+        at(`${name}.then(undefined, () => {});`),
       ];
     }
     return [
@@ -798,21 +764,22 @@ declare namespace printBody {
   `;
 
   /**
-   * an async alias followed by AdvanceTimers is started, the time moved, then
-   * awaited where it is used: it was awaited where it was declared, before the
-   * time that would finish it could move, and the test hung
+   * an alias of an async call written just before an AdvanceTimers is started
+   * there under \`pending\`, the time moved, and the alias declared as the
+   * awaited call where it is next used, a plain value: it was awaited where it
+   * was declared, before the time that would finish it could move, and hung
    */
   export type StartedThenAwaited = Expect<
     Invoke<typeof printAlias, [Later, "Named"]>,
     "=",
-    'test("later > Named", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Waited = later(1000);\n  Waited.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1_000);\n  const actual = await Waited;\n  const expected = "done";\n  expect(actual).toEqual(expected);\n});'
+    'test("later > Named", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(1000);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(1_000);\n  const Waited = await pending;\n  const expected = "done";\n  expect(Waited).toEqual(expected);\n});'
   >;
 
   /** an inline one the same, awaited as soon as the time has moved */
   export type InlineToo = Expect<
     Invoke<typeof printAlias, [Later, "Inline"]>,
     "startsWith",
-    'test("later > Inline", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending;\n'
+    'test("later > Inline", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending;\n'
   >;
 
   /** @control without an AdvanceTimers after it, an async effect is awaited before the next one runs */
@@ -901,7 +868,7 @@ declare namespace printBody {
     Expect<
       Invoke<typeof printAlias, [Caught_, "Inline"]>,
       "includes",
-      'const pending = nt.caught(async () => (await failsLater(10, "x")), "Invoke<typeof failsLater, [ms: 10, message: \\"x\\"]>");\n  pending.catch(() => {});'
+      'const pending = nt.caught(async () => (await failsLater(10, "x")), "Invoke<typeof failsLater, [ms: 10, message: \\"x\\"]>");\n  pending.then(undefined, () => {});'
     >,
   ];
 
@@ -966,20 +933,19 @@ declare namespace printBody {
   `;
 
   /**
-   * an alias started before an AdvanceTimers takes the alias it names or
-   * catches with it: that is the same call (A was awaited before the time
-   * moved, and `.catch` was called on its answer)
+   * an alias that only names the alias of an async call is started with it,
+   * the call under `pending`, and both are declared once the time has moved,
+   * plain values (A was awaited before the time moved). A Caught of an alias
+   * is not a call that can be started: it is said where it is written
    */
   export type StartedWithIt = [
-    Expect<Invoke<typeof printAlias, [Timed, "OfAlias"]>, "=", "test(\"f > OfAlias\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = f(\"a\");\n  const AA = A;\n  AA.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const actual = await AA;\n  const expected = \"a\";\n  expect(actual).toEqual(expected);\n});">,
-    Expect<Invoke<typeof printAlias, [Timed, "OfCaught"]>, "=", "test(\"f > OfCaught\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = f(\"a\");\n  const E = nt.caught(async () => (await A), \"A\");\n  E.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const actual = await E;\n  const expected = {};\n  expect(actual).toMatchObject(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Timed, "OfAlias"]>, "=", "test(\"f > OfAlias\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = f(\"a\");\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const A = await pending;\n  const AA = A;\n  const expected = \"a\";\n  expect(AA).toEqual(expected);\n});">,
+    Expect<Invoke<typeof moduleWarnings, [Timed]>, "=", ["`Caught<A>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught","`E` waits on the time the AdvanceTimers after it moves, but is awaited before it: only an alias of an async call (or of a Caught of one, written inline), named here first, is started there. Write the call inline in the alias, or inline here"]>,
   ];
-
 
   type Waits_ = Invoke<typeof later, [ms: 1000, value: "done"]>;
   type OfWaits = Waits_;
-  type Fails_ = Invoke<typeof failsLater, [ms: 1000, message: "late"]>;
-  type FailsCaught = Caught<Fails_>;
+  type FailsCaught = Caught<Invoke<typeof failsLater, [ms: 1000, message: "late"]>>;
 
   /** run under fake time: an alias of an alias waits on the timer the AdvanceTimers moves */
   export type OfAliasUnderFakeTime = Given<
@@ -987,7 +953,7 @@ declare namespace printBody {
     Expect<OfWaits, "=", "done">
   >;
 
-  /** and a Caught of an alias catches the rejection the moved time brings */
+  /** and an alias of a Caught of the call catches the rejection the moved time brings */
   export type CaughtAliasUnderFakeTime = Given<
     [FakeTimers, FailsCaught, AdvanceTimers<1_000>],
     Expect<FailsCaught, "matches", { message: "late" }>
@@ -1001,68 +967,80 @@ declare namespace printBody {
       type Fails = Invoke<typeof failsLater, [ms: 10, message: "late"]>;
       type Boom = Invoke<typeof boom>;
       type AA = Boom;
-      type E = Caught<Boom>;
       export type Second = Given<[FakeTimers, Fails, AdvanceTimers<10>], [Expect<1, "=", 1>, Throws<Fails, "late">]>;
       export type Between = Given<[FakeTimers, Fails, AdvanceTimers<10>, Invoke<typeof g, ["y"]>], Throws<Fails, "late">>;
       export type Named = Given<[FakeTimers, AA, AdvanceTimers<1>], Throws<Boom, "no">>;
+      export type CaughtOf = Given<[FakeTimers, AA, AdvanceTimers<1>], Expect<Caught<AA>, "matches", { message: "no" }>>;
       export type Unused = Given<[FakeTimers, Fails, AdvanceTimers<10>], Expect<1, "=", 1>>;
-      export type Both = Given<[FakeTimers, E, AdvanceTimers<1>], [Expect<E, "matches", {}>, Throws<AA, "no">]>;
     }
   `;
 
   /**
-   * a started alias that a later statement uses is waited for without
-   * throwing, so the Throws that checks it sees the rejection (it was awaited
-   * bare first, which threw); the alias that only names it is the same promise
+   * once the time has moved, a started call a later statement checks is waited
+   * for without throwing, so that Throws (or Caught) sees the rejection; a
+   * Throws or a Caught of the alias, or of one that only names it, checks the
+   * started call itself
    */
   export type WaitedForThrows = [
-    Expect<Invoke<typeof printAlias, [Owed, "Second"]>, "=", "test(\"failsLater > Second\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Fails = failsLater(10, \"late\");\n  Fails.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await Fails.catch(() => {});\n  const actual1 = 1;\n  const expected1 = 1;\n  expect.soft(actual1).toEqual(expected1);\n  await expect.soft(async () => (await Fails)).rejects.toThrow(\"late\");\n});">,
-    Expect<Invoke<typeof printAlias, [Owed, "Between"]>, "=", "test(\"failsLater > Between\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Fails = failsLater(10, \"late\");\n  Fails.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await Fails.catch(() => {});\n  g(\"y\");\n  await expect(async () => (await Fails)).rejects.toThrow(\"late\");\n});">,
-    Expect<Invoke<typeof printAlias, [Owed, "Named"]>, "=", "test(\"failsLater > Named\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Boom = boom();\n  const AA = Boom;\n  AA.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1);\n  await expect(async () => (await Boom)).rejects.toThrow(\"no\");\n});">,
+    Expect<Invoke<typeof printAlias, [Owed, "Second"]>, "=", "test(\"failsLater > Second\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = failsLater(10, \"late\");\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending.then(undefined, () => {});\n  const actual1 = 1;\n  const expected1 = 1;\n  expect.soft(actual1).toEqual(expected1);\n  await expect.soft(async () => (await pending)).rejects.toThrow(\"late\");\n});">,
+    Expect<Invoke<typeof printAlias, [Owed, "Between"]>, "=", "test(\"failsLater > Between\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = failsLater(10, \"late\");\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending.then(undefined, () => {});\n  g(\"y\");\n  await expect(async () => (await pending)).rejects.toThrow(\"late\");\n});">,
+    Expect<Invoke<typeof printAlias, [Owed, "Named"]>, "=", "test(\"failsLater > Named\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = boom();\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(1);\n  await expect(async () => (await pending)).rejects.toThrow(\"no\");\n});">,
+    Expect<Invoke<typeof printAlias, [Owed, "CaughtOf"]>, "=", "test(\"failsLater > CaughtOf\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = boom();\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const actual = await nt.caught(async () => (await pending), \"AA\");\n  const expected = { message: \"no\" };\n  expect(actual).toMatchObject(expected);\n});">,
   ];
 
   /** @control one nothing uses again is awaited, so its rejection fails the test there */
   export type UnusedAwaited = Expect<
     Invoke<typeof printAlias, [Owed, "Unused"]>,
     "=",
-    "test(\"failsLater > Unused\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Fails = failsLater(10, \"late\");\n  Fails.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await Fails;\n  const actual = 1;\n  const expected = 1;\n  expect(actual).toEqual(expected);\n});"
+    "test(\"failsLater > Unused\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = failsLater(10, \"late\");\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending;\n  const actual = 1;\n  const expected = 1;\n  expect(actual).toEqual(expected);\n});"
   >;
 
-  /**
-   * an alias that only names a started one is the same call, started with it:
-   * a Throws of it sees the rejection (it was awaited where declared, and threw)
-   */
-  export type NamesStarted = Expect<
-    Invoke<typeof printAlias, [Owed, "Both"]>,
-    "=",
-    "test(\"failsLater > Both\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const Boom = boom();\n  const E = nt.caught(async () => (await Boom), \"Boom\");\n  E.catch(() => {});\n  await vi.advanceTimersByTimeAsync(1);\n  const actual1 = await E;\n  const expected1 = {};\n  expect.soft(actual1).toMatchObject(expected1);\n  const AA = Boom;\n  await expect.soft(async () => (await AA)).rejects.toThrow(\"no\");\n});"
-  >;
-
-  type Defaults = `
+  type Shapes = `
     const later = (ms: number): Promise<string> => new Promise((r) => setTimeout(() => r("done"), ms));
+    const sthrow = (x: string): string => { throw Object.assign(new Error("s"), { code: x }); };
     const g = (x: string): string => x + "!";
+    const thenable = (ms: number): PromiseLike<string> => ({ then: (ok: any) => (setTimeout(() => ok("done"), ms), undefined as any) });
     declare namespace later {
       type A = Invoke<typeof later, [ms: 10]>;
       type D<X extends string = A> = Invoke<typeof g, [X]>;
+      type P<Y extends string = "y"> = Invoke<typeof g, [A]>;
+      type DP<X extends string = P> = Invoke<typeof g, [X]>;
       type Sh<A extends string = "x"> = Invoke<typeof g, [A]>;
       type Fx = Fixture<string, A>;
+      type T = Invoke<typeof thenable, [ms: 10]>;
+      export type Message = Given<[FakeTimers, A, AdvanceTimers<10>], Throws<Invoke<typeof sthrow, ["z"]>, { message: A }>>;
+      export type Matches = Given<[FakeTimers, A, AdvanceTimers<10>], Throws<Invoke<typeof sthrow, ["z"]>, { matches: A }>>;
+      export type Field = Given<[FakeTimers, A, AdvanceTimers<10>], Throws<Invoke<typeof sthrow, ["z"]>, { code: A }>>;
       export type AsDefault = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<D, "=", "done!">>;
+      export type Chain = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<DP, "=", "done!!">>;
       export type Shadowed = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<Sh, "=", "x!">>;
       export type UnderFixture = Given<[FakeTimers, Fx, AdvanceTimers<10>], Expect<Fx, "=", "done">>;
+      export type Thenable = Given<[FakeTimers, T, AdvanceTimers<10>], Expect<T, "=", "done">>;
+      export type Credit = Given<[FakeTimers, A, AdvanceTimers<10>], Throws<Invoke<typeof sthrow, [A]>, "s">>;
     }
   `;
 
   /**
-   * a parameter's default that names a started alias is refused where the
-   * test runs, and said where it is written (it printed `await` in the
-   * default, a module that does not parse); a parameter that shadows the
-   * alias is its own; a Fixture's type is not the started promise's
+   * every other alias is printed as with nothing started, so it is legal where
+   * any alias is: in a Throws' matcher (it printed `await` in the matcher's
+   * callback, which does not parse), in a parameter's default, through a
+   * default that calls another parameterised alias (it called an async arrow
+   * and got a promise), a parameter that shadows the alias, a Fixture's
+   * annotation; a thenable is guarded with `then` (it has no `catch`); and an
+   * alias used inside another call's Throws is declared before it, so its own
+   * rejection fails the test there rather than counting as that call's
    */
-  export type Defaulted = [
-    Expect<Invoke<typeof printAlias, [Defaults, "AsDefault"]>, "=", "test(\"later > AsDefault\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = later(10);\n  A.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await A;\n  const D = (X: string = nt_unsupported(\"the default of X names an alias started before an AdvanceTimers, which a default cannot wait for: pass it where the alias with X is used\")) => g(X);\n  const actual = D();\n  const expected = \"done!\";\n  expect(actual).toEqual(expected);\n});">,
-    Expect<Invoke<typeof printAlias, [Defaults, "Shadowed"]>, "=", "test(\"later > Shadowed\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = later(10);\n  A.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await A;\n  const Sh = (A: string = \"x\") => g(A);\n  const actual = Sh();\n  const expected = \"x!\";\n  expect(actual).toEqual(expected);\n});">,
-    Expect<Invoke<typeof printAlias, [Defaults, "UnderFixture"]>, "=", "test(\"later > UnderFixture\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const A = later(10);\n  const Fx = A;\n  Fx.catch(() => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const actual = await Fx;\n  const expected = \"done\";\n  expect(actual).toEqual(expected);\n});">,
-    Expect<Invoke<typeof moduleWarnings, [Defaults]>, "=", ["`D`: the default of X names an alias started before an AdvanceTimers, which a default cannot wait for: pass it where the alias with X is used"]>,
+  export type Shaped = [
+    Expect<Invoke<typeof printAlias, [Shapes, "Message"]>, "=", "test(\"later > Message\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  await expect(async () => (sthrow(\"z\"))).rejects.toSatisfy((err) => String(err.message).includes(A));\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "Matches"]>, "=", "test(\"later > Matches\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  await expect(async () => (sthrow(\"z\"))).rejects.toSatisfy((err) => new RegExp(A).test(String(err.message)));\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "Field"]>, "=", "test(\"later > Field\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  await expect(async () => (sthrow(\"z\"))).rejects.toSatisfy((err) => (expect(err).toMatchObject({ code: A }), true));\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "AsDefault"]>, "=", "test(\"later > AsDefault\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  const D = (X: string = A) => g(X);\n  const actual = D();\n  const expected = \"done!\";\n  expect(actual).toEqual(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "Chain"]>, "=", "test(\"later > Chain\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  const P = (Y: string = \"y\") => g(A);\n  const DP = (X: string = P()) => g(X);\n  const actual = DP();\n  const expected = \"done!!\";\n  expect(actual).toEqual(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "Shadowed"]>, "=", "test(\"later > Shadowed\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  const Sh = (A: string = \"x\") => g(A);\n  const actual = Sh();\n  const expected = \"x!\";\n  expect(actual).toEqual(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "UnderFixture"]>, "=", "test(\"later > UnderFixture\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  const Fx: string = A;\n  const expected = \"done\";\n  expect(Fx).toEqual(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "Thenable"]>, "=", "test(\"later > Thenable\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = thenable(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const T = await pending;\n  const expected = \"done\";\n  expect(T).toEqual(expected);\n});">,
+    Expect<Invoke<typeof printAlias, [Shapes, "Credit"]>, "=", "test(\"later > Credit\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(10);\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const A = await pending;\n  expect(() => (sthrow(A))).toThrow(\"s\");\n});">,
+    Expect<Invoke<typeof moduleWarnings, [Shapes]>, "=", []>,
   ];
 
   type FailsAgain = Invoke<typeof failsLater, [ms: 1_000, message: "late"]>;
@@ -1073,11 +1051,20 @@ declare namespace printBody {
     [Expect<1, "=", 1>, Throws<FailsAgain, "late">]
   >;
 
+  type Thenable_ = Invoke<typeof aThenable, [ms: 1_000, value: "done"]>;
+
+  /** run under fake time: a thenable with no `catch` is started and awaited */
+  export type ThenableUnderFakeTime = Given<
+    [FakeTimers, Thenable_, AdvanceTimers<1_000>],
+    Expect<Thenable_, "=", "done">
+  >;
+
   type Matrix = `    const later = (ms: number): Promise<string> => new Promise((r) => setTimeout(() => r("done"), ms));
     const fails = async (ms: number): Promise<string> => { throw new Error("late"); };
     const g = (x: string): string => x + "!";
     const ga = async (x: string): Promise<string> => x + "?";
     const box = async () => ({ get: async (k: string) => k });
+    const thenable = (ms: number): PromiseLike<string> => ({ then: (ok: any) => (setTimeout(() => ok("done"), ms), undefined as any) });
     declare namespace later {
       type A = Invoke<typeof later, [ms: 10]>;
       type AA = A;
@@ -1086,6 +1073,8 @@ declare namespace printBody {
       type B = Invoke<typeof box>;
       type Fx = Fixture<string, A>;
       type P<X extends string = "x"> = Invoke<typeof g, [A]>;
+      type DP<X extends string = P> = Invoke<typeof g, [X]>;
+      type Th = Invoke<typeof thenable, [ms: 10]>;
       type D<X extends string = A> = Invoke<typeof g, [X]>;
       type Sh<A extends string = "x"> = Invoke<typeof g, [A]>;
       export type Value = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<A, "=", "done">>;
@@ -1108,6 +1097,11 @@ declare namespace printBody {
       export type InlineMethod = Given<[FakeTimers, Call<B, "get", [k: "k"]>, AdvanceTimers<10>], Expect<1, "=", 1>>;
       export type InlineCaught = Given<[FakeTimers, Caught<Invoke<typeof fails, [ms: 10]>>, AdvanceTimers<10>], Expect<1, "=", 1>>;
       export type InlineTwice = Given<[FakeTimers, Invoke<typeof later, [ms: 10]>, AdvanceTimers<5>, AdvanceTimers<5>], Expect<1, "=", 1>>;
+      export type Matcher = Given<[FakeTimers, A, AdvanceTimers<10>], Throws<Invoke<typeof g, ["z"]>, { message: A; matches: A; code: A }>>;
+      export type DefaultChain = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<DP, "=", "done!!">>;
+      export type SpyOf = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<Calls<Spy<(x: string) => string, typeof g>>, "isEmpty">>;
+      export type MockedOf = Given<[FakeTimers, A, AdvanceTimers<10>, Call<Mocked<typeof g>, "mockReturnValue", [value: A]>], Expect<1, "=", 1>>;
+      export type OfThenable = Given<[FakeTimers, Th, AdvanceTimers<10>], Expect<Th, "=", "done">>;
       export type Read = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<FromFile<"./data.txt">, "=", A>>;
     }
 `;
@@ -1124,13 +1118,12 @@ declare namespace printBody {
 const printParam = (p: Param) =>
   `${p.name}: ${p.type}${p.fallback ? ` = ${printExpr(p.fallback)}` : ""}`;
 
-// an alias of an async call is awaited here, unless it is started for an AdvanceTimers (`settled`)
+// an alias whose call was started before an AdvanceTimers is that call, awaited
 const printBinding = (b: Binding) =>
   b.params
     ? // an object literal as an arrow's body reads as a block: parenthesise it
       `const ${b.name} = ${awaits(b.value) ? "async " : ""}(${b.params.map(printParam).join(", ")}) => ${b.value.kind === "object" ? `(${printExpr(b.value)})` : printExpr(b.value)};`
-    : // a started alias holds the promise, which the Fixture's type is not
-      `const ${b.name}${b.annotation && !b.started ? `: ${b.annotation}` : ""} = ${printExpr(b.started ? started(b.value) : b.value)};`;
+    : `const ${b.name}${b.annotation ? `: ${b.annotation}` : ""} = ${b.pending ? `await ${b.pending}` : printExpr(b.value)};`;
 
 export type Needs = {
   /** `readFileSync`, for `FromFile`. */
@@ -1306,7 +1299,7 @@ export function printTest(t: TestCase): EmittedTest {
             line,
           })),
           // each alias declared where the test first reaches it, so the effects run as written
-          ...printBody(t.body, scope, before, startedGroups(t))
+          ...printBody(t.body, scope, before)
             .flat()
             .map(({ code, line }) => ({ code: `  ${code}`, line })),
           // a test with no statements still declares what it names
