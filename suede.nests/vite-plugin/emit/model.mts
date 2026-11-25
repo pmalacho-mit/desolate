@@ -918,6 +918,31 @@ function registerSetup(
 const SECOND_VALUE = (name: string) =>
   `\`${name}\` is stubbed twice in one test: a StubEnv applies to the whole test, before its code runs, so only the last value is ever seen. Give each value a test of its own`;
 
+declare namespace throwsAtDeclaration {
+  type Boom = `
+    const boom = async (): Promise<never> => { throw new Error("no"); };
+    declare namespace boom {
+      type Boom = Invoke<typeof boom>;
+      export type Alias = Throws<Boom, "no">;
+      export type Inline = Throws<Invoke<typeof boom>, "no">;
+      export type Timed = Given<[FakeTimers, Boom, AdvanceTimers<5>], Throws<Boom, "no">>;
+    }
+  `;
+
+  /**
+   * a Throws of an alias of a call is said where it is written: the alias throws
+   * where it is declared. The controls: the call inside Throws, and the alias
+   * started before an AdvanceTimers, which Throws does see
+   */
+  export type Said = Expect<
+    Invoke<typeof harness.moduleWarnings, [Boom]>,
+    "=",
+    [
+      "`Throws<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before Throws can check it. Write the call inside Throws, or name the error with Caught",
+    ]
+  >;
+}
+
 declare namespace registerSetup {
   type Twice = `
     const kind = () => process.env.BACKEND;
@@ -1371,11 +1396,34 @@ function tableCases(
   });
 }
 
-export const lowerAlias = (
+export function lowerAlias(
   cx: EmitContext,
   decl: ts.TypeAliasDeclaration,
   path: string[] = [],
-): TestCase[] => casesOf(cx, decl, path).map(settled);
+): TestCase[] {
+  const cases = casesOf(cx, decl, path).map(settled);
+  for (const name of new Set(cases.flatMap(throwsAtDeclaration)))
+    cx.warn(decl, THROWS_ALIAS(name));
+  return cases;
+}
+
+// `Throws<Boom>` with `type Boom = Invoke<…>`: the call runs where Boom is declared, before Throws
+const throwsAtDeclaration = (t: TestCase) =>
+  t.body.flatMap((s) => {
+    if (s.kind !== "assert" || s.condition !== "throws") return [];
+    const b =
+      s.actual.kind === "name" &&
+      t.bindings.find((b) => b.name === (s.actual as { name: string }).name);
+    return b &&
+      !b.params &&
+      !b.started &&
+      ["call", "method", "construct"].includes(b.value.kind)
+      ? [b.name]
+      : [];
+  });
+
+const THROWS_ALIAS = (name: string) =>
+  `\`Throws<${name}>\` names an alias of a call, which runs where the alias is declared: what it throws fails the test before Throws can check it. Write the call inside Throws, or name the error with Caught`;
 
 function casesOf(
   cx: EmitContext,

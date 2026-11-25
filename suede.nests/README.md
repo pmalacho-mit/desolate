@@ -377,8 +377,9 @@ is not an unhandled one: a `Throws` after it sees it.
 
 Outside that shape an alias of a call that throws (or rejects) throws where it
 is declared, so `Throws<Boom>` with `type Boom = Invoke<typeof boom>` fails the
-test with boom's error rather than checking it. Write the call inside the
-`Throws` (`Throws<Invoke<typeof boom>, …>`), or name the error with `Caught`.
+test with boom's error rather than checking it; the printer says so where it
+is written. Write the call inside the `Throws` (`Throws<Invoke<typeof boom>, …>`),
+or name the error with `Caught`.
 
 A `Throws` matcher's fields beyond `instanceOf`, `name`, `message` and
 `matches` are the error's own, compared as `"matches"` compares:
