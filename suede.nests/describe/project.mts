@@ -34,7 +34,7 @@ import {
 import { resolved } from "./lookup.mts";
 
 import type { ResultRecord } from "../vite-plugin/reporter.mts";
-import type { Expect, Invoke } from "../dsl.import.meta.vitest.ts";
+import type { Expect, Invoke, Table } from "../dsl.import.meta.vitest.ts";
 import type * as harness from "../_internal/harness.mts";
 import type { FileDocs } from "./model.mts";
 import type { Tag } from "../vite-plugin/emit/ir.mts";
@@ -548,6 +548,26 @@ export function projectDocs({
 
 const STUBBED = ["*/dsl.import.meta.vitest", "*/dsl.import.meta.vitest.ts"];
 
+/** A file of the project under `root`: inside it (not a sibling that shares its name's start), and not a package's. */
+export const isOwn = (root: string, file: string) =>
+  file.startsWith(`${root.replace(/\/$/, "")}/`) &&
+  !file.slice(root.length).split("/").includes("node_modules");
+
+declare namespace isOwn {
+  /** a stub of the project's own; not one beside it, nor one a package ships */
+  export type Under = Table<
+    typeof isOwn,
+    [
+      [args: [root: "/p/app", file: "/p/app/src/nests.d.ts"], expected: true],
+      [args: [root: "/p/app", file: "/p/app-old/nests.d.ts"], expected: false],
+      [
+        args: [root: "/p/app", file: "/p/app/node_modules/lib/nests.d.ts"],
+        expected: false,
+      ],
+    ]
+  >;
+}
+
 // what a module exports at its top level, as written
 const exportedNames = (statements: readonly ts.Statement[]) =>
   statements.flatMap((st) =>
@@ -575,7 +595,7 @@ export function staleStubs(
   const exported = [...new Set(exportedNames(dsl.statements))];
   return program
     .getSourceFiles()
-    .filter((s) => s.isDeclarationFile && s.fileName.startsWith(root))
+    .filter((s) => s.isDeclarationFile && isOwn(root, s.fileName))
     .flatMap((source) =>
       source.statements.flatMap((st) => {
         if (
