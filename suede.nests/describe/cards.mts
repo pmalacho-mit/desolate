@@ -232,7 +232,8 @@ export const fileCards = (
 declare namespace fileCards {
   type Suite = `
     /** Memory in MiB. */
-    export const parseMemory = (value: string): number | null => (value === "8g" ? 8192 : null);
+    export const parseMemory = (value: string): number | null => (value === "8g" ? 8192 : value ? null : fail());
+    const fail = (): never => { throw new Error("no memory given"); };
     declare namespace parseMemory {
       /** suffixes are read */
       export type Spellings = Table<typeof parseMemory, [
@@ -240,16 +241,18 @@ declare namespace fileCards {
         /** anything else is not memory */
         [args: [value: "lots"], expected: null],
       ]>;
+      /** nothing at all is refused */
+      export type Empty = Throws<Invoke<typeof parseMemory, [value: ""]>, "no memory given">;
     }
   `;
 
-  /** a table's rows are split into what it answers and what it refuses, columns named as the arguments are */
+  /** a table's rows are what it answers, columns named as the arguments are; a throw is what it refuses */
   export type Card = Expect<
     Invoke<
       typeof fileCards,
       [file: Invoke<typeof harness.docsOf, [source: Suite]>]
     >,
     "=",
-    '# snippet.ts\n\n## `parseMemory`\n\n```ts\nparseMemory(value: string): number | null\n```\n\nMemory in MiB.\n\n**What it answers**\n\n- **Spellings**: suffixes are read\n\n  | value | expected |  |\n  | --- | --- | --- |\n  | `"8g"` | `8192` |  |\n\n**What it refuses**\n\n- **Spellings**: suffixes are read\n\n  | value | expected | shows |  |\n  | --- | --- | --- | --- |\n  | `"lots"` | `null` | anything else is not memory |  |\n'
+    '# snippet.ts\n\n## `parseMemory`\n\n```ts\nparseMemory(value: string): number | null\n```\n\nMemory in MiB.\n\n**What it answers**\n\n- **Spellings**: suffixes are read\n\n  | value | expected | shows |  |\n  | --- | --- | --- | --- |\n  | `"8g"` | `8192` |  |  |\n  | `"lots"` | `null` | anything else is not memory |  |\n\n**What it refuses**\n\n- **Empty**: nothing at all is refused\n  - `parseMemory("") throws /no memory given/`\n'
   >;
 }

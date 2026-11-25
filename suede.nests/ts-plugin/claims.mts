@@ -258,7 +258,7 @@ declare namespace hoverClaims {
       [file: "uses-memory.ts", needle: "parseMemory("]
     >,
     "=",
-    '**What it answers**\n- **Spellings**: suffixes are read: `"8g"` → `8192`; `"512m"` → `512`\n\n**What it refuses**\n- **Spellings**: suffixes are read: `"lots"` → `null`\n- **Empty**: nothing is no memory, not zero. `parseMemory("") throws /empty/`'
+    '**What it answers**\n- **Spellings**: suffixes are read: `"8g"` → `8192`; `"512m"` → `512`; `"lots"` → `null`\n\n**What it refuses**\n- **Empty**: nothing is no memory, not zero. `parseMemory("") throws /empty/`'
   >;
 
   /** and the same where it is declared */

@@ -491,7 +491,10 @@ resolution: rename the test and the editor's rename follows; remove it and
 one model. For each file: the functions its tests are named after (signature,
 JSDoc, tags), and each test as documentation: its words (the alias's, and a
 row's own), its evidence in shorthand, its table cells named as the arguments are,
-whether it shows what is answered or what is refused, and what it leaned on
+whether it shows what is answered or what is refused (refused: every
+assertion in it is a `Throws`, a rejection, or about a `Caught` error; any value
+is an answer, `null`, `false` and `undefined` included, since which of them
+means "refused" is the function's own convention), and what it leaned on
 (harness functions, mocks, setups, the DSL values above). Then what only the
 whole program knows: who calls each function, from where, and whether from
 code, a test or a harness; which harness modules the tests speak through; which

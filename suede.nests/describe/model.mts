@@ -46,7 +46,7 @@ export type ClaimDoc = {
   rowDoc: string | null;
   tags: Tag[];
   mode: TestCase["mode"];
-  /** A test of what is refused (a throw, a null, a false), or of what is answered. */
+  /** A test of what is refused (a throw, a rejection, a caught error), or of what is answered (any value). */
   kind: "refuses" | "answers";
   /** The evidence: the test Vitest runs, without the words above it. */
   code: string;
@@ -141,10 +141,12 @@ const valueOf = (e: Expr, bindings: Binding[]): Expr => {
   }
 };
 
-const REFUSING_VALUES = ["null", "false", "undefined"];
-
-// a refusal is what a guard says: it throws, or answers null or false; a claim
-// that also shows what is answered is about the answer, so every assertion has to refuse
+// a refusal is a throw (or a rejection): the one thing a function does that is
+// unmistakably refusing. A value is an answer, null, false and undefined
+// included, since which of them refuses depends on the function: `slugRefusal`
+// answers null to accept, `isInternal` false for the usual address, a function
+// that returns nothing undefined every time. A claim that also shows what is
+// answered is about the answer, so every assertion has to refuse
 const isRefusal = (t: TestCase) => {
   const asserted = t.body.filter((s) => s.kind === "assert");
   return (
@@ -152,17 +154,13 @@ const isRefusal = (t: TestCase) => {
     asserted.every(
       (s) =>
         s.condition === "throws" ||
-        s.condition === "falsy" ||
-        valueOf(s.actual, t.bindings).kind === "caught" ||
-        (s.condition === "=" &&
-          s.expected?.kind === "literal" &&
-          REFUSING_VALUES.includes(s.expected.source)),
+        valueOf(s.actual, t.bindings).kind === "caught",
     )
   );
 };
 
 declare namespace isRefusal {
-  /** a throw, a null and a false are refusals; a value is an answer */
+  /** a throw is a refusal; a value is an answer */
   export type Kinds = Table<
     typeof harness.claimKind,
     [
@@ -173,12 +171,32 @@ declare namespace isRefusal {
         ],
         expected: "refuses",
       ],
+      /**
+       * null, false and undefined are answers: which of them refuses is the
+       * function's to say, and `slugRefusal` answers null to accept (35 of
+       * desolate's refusal-first findings were functions like it, read inverted)
+       */
       [
         args: [
-          source: 'const f = (x: string) => null;\ndeclare namespace f { export type T = Expect<Invoke<typeof f, [x: ""]>, "=", null>; }',
+          source: 'const slugRefusal = (x: string): string | null => (x ? null : "empty");\ndeclare namespace slugRefusal { export type T = Expect<Invoke<typeof slugRefusal, [x: "a"]>, "=", null>; }',
           alias: "T",
         ],
-        expected: "refuses",
+        expected: "answers",
+      ],
+      [
+        args: [
+          source: 'const isInternal = (x: string) => x === "10.0.0.1";\ndeclare namespace isInternal { export type T = Expect<Invoke<typeof isInternal, [x: "8.8.8.8"]>, "=", false>; }',
+          alias: "T",
+        ],
+        expected: "answers",
+      ],
+      /** a function that returns nothing answers undefined every time: `ownDirectory > Made` */
+      [
+        args: [
+          source: 'const made = (x: string): void => { if (!x) throw new Error("no"); };\ndeclare namespace made { export type T = Expect<Invoke<typeof made, [x: "a"]>, "=", undefined>; }',
+          alias: "T",
+        ],
+        expected: "answers",
       ],
       [
         args: [
@@ -425,7 +443,7 @@ declare namespace fileDocs {
         {
           doc: "suffixes are read";
           rowDoc: "anything else is not memory";
-          kind: "refuses";
+          kind: "answers";
           tags: [{ name: "control"; text: "" }];
           shorthand: ['parseMemory("lots") → null'];
           cells: {
