@@ -93,7 +93,7 @@ const pushedLine = (branch: string, commit = "") =>
  *  `card` "" for Dismiss, which is pressed on a card that has), and presses where it is. */
 const armedPress = async (
   page: {
-    move: (s: string, t?: string) => Promise<unknown>;
+    move: (s: string, t?: string, dx?: number, dy?: number) => Promise<unknown>;
     until: (e: string, w: string, ms?: number) => Promise<unknown>;
     evaluate: <T>(e: string) => Promise<T>;
     pressHere: () => Promise<void>;
@@ -102,12 +102,21 @@ const armedPress = async (
   label: string,
   card = "document.querySelector('.card.asked')",
 ) => {
-  await page.move(selector, label);
   const decided = card
     ? `/^(approving|Approved|Not pushed)/.test(${card}?.querySelector('.hint')?.textContent ?? '')`
     : "false";
   const button = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((b) => b.offsetParent && b.innerText.includes(${JSON.stringify(label)}))`;
-  await page.until(`${pressable(button)} || ${decided}`, `${label} armed`, 10_000);
+  // (Anything the page does meanwhile, a card arriving, asks the pointer to come to it again:
+  // a person moves it again. So does this, up to a few times.)
+  for (let i = 0; ; i++) {
+    await page.move(selector, label, i % 2 ? 2 : -2);
+    try {
+      await page.until(`${pressable(button)} || ${decided}`, `${label} armed`, 4_000);
+      break;
+    } catch (error) {
+      if (i >= 4) throw error;
+    }
+  }
   if (!(await page.evaluate<boolean>(decided))) await page.pressHere();
 };
 /** A button pressable now: Approve by `disabled`, Refuse and Dismiss by aria-disabled (a key
@@ -126,7 +135,15 @@ const restOn = async (page: Hand, button: string, what: string) => {
     `(() => { const r = ${button}.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
   await page.moveTo(at.x, at.y);
-  await page.until(`${pressable(button)}`, `${what} armed`, 10_000);
+  for (let i = 0; ; i++)
+    try {
+      await page.until(`${pressable(button)}`, `${what} armed`, 4_000);
+      return;
+    } catch (error) {
+      // (The page changed meanwhile: the pointer comes to it again.)
+      if (i >= 4) throw error;
+      await page.moveTo(at.x + (i % 2 ? 2 : -2), at.y);
+    }
 };
 /** Where a picture of the approval page goes, for a person to look at. */
 const shot = (name: string) =>
