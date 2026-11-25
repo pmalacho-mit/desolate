@@ -1108,6 +1108,7 @@ declare namespace printBody {
       export type InlineMethod = Given<[FakeTimers, Call<B, "get", [k: "k"]>, AdvanceTimers<10>], Expect<1, "=", 1>>;
       export type InlineCaught = Given<[FakeTimers, Caught<Invoke<typeof fails, [ms: 10]>>, AdvanceTimers<10>], Expect<1, "=", 1>>;
       export type InlineTwice = Given<[FakeTimers, Invoke<typeof later, [ms: 10]>, AdvanceTimers<5>, AdvanceTimers<5>], Expect<1, "=", 1>>;
+      export type Read = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<FromFile<"./data.txt">, "=", A>>;
     }
 `;
 

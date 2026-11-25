@@ -14,9 +14,9 @@
 // This is test-only code. Modules must import it *as a type only*, so that it
 // is erased from any build and can only ever run through the generated tests.
 import path from "node:path";
-import vm from "node:vm";
 import { createHash } from "node:crypto";
 import ts from "@typescript/typescript6";
+import { parseSync } from "vite";
 
 // the library's own TypeScript, so a test's programs are read by the copy that reads them in the library
 export { ts };
@@ -260,39 +260,32 @@ export const minimalForFixture = (fixture: string, testName: string): string =>
   minimalFor(path.join(import.meta.dirname, "fixtures", fixture), testName);
 
 /**
- * The syntax errors in the module the printer writes for `code`: TypeScript's,
- * then what JavaScript's own parser (V8's) refuses once the types are stripped,
- * such as an `await` in a function that is not async, which TypeScript leaves
- * to its checker. A parse check only: it says nothing of types, nor of what the
- * test does when it runs.
+ * The syntax errors in the tests the printer writes for `code`, each with the
+ * test's name and its line. Each test is parsed on its own, as a module (so
+ * `import.meta` and imports are as in a test file, and one test's error does
+ * not hide another's), by oxc, the parser Vite itself transforms tests with;
+ * it refuses an `await` in a function that is not async, which TypeScript
+ * leaves to its checker. A parse check only: it says nothing of types, nor of
+ * what a test does when it runs. Printing that fails is reported too.
  */
 export function syntaxErrorsIn(code: string): string[] {
-  const printed = printModule(code);
-  const lines = printed.split("\n");
-  const { outputText, diagnostics = [] } = ts.transpileModule(printed, {
-    reportDiagnostics: true,
-    // CommonJS, so the parser takes it as a script: the imports become calls, the rest is as printed
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.CommonJS,
-    },
-  });
-  const errors = diagnostics.map((d) => {
-    const line =
-      d.file && d.start !== undefined
-        ? d.file.getLineAndCharacterOfPosition(d.start).line
-        : -1;
-    return `${ts.flattenDiagnosticMessageText(d.messageText, " ")}: ${lines[line]?.trim() ?? ""}`;
-  });
   try {
-    new vm.Script(outputText);
-  } catch (error) {
-    const at = /:(\d+)\n/.exec(String((error as Error).stack))?.[1];
-    errors.push(
-      `${(error as Error).message}: ${outputText.split("\n")[Number(at) - 1]?.trim() ?? ""}`,
+    const { header, tests } = emitTests(inputFor(code));
+    return [
+      { name: "(header)", text: header.join("\n") },
+      ...tests.map((t) => ({ name: t.name, text: printTest(t).code })),
+    ].flatMap(({ name, text }) =>
+      parseSync(`${name}.ts`, text, { lang: "ts", sourceType: "module" }).errors.map(
+        (e) => {
+          const at = e.labels?.[0]?.start ?? 0;
+          const line = text.slice(0, at).split("\n").length - 1;
+          return `${name}: ${e.message}: ${text.split("\n")[line]?.trim() ?? ""}`;
+        },
+      ),
     );
+  } catch (error) {
+    return [`printing failed: ${(error as Error).message}`];
   }
-  return errors;
 }
 
 /** The whole generated module: preamble, then every test. */
