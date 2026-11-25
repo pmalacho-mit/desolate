@@ -135,12 +135,17 @@ export function behaviorDiff(
         r.removed.includes(`@${t.name}${t.text ? ` ${t.text}` : ""}`),
     ),
   );
-  out.needsReview =
-    out.removed.length +
-    out.changed.length +
-    out.setupChanged.length +
-    out.skipped.length +
-    weakened.length;
+  // a claim both changed and stripped of a tag is one claim to approve
+  out.needsReview = new Set(
+    [
+      ...out.removed,
+      ...out.skipped,
+      ...[...out.changed, ...out.setupChanged, ...weakened].map((p) => ({
+        file: p.file,
+        claim: p.after,
+      })),
+    ].map(({ claim }) => claim.id),
+  ).size;
   return out;
 }
 
@@ -459,6 +464,30 @@ declare namespace behaviorDiff {
       export type Upper = Expect<Invoke<typeof isSlug, [v: "Acme"]>, "=", false>;
     }
   `;
+
+  type Untested = `
+    const isSlug = (v: string) => /^[a-z]*$/.test(v);
+    declare namespace isSlug {
+      /**
+       * lowercase letters
+       * @principle P5
+       */
+      export type Lower = Expect<Invoke<typeof isSlug, [v: "acme"]>, "=", false>;
+      /** no capitals */
+      export type Upper = Expect<Invoke<typeof isSlug, [v: "Acme"]>, "=", false>;
+    }
+  `;
+
+  /** a claim changed that also lost its tags is one claim to approve, not two */
+  export type Once = Expect<
+    Invoke<typeof harness.diffOf, [before: Tagged, after: Untested]>,
+    "matches",
+    {
+      changed: [{ after: { name: "isSlug > Lower" } }];
+      retagged: [{ removed: ["@control", "@principle P4"] }];
+      needsReview: 1;
+    }
+  >;
 
   type MoreTagged = `
     const isSlug = (v: string) => /^[a-z]+$/.test(v);
