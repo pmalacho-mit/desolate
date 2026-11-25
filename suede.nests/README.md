@@ -500,8 +500,11 @@ whole program knows: who calls each function, from where, and whether from
 code, a test or a harness; which harness modules the tests speak through; which
 modules they replace; and how the last run went, from `.derived/results.json`.
 
-`--exclude` takes globs, as the plugin's `exclude` does. A project that vendors
-this library leaves the library's own tests out; `--self` reads them too.
+`--exclude` takes a glob, as the plugin's `exclude` does, and is written once
+for each: `--exclude 'tests/**' --exclude 'vendor/**'`. A file named for
+`cards` or `lint` that is not there is refused (exit 2), so `--exclude a b`
+does not lint `b` and quietly pass. A project that vendors this library leaves
+the library's own tests out; `--self` reads them too.
 
 ```
 node <path-to-library>/cli.mts docs model [--out file]       # the model, as JSON

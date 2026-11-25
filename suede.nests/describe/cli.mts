@@ -13,6 +13,7 @@ import { LIBRARY } from "../vite-plugin/discovery.mts";
 
 import type { ProjectDocs, ProjectOptions } from "./project.mts";
 import type { Expect, Invoke } from "../dsl.import.meta.vitest.ts";
+import type { libraryRoot } from "../_internal/harness.mts";
 
 const DESCRIPTION = [
   "What the tests say, as documentation.",
@@ -38,7 +39,7 @@ export const parseDocs = (argv: string[]) => {
     ),
     cli.flags(
       "exclude",
-      "Globs to leave out, relative to the working directory, as the plugin's `exclude` takes them.",
+      "A glob to leave out, relative to the working directory, as the plugin's `exclude` takes them. One each: --exclude 'a/**' --exclude 'b/**'.",
     ),
     cli.flag("self", "Read the library's own tests too.", false),
     cli.flag("json", "Print JSON instead of Markdown.", false),
@@ -79,6 +80,40 @@ declare namespace parseDocs {
 }
 
 type Parsed = ReturnType<typeof parseDocs>;
+
+/**
+ * Why the files named are not ones to read, or null when each is there. A name
+ * that is no file read as nothing and exited 0: `--exclude a b` makes `b` a
+ * file to lint, so that is what the message says first.
+ */
+export const missingFiles = (files: string[], root = process.cwd()) => {
+  const missing = files.filter((f) => !fs.existsSync(path.resolve(root, f)));
+  const glob = missing.find((f) => /[*?[{]/.test(f));
+  return missing.length
+    ? `no such file: ${missing.join(", ")}${glob ? `. A glob to leave out is given with --exclude, one each: --exclude '${glob}'` : ""}`
+    : null;
+};
+
+declare namespace missingFiles {
+  /** `docs lint --exclude a b` hands `b` over as a file: there is none, and it says how to exclude it */
+  export type Glob = Expect<
+    Invoke<typeof missingFiles, [files: ["suede.nests/**"]]>,
+    "=",
+    "no such file: suede.nests/**. A glob to leave out is given with --exclude, one each: --exclude 'suede.nests/**'"
+  >;
+  /** a name that is no file is said as one */
+  export type Name = Expect<
+    Invoke<typeof missingFiles, [files: ["nope.ts"]]>,
+    "=",
+    "no such file: nope.ts"
+  >;
+  /** @control a file that is there is read */
+  export type There = Expect<
+    Invoke<typeof missingFiles, [files: ["cli.mts"], root: Invoke<typeof libraryRoot>]>,
+    "=",
+    null
+  >;
+}
 
 const projectFor = (
   p: Parsed,
@@ -149,6 +184,11 @@ const write = (text: string, out?: string) => {
   } else process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
 };
 
+const refused = (why: string) => {
+  console.error(`docs: ${why}`);
+  return 2;
+};
+
 export async function runDocs(argv: string[]): Promise<number> {
   const p = parseDocs(argv);
   switch (p.action) {
@@ -156,6 +196,8 @@ export async function runDocs(argv: string[]): Promise<number> {
       write(JSON.stringify(projectFor(p, { files: [] }), null, 2), p.out);
       return 0;
     case "cards": {
+      const missing = missingFiles(p.rest);
+      if (missing) return refused(missing);
       const project = projectFor(p);
       const pages = project.files
         .filter((f) => f.subjects.length)
@@ -184,6 +226,8 @@ export async function runDocs(argv: string[]): Promise<number> {
       return p.check && d.needsReview ? 1 : 0;
     }
     case "lint": {
+      const missing = missingFiles(p.rest);
+      if (missing) return refused(missing);
       const findings = lint(projectFor(p));
       if (p.json) write(JSON.stringify(findings, null, 2));
       else
@@ -195,4 +239,16 @@ export async function runDocs(argv: string[]): Promise<number> {
       console.error(p.help());
       return 2;
   }
+}
+
+declare namespace runDocs {
+  /**
+   * `docs lint --exclude a b` is refused, a usage error: it linted `b` as a
+   * file, found nothing, printed nothing and exited 0
+   */
+  export type ExcludeTwo = Expect<
+    Invoke<typeof runDocs, [argv: ["lint", "--exclude", "a/**", "b/**"]]>,
+    "=",
+    2
+  >;
 }

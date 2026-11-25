@@ -332,3 +332,6 @@ export const failsLater = async (ms: number, message: string): Promise<never> =>
   await later(ms, "");
   throw new Error(message);
 };
+
+/** The library's own folder, for a test that names one of its files. */
+export const libraryRoot = () => path.dirname(import.meta.dirname);
