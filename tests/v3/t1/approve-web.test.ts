@@ -13,7 +13,7 @@ import { after, before, describe, it, mock } from "node:test";
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "desolate-approve-"));
 process.env.DESOLATE_HOME = home;
 process.env.DESOLATE_EDITOR_PORT = "31599";
-const { approveToken, embedAddress, handler, issueToken, pushToken } =
+const { approveToken, embedAddress, handler, issueToken, pushToken, SIGNED_FILE } =
   await import("../../../release/host/approve-web.ts");
 const { formatApproval, lfsDigest, signedFor } =
   await import("../../../release/shared/approval.ts");
@@ -74,6 +74,8 @@ type Said = {
 };
 /** Where the stand-in pusher's log ends: each word is written at its end, unless it says. */
 let logEnd = 0;
+/** The root's answer to where its log ends, when a test holds it (a root slow to answer). */
+let markSays: (() => Promise<{ inode: string; offset: number } | null>) | null = null;
 let pusherHeard: ((said: Said) => void) | null = null;
 const pusherSays = (said: Said) => pusherHeard!(said);
 /** The keyring's answer to the next approvals, when a test holds it: an error, or "" to take it. */
@@ -220,7 +222,7 @@ before(async () => {
           return `https://github.com/${issue.repo}/issues/7`;
         },
         refuseIssue: async (issue) => void notNow.push(issue.id),
-        pusherMark: async () => ({ inode: "1", offset: logEnd }),
+        pusherMark: async () => (markSays ? markSays() : { inode: "1", offset: logEnd }),
         pushes: (heard) => {
           pusherHeard = (said) => heard({ log: { inode: "1", end: (logEnd += 100) }, ...said });
           return () => (pusherHeard = null);
@@ -912,13 +914,13 @@ describe("T1 the approval page", () => {
     for (const signed of everSigned) {
       const field = (name: string) => new RegExp(`^${name}: (.+)$`, "m").exec(signed)![1]!;
       const [repo, branch, commit, onto] = ["repo", "branch", "commit", "onto"].map(field);
+      // ("pushed": a failure would keep them listened for, a "pushed" may still settle it.)
       pusherHeard?.({
-        type: "push-failed",
+        type: "pushed",
         repo: repo!,
         branch: branch!,
         commit: commit!,
         onto: onto === "none" ? null : onto!,
-        error: "ended by the test",
       });
     }
     await moment();
@@ -937,8 +939,9 @@ describe("T1 the approval page", () => {
     // Every page is told at once that it is being pushed: the names the Mac signed, and when.
     const token = pushToken(approveToken(), message);
     type Told = { token: string; pushed: boolean; error?: string; at: number };
+    // (This one: the earlier approvals of the same text, the test ended itself, before it.)
     const mine = (body: Record<string, unknown> | null) =>
-      (body!.approved as Told[]).filter((d) => d.token === token && !d.error);
+      (body!.approved as Told[]).filter((d) => d.token === token && d.at >= before);
     const pushing = mine(looking.answer.body);
     assert.equal(pushing.length, 1);
     assert.ok(pushing[0]!.at >= before && pushing[0]!.at <= Date.now());
@@ -1006,7 +1009,7 @@ describe("T1 the approval page", () => {
       error: "refused\u001b[2J <img src=x onerror=alert(1)> \u202eevil",
     });
     await moment();
-    assert.equal(pusherHeard, null, "heard of, and no page: no longer followed");
+    assert.ok(pusherHeard, 'a failure, and no page: still followed (a "pushed" may settle it)');
     const next = JSON.parse((await call("GET", "/pending", asPage())).body) as {
       approved: { token: string; pushed: boolean; error?: string; uncertain?: boolean }[];
     };
@@ -1018,6 +1021,16 @@ describe("T1 the approval page", () => {
       [false, "refused?[2J <img src=x onerror=alert(1)> ?evil", false],
       "the page's next ask (a reload's first) is told it failed, and why, as text",
     );
+    // CONTROL: "pushed" settles it, and with no page the log is no longer followed.
+    pusherSays({
+      type: "pushed",
+      repo: push.repo,
+      branch: push.branch,
+      commit: push.commit,
+      onto: null,
+    });
+    await moment();
+    assert.equal(pusherHeard, null, "pushed, and no page: no longer followed");
   });
 
   it("a flood of the pusher's words: what the page is told stays as many approvals as a person made, each ended once", async () => {
@@ -1041,11 +1054,10 @@ describe("T1 the approval page", () => {
       });
     assert.equal(await tagNow(), tagBefore, "no word on a move signed here: the page is not told");
     // CONTROL: the word on the move signed ends that approval, once, with at most
-    // printable's 4,000 characters of why; the many after it change nothing (ended, and no
-    // page open, the log is no longer followed: endedBy's own tests show the once).
+    // printable's 4,000 characters of why; the many failures after it change nothing.
     for (let i = 0; i < 1000; i++)
       pusherHeard?.({
-        type: i ? "pushed" : "push-failed",
+        type: "push-failed",
         repo: push.repo,
         branch: push.branch,
         commit: push.commit,
@@ -1202,6 +1214,98 @@ describe("T1 the approval page", () => {
     });
     await moment();
     assert.equal((await mine()).error, "this push's");
+  });
+
+  it('a failure, then "pushed" for that very move: the record says pushed, its failure kept as said first; "pushed", then a failure: pushed it stays', async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    await listedNow();
+    const move = { repo: push.repo, branch: push.branch, commit: push.commit, onto: null };
+    type Told = { token: string; pushed: boolean; error?: string };
+    const last = async () =>
+      (
+        JSON.parse((await call("GET", "/pending", asPage())).body) as { approved: Told[] }
+      ).approved.at(-1)!;
+    assert.equal((await approve(good())).status, 200);
+    pusherSays({ type: "push-failed", ...move, error: "another approval's" });
+    await moment();
+    assert.deepEqual([(await last()).pushed, (await last()).error], [false, "another approval's"]);
+    pusherSays({ type: "pushed", ...move });
+    await moment();
+    assert.deepEqual([(await last()).pushed, (await last()).error], [true, "another approval's"]);
+    // The other order.
+    assert.equal((await approve(good())).status, 200);
+    pusherSays({ type: "pushed", ...move });
+    await moment();
+    pusherHeard?.({ type: "push-failed", ...move, error: "too late" });
+    await moment();
+    assert.deepEqual([(await last()).pushed, (await last()).error], [true, undefined]);
+  });
+
+  it("a text signed here, its record gone (16 more since), listed again: said to be approved already, and when, here and after a restart; control: a text never signed is not", async () => {
+    approved.length = 0;
+    const texts = Array.from({ length: 17 }, (_, i) =>
+      formatApproval({ ...push, branch: `many/${i}`, nonce: String(i + 1).padStart(32, "7") }),
+    );
+    for (const text of texts) {
+      listed = [{ message: text, at: "2026-11-12T00:00:00Z" }];
+      await listedNow();
+      const nonce = /^nonce: (.+)$/m.exec(text)![1]!;
+      const answer = await approve({
+        nonce,
+        token: pushToken(approveToken(), text),
+        commit: push.commit,
+      });
+      assert.equal(answer.status, 200, answer.body);
+    }
+    const never = formatApproval({ ...push, branch: "many/never", nonce: "8".repeat(32) });
+    listed = [
+      { message: texts[0]!, at: "2026-11-12T00:00:00Z" },
+      { message: never, at: "2026-11-12T00:00:00Z" },
+    ];
+    const answer = JSON.parse((await call("GET", "/pending", asPage())).body) as {
+      pending: { token: string; signedAt?: number }[];
+      approved: { token: string }[];
+    };
+    const first = pushToken(approveToken(), texts[0]!);
+    assert.ok(!answer.approved.some((a) => a.token === first), "its record is gone");
+    assert.equal(typeof answer.pending.find((p) => p.token === first)?.signedAt, "number");
+    assert.equal(
+      answer.pending.find((p) => p.token === pushToken(approveToken(), never))?.signedAt,
+      undefined,
+    );
+    // Kept on the Mac's disk: a daemon started again knows it too.
+    const kept = JSON.parse(fs.readFileSync(SIGNED_FILE, "utf8")) as [string, number][];
+    assert.ok(kept.some(([token]) => token === first));
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+  });
+
+  it("a root slow to say where its log ends: the signature waits a few seconds at most, and the record says no word can end it", async () => {
+    listed = [{ message, at: "2026-11-12T00:00:00Z" }];
+    approved.length = 0;
+    await listedNow();
+    markSays = () => new Promise(() => {});
+    const began = Date.now();
+    const answer = await approve(good());
+    markSays = null;
+    assert.equal(answer.status, 200, answer.body);
+    assert.ok(Date.now() - began < 6000, `${Date.now() - began} ms`);
+    const told = (
+      JSON.parse((await call("GET", "/pending", asPage())).body) as {
+        approved: { unmarked?: true }[];
+      }
+    ).approved.at(-1)!;
+    assert.equal(told.unmarked, true);
+    // CONTROL: a root that answers: marked.
+    assert.equal((await approve(good())).status, 200);
+    assert.equal(
+      (
+        JSON.parse((await call("GET", "/pending", asPage())).body) as {
+          approved: { unmarked?: true }[];
+        }
+      ).approved.at(-1)!.unmarked,
+      undefined,
+    );
   });
 
   it("a push the reviewer could not describe is not signed, though the page listed it", async () => {

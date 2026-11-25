@@ -1727,6 +1727,42 @@ echo "=====waits"; cat /tmp/waits.lines`,
         (await page.evaluate<number>("performance.now()")) - movedAt >= 1000,
         "not before it rested on it a second",
       );
+      // The page comes back under a still pointer: the tab left for another and shown again,
+      // or the pointer gone out of the window (as out of the frame beside the git terminal) and
+      // back. The first move after (one event: as the browser's own, bringing its hover up to
+      // date) arms nothing; a second, somewhere else, is the pointer moving (the control).
+      const comesBack = async (what: string, away: () => Promise<void>) => {
+        const here = page.pointer();
+        await away();
+        await page.moveTo(here.x + 3, here.y + 1, 1);
+        await sleep(2500);
+        assert.equal(await page.evaluate(armed), false, `${what}: one move arms nothing`);
+        await page.moveTo(here.x + 5, here.y + 2, 1);
+        await page.until(armed, `${what}: armed once the pointer moved again`, 10_000);
+      };
+      const other = await browser.tab("about:blank");
+      await comesBack("the tab hidden and shown", async () => {
+        await other.front();
+        await page.until("document.visibilityState === 'hidden'", "the tab hidden");
+        await page.front();
+      });
+      await other.close();
+      await comesBack("the pointer out of the window and back", async () => {
+        await page.moveTo(-20, -20, 1);
+      });
+      // What the card says, said again the same (as the next answer can): its height the same,
+      // its Approve disarmed, and a still pointer does not arm it; a move does.
+      const height = await page.evaluate<number>(`${card}.offsetHeight`);
+      await page.evaluate(
+        "render(pending.map((p) => p.branch === 'web-pointer' ? { ...p, review: { ...p.review, again: 1 } } : p), issues); true",
+      );
+      assert.equal(await page.evaluate<number>(`${card}.offsetHeight`), height, "the same height");
+      assert.equal(await page.evaluate(armed), false, "said again: disarmed");
+      await sleep(2500);
+      assert.equal(await page.evaluate(armed), false, "and not armed again under a still pointer");
+      await page.moveTo(page.pointer().x + 2, page.pointer().y, 1);
+      await page.moveTo(page.pointer().x + 2, page.pointer().y, 1);
+      await page.until(armed, "armed once the pointer moved onto it again", 10_000);
       await page.shot(shot("waiting"));
       // The click is the approval. What the card says from then on is recorded as it changes.
       await page.evaluate(
@@ -1957,19 +1993,26 @@ echo "=====waits"; cat /tmp/waits.lines`,
       assert.equal(seen.markup, 0, "its words are text");
       assert.ok(seen.records <= 16, `${seen.records} approvals told to the page`);
       await page.shot(shot("failed-quoted"));
-      // The forge then takes the push: the pusher's own word comes second, and the first stands.
-      // A forged report is a wrong line on this card at worst, never more (it signs nothing).
+      // The forge then takes the push: the pusher's own "pushed" comes second, and settles it (a
+      // forged failure, or another approval's, timed before it, is shown as said first).
       stack.forge("hold", "acme/widgets", "0");
       for (let i = 0; i < 240 && forgeRefs("acme/widgets")["web-held"] !== commit; i++)
         await sleep(500);
       assert.equal(forgeRefs("acme/widgets")["web-held"], commit, "the real push landed");
-      await sleep(3000);
-      assert.equal(await page.evaluate(hintOf("web-held")), failed);
-      // Until dismissed; and dismissed, a reload does not bring it back.
-      await dismissed(page, "web-held");
+      await page.until(
+        `${pushedLine("web-held")}?.textContent.includes("the root's pusher first reported a failure, then that the remote has it")`,
+        "pushed, its earlier failure said",
+        60_000,
+      );
+      await page.moveTo(4, 4);
+      await page.until(
+        `!${cardOf("web-held")} && !document.querySelector('.card.kept')`,
+        "its card gone",
+      );
       await page.reload();
       await sleep(3000);
       assert.equal(await page.evaluate(`!!${cardOf("web-held")}`), false);
+      assert.equal(await page.evaluate(`!!${pushedLine("web-held")}`), true);
 
       // The forge refuses it, its branch moved after the card was drawn: the card says so in
       // the pusher's words, and stays.

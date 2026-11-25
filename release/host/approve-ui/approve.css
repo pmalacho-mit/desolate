@@ -173,8 +173,8 @@ label.file { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line
 .card.pushing .hint { color: var(--fg); }
 .card.failed, .card.uncertain { border-color: var(--danger); }
 .card.failed .hint, .card.uncertain .hint { color: var(--danger); }
-.card.unheard { border-color: var(--caution); }
-.card.unheard .hint { color: var(--caution); }
+.card.unheard, .card.unmarked { border-color: var(--caution); }
+.card.unheard .hint, .card.unmarked .hint { color: var(--caution); }
 /* Dismiss at the far end of the bar: where no Approve ever was. */
 .arm.dismiss { margin-left: auto; }
 /* The pusher's words, set apart from the page's own: quoted, and said to be its. */

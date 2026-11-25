@@ -232,6 +232,8 @@ export type Approved = {
   error?: string;
   uncertain?: boolean;
   link?: string;
+  /** Where the pusher's log stood could not be read when it was signed: no word can end it. */
+  unmarked?: true;
 };
 export type Backend = {
   /** Pushes waiting for a person, as the root lists them (the root's word: only the message
@@ -419,6 +421,27 @@ const LISTED_MOST = 32;
  *  by a person's click here, never by a report: a root that reports a million ends at most
  *  these, each once (`endedBy`), with at most `printable`'s 4,000 characters of why. */
 const OUTCOMES_KEPT = 16;
+/** Texts whose signing is remembered (their tokens, 64 characters, and a time): a waiting push
+ *  the root lists again after its record is gone is said to be approved already. */
+const SIGNED_KEPT = 1024;
+export const SIGNED_FILE = path.join(paths.state, "approve-signed");
+const signedBefore = (): [string, number][] => {
+  try {
+    const kept = JSON.parse(fs.readFileSync(SIGNED_FILE, "utf8")) as unknown;
+    return Array.isArray(kept)
+      ? kept
+          .filter(
+            (e): e is [string, number] =>
+              Array.isArray(e) && /^[0-9a-f]{64}$/.test(String(e[0])) && Number.isFinite(e[1]),
+          )
+          .slice(-SIGNED_KEPT)
+      : [];
+  } catch {
+    return [];
+  }
+};
+/** How long the mark of the pusher's log may take before a signature goes without it. */
+const MARK_MS = 3000;
 /** How long the pusher's log is followed for an approval it has not said the end of: a push
  *  ends in seconds, a large one in minutes. Past it, the dashboard's activity says. */
 const HEARD_MS = 30 * 60_000;
@@ -441,15 +464,20 @@ const pullRequestPage = (repo: string, branch: string) =>
  *  (an approval whose word was missed, pushed again, is answered "pushed" by the pusher, which
  *  finds the remote there already). Any other word ends the oldest: pushes to a repository go
  *  one at a time (root/push.ts, its lock), so their words come in the order they were
- *  approved. One already ended keeps its first word. */
+ *  approved. One a failure ended is ended again by a "pushed" after it; one "pushed" ended
+ *  keeps that. */
 export const endedBy = (
   approvals: readonly (Approved & { after: LogMark | null })[],
   said: Pick<PusherSaid, "type" | "repo" | "branch" | "commit" | "onto" | "log">,
   now: number,
 ): number[] => {
+  // ("pushed" settles one a failure ended too: that failure may be another approval's of the
+  // same move, one this page does not hold (approved at the terminal, before a restart), timed
+  // by the root's user to come after this one's mark. The pusher says "pushed" only when the
+  // remote has the commit. Nothing overturns a "pushed".)
   const open = approvals.flatMap((a, at) =>
     !a.pushed &&
-    a.error === undefined &&
+    (a.error === undefined || said.type === "pushed") &&
     now - a.at < HEARD_MS &&
     a.repo === said.repo &&
     a.branch === said.branch &&
@@ -699,12 +727,16 @@ declare namespace endedBy {
       [args: [approvals: [Signed, Again], said: Refused, now: 2000], expected: [0]],
     ]
   >;
-  /** one already ended keeps its first word; one no longer listened for is not ended now */
+  /** a failure ends one not ended; a "pushed" ends one a failure ended too (that failure may
+   *  have been another approval's), and nothing ends one "pushed" ended; one no longer listened
+   *  for is not ended now */
   export type Once = Table<
     typeof endedBy,
     [
       [args: [approvals: [Failed, Signed], said: Refused, now: 2000], expected: [1]],
+      [args: [approvals: [Failed, Signed], said: Word, now: 2000], expected: [0, 1]],
       [args: [approvals: [Pushed], said: Word, now: 2000], expected: []],
+      [args: [approvals: [Pushed], said: Refused, now: 2000], expected: []],
       [args: [approvals: [Signed], said: Word, now: 1801000], expected: []],
     ]
   >;
@@ -825,8 +857,23 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
   const told = () => approvals.filter((a) => !signing.has(a));
   /** Where the pusher's log ended when each was signed: only a word after it ends it. */
   const marks = new WeakMap<Approved, LogMark | null>();
-  const unsaid = (a: Approved) =>
-    !a.pushed && a.error === undefined && Date.now() - a.at < HEARD_MS;
+  /** The texts this host signed (by their tokens) and when: far more than are kept as
+   *  records, and across a restart of the daemon (SIGNED_FILE). */
+  const signed = new Map<string, number>(signedBefore());
+  const signedHere = (given: string, at: number) => {
+    signed.delete(given);
+    signed.set(given, at);
+    for (const [old] of signed) if (signed.size > SIGNED_KEPT) signed.delete(old);
+    const file = `${SIGNED_FILE}.${process.pid}`;
+    try {
+      fs.writeFileSync(file, JSON.stringify([...signed]), { mode: 0o600 });
+      fs.renameSync(file, SIGNED_FILE);
+    } catch {
+      /* kept in memory until the daemon restarts */
+    }
+  };
+  // (One a failure ended is still listened for: a "pushed" after it settles it: endedBy.)
+  const unsaid = (a: Approved) => !a.pushed && Date.now() - a.at < HEARD_MS;
   let pages = 0;
   let unhear: (() => void) | null = null;
   const hearPusher = () => {
@@ -1277,7 +1324,13 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
         // another call into the root.
         let fromRoot: ReturnType<typeof rootListAfter> | null = null;
         for (;;) {
-          const out = answerFor(root.pending, root.look, token);
+          // A text this host signed, whose record has gone (16 since, or a restart), listed
+          // again: said so, with when, and never drawn as one to approve.
+          const out = answerFor(root.pending, root.look, token).map((p) =>
+            signed.has(p.token) && !approvals.some((a) => a.token === p.token)
+              ? { ...p, signedAt: signed.get(p.token)! }
+              : p,
+          );
           hearPusher();
           // (Each approval whole: its time is the click's, so the tag moves only with news.)
           const approved = told();
@@ -1505,8 +1558,14 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           signing.add(approval);
           hearPusher();
           // Where the log ends now, before the signature leaves: the push's word comes after.
-          // (Not said, the push is approved all the same, and its card says no word came.)
-          marks.set(approval, await backend.pusherMark().catch(() => null));
+          // A few seconds at most: not said by then, the push is approved all the same, and its
+          // card says at once that this page cannot tell how it ends.
+          const mark = await Promise.race([
+            backend.pusherMark().catch(() => null),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), MARK_MS).unref()),
+          ]);
+          marks.set(approval, mark);
+          if (!mark) approval.unmarked = true;
           // Not heard of by then: no longer listened for (the dashboard's activity says).
           setTimeout(hearPusher, HEARD_MS + 1000).unref();
           try {
@@ -1524,6 +1583,7 @@ export const handler = (backend: Backend, log: (line: string) => void) => {
           // for another's click, and a click the keyring refused drops nothing).
           const taken = told();
           if (taken.length > OUTCOMES_KEPT) approvals.splice(approvals.indexOf(taken[0]!), 1);
+          signedHere(given, approval.at);
           // Every page is told: another tab, too, shows it as being pushed.
           tell();
           log(

@@ -399,15 +399,17 @@ export const openBrowser = async (
         pointer = at;
         return at;
       },
-      /** The pointer moved to a point of the window, in eight steps: nothing pressed. */
-      moveTo: async (x: number, y: number) => {
-        for (let i = 1; i <= 8; i++)
+      /** The pointer moved to a point of the window, in eight steps (or `steps`): nothing
+       *  pressed. One step is one event, as the browser sends when it brings its hover up to
+       *  date. */
+      moveTo: async (x: number, y: number, steps = 8) => {
+        for (let i = 1; i <= steps; i++)
           await send(
             "Input.dispatchMouseEvent",
             {
               type: "mouseMoved",
-              x: pointer.x + ((x - pointer.x) * i) / 8,
-              y: pointer.y + ((y - pointer.y) * i) / 8,
+              x: pointer.x + ((x - pointer.x) * i) / steps,
+              y: pointer.y + ((y - pointer.y) * i) / steps,
             },
             sessionId,
           );
@@ -435,6 +437,11 @@ export const openBrowser = async (
           await pressKey("Tab");
         }
         throw new Error(`Tab never reached ${element}`);
+      },
+      /** This tab brought in front of the others, as a person's click on it does. */
+      front: async () => {
+        await send("Page.bringToFront", {}, sessionId);
+        await sleep(300);
       },
       /** Where the pointer is. */
       pointer: () => ({ ...pointer }),

@@ -8,8 +8,12 @@
 // dogfooding, 2026-11-22). Any change to the page (a card added, ended, its summary arriving, a
 // scroll) disarms every button, and only a movement of the pointer onto one starts its second
 // again: a button that came under a still pointer never arms (the review of #283: a card that
-// went brought the next card's Approve under the pointer that had approved it). Nothing the
-// page does moves a card from under the pointer either: one that ends keeps its place until
+// went brought the next card's Approve under the pointer that had approved it). That is what
+// covers whatever moves under the pointer: decided cards folding when a new one arrives, a
+// card drawn again as waiting, the pusher's words appearing or shown whole, buttons hidden as a
+// push fails, a scroll, the frame moved beside the git terminal. A movement counts only once
+// the page knows where the pointer was: after the tab or frame was left (`forget`), the first
+// movement only tells it. Removals are stopped as well: a card that ends keeps its place until
 // the pointer is off the list of cards (`keep`). Keys do not approve. Refuse and Dismiss take a
 // key too, by the same rule: only once the person moved the focus onto the button with their
 // own Tab since the page last changed, and rested there a second (`keyReady`): focus the page
@@ -53,6 +57,7 @@ const attention = () => {
   const now = attending();
   if (!now) {
     attentiveSince = 0;
+    forget();
     disarmAll();
   } else if (attentiveSince === 0) attentiveSince = performance.now();
 };
@@ -103,6 +108,15 @@ document.addEventListener("pointermove", (event) => {
   pointerMoved = event.isTrusted && pointerAt !== null && (event.screenX !== pointerAt[0] || event.screenY !== pointerAt[1]);
   pointerAt = [event.screenX, event.screenY];
 }, true);
+/** The page is no longer where the pointer is (left, hidden, its window or frame not in use):
+ *  where it was is forgotten, and no button has had it come to it. Coming back, the browser's
+ *  own pointermove (hover brought up to date, at wherever the pointer now is) only says where
+ *  it is: a second, somewhere else, is the first that counts (the review of #283). */
+const forget = () => { pointerAt = null; pointerMoved = false; for (const card of cards.values()) unmoved(card, false); };
+window.addEventListener("blur", forget);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "visible") forget(); });
+document.documentElement.addEventListener("pointerleave", forget);
+document.addEventListener("mouseleave", forget);
 /** The page changed: no button of `card` has had the pointer, or the person's Tab, come to it
  *  since. */
 const unmoved = (card, keys = true) => { for (const arm of card.arms) { arm.came = false; arm.overSince = 0; if (keys) arm.keyedAt = 0; } };
@@ -140,7 +154,10 @@ const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 // So does the page scrolling: it moves Approve under a pointer that did not move.
 // (A scroll moves the buttons under the pointer, not the focus: the focus the person's Tab
 // brought to a button stays where it was, and so does what a key acts on. Tab itself scrolls.)
-const moved = (keys = true) => { for (const card of cards.values()) { card.changedAt = performance.now(); unmoved(card, keys); } disarmAll(); };
+/** What `card` shows changed: its buttons wait their second again, after the pointer (or the
+ *  person's Tab) comes to them. The one way the page marks a card changed. */
+const stirred = (card, keys = true) => { card.changedAt = performance.now(); unmoved(card, keys); };
+const moved = (keys = true) => { for (const card of cards.values()) stirred(card, keys); disarmAll(); };
 new ResizeObserver(() => moved()).observe(list);
 window.addEventListener("scroll", () => moved(false), { passive: true });
 /** Armed, if the pointer came to it and has been over it (moving or not) for a second while
@@ -206,7 +223,7 @@ const askHost = async (card, what, query) => {
 };
 /** Anything added to a card changes it: its buttons disarm, and each arms again only once the
  *  pointer has come to it. */
-const changed = (card) => { card.changedAt = performance.now(); unmoved(card); disarm(card); };
+const changed = (card) => { stirred(card); disarm(card); };
 /** A diff, asked of desolate's reviewer a page at a time (its bytes from `from` up to `next`):
  *  the first when opened, the next when the person asks for more. Nothing is cut: a long diff
  *  is a longer read, never a shorter one. */
@@ -616,16 +633,17 @@ const showApproved = (card) => {
   const record = card.record;
   if (record && record.pushed) return void keep(card, pushedText(record), pushedLine(record));
   const failed = record && record.error !== undefined;
-  const state = failed ? (record.uncertain ? "uncertain" : "failed") : Date.now() - card.approvedAt >= NO_WORD_MS ? "unheard" : "pushing";
+  const state = failed ? (record.uncertain ? "uncertain" : "failed") : record && record.unmarked ? "unmarked" : Date.now() - card.approvedAt >= NO_WORD_MS ? "unheard" : "pushing";
   const branch = card.push.branch;
   // (Each the same while it stands: a line that changed by itself would move what is below.)
   const text =
     state === "failed" ? "Not pushed: the root's pusher reports it failed, in its words above. To try again, push it again (the dashboard's Push, desolate push, or git push in the git VM) and approve it here."
     : state === "uncertain" ? `Perhaps not pushed: the root's pusher reports it may or may not have reached the remote, in its words above. See what the remote's ${branch} has (desolate fetch, then the dashboard) before you push it again.`
+    : state === "unmarked" ? "Approved: the root is pushing it, but desolate could not note where the pusher's log stood as you approved it, so it cannot tell you here how this ends: desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended."
     : state === "unheard" ? `No word from the root's pusher in the ${NO_WORD_MS / 60_000} minutes since you approved this. A large push can take longer, and this changes when word comes. If none does, desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended; to try again, push it again.`
     : `Approved${card.squashes ? ", squashed into one commit" : ""}: the root is pushing it to the remote now. This card goes when the root's pusher reports the remote has it.`;
   if (failed) quote(card, record.error);
-  for (const name of ["pushing", "failed", "uncertain", "unheard"]) card.element.classList.toggle(name, name === state);
+  for (const name of ["pushing", "failed", "uncertain", "unheard", "unmarked"]) card.element.classList.toggle(name, name === state);
   // Pushing, a card approved here keeps its buttons (disabled): nothing moves under the
   // pointer that clicked. Ended, or not heard of, Dismiss shows, at the far end of the bar,
   // where no Approve was.
@@ -669,7 +687,7 @@ const dismiss = (card) => {
   keep(card, "Dismissed.", null);
 };
 /** What the pusher reports a pushed approval did, as a line of text. */
-const pushedText = (record) => `${record.repo} ${record.branch} ${record.commit.slice(0, 12)}: the root's pusher reports the remote has it${record.squashes ? ", squashed into one commit" : ""}. Approved at ${new Date(record.at).toTimeString().slice(0, 8)}.`;
+const pushedText = (record) => `${record.repo} ${record.branch} ${record.commit.slice(0, 12)}: ${record.error !== undefined ? "the root's pusher first reported a failure, then that the remote has it" : "the root's pusher reports the remote has it"}${record.squashes ? ", squashed into one commit" : ""}. Approved at ${new Date(record.at).toTimeString().slice(0, 8)}.`;
 /** A pushed approval's line under "Pushed", newest first, once: what the pusher reports the
  *  remote took, the page to open its pull request, and how to go on after a squash. */
 const pushedLine = (record) => {
@@ -767,6 +785,13 @@ const render = (pending, issues) => {
       cards.set(push.token, card);
       list.append(card.element);
       changed = added = true;
+      // Signed here before, its record gone since (16 more, or the daemon restarted): never
+      // one to approve (its text is spent: the keyring takes no second signature).
+      if (push.signedAt) {
+        card.done = card.signed = true;
+        for (const arm of card.arms) if (arm.kind !== "dismiss") arm.wrap.hidden = true;
+        said(card, `Already approved here at ${new Date(push.signedAt).toTimeString().slice(0, 8)}: the root still lists it. It cannot be approved again; the terminal or dashboard that pushed says how it ended.`);
+      }
       if (askedFor.commit === push.commit && askedFor.repo === push.repo && askedFor.branch === push.branch) {
         askedFor.commit = "";
         card.element.classList.add("asked");
@@ -792,7 +817,7 @@ const render = (pending, issues) => {
         card.summary.replaceChildren(el("p", `this account of the push could not be shown: ${error.message}. It cannot be approved here.`, "error"));
         choicesOf(card, null);
       }
-      card.changedAt = performance.now();
+      stirred(card);
       changed = true;
     }
   }
@@ -808,14 +833,14 @@ const render = (pending, issues) => {
   // Something new to decide: what was decided before folds to its names and its outcome, so
   // the new card is not pushed below the fold (dogfooding, 2026-11-21: two refused cards above
   // the live one, beside the git terminal). The page moved: every card waits its second again.
-  if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); card.changedAt = performance.now(); }
+  if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); stirred(card); }
   if (scrollTo) scrollTo.scrollIntoView({ block: "start" });
   if (changed) disarmAll();
   counted();
 };
 /** How many wait, in the tab's title and to the git terminal; and nothing on the page, said. */
 const counted = () => {
-  const waiting = [...cards.values()].filter((card) => !card.gone).length;
+  const waiting = [...cards.values()].filter((card) => !card.gone && !card.signed).length;
   document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
   // (A number, to that one origin.)
