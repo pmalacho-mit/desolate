@@ -22,6 +22,12 @@ export type BehaviorDiff = {
   removed: Keyed[];
   /** Same test, different evidence: what it runs, and so what it checks or expects, changed. */
   changed: Pair[];
+  /**
+   * Same test, the same claims: only what it sets up or does first changed (a
+   * mock, a setup, an alias, an effect), every claim line as it was. Listed,
+   * not a change to what the code guarantees.
+   */
+  setupChanged: Pair[];
   /** Same evidence, different words: its own, or how its evidence is said. */
   reworded: Pair[];
   /** Was run, now is not. */
@@ -53,6 +59,14 @@ const keyed = (files: FileDocs[]) =>
 
 const words = (c: ClaimDoc) => JSON.stringify([claimWords(c), c.shorthand]);
 
+// conservative: every claim line the same, in the same order, and some other
+// line of the shorthand not, so the change is one a reader can see. When the
+// shorthand shows no difference at all, what changed cannot be told: changed
+const onlySetup = (before: ClaimDoc, after: ClaimDoc) =>
+  after.checks.length > 0 &&
+  JSON.stringify(before.checks) === JSON.stringify(after.checks) &&
+  JSON.stringify(before.shorthand) !== JSON.stringify(after.shorthand);
+
 const runs = (c: ClaimDoc) => c.mode === "test" || c.mode === "test.only";
 
 /** The claims that differ between two readings of a project. */
@@ -66,6 +80,7 @@ export function behaviorDiff(
     added: [],
     removed: [],
     changed: [],
+    setupChanged: [],
     reworded: [],
     skipped: [],
     retagged: [],
@@ -91,7 +106,11 @@ export function behaviorDiff(
     if (!was) out.added.push(now);
     else if (runs(was.claim) && !runs(now.claim)) out.skipped.push(now);
     else if (was.claim.code !== now.claim.code)
-      out.changed.push({ file: now.file, before: was.claim, after: now.claim });
+      (onlySetup(was.claim, now.claim) ? out.setupChanged : out.changed).push({
+        file: now.file,
+        before: was.claim,
+        after: now.claim,
+      });
     else if (words(was.claim) !== words(now.claim))
       out.reworded.push({
         file: now.file,
@@ -141,7 +160,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** A behavior diff, as Markdown a reviewer reads before the code. */
 export function diffMarkdown(d: BehaviorDiff): string {
   const lines = [
-    `**${plural(d.added.length, "claim")} added, ${d.removed.length} removed, ${d.changed.length} changed, ${d.skipped.length} skipped, ${d.reworded.length} reworded, ${d.retagged.length} retagged.**`,
+    `**${plural(d.added.length, "claim")} added, ${d.removed.length} removed, ${d.changed.length} changed, ${d.setupChanged.length} with setup changed, ${d.skipped.length} skipped, ${d.reworded.length} reworded, ${d.retagged.length} retagged.**`,
     d.needsReview
       ? `${plural(d.needsReview, "change")} to what the code guarantees: a person should approve these.`
       : "No guarantee was removed or changed.",
@@ -160,6 +179,13 @@ export function diffMarkdown(d: BehaviorDiff): string {
     ...block(
       "Changed",
       d.changed.map(
+        ({ file, before, after }) =>
+          `- \`${after.name}\` (${file}): ${said(after)}${evidence(before, "was: ")}${evidence(after, "now: ")}`,
+      ),
+    ),
+    ...block(
+      "Setup changed (every claim line as it was)",
+      d.setupChanged.map(
         ({ file, before, after }) =>
           `- \`${after.name}\` (${file}): ${said(after)}${evidence(before, "was: ")}${evidence(after, "now: ")}`,
       ),
@@ -243,6 +269,51 @@ declare namespace behaviorDiff {
         },
       ];
       reworded: [{ after: { doc: "lowercase letters, said differently" } }];
+      needsReview: 2;
+    }
+  >;
+
+  type Fixtures = `
+    const size = (dir: string) => dir.length;
+    const dirOf = (name: string) => "/tmp/" + name;
+    declare namespace size {
+      type Dir = Invoke<typeof dirOf, [name: "abc"]>;
+      /** a directory's size */
+      export type Same = Expect<Invoke<typeof size, [dir: Dir]>, "=", 8>;
+      /** inline */
+      export type Inline = Expect<Invoke<typeof size, [dir: Invoke<typeof dirOf, [name: "abc"]>]>, "=", 8>;
+      /** the claim itself */
+      export type Claim = Expect<Invoke<typeof size, [dir: Dir]>, "=", 8>;
+    }
+  `;
+  type Rebuilt = `
+    const size = (dir: string) => dir.length;
+    declare namespace size {
+      type Dir = TempDir<{ "a.txt": "x" }>;
+      /** a directory's size */
+      export type Same = Expect<Invoke<typeof size, [dir: Dir]>, "=", 8>;
+      /** inline */
+      export type Inline = Expect<Invoke<typeof size, [dir: TempDir<{ "a.txt": "x" }>]>, "=", 8>;
+      /** the claim itself */
+      export type Claim = Expect<Invoke<typeof size, [dir: Dir]>, ">", 0>;
+    }
+  `;
+
+  /**
+   * a change to what a test sets up, every claim line as it was, is "setup
+   * changed" and needs no one; a claim line that differs (an argument written
+   * inline in it, or what is expected) is changed (41 rewrites to TempDir all
+   * read "changed: a person should approve these")
+   */
+  export type Setup = Expect<
+    Invoke<typeof harness.diffOf, [before: Fixtures, after: Rebuilt]>,
+    "matches",
+    {
+      setupChanged: [{ after: { name: "size > Same" } }];
+      changed: [
+        { after: { name: "size > Inline" } },
+        { after: { name: "size > Claim" } },
+      ];
       needsReview: 2;
     }
   >;

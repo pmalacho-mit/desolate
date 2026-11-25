@@ -13,7 +13,7 @@ import {
   tagsOf,
   topLevelDeclarations,
 } from "../vite-plugin/emit/declarations.mts";
-import { shorthand } from "./shorthand.mts";
+import { claimLines, shorthand } from "./shorthand.mts";
 import { lookupFor } from "./lookup.mts";
 
 import type { EmitInput } from "../vite-plugin/emit/index.mts";
@@ -51,6 +51,8 @@ export type ClaimDoc = {
   code: string;
   /** The evidence in shorthand: what the printed test sets up, does and checks, a line of code each. */
   shorthand: string[];
+  /** The lines of `shorthand` that are claims, one per assertion; the rest are what the test sets up. */
+  checks: string[];
   /** A table row's call, cell by cell, for a docs table. */
   cells: {
     args: [label: string | null, value: string][];
@@ -235,6 +237,7 @@ export function claimOf(t: TestCase, file: string, lookup: Lookup): ClaimDoc {
     kind: isRefusal(t) ? "refuses" : "answers",
     code: printTest({ ...t, doc: null, rowDoc: null }).code,
     shorthand: shorthand(t, lookup),
+    checks: claimLines(t, lookup),
     cells: cellsOf(t),
     uses: {
       harness: harnessOf(t),

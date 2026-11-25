@@ -515,6 +515,17 @@ one and one newly skipped are each a guarantee that is gone or different, and
 `--check` exits 1 when there is any, for a CI step or a review that a person
 signs off.
 
+A changed test is one of two things, told apart by its shorthand. Each
+assertion (an `Expect`, a `Throws`, a table row's check) is a claim line; every
+other line (a mock, a setup, an alias, an effect) is what the test sets up. When
+every claim line is exactly as it was, in the same order, and some other line is
+not, the test is listed as **setup changed**: it does something else first and
+claims the same, and `--check` does not fail on it (a person still reads it,
+since a setup can make a claim easier to pass). Anything else is **changed**: a
+claim line that differs (an argument written inline in it counts, since it is
+on that line), one more or fewer, or a printed test that differs where the
+shorthand shows no difference.
+
 A claim's tags are compared too, as written (`@principle P4`): each one removed
 or added is listed under "Retagged". A removed `@control`, `@principle`,
 `@requirement` or `@incident` is a weaker statement of what the test is evidence

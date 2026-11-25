@@ -459,6 +459,20 @@ const counted = (lines: Line[]): Line[] => {
 const text = ({ code, notes }: Line) =>
   notes.length ? `${code}  // ${notes.join("; ")}` : code;
 
+/**
+ * The lines of a test's shorthand that are its claims: one per assertion (an
+ * `Expect`, a `Throws`, a table row's check), as `shorthand` writes them. Every
+ * other line (a mock, a setup, an alias, an effect) is what the test sets up.
+ */
+export const claimLines = (t: TestCase, lookup: Lookup = () => null) =>
+  t.mode === "test.todo"
+    ? []
+    : t.body.flatMap((s) =>
+        s.kind === "assert"
+          ? [text(line(lookup, (scope) => assertionLine(s, scope)))]
+          : [],
+      );
+
 /** A test, in shorthand: a line per mock, setup, alias, effect and claim, in the order they run. */
 export function shorthand(t: TestCase, lookup: Lookup = () => null): string[] {
   if (t.mode === "test.todo") return [];
