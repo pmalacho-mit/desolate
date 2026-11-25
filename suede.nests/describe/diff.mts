@@ -2,7 +2,7 @@
 // adds, the ones it removes, the ones whose evidence changed, and the functions
 // it adds with nothing said of them.
 //
-// A removed claim, a changed one, one now skipped, and one that lost a tag
+// A removed claim, a changed one (its setup alone included), one now skipped, and one that lost a tag
 // saying what it is evidence of are what a person should approve: each is a
 // guarantee the code no longer makes, or makes differently. They are
 // `needsReview`, and `cli.mts docs diff --check` fails on any.
@@ -23,9 +23,10 @@ export type BehaviorDiff = {
   /** Same test, different evidence: what it runs, and so what it checks or expects, changed. */
   changed: Pair[];
   /**
-   * Same test, the same claims: only what it sets up or does first changed (a
-   * mock, a setup, an alias, an effect), every claim line as it was. Listed,
-   * not a change to what the code guarantees.
+   * Same test, every claim line reading as it did, and what those lines stand
+   * on changed: a mock, a setup, an alias, an effect. Listed apart because the
+   * claim reads the same, but not necessarily the same claim (`Want = 8` became
+   * `Want = 9` under `size(…) → Want`): a person approves it, as a changed one.
    */
   setupChanged: Pair[];
   /** Same evidence, different words: its own, or how its evidence is said. */
@@ -36,7 +37,7 @@ export type BehaviorDiff = {
   retagged: (Pair & { removed: string[]; added: string[] })[];
   /** Functions with tests now that had none before. */
   newSubjects: { file: string; name: string }[];
-  /** What a person should approve: removed, changed or skipped claims, and evidence tags removed. */
+  /** What a person should approve: removed, changed, setup changed or skipped claims, and evidence tags removed. */
   needsReview: number;
 };
 
@@ -137,6 +138,7 @@ export function behaviorDiff(
   out.needsReview =
     out.removed.length +
     out.changed.length +
+    out.setupChanged.length +
     out.skipped.length +
     weakened.length;
   return out;
@@ -347,10 +349,9 @@ declare namespace behaviorDiff {
   `;
 
   /**
-   * a change to what a test sets up, every claim line as it was, is "setup
-   * changed" and needs no one; a claim line that differs (an argument written
-   * inline in it, or what is expected) is changed (41 rewrites to TempDir all
-   * read "changed: a person should approve these")
+   * a change to what a test stands on, every claim line as it was, is listed
+   * as "setup changed"; a claim line that differs (an argument written inline
+   * in it, or what is expected) is changed. Both are a person's to approve
    */
   export type Setup = Expect<
     Invoke<typeof harness.diffOf, [before: Fixtures, after: Rebuilt]>,
@@ -361,7 +362,65 @@ declare namespace behaviorDiff {
         { after: { name: "size > Inline" } },
         { after: { name: "size > Claim" } },
       ];
-      needsReview: 2;
+      needsReview: 3;
+    }
+  >;
+
+  type Stood = `
+    const size = (s: string) => s.length;
+    const refuse = (path: string): string => { if (path.includes("..")) throw new Error(path); return path; };
+    const added: string[] = [];
+    const add = (x: string) => { added.push(x); };
+    declare namespace size {
+      type Want = 8;
+      type Evil = "../etc/passwd";
+      /** eight characters */
+      export type Eight = Expect<Invoke<typeof size, [s: "abcdefgh"]>, "=", Want>;
+      /**
+       * a way out is refused
+       * @control
+       */
+      export type Out = Throws<Invoke<typeof refuse, [path: Evil]>>;
+      /** both were added */
+      export type Both = Given<[Invoke<typeof add, [x: "a"]>, Invoke<typeof add, [x: "b"]>], Expect<typeof added, "isNotEmpty">>;
+    }
+  `;
+  type Weakened = `
+    const size = (s: string) => s.length;
+    const refuse = (path: string): string => { if (path.includes("..")) throw new Error(path); return path; };
+    const added: string[] = [];
+    const add = (x: string) => { added.push(x); };
+    declare namespace size {
+      type Want = 9;
+      type Evil = "a/../b";
+      /** eight characters */
+      export type Eight = Expect<Invoke<typeof size, [s: "abcdefgh"]>, "=", Want>;
+      /**
+       * a way out is refused
+       * @control
+       */
+      export type Out = Throws<Invoke<typeof refuse, [path: Evil]>>;
+      /** both were added */
+      export type Both = Given<Invoke<typeof add, [x: "a"]>, Expect<typeof added, "isNotEmpty">>;
+    }
+  `;
+
+  /**
+   * what a claim line stands on can change the claim: the value it expects, the
+   * input a control refuses, an effect left out. Each reads the same and is
+   * setup changed, and --check fails on it (none of them did)
+   */
+  export type StoodOn = Expect<
+    Invoke<typeof harness.diffOf, [before: Stood, after: Weakened]>,
+    "matches",
+    {
+      setupChanged: [
+        { after: { name: "size > Eight" } },
+        { after: { name: "size > Out" } },
+        { after: { name: "size > Both" } },
+      ];
+      changed: [];
+      needsReview: 3;
     }
   >;
 

@@ -534,9 +534,13 @@ A changed test is one of two things, told apart by its shorthand. Each
 assertion (an `Expect`, a `Throws`, a table row's check) is a claim line; every
 other line (a mock, a setup, an alias, an effect) is what the test sets up. When
 every claim line is exactly as it was, in the same order, and some other line is
-not, the test is listed as **setup changed**: it does something else first and
-claims the same, and `--check` does not fail on it (a person still reads it,
-since a setup can make a claim easier to pass). Anything else is **changed**: a
+not, the test is listed as **setup changed**: every claim line reads as it did,
+and what those lines stand on changed. That is not necessarily the same claim
+(`size("abcdefgh") → Want` reads the same when `Want = 8` becomes `Want = 9`,
+and so does a control whose refused input became a harmless one), so a person
+approves it as a changed one, and `--check` fails on it. It is listed apart
+because it reads as the same claim: a reader checks what it stands on. Anything
+else is **changed**: a
 claim line that differs (an argument written inline in it counts, since it is
 on that line), one more or fewer, or a printed test that differs where the
 shorthand shows no difference.
