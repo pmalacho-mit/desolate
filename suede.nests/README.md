@@ -515,6 +515,12 @@ one and one newly skipped are each a guarantee that is gone or different, and
 `--check` exits 1 when there is any, for a CI step or a review that a person
 signs off.
 
+A claim's tags are compared too, as written (`@principle P4`): each one removed
+or added is listed under "Retagged". A removed `@control`, `@principle`,
+`@requirement` or `@incident` is a weaker statement of what the test is evidence
+of, and fails `--check` as a removed claim does. An added tag, and a changed
+`@standsIn` or `@realIn`, is listed for the reader and fails nothing.
+
 **`docs lint`** finds: tests with no words of their own (`missing-claim`), words
 that only say the assertion again (`restates`), `{@link}`s to tests that do not
 exist (`unresolved-link`), a description that cites some claims and not others

@@ -44,7 +44,7 @@ export const parseDocs = (argv: string[]) => {
     cli.flag("json", "Print JSON instead of Markdown.", false),
     cli.flag(
       "check",
-      "For diff: exit 1 when a claim was removed, changed or skipped. For lint: exit 1 on any finding.",
+      "For diff: exit 1 when a claim was removed, changed or skipped, or lost a @control, @principle, @requirement or @incident. For lint: exit 1 on any finding.",
       false,
     ),
   ]);

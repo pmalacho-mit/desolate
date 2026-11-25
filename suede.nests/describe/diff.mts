@@ -2,9 +2,10 @@
 // adds, the ones it removes, the ones whose evidence changed, and the functions
 // it adds with nothing said of them.
 //
-// A removed claim, a changed one, and one now skipped are what a person should
-// approve: each is a guarantee the code no longer makes, or makes differently.
-// They are `needsReview`, and `cli.mts docs diff --check` fails on any.
+// A removed claim, a changed one, one now skipped, and one that lost a tag
+// saying what it is evidence of are what a person should approve: each is a
+// guarantee the code no longer makes, or makes differently. They are
+// `needsReview`, and `cli.mts docs diff --check` fails on any.
 import { claimWords, subjectId } from "./model.mts";
 import { codeBlock, codeSpan } from "./shorthand.mts";
 
@@ -25,11 +26,23 @@ export type BehaviorDiff = {
   reworded: Pair[];
   /** Was run, now is not. */
   skipped: Keyed[];
+  /** Same test, its tags changed: `@control`, `@principle P4`, … as written. */
+  retagged: (Pair & { removed: string[]; added: string[] })[];
   /** Functions with tests now that had none before. */
   newSubjects: { file: string; name: string }[];
-  /** What a person should approve: removed, changed or skipped claims. */
+  /** What a person should approve: removed, changed or skipped claims, and evidence tags removed. */
   needsReview: number;
 };
+
+/**
+ * The tags that say what a claim is evidence of. One removed is a weaker
+ * statement of evidence, as a removed claim is. One added is a stronger one:
+ * listed for a reader, never a failure.
+ */
+export const EVIDENCE_TAGS = ["control", "principle", "requirement", "incident"];
+
+const tagsOf = (c: ClaimDoc) =>
+  c.tags.map((t) => `@${t.name}${t.text ? ` ${t.text}` : ""}`);
 
 const keyed = (files: FileDocs[]) =>
   new Map(
@@ -55,11 +68,26 @@ export function behaviorDiff(
     changed: [],
     reworded: [],
     skipped: [],
+    retagged: [],
     newSubjects: [],
     needsReview: 0,
   };
   for (const [key, now] of b) {
     const was = a.get(key);
+    if (was) {
+      const before = tagsOf(was.claim);
+      const after = tagsOf(now.claim);
+      const removed = before.filter((t) => !after.includes(t));
+      const added = after.filter((t) => !before.includes(t));
+      if (removed.length || added.length)
+        out.retagged.push({
+          file: now.file,
+          before: was.claim,
+          after: now.claim,
+          removed,
+          added,
+        });
+    }
     if (!was) out.added.push(now);
     else if (runs(was.claim) && !runs(now.claim)) out.skipped.push(now);
     else if (was.claim.code !== now.claim.code)
@@ -80,8 +108,18 @@ export function behaviorDiff(
       .filter((s) => !subjectsBefore.has(subjectId(f.file, s.name)))
       .map((s) => ({ file: f.file, name: s.name })),
   );
+  const weakened = out.retagged.filter((r) =>
+    r.before.tags.some(
+      (t) =>
+        EVIDENCE_TAGS.includes(t.name) &&
+        r.removed.includes(`@${t.name}${t.text ? ` ${t.text}` : ""}`),
+    ),
+  );
   out.needsReview =
-    out.removed.length + out.changed.length + out.skipped.length;
+    out.removed.length +
+    out.changed.length +
+    out.skipped.length +
+    weakened.length;
   return out;
 }
 
@@ -103,7 +141,7 @@ const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 /** A behavior diff, as Markdown a reviewer reads before the code. */
 export function diffMarkdown(d: BehaviorDiff): string {
   const lines = [
-    `**${plural(d.added.length, "claim")} added, ${d.removed.length} removed, ${d.changed.length} changed, ${d.skipped.length} skipped, ${d.reworded.length} reworded.**`,
+    `**${plural(d.added.length, "claim")} added, ${d.removed.length} removed, ${d.changed.length} changed, ${d.skipped.length} skipped, ${d.reworded.length} reworded, ${d.retagged.length} retagged.**`,
     d.needsReview
       ? `${plural(d.needsReview, "change")} to what the code guarantees: a person should approve these.`
       : "No guarantee was removed or changed.",
@@ -145,6 +183,16 @@ export function diffMarkdown(d: BehaviorDiff): string {
         said(before) !== said(after)
           ? `- \`${after.name}\`: "${said(before)}" → "${said(after)}"`
           : `- \`${after.name}\`: ${said(after)}${evidence(before, "was: ")}${evidence(after, "now: ")}`,
+      ),
+    ),
+    ...block(
+      "Retagged",
+      d.retagged.map(
+        ({ file, after, removed, added }) =>
+          `- \`${after.name}\` (${file}): ${[
+            ...removed.map((t) => `removed \`${t}\``),
+            ...added.map((t) => `added \`${t}\``),
+          ].join(", ")}`,
       ),
     ),
     ...block(
@@ -198,4 +246,84 @@ declare namespace behaviorDiff {
       needsReview: 2;
     }
   >;
+
+  type Tagged = `
+    const isSlug = (v: string) => /^[a-z]+$/.test(v);
+    declare namespace isSlug {
+      /**
+       * lowercase letters
+       * @control
+       * @principle P4
+       */
+      export type Lower = Expect<Invoke<typeof isSlug, [v: "acme"]>, "=", true>;
+      /** no capitals */
+      export type Upper = Expect<Invoke<typeof isSlug, [v: "Acme"]>, "=", false>;
+    }
+  `;
+  type Untagged = `
+    const isSlug = (v: string) => /^[a-z]+$/.test(v);
+    declare namespace isSlug {
+      /**
+       * lowercase letters
+       * @principle P5
+       */
+      export type Lower = Expect<Invoke<typeof isSlug, [v: "acme"]>, "=", true>;
+      /**
+       * no capitals
+       * @standsIn shared/names.ts
+       */
+      export type Upper = Expect<Invoke<typeof isSlug, [v: "Acme"]>, "=", false>;
+    }
+  `;
+
+  type MoreTagged = `
+    const isSlug = (v: string) => /^[a-z]+$/.test(v);
+    declare namespace isSlug {
+      /**
+       * lowercase letters
+       * @control
+       * @principle P4
+       */
+      export type Lower = Expect<Invoke<typeof isSlug, [v: "acme"]>, "=", true>;
+      /**
+       * no capitals
+       * @incident 7
+       */
+      export type Upper = Expect<Invoke<typeof isSlug, [v: "Acme"]>, "=", false>;
+    }
+  `;
+
+  /**
+   * a tag removed or added is listed (it showed nothing); a removed @control
+   * or @principle is a weaker statement of evidence, so a person approves it.
+   * The control: an added tag alone needs no one
+   */
+  export type Tags = [
+    Expect<
+      Invoke<typeof harness.diffOf, [before: Tagged, after: Untagged]>,
+      "matches",
+      {
+        retagged: [
+          {
+            after: { name: "isSlug > Lower" };
+            removed: ["@control", "@principle P4"];
+            added: ["@principle P5"];
+          },
+          {
+            after: { name: "isSlug > Upper" };
+            removed: [];
+            added: ["@standsIn shared/names.ts"];
+          },
+        ];
+        changed: [];
+        reworded: [];
+        needsReview: 1;
+      }
+    >,
+    Expect<
+      Invoke<typeof harness.diffOf, [before: Tagged, after: MoreTagged]>,
+      "matches",
+      { retagged: [{ added: ["@incident 7"] }]; needsReview: 0 }
+    >,
+  ];
 }
