@@ -379,7 +379,11 @@ later statement uses it, waited for without throwing, so that one still sees a
 rejection); one that nothing uses again is awaited there, so its rejection fails
 the test. An effect before an `AdvanceTimers` that waits but is not that shape
 (an alias used earlier in the test, a `Caught` of an alias) is said where it is
-written: it would be awaited before the time moves, and hang.
+written: it would be awaited before the time moves, and hang. An async effect
+that is not directly before an `AdvanceTimers` is awaited where it stands, before
+any time moves. A parameterised alias is a call each time it is named, so naming
+one again after the `AdvanceTimers` is a second call, which waits on time that
+has already moved, as a second inline call would.
 
 Outside that shape an alias of a call that throws (or rejects) throws where it
 is declared, so `Throws<Boom>` with `type Boom = Invoke<typeof boom>` fails the

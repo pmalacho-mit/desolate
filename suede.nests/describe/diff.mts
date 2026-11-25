@@ -334,6 +334,51 @@ declare namespace behaviorDiff {
     }
   >;
 
+  type Started = `
+    const later = (ms: number, v: string): Promise<string> => new Promise((r) => setTimeout(() => r(v), ms));
+    const fails = async (ms: number, m: string): Promise<never> => { throw new Error(m); };
+    declare namespace later {
+      type F = Invoke<typeof fails, [ms: 10, m: "late"]>;
+      type FF = F;
+      type A = Invoke<typeof later, [ms: 10, v: "done"]>;
+      type AA = A;
+      export type Unused = Given<[FakeTimers, F, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type OfAlias = Given<[FakeTimers, FF, AdvanceTimers<10>], Throws<FF, "late">>;
+      export type Named = Given<[FakeTimers, AA, AdvanceTimers<10>], Expect<AA, "=", "done">>;
+    }
+  `;
+  type StartedLater = `
+    const later = (ms: number, v: string): Promise<string> => new Promise((r) => setTimeout(() => r(v), ms));
+    const fails = async (ms: number, m: string): Promise<never> => { throw new Error(m); };
+    declare namespace later {
+      type F = Invoke<typeof fails, [ms: 20, m: "late"]>;
+      type FF = F;
+      type A = Invoke<typeof later, [ms: 10, v: "done"]>;
+      type AA = A;
+      export type Unused = Given<[FakeTimers, F, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type OfAlias = Given<[FakeTimers, FF, AdvanceTimers<10>], Throws<FF, "late">>;
+      export type Named = Given<[FakeTimers, AA, AdvanceTimers<10>], Expect<AA, "=", "done">>;
+    }
+  `;
+
+  /**
+   * a started call whose argument changed is listed with shorthands that show
+   * it (both read `F`, the call under `pending` gone from them)
+   */
+  export type StartedArgument = Expect<
+    Invoke<typeof harness.diffOf, [before: Started, after: StartedLater]>,
+    "matches",
+    {
+      setupChanged: [
+        {
+          before: { shorthand: ["fakeTimers()", 'F = fails(ms: 10, m: "late")', "F", "advanceTimers(10)", "1 → 1"] };
+          after: { shorthand: ["fakeTimers()", 'F = fails(ms: 20, m: "late")', "F", "advanceTimers(10)", "1 → 1"] };
+        },
+        { after: { name: "later > OfAlias" } },
+      ];
+    }
+  >;
+
   type Fixtures = `
     const size = (dir: string) => dir.length;
     const dirOf = (name: string) => "/tmp/" + name;

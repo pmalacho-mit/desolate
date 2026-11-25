@@ -165,6 +165,8 @@ export type TestCase = {
   imports: Map<string, Set<string>>;
   mocks: ModuleMock[];
   setup: Setup[];
+  // as lowered, when `settled` started something: what the author wrote, which the shorthand says
+  written?: TestCase;
 };
 
 export const children = (e: Expr): Expr[] => {
@@ -354,7 +356,12 @@ export function settled(t: TestCase): TestCase {
         ? { ...e, awaited: true }
         : e,
     );
-  return { ...t, body: called(body), bindings: called(bindings) };
+  return {
+    ...t,
+    body: called(body),
+    bindings: called(bindings),
+    written: t,
+  };
 }
 
 /** Every name a test refers to, its own aliases and their parameters included. */

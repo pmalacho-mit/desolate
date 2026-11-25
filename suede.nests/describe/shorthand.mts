@@ -464,10 +464,15 @@ const text = ({ code, notes }: Line) =>
  * `Expect`, a `Throws`, a table row's check), as `shorthand` writes them. Every
  * other line (a mock, a setup, an alias, an effect) is what the test sets up.
  */
-export const claimLines = (t: TestCase, lookup: Lookup = () => null) =>
-  t.mode === "test.todo"
-    ? []
-    : t.body.flatMap((s) =>
+export const claimLines = (
+  { written, ...t }: TestCase,
+  lookup: Lookup = () => null,
+): string[] =>
+  written
+    ? claimLines(written, lookup)
+    : t.mode === "test.todo"
+      ? []
+      : t.body.flatMap((s) =>
         s.kind === "assert"
           ? [text(line(lookup, (scope) => assertionLine(s, scope)))]
           : [],
@@ -475,18 +480,11 @@ export const claimLines = (t: TestCase, lookup: Lookup = () => null) =>
 
 /** A test, in shorthand: a line per mock, setup, alias, effect and claim, in the order they run. */
 export function shorthand(t: TestCase, lookup: Lookup = () => null): string[] {
+  // what the author wrote: a call started for fake time is the printer's business
+  if (t.written) return shorthand(t.written, lookup);
   if (t.mode === "test.todo") return [];
   const at = (render: (scope: Scope) => string) => line(lookup, render);
-  // where each alias is written, a started one with the effect that starts it
-  const before = placed({
-    ...t,
-    body: t.body.map((s) => {
-      if (s.kind !== "effect" || !s.start) return s;
-      const { start: _, ...written } = s;
-      return written;
-    }),
-    bindings: t.bindings.map(({ pending: _, ...b }) => b),
-  });
+  const before = placed(t);
   const body: Line[] = [];
   let effects: Line[] = [];
   let checked = false;
@@ -657,6 +655,31 @@ declare namespace shorthand {
       ],
     ]
   >;
+
+  type Started = `
+    const later = (ms: number, v: string): Promise<string> => new Promise((r) => setTimeout(() => r(v), ms));
+    const fails = async (ms: number, m: string): Promise<never> => { throw new Error(m); };
+    declare namespace later {
+      type F = Invoke<typeof fails, [ms: 10, m: "late"]>;
+      type FF = F;
+      type A = Invoke<typeof later, [ms: 10, v: "done"]>;
+      type AA = A;
+      export type Unused = Given<[FakeTimers, F, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type OfAlias = Given<[FakeTimers, FF, AdvanceTimers<10>], Throws<FF, "late">>;
+      export type Named = Given<[FakeTimers, AA, AdvanceTimers<10>], Expect<AA, "=", "done">>;
+    }
+  `;
+
+  /**
+   * a test started for fake time reads as written: every alias with its call,
+   * where the test first names it (the call is under `pending` only in the
+   * printed test; the shorthand had lost F, FF and AA, and moved A)
+   */
+  export type AsWritten = [
+    Expect<Invoke<typeof harness.shorthandOf, [Started, "Unused"]>, "=", [["fakeTimers()","F = fails(ms: 10, m: \"late\")","F","advanceTimers(10)","1 → 1"]]>,
+    Expect<Invoke<typeof harness.shorthandOf, [Started, "OfAlias"]>, "=", [["fakeTimers()","F = fails(ms: 10, m: \"late\")","FF = F","FF","advanceTimers(10)","FF throws /late/"]]>,
+    Expect<Invoke<typeof harness.shorthandOf, [Started, "Named"]>, "=", [["fakeTimers()","A = later(ms: 10, v: \"done\")","AA = A","AA","advanceTimers(10)","AA → \"done\""]]>,
+  ];
 }
 
 // ── as Markdown ────────────────────────────────────────────────────────────
