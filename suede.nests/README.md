@@ -552,7 +552,9 @@ that only say the assertion again (`restates`), `{@link}`s to tests that do not
 exist (`unresolved-link`), a description that cites some claims and not others
 (`uncited`), a function whose every claim is a refusal and none a
 `@control` (`no-control`), claims that open with a refusal (`refusal-first`),
-and functions called from ten places or more with no claims (`unclaimed-hot`).
+functions called from ten places or more with no claims (`unclaimed-hot`),
+and an optional-dependency stub that lacks some of the DSL's exports
+(`stale-stub`, [below](#keeping-nests-optional-for-consumers)).
 `--check` exits 1 on any finding.
 
 ## Mocking a module
@@ -774,6 +776,13 @@ loose types. TypeScript consults it only when the import does not resolve to a
 file: without nests installed the project compiles and the tests are never
 collected; with nests installed at the imported path the real types win and the
 stub is inert.
+
+The stub names each of the DSL's exports, so when the DSL gains one, a stub
+written before it lacks it, and the first test to use it fails to type-check
+where nests is not installed. `docs lint` compares every stub in the project
+with the DSL and says which exports it lacks (`stale-stub`), with the command
+that writes it again. Nothing rewrites it for you: the stub is yours, committed
+with your code.
 
 ## Scripts
 

@@ -91,6 +91,13 @@ export type ProjectDocs = {
   }[];
   /** By `claimId(file, name)`, from the last run's `.derived/results.json`. */
   results: Record<string, ResultRecord["state"]>;
+  /**
+   * Each optional-dependency stub in the project (`nests.d.ts`, from
+   * scripts/install-optional-dependency-stub.sh) that lacks some of the DSL's
+   * exports: a test that uses one fails to type-check where suede.nests is not
+   * installed.
+   */
+  staleStubs: { file: string; line: number; missing: string[] }[];
 };
 
 export type ProjectOptions = {
@@ -449,6 +456,7 @@ export function projectDocs({
     boundaries: [],
     links: [],
     results: {},
+    staleStubs: [],
   };
   if (filesOnly) return model;
 
@@ -534,7 +542,68 @@ export function projectDocs({
   model.boundaries = boundaries;
   model.links = linksIn(checker, read);
   model.results = readResults(root);
+  model.staleStubs = staleStubs(program, root, library);
   return model;
+}
+
+const STUBBED = ["*/dsl.import.meta.vitest", "*/dsl.import.meta.vitest.ts"];
+
+// what a module exports at its top level, as written
+const exportedNames = (statements: readonly ts.Statement[]) =>
+  statements.flatMap((st) =>
+    ts.getModifiers(st as ts.HasModifiers)?.some(
+      (m) => m.kind === ts.SyntaxKind.ExportKeyword,
+    ) &&
+    (ts.isTypeAliasDeclaration(st) ||
+      ts.isInterfaceDeclaration(st) ||
+      ts.isModuleDeclaration(st)) &&
+    ts.isIdentifier(st.name)
+      ? [st.name.text]
+      : [],
+  );
+
+/** The stubs in the program that declare fewer names than the DSL exports, and which. */
+export function staleStubs(
+  program: ts.Program,
+  root: string,
+  library = LIBRARY,
+): ProjectDocs["staleStubs"] {
+  const dsl = program.getSourceFile(
+    path.join(library, "dsl.import.meta.vitest.ts"),
+  );
+  if (!dsl) return [];
+  const exported = [...new Set(exportedNames(dsl.statements))];
+  return program
+    .getSourceFiles()
+    .filter((s) => s.isDeclarationFile && s.fileName.startsWith(root))
+    .flatMap((source) =>
+      source.statements.flatMap((st) => {
+        if (
+          !ts.isModuleDeclaration(st) ||
+          !ts.isStringLiteral(st.name) ||
+          !STUBBED.includes(st.name.text) ||
+          !st.body ||
+          !ts.isModuleBlock(st.body)
+        )
+          return [];
+        const declared = new Set(exportedNames(st.body.statements));
+        const missing = exported.filter((n) => !declared.has(n));
+        return missing.length
+          ? [
+              {
+                file: relativeTo(root, source.fileName),
+                line:
+                  source.getLineAndCharacterOfPosition(st.getStart()).line + 1,
+                missing,
+              },
+            ]
+          : [];
+      }),
+    )
+    .filter(
+      // the two spellings in one stub are one finding
+      (stub, i, all) => all.findIndex((s) => s.file === stub.file) === i,
+    );
 }
 
 declare namespace projectDocs {
@@ -548,6 +617,59 @@ declare namespace projectDocs {
     "matches",
     { harnesses: [{ file: "harness.ts" }] }
   >;
+
+  /**
+   * a consumer's stub that lacks DSL exports the library gained is found, and
+   * which it lacks (desolate's release/nests.d.ts lacked new ones, and the first
+   * test to use one failed where suede.nests is not installed). The control:
+   * the stub this library writes lacks none
+   */
+  export type StaleStub = [
+    Expect<
+      Invoke<typeof harness.projectAt, [file: "stub/code.ts"]>,
+      "matches",
+      {
+        staleStubs: [
+          {
+            file: "nests.d.ts";
+            missing: [
+              "Construct",
+              "Call",
+              "Fixture",
+              "Widen",
+              "FromFile",
+              "Env",
+              "Snapshot",
+              "Nothing",
+              "Throws",
+              "Given",
+              "ExpectGiven",
+              "Mock",
+              "Mocked",
+              "Caught",
+              "Spy",
+              "Calls",
+              "FakeTimers",
+              "AdvanceTimers",
+              "StubEnv",
+              "TempDir",
+              "WriteFile",
+              "Exists",
+              "ListDir",
+              "Repeat",
+              "Table",
+              "Skip",
+              "SkipIfNotFound",
+              "Only",
+              "Todo",
+              "Configure",
+            ];
+          },
+        ];
+      }
+    >,
+    Expect<Invoke<typeof harness.templateStubGaps>, "=", []>,
+  ];
 
   /** a harness function's tags are carried with it: what it stands in for, and where the real thing is shown */
   export type HarnessTags = Expect<

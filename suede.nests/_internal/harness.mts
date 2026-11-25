@@ -38,7 +38,7 @@ import { expression, shorthand } from "../describe/shorthand.mts";
 import { lookupFor } from "../describe/lookup.mts";
 import { claimOf, fileDocs } from "../describe/model.mts";
 import { behaviorDiff } from "../describe/diff.mts";
-import { projectDocs } from "../describe/project.mts";
+import { projectDocs, staleStubs } from "../describe/project.mts";
 import type { Finding } from "../describe/lint.mts";
 
 import type { EmitContext, EmitInput } from "../vite-plugin/emit/index.mts";
@@ -336,12 +336,26 @@ export const failsLater = async (ms: number, message: string): Promise<never> =>
 /** The library's own folder, for a test that names one of its files. */
 export const libraryRoot = () => path.dirname(import.meta.dirname);
 
-/** A fixture's file with tests read as a whole project, its references and harnesses included. */
+/** A fixture's file with tests read as a whole project, every file in its folder in the program. */
 export const projectAt = (file: string) => {
   const abs = path.join(import.meta.dirname, "fixtures", file);
+  const root = path.dirname(abs);
   return projectDocs({
-    root: path.dirname(abs),
+    root,
     files: [abs],
-    program: ts.createProgram([abs], OPTIONS),
+    program: ts.createProgram(ts.sys.readDirectory(root, [".ts"]), OPTIONS),
   });
+};
+
+/** The DSL's exports the stub this library writes for consumers lacks. */
+export const templateStubGaps = () => {
+  const library = path.dirname(import.meta.dirname);
+  const program = ts.createProgram(
+    [
+      path.join(library, "templates/optional/nests.d.ts"),
+      path.join(library, "dsl.import.meta.vitest.ts"),
+    ],
+    OPTIONS,
+  );
+  return staleStubs(program, library, library).flatMap((s) => s.missing);
 };

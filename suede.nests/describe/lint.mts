@@ -1,6 +1,9 @@
 // What a reader of the docs would trip on, said where it is written. Every
 // finding is a suggestion about the words: none of them is a failing test.
+import path from "node:path";
+
 import { claimWords, groupClaims, qualifiedName } from "./model.mts";
+import { LIBRARY } from "../vite-plugin/discovery.mts";
 
 import type { ClaimDoc } from "./model.mts";
 import type { ProjectDocs } from "./project.mts";
@@ -21,7 +24,8 @@ export type Rule =
   | "uncited"
   | "no-control"
   | "refusal-first"
-  | "unclaimed-hot";
+  | "unclaimed-hot"
+  | "stale-stub";
 
 const STOP = new Set(
   "a an the of to is are be it its and or in on for with as by at not no that this what which".split(
@@ -79,9 +83,14 @@ const HOT = 10;
 
 const at = (file: string, c: ClaimDoc) => ({ file, line: c.line });
 
+// the command that writes the stub again, from where it is run
+const stubCommand = (root: string, stub: string) =>
+  `bash ${path.relative(process.cwd(), path.join(LIBRARY, "scripts/install-optional-dependency-stub.sh")) || "."} ${path.relative(process.cwd(), path.join(root, path.dirname(stub))) || "."}`;
+
 /** Findings over a project's docs. */
 export function lint(
-  project: Pick<ProjectDocs, "files" | "links" | "unclaimed">,
+  project: Pick<ProjectDocs, "files" | "links" | "unclaimed"> &
+    Partial<Pick<ProjectDocs, "root" | "staleStubs">>,
 ): Finding[] {
   const out: Finding[] = [];
   for (const f of project.files) {
@@ -148,6 +157,13 @@ export function lint(
       rule: "unresolved-link",
       message: `{@link ${l.target}} names nothing: a claim renamed or removed?`,
     });
+  for (const stub of project.staleStubs ?? [])
+    out.push({
+      file: stub.file,
+      line: stub.line,
+      rule: "stale-stub",
+      message: `declares no ${stub.missing.join(", ")}: the DSL exports them now, and a test that uses one fails to type-check where suede.nests is not installed. Write the stub again: ${stubCommand(project.root ?? process.cwd(), stub.file)}`,
+    });
   for (const u of project.unclaimed.filter((u) => u.callers >= HOT))
     out.push({
       file: u.file,
@@ -176,6 +192,23 @@ declare namespace lint {
           export type Throws_ = Throws<Invoke<typeof refuse, [t: "x"]>>;
         }
       `,
+    ]
+  >;
+
+  /** a stub that lacks the DSL's newer exports is said, with the command that writes it again */
+  export type StaleStub = Expect<
+    Invoke<
+      typeof lint,
+      [project: Invoke<typeof harness.projectAt, [file: "stub/code.ts"]>]
+    >,
+    "matches",
+    [
+      {
+        file: "nests.d.ts";
+        line: 2;
+        rule: "stale-stub";
+        message: "declares no Construct, Call, Fixture, Widen, FromFile, Env, Snapshot, Nothing, Throws, Given, ExpectGiven, Mock, Mocked, Caught, Spy, Calls, FakeTimers, AdvanceTimers, StubEnv, TempDir, WriteFile, Exists, ListDir, Repeat, Table, Skip, SkipIfNotFound, Only, Todo, Configure: the DSL exports them now, and a test that uses one fails to type-check where suede.nests is not installed. Write the stub again: bash scripts/install-optional-dependency-stub.sh _internal/fixtures/stub";
+      },
     ]
   >;
 
