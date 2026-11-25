@@ -1059,6 +1059,41 @@ declare namespace printBody {
     Expect<Thenable_, "=", "done">
   >;
 
+  type Two = `
+    const later = (ms: number, v: string): Promise<string> => new Promise((r) => setTimeout(() => r(v), ms));
+    const fails = async (ms: number, m: string): Promise<never> => { throw new Error(m); };
+    declare namespace later {
+      type A = Invoke<typeof later, [ms: 5, v: "a"]>;
+      type B = Invoke<typeof later, [ms: 10, v: "b"]>;
+      type F = Invoke<typeof fails, [ms: 10, m: "late"]>;
+      type C = Caught<F>;
+      type P<Y extends string = "y"> = Caught<F>;
+      export type Both = Given<[FakeTimers, A, AdvanceTimers<5>, B, AdvanceTimers<10>], [Expect<A, "=", "a">, Expect<B, "=", "b">]>;
+      export type Tuple = [Given<[FakeTimers, A, AdvanceTimers<5>], Expect<A, "=", "a">>, Given<[B, AdvanceTimers<10>], Expect<B, "=", "b">>];
+      export type CaughtBinding = Given<[FakeTimers, F, AdvanceTimers<10>], Expect<C, "matches", { message: "late" }>>;
+      export type CaughtParam = Given<[FakeTimers, F, AdvanceTimers<10>], Expect<P, "matches", { message: "late" }>>;
+    }
+  `;
+
+  /**
+   * a second alias started in one test is started under a name of its own and
+   * declared from it (it was called again after the time had moved, and hung),
+   * in one Given or in a tuple of them
+   */
+  export type TwoStarted = [
+    Expect<Invoke<typeof printAlias, [Two, "Both"]>, "=", "test(\"later > Both\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(5, \"a\");\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(5);\n  await pending.then(undefined, () => {});\n  const pending2 = later(10, \"b\");\n  pending2.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  await pending2.then(undefined, () => {});\n  const A = await pending;\n  const expected1 = \"a\";\n  expect.soft(A).toEqual(expected1);\n  const B = await pending2;\n  const expected2 = \"b\";\n  expect.soft(B).toEqual(expected2);\n});">,
+    Expect<Invoke<typeof printAlias, [Two, "Tuple"]>, "=", "test(\"later > Tuple\", async () => {\n  vi.useFakeTimers();\n  onTestFinished(() => { vi.useRealTimers(); });\n  const pending = later(5, \"a\");\n  pending.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(5);\n  const A = await pending;\n  const expected1 = \"a\";\n  expect.soft(A).toEqual(expected1);\n  const pending2 = later(10, \"b\");\n  pending2.then(undefined, () => {});\n  await vi.advanceTimersByTimeAsync(10);\n  const B = await pending2;\n  const expected2 = \"b\";\n  expect.soft(B).toEqual(expected2);\n});">,
+  ];
+
+  type First = Invoke<typeof later, [ms: 500, value: "a"]>;
+  type Second = Invoke<typeof later, [ms: 1_000, value: "b"]>;
+
+  /** run under fake time: two calls, each started before the time it waits on */
+  export type TwoUnderFakeTime = Given<
+    [FakeTimers, First, AdvanceTimers<500>, Second, AdvanceTimers<1_000>],
+    [Expect<First, "=", "a">, Expect<Second, "=", "b">]
+  >;
+
   type Matrix = `    const later = (ms: number): Promise<string> => new Promise((r) => setTimeout(() => r("done"), ms));
     const fails = async (ms: number): Promise<string> => { throw new Error("late"); };
     const g = (x: string): string => x + "!";

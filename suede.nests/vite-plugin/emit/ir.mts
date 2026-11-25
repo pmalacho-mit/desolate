@@ -304,7 +304,10 @@ export function settled(t: TestCase): TestCase {
       continue;
     const name = fresh();
     body[i] = { ...s, start: { name, call } };
-    bindings = bindings.map((b) => (b === root ? { ...b, pending: name } : b));
+    // by name: an earlier start has rewritten the bindings into copies
+    bindings = bindings.map((b) =>
+      b.name === root.name ? { ...b, pending: name } : b,
+    );
     chains.push(...chain);
     if (call.kind === "caught") continue;
     // a Throws or a Caught of the alias checks the started call itself
@@ -329,7 +332,8 @@ export function settled(t: TestCase): TestCase {
       aliases.has(b.name) ? b : { ...b, value: caught(b.value) },
     );
   }
-  if (body.every((s, i) => s === t.body[i])) return t;
+  if (!chains.length && body.every((s) => s.kind !== "effect" || !s.start))
+    return t;
   // an alias of a started call that nothing after it reaches is not declared at all
   for (let dropped = true; dropped; ) {
     const kept = { ...t, body, bindings };
