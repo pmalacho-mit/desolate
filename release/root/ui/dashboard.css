@@ -24,6 +24,10 @@
   --gray: #a1a1aa; --blue: #2563eb; --green: #16a34a; --yellow: #ca8a04; --orange: #ea580c; --red: #dc2626;
   --k-domain: #6f4ef2; --k-workspace: #0e9470; --k-repo: #56667f; --k-branch: #cf6a0a; --k-commit: #767c87;
   --shadow: 0 1px 2px rgba(20, 20, 30, 0.05), 0 2px 8px rgba(20, 20, 30, 0.04);
+  /* A diff's lines added and removed, and the words that changed in them (GitHub's own tints),
+     and how light a token's colour may be on each (.hl, below). */
+  --add-line: #e6ffec; --add-mark: #abf2bc; --del-line: #ffebe9; --del-mark: #ffcecb;
+  --hl-plain: 0.56; --hl-line: 0.5; --hl-mark: 0.45; --hl-l: var(--hl-plain);
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -33,6 +37,8 @@
     --gray: #71717a; --blue: #60a5fa; --green: #4ade80; --yellow: #facc15; --orange: #fb923c; --red: #f87171;
     --k-domain: #a28fff; --k-workspace: #3cc79c; --k-repo: #9eabc2; --k-branch: #f3a04c; --k-commit: #969ca7;
     --shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 4px 16px rgba(0, 0, 0, 0.3);
+    --add-line: #14261c; --add-mark: #1d4a2b; --del-line: #2a171b; --del-mark: #5c2427;
+    --hl-plain: 0.61; --hl-line: 0.65; --hl-mark: 0.81; --hl-l: var(--hl-plain);
   }
 }
 
@@ -80,6 +86,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 input, select { font: 13px var(--font); height: var(--btn); padding: 0 var(--s3); border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
 input:focus, select:focus { outline: 0; border-color: var(--soft); box-shadow: 0 0 0 3px color-mix(in srgb, var(--soft) 18%, transparent); }
 input.filter { width: 240px; max-width: 100%; }
+
+/* ---- a choice of two or more, shown together, the chosen one filled: radio buttons drawn as
+   one control (the radio itself is over its label, unseen, so a click anywhere chooses it) */
+.segmented { display: inline-flex; height: var(--row); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; vertical-align: middle; }
+.segmented label { position: relative; display: inline-flex; align-items: center; padding: 0 var(--s2); font: 550 12px/1 var(--font); color: var(--soft); background: var(--card); cursor: pointer; white-space: nowrap; }
+.segmented label + label { border-left: 1px solid var(--line); }
+.segmented label:hover { background: var(--hover); color: var(--ink); }
+.segmented input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.segmented label:has(input:checked) { background: var(--ink); color: var(--card); }
+.segmented label:has(input:focus-visible) { outline: 2px solid var(--link); outline-offset: -2px; }
 
 /* ---- folding */
 button.fold { min-height: 0; width: 24px; height: 24px; padding: 0; border: 0; background: none; box-shadow: none; color: var(--soft); font-size: 14px; border-radius: 6px; }
@@ -208,6 +224,13 @@ textarea.wide { font: 13px/1.45 var(--mono); resize: vertical; }
 .markdown table { border-collapse: collapse; } .markdown th, .markdown td { border: 1px solid var(--line); padding: var(--s1) var(--s2); }
 .markdown blockquote { margin: 0; padding-left: var(--s3); border-left: 3px solid var(--line); color: var(--soft); }
 .markdown li.task { list-style: none; }
+/* Where a link goes, beside it (markdown.js where): the host the browser will use, set apart. */
+.markdown .address { color: var(--soft); font: 12px var(--mono); overflow-wrap: anywhere; }
+.markdown .address .host { color: var(--ink); font-weight: 650; }
+/* A line of the page's own in the preview (what was not drawn, and why): a badge no Markdown
+   can draw, as nothing in it gets a class or a ::before. */
+.md-own { margin: var(--s2) 0; padding: var(--s1) var(--s2); border: 1px dashed var(--orange); border-radius: 6px; color: var(--ink); font-size: 12.5px; }
+.md-own::before { content: "desolate"; margin-right: var(--s2); padding: 0 6px; border-radius: 4px; background: var(--ink); color: var(--card); font-weight: 650; }
 [data-preview-toggle] { justify-self: start; align-self: flex-start; width: auto; }
 
 /* ---- the review: a panel on the right, the window's height, its width the person's */
@@ -263,8 +286,8 @@ button.commit-pick.on { background: color-mix(in srgb, var(--link) 12%, var(--ca
    column as wide as the longest line, so every line's colour reaches the scrolled width. */
 pre.diff { display: grid; margin: 0; max-height: 60vh; white-space: pre; overflow: auto; line-height: 1.35; border: 1px solid var(--line); border-radius: 10px; padding: var(--s2) 0; }
 pre.diff span { display: block; padding: 0 var(--s3); }
-pre.diff .add { background: color-mix(in srgb, var(--green) 14%, transparent); }
-pre.diff .del { background: color-mix(in srgb, var(--red) 14%, transparent); }
+pre.diff .add { background: var(--add-line); --hl-l: var(--hl-line); }
+pre.diff .del { background: var(--del-line); --hl-l: var(--hl-line); }
 pre.diff .hunk { color: var(--link); }
 pre.diff .file { font-weight: 700; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 pre.diff span.hl { display: inline; padding: 0; }
@@ -272,14 +295,30 @@ pre.diff span.hl { display: inline; padding: 0; }
 .sbs-row { display: grid; grid-template-columns: 3.5em minmax(0, 1fr) 3.5em minmax(0, 1fr); }
 .sbs-row .no { color: var(--soft); text-align: right; padding: 0 var(--s2) 0 var(--s1); user-select: none; border-right: 1px solid var(--line); font-variant-numeric: tabular-nums; }
 .sbs-row .code { white-space: pre-wrap; overflow-wrap: anywhere; padding: 0 var(--s2); }
-.sbs-row .code.del, .sbs-row .no.del { background: color-mix(in srgb, var(--red) 12%, transparent); }
-.sbs-row .code.add, .sbs-row .no.add { background: color-mix(in srgb, var(--green) 12%, transparent); }
-.sbs-row .code.del mark { background: color-mix(in srgb, var(--red) 36%, transparent); color: inherit; border-radius: 2px; }
-.sbs-row .code.add mark { background: color-mix(in srgb, var(--green) 36%, transparent); color: inherit; border-radius: 2px; }
+.sbs-row .code.del, .sbs-row .no.del { background: var(--del-line); --hl-l: var(--hl-line); }
+.sbs-row .code.add, .sbs-row .no.add { background: var(--add-line); --hl-l: var(--hl-line); }
+.sbs-row .code.del mark { background: var(--del-mark); --hl-l: var(--hl-mark); color: inherit; border-radius: 2px; }
+.sbs-row .code.add mark { background: var(--add-mark); --hl-l: var(--hl-mark); color: inherit; border-radius: 2px; }
 .sbs-row .empty { background: color-mix(in srgb, var(--soft) 7%, transparent); }
 .sbs-file { font-weight: 650; padding: 6px var(--s3); border-top: 1px solid var(--line); background: var(--raise); position: sticky; top: 0; }
+/* A file's names keep every space, a run and a trailing one, as the unified header's do: run
+   together, "a.md  Rendered" read as a name beside a control (review of #281). */
+.sbs-file { white-space: break-spaces; }
+/* A file's header is a button of its name, that collapses its diff (dashboard.js collapsible):
+   the header's text as it was, the whole row to click, an arrow saying which way it is. */
+button.collapse { display: block; width: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: inherit; font: inherit; text-align: left; white-space: inherit; overflow-wrap: anywhere; }
+button.collapse:hover { opacity: 1; text-decoration: underline; }
+button.collapse::before { content: "\25BE" / ""; display: inline-block; width: 1.5ch; color: var(--soft); font-weight: 400; }
+button.collapse[aria-expanded="false"]::before { content: "\25B8" / ""; }
+pre.diff .file.collapsed { color: var(--soft); }
+.sbs-file.collapsed { color: var(--soft); }
 .sbs-hunk { color: var(--link); padding: 2px var(--s3); background: color-mix(in srgb, var(--link) 6%, transparent); }
 .sbs-meta { color: var(--soft); padding: 2px var(--s3); font-style: italic; }
-/* Syntax colour (shared/ui/highlight.js): each token's colours, for light and dark. */
-.hl { color: var(--hl-light, inherit); }
-@media (prefers-color-scheme: dark) { .hl { color: var(--hl-dark, inherit); } }
+/* Syntax colour (shared/ui/highlight.js): each token's colours, for light and dark, made no
+   lighter (in the dark, no darker) than --hl-l, the OKLCH lightness at which every colour of the
+   theme reads at 4.5:1 or more (WCAG AA) on what is behind it: the card, a line's tint, a changed
+   word's. A colour already darker (lighter) is left as it is; hue and chroma stay. The changed
+   words of a comment read at 1.3:1 in the dark (the owner's screenshot, #281), and GitHub's own
+   orange at 3.5:1 on white. Measured, and each bound chosen, by tests/v3/t1/contrast.test.ts. */
+.hl { color: oklch(from var(--hl-light, var(--ink)) min(l, var(--hl-l)) c h); }
+@media (prefers-color-scheme: dark) { .hl { color: oklch(from var(--hl-dark, var(--ink)) max(l, var(--hl-l)) c h); } }

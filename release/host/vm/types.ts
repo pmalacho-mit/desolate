@@ -119,6 +119,13 @@ export interface Backend {
    *  workspace: a workspace listening on one must not get the host to bind it, in front of
    *  another VM's ssh or link (found by an audit on the M1). */
   hostPorts?(): Set<number>;
+  /** Give every running VM that is known by an ssh host key another VM has one of its own,
+   *  made in it; one that cannot be given one is stopped (bootstrap). */
+  ownHostKeys?(log: (line: string) => void): Promise<void>;
+  /** For a stopped VM that holds no ssh host key desolate recorded for it: forget its record,
+   *  so that its next start takes the key it shows once and gives it a new one at once
+   *  (`desolate host-key`). */
+  forgetHostKey?(name: string): Promise<void>;
 }
 
 export const GUEST_USER = "desolate";

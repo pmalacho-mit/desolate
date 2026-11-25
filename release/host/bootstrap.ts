@@ -223,6 +223,10 @@ export const bootstrap = async (
   (await import("./carry.ts")).dropPartial();
 
   const b = backend();
+  // A VM made before each was given an ssh host key of its own at its first start is given
+  // one here while it runs (a stopped one, as it starts). Once every stack has bootstrapped on
+  // this, nothing is left for it to do, and it can go.
+  await b.ownHostKeys?.((line) => out(`    ${line}`));
   const missing = (await b.check()).filter((check) => !check.ok && check.name !== "base image");
   if (missing.length > 0)
     refuse(

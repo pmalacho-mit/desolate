@@ -34,6 +34,7 @@ bootstrap: 8 step(s) done.
   ok   socket paths fit: the longest fits in 103 bytes
   ok   VMs forward nothing by themselves: every running VM refuses Lima's own forwarding
   ok   VMs started confined: every running VM's host process may hand it only its own shares
+  ok   VMs have ssh host keys of their own: every running VM is known by the key desolate gave it alone
   ok   base image: the base VM dsl-<instance>-base, provisioned from this desolate's image (<image>)
   ok   root VM running: dsl-<instance>-root
   ok   approver: terminal; pushes are approved on this host
