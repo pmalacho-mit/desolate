@@ -54,7 +54,8 @@ export type ClaimDoc = {
   /**
    * What a diff compares two readings of the test by: its code printed with
    * every `await` left out, hashed. A function that became async is checked for
-   * the same value, so its test makes the same claim.
+   * the same value, so its test makes the same claim. A refusal keeps its
+   * awaits: a throw that became a rejection is a different claim.
    */
   fingerprint: string;
   /** The evidence in shorthand: what the printed test sets up, does and checks, a line of code each. */
@@ -248,14 +249,24 @@ function harnessOf(t: TestCase): ClaimDoc["uses"]["harness"] {
 }
 
 // every call as if it answered at once: AdvanceTimers is awaited in both readings alike
+// A refusal is the exception: a guard that became async, called for effect by
+// a caller that does not await it, no longer stops anything, and nothing checks
+// for the floating promise. So what a Throws calls, and a Caught, keep theirs.
 const unawaited = <T,>(value: T): T => {
   if (Array.isArray(value)) return value.map(unawaited) as T;
   if (!value || typeof value !== "object" || value instanceof Map) return value;
   const kind = (value as { kind?: string }).kind;
+  if (kind === "caught") return value;
+  const refusal =
+    kind === "assert" && (value as { condition?: string }).condition === "throws";
   return Object.fromEntries(
     Object.entries(value).map(([key, v]) => [
       key,
-      key === "awaited" && kind !== "advanceTimers" ? false : unawaited(v),
+      key === "awaited" && kind !== "advanceTimers"
+        ? false
+        : refusal && key === "actual"
+          ? v
+          : unawaited(v),
     ]),
   ) as T;
 };

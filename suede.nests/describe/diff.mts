@@ -283,6 +283,8 @@ declare namespace behaviorDiff {
       export type Same = Expect<Invoke<typeof load, [id: "a"]>, "=", "a">;
       /** and a bad one is refused */
       export type Refused = Throws<Invoke<typeof refuse, [id: "b"]>, "b">;
+      /** its error says which */
+      export type Said = Expect<Caught<Invoke<typeof refuse, [id: "b"]>>, "matches", { message: "b" }>;
       /** a value */
       export type Other = Expect<Invoke<typeof load, [id: "a"]>, "=", "a">;
     }
@@ -295,6 +297,8 @@ declare namespace behaviorDiff {
       export type Same = Expect<Invoke<typeof load, [id: "a"]>, "=", "a">;
       /** and a bad one is refused */
       export type Refused = Throws<Invoke<typeof refuse, [id: "b"]>, "b">;
+      /** its error says which */
+      export type Said = Expect<Caught<Invoke<typeof refuse, [id: "b"]>>, "matches", { message: "b" }>;
       /** a value */
       export type Other = Expect<Invoke<typeof load, [id: "a"]>, "=", "b">;
     }
@@ -303,22 +307,25 @@ declare namespace behaviorDiff {
   /**
    * a function that became async gives the same claims: its test awaits, and
    * checks the same value (it read "changed" with the same evidence before and
-   * after); a throw that became a rejection is said differently, so it is
-   * reworded. The control: a different value is still changed
+   * after). A refusal that became a rejection is changed: a caller that does
+   * not await the guard is no longer stopped by it. The control: a different
+   * value is changed too
    */
   export type BecameAsync = Expect<
     Invoke<typeof harness.diffOf, [before: Sync, after: Async]>,
     "matches",
     {
-      changed: [{ after: { name: "load > Other" } }];
-      setupChanged: [];
-      reworded: [
+      changed: [
         {
           before: { shorthand: ['refuse("b") throws /b/'] };
           after: { shorthand: ['refuse("b") rejects /b/'] };
         },
+        { after: { name: "load > Said" } },
+        { after: { name: "load > Other" } },
       ];
-      needsReview: 1;
+      setupChanged: [];
+      reworded: [];
+      needsReview: 3;
     }
   >;
 
