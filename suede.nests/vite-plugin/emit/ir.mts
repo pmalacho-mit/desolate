@@ -344,7 +344,17 @@ export function settled(t: TestCase): TestCase {
     );
     dropped = bindings.length < count;
   }
-  return { ...t, body, bindings };
+  // a parameterised alias that now checks a started call is an async arrow: each call of it awaits
+  const asyncArrows = new Set(
+    bindings.filter((b) => b.params && awaits(b.value)).map((b) => b.name),
+  );
+  const called = <T,>(value: T) =>
+    rewritten(value, (e) =>
+      e.kind === "call" && asyncArrows.has(aliasName(e.callee) ?? "")
+        ? { ...e, awaited: true }
+        : e,
+    );
+  return { ...t, body: called(body), bindings: called(bindings) };
 }
 
 /** Every name a test refers to, its own aliases and their parameters included. */
