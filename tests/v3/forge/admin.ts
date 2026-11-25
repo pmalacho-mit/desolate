@@ -10,6 +10,7 @@
 //   admin.ts lfs-has <owner/repo> <oid>                  exit 0 if the forge holds that object
 //   admin.ts has <owner/repo> <git id>                   exit 0 if the repository holds that git object
 //   admin.ts quarantine <owner/repo>                     what receive-pack left of pushes it refused
+//   admin.ts hold <owner/repo> <seconds>                 each push waits that long before it is applied (0: no more)
 import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -191,9 +192,17 @@ done
       .filter((name) => /^(incoming-|tmp_objdir)/.test(name))
       .join("\n"),
   );
+} else if (verb === "hold") {
+  // A forge slow to take a push, as with a large one: its pre-receive hook waits before the
+  // ref is updated, while the pusher waits for the forge's report.
+  const hook = path.join(repoDir(need(args[0])), "hooks", "pre-receive");
+  const seconds = Number(args[1]);
+  if (seconds > 0)
+    fs.writeFileSync(hook, `#!/bin/sh\ncat >/dev/null\nsleep ${seconds}\n`, { mode: 0o755 });
+  else fs.rmSync(hook, { force: true });
 } else {
   console.error(
-    "usage: admin.ts create-repo|add-key|pulls|pushes|access|refs|lfs-has|has|quarantine ...",
+    "usage: admin.ts create-repo|add-key|pulls|pushes|access|refs|lfs-has|has|quarantine|hold ...",
   );
   process.exit(64);
 }

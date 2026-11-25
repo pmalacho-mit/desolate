@@ -399,9 +399,11 @@ what it would send, worked out in the root. **Approve** arms once the pointer ha
 on it for a second while nothing on the page changed: rest it on the button, then click (a
 click before that does nothing, and the line under the buttons says why). One click, and the root pushes exactly that commit, and nothing else:
 the pack that goes is the one desolate's reviewer made of its commits, and what you approve
-names it. The card then says when the push is on the remote, with **Open a pull request**
-(GitHub's page, into the repository's default branch). Once nothing else waits, the keys go
-back to the shell.
+names it. The card then says it is being pushed, and goes once the root's pusher reports the
+remote has it: a line under **Pushed** says so, with **Open a pull request** (GitHub's page,
+into the repository's default branch). A push that fails keeps its card, saying why in the
+pusher's words, until you dismiss it; one not heard of in three minutes says that, and where
+to look. Once nothing else waits, the keys go back to the shell.
 
 What the approval page shows, and the two choices it may add:
 

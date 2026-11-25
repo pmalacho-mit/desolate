@@ -253,6 +253,27 @@ export const openBrowser = async (
       if (r.exceptionDetails) throw new Error(`in the page: ${r.exceptionDetails.text}`);
       return r.result?.value as T;
     };
+    /** A key pressed and let go where the focus is, as a person's: Tab (Shift+Tab, with
+     *  `shift`) or Enter. */
+    const pressKey = async (key: "Tab" | "Enter", shift = false) => {
+      const code = key === "Tab" ? 9 : 13;
+      const base = {
+        key,
+        code: key,
+        windowsVirtualKeyCode: code,
+        nativeVirtualKeyCode: code,
+        modifiers: shift ? 8 : 0,
+      };
+      await send(
+        "Input.dispatchKeyEvent",
+        key === "Enter"
+          ? { type: "keyDown", ...base, text: "\r", unmodifiedText: "\r" }
+          : { type: "rawKeyDown", ...base },
+        sessionId,
+      );
+      await send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, sessionId);
+      await sleep(100);
+    };
     let pointer = { x: width / 2, y: height / 2 };
     const self = {
       said,
@@ -352,6 +373,78 @@ export const openBrowser = async (
         );
         await sleep(300);
       },
+      /** The pointer moved, in eight steps, to `selector`'s middle (holding `text`, if given),
+       *  shifted by `dx` and `dy`: nothing pressed. Where it went. */
+      move: async (selector: string, text = "", dx = 0, dy = 0) => {
+        // (Drawn ones only: a hidden element's innerText is its text.)
+        const find = `[...document.querySelectorAll(${JSON.stringify(selector)})].find((n) => n.offsetParent && n.innerText.includes(${JSON.stringify(text)}))`;
+        await send("Page.bringToFront", {}, sessionId);
+        const at = await evaluate<{ x: number; y: number } | null>(`(() => {
+          const e = ${find};
+          if (!e) return null;
+          const r = e.getBoundingClientRect();
+          return { x: r.x + r.width / 2 + ${dx}, y: r.y + r.height / 2 + ${dy} };
+        })()`);
+        if (!at) throw new Error(`nothing to move to: ${selector} ${text}`);
+        for (let i = 1; i <= 8; i++)
+          await send(
+            "Input.dispatchMouseEvent",
+            {
+              type: "mouseMoved",
+              x: pointer.x + ((at.x - pointer.x) * i) / 8,
+              y: pointer.y + ((at.y - pointer.y) * i) / 8,
+            },
+            sessionId,
+          );
+        pointer = at;
+        return at;
+      },
+      /** The pointer moved to a point of the window, in eight steps (or `steps`): nothing
+       *  pressed. One step is one event, as the browser sends when it brings its hover up to
+       *  date. */
+      moveTo: async (x: number, y: number, steps = 8) => {
+        for (let i = 1; i <= steps; i++)
+          await send(
+            "Input.dispatchMouseEvent",
+            {
+              type: "mouseMoved",
+              x: pointer.x + ((x - pointer.x) * i) / steps,
+              y: pointer.y + ((y - pointer.y) * i) / steps,
+            },
+            sessionId,
+          );
+        pointer = { x, y };
+      },
+      /** A press and release where the pointer is, without moving it: a person clicking again
+       *  with a hand that stayed still. */
+      pressHere: async () => {
+        for (const type of ["mousePressed", "mouseReleased"])
+          await send(
+            "Input.dispatchMouseEvent",
+            { type, ...pointer, button: "left", clickCount: 1 },
+            sessionId,
+          );
+        await sleep(300);
+      },
+      key: pressKey,
+      /** Tab pressed until the focus is on `element` (an expression), from the page's top (the
+       *  focus let go first: past the last element, Tab leaves a headless page): at most 200
+       *  times. */
+      tabTo: async (element: string) => {
+        await evaluate("document.activeElement?.blur(); true");
+        for (let i = 0; i < 200; i++) {
+          if (await evaluate<boolean>(`document.activeElement === ${element}`)) return;
+          await pressKey("Tab");
+        }
+        throw new Error(`Tab never reached ${element}`);
+      },
+      /** This tab brought in front of the others, as a person's click on it does. */
+      front: async () => {
+        await send("Page.bringToFront", {}, sessionId);
+        await sleep(300);
+      },
+      /** Where the pointer is. */
+      pointer: () => ({ ...pointer }),
       /** Text typed where the focus is. */
       type: async (text: string) => {
         await send("Input.insertText", { text }, sessionId);

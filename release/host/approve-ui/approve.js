@@ -1,13 +1,23 @@
 // The approval page's script. Everything it puts on the page is text (textContent), never
 // markup: a commit's subject or a file's name is whatever an agent wrote.
 //
-// Arming. The Approve button takes a click only when (1) the page has been visible and
-// focused for a second, (2) the card has been on the page, unchanged, for a second, and (3)
-// the pointer has been over the button for that second, moving or at rest (a pointer at rest
-// was never armed, and a click soon after arriving was refused: dogfooding, 2026-11-22). Any
-// change to the page (a card added, gone, its summary arriving, a scroll) disarms every
-// button, and the second starts again: a card that shifted under a still pointer arms only
-// once it has stood still under it. Keys do not approve.
+// Arming. Approve, Refuse and Dismiss each take a click only when (1) the page has been
+// visible and focused for a second, (2) the card has been on the page, unchanged, for a
+// second, and (3) since the page last changed, the pointer has moved onto the button and been
+// over it for that second, moving or at rest (a click soon after arriving was refused:
+// dogfooding, 2026-11-22). Any change to the page (a card added, ended, its summary arriving, a
+// scroll) disarms every button, and only a movement of the pointer onto one starts its second
+// again: a button that came under a still pointer never arms (the review of #283: a card that
+// went brought the next card's Approve under the pointer that had approved it). That is what
+// covers whatever moves under the pointer: decided cards folding when a new one arrives, a
+// card drawn again as waiting, the pusher's words appearing or shown whole, buttons hidden as a
+// push fails, a scroll, the frame moved beside the git terminal. A movement counts only once
+// the page knows where the pointer was: after the tab or frame was left (`forget`), the first
+// movement only tells it. Removals are stopped as well: a card that ends keeps its place until
+// the pointer is off the list of cards (`keep`). Keys do not approve. Refuse and Dismiss take a
+// key too, by the same rule: only once the person moved the focus onto the button with their
+// own Tab since the page last changed, and rested there a second (`keyReady`): focus the page
+// moved, or that was there when the page changed, arms nothing.
 //
 // Embedded beside the git terminal (/embed, approve-web.ts): the key from the address's
 // fragment is the credential (sent as a header), the pointer over the frame counts as
@@ -47,6 +57,7 @@ const attention = () => {
   const now = attending();
   if (!now) {
     attentiveSince = 0;
+    forget();
     disarmAll();
   } else if (attentiveSince === 0) attentiveSince = performance.now();
 };
@@ -82,10 +93,44 @@ const reviewedOf = (card) => Boolean(card.issue) || card.reviewed;
 // And only while the page's last look at what waits worked: a page that cannot see the list
 // cannot see that what it shows has changed.
 let current = false;
-const ready = (card, arm) => current && reviewedOf(card) && attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden && confirmed(card);
+/** The page and the card have stood still for a second, and the button is in view. */
+const still = (card, arm) => attentiveSince !== 0 && performance.now() - attentiveSince >= READY_MS && performance.now() - card.changedAt >= READY_MS && arm.visible !== false && !arm.wrap.hidden;
+const ready = (card, arm) => current && reviewedOf(card) && still(card, arm) && confirmed(card);
 const armedOf = (card) => card.arms.find((a) => a.armedAt);
+/** Approve, and its squashed choice: what signs. */
+const signs = (arm) => arm.kind === "approve" || arm.kind === "squash";
+// Where the pointer was at its last movement, by its own events: a movement is one to
+// somewhere else. (After the page changes under a still pointer, the browser may send a
+// pointermove of its own, at the same place: that is not the pointer coming to anything.)
+let pointerAt = null;
+let pointerMoved = false;
+document.addEventListener("pointermove", (event) => {
+  pointerMoved = event.isTrusted && pointerAt !== null && (event.screenX !== pointerAt[0] || event.screenY !== pointerAt[1]);
+  pointerAt = [event.screenX, event.screenY];
+}, true);
+/** The page is no longer where the pointer is (left, hidden, its window or frame not in use):
+ *  where it was is forgotten, and no button has had it come to it. Coming back, the browser's
+ *  own pointermove (hover brought up to date, at wherever the pointer now is) only says where
+ *  it is: a second, somewhere else, is the first that counts (the review of #283). */
+const forget = () => { pointerAt = null; pointerMoved = false; for (const card of cards.values()) unmoved(card, false); };
+window.addEventListener("blur", forget);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState !== "visible") forget(); });
+document.documentElement.addEventListener("pointerleave", forget);
+document.addEventListener("mouseleave", forget);
+/** The page changed: no button of `card` has had the pointer, or the person's Tab, come to it
+ *  since. */
+const unmoved = (card, keys = true) => { for (const arm of card.arms) { arm.came = false; arm.overSince = 0; if (keys) arm.keyedAt = 0; } };
+// When the person last pressed Tab here: a button focused just after came to by their key.
+let tabbedAt = -Infinity;
+document.addEventListener("keydown", (event) => { if (event.isTrusted && event.key === "Tab") tabbedAt = performance.now(); }, true);
+/** Refuse or Dismiss, focused by the person's own Tab since the page last changed, and a
+ *  second ago; the page and the card still, and this page with the focus. */
+const keyReady = (card, arm) => arm.keyedAt !== 0 && document.activeElement === arm.button && document.hasFocus() && performance.now() - arm.keyedAt >= READY_MS && still(card, arm) && !card.busy && (arm.kind === "dismiss" ? card.done : !card.done);
+/** A button looks pressable, or not: Approve by `disabled` (it takes no key at all), Refuse
+ *  and Dismiss by aria-disabled, so a key can still reach them. */
+const pressable = (arm, yes) => { if (signs(arm)) arm.button.disabled = !yes; else arm.button.setAttribute("aria-disabled", String(!yes)); };
 const disarm = (card) => {
-  for (const arm of card.arms) { arm.armedAt = 0; if (!card.done) arm.button.disabled = true; }
+  for (const arm of card.arms) { arm.armedAt = 0; pressable(arm, false); }
   if (card.done || performance.now() < card.saidUntil) return;
   arming(card, whyNotArmed(card));
 };
@@ -100,38 +145,55 @@ const said = (card, text) => {
 };
 /** Why no button of `card` is armed now, as the hint says it. */
 const whyNotArmed = (card) => {
-  const first = card.arms.find((a) => !a.wrap.hidden);
-  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "rest the pointer on a button: it arms after a second" : "arming in a moment...";
+  const first = card.arms.find((a) => signs(a) && !a.wrap.hidden);
+  return !reviewedOf(card) ? "waiting for desolate's reviewer to say what it sends" : !confirmed(card) ? `type ${card.push.branch} above to replace it` : first && ready(card, first) ? "move the pointer onto a button and rest it there: it arms after a second" : "arming in a moment...";
 };
 const disarmAll = () => { for (const card of cards.values()) disarm(card); };
 // Whatever changes a card's size (a card folded, a diff opened, what happened said on one, as
 // late as the pusher's word) moves every Approve below it: each waits its second again.
 // So does the page scrolling: it moves Approve under a pointer that did not move.
-const moved = () => { for (const card of cards.values()) card.changedAt = performance.now(); disarmAll(); };
-new ResizeObserver(moved).observe(list);
-window.addEventListener("scroll", moved, { passive: true });
-/** Armed, if the pointer has been over it (moving or not) for a second while nothing on the
- *  page changed. */
+// (A scroll moves the buttons under the pointer, not the focus: the focus the person's Tab
+// brought to a button stays where it was, and so does what a key acts on. Tab itself scrolls.)
+/** What `card` shows changed: its buttons wait their second again, after the pointer (or the
+ *  person's Tab) comes to them. The one way the page marks a card changed. */
+const stirred = (card, keys = true) => { card.changedAt = performance.now(); unmoved(card, keys); };
+const moved = (keys = true) => { for (const card of cards.values()) stirred(card, keys); disarmAll(); };
+new ResizeObserver(() => moved()).observe(list);
+window.addEventListener("scroll", () => moved(false), { passive: true });
+/** Armed, if the pointer came to it and has been over it (moving or not) for a second while
+ *  nothing on the page changed. Approve, only once the push can be signed; Refuse, at any
+ *  time it waits; Dismiss, once it has ended. */
 const tryArm = (card, arm) => {
-  if (card.done || card.busy || armedOf(card) || performance.now() < card.saidUntil || !arm.overSince || performance.now() - arm.overSince < READY_MS || !ready(card, arm)) return;
+  if (card.busy || armedOf(card) || !arm.came || !arm.overSince || performance.now() - arm.overSince < READY_MS || !still(card, arm)) return;
+  if (arm.kind === "dismiss" ? !card.done : card.done || performance.now() < card.saidUntil || (signs(arm) && !ready(card, arm))) return;
   arm.armedAt = performance.now();
-  arm.button.disabled = false;
+  pressable(arm, true);
+  // (Dismiss leaves the line as it is: it says what became of the push.)
+  if (arm.kind === "dismiss") return;
   card.saidUntil = 0;
-  arming(card, card.issue ? "armed: click to publish" : "armed: click to approve");
+  arming(card, arm.kind === "refuse" ? `armed: click to ${card.issue ? "leave it for now" : "refuse"}` : card.issue ? "armed: click to publish" : "armed: click to approve");
 };
 // (The pointer over a button is read as the browser has it, :hover: a pointer at rest sends
-// no events.)
+// no events. It counts only once the pointer came to the button: `came`, set by a movement.)
 setInterval(() => {
   for (const card of cards.values()) {
-    if (card.done) continue;
     for (const arm of card.arms) {
       const over = arm.wrap.matches(":hover");
-      if (!over && arm.overSince) { arm.overSince = 0; if (arm.armedAt) disarm(card); }
-      else if (over && !arm.overSince) arm.overSince = performance.now();
+      if (!over && (arm.overSince || arm.came)) { arm.overSince = 0; arm.came = false; if (arm.armedAt) disarm(card); }
+      else if (over && arm.came && !arm.overSince) arm.overSince = performance.now();
       tryArm(card, arm);
     }
-    if (!armedOf(card)) disarm(card);
+    if (!armedOf(card)) {
+      disarm(card);
+      // Reached by the person's Tab and rested on: pressable by a key.
+      for (const arm of card.arms) if (!signs(arm) && keyReady(card, arm)) {
+        pressable(arm, true);
+        if (arm.kind === "refuse") arming(card, `armed: press Enter to ${card.issue ? "leave it for now" : "refuse"}`);
+      }
+    }
   }
+  // A card that ended goes once the pointer is off the list of cards: nothing then moves under it.
+  if (kept.size && !list.matches(":hover")) collapse();
 }, 250);
 setInterval(() => { for (const card of cards.values()) if (card.tick && !card.done) card.tick(); }, 1000);
 
@@ -159,8 +221,9 @@ const askHost = async (card, what, query) => {
   if (!answer.ok) throw new Error(body.error || `HTTP ${answer.status}`);
   return body;
 };
-/** Anything added to a card changes it: Approve disarms, and arms again only as it always does. */
-const changed = (card) => { card.changedAt = performance.now(); disarm(card); };
+/** Anything added to a card changes it: its buttons disarm, and each arms again only once the
+ *  pointer has come to it. */
+const changed = (card) => { stirred(card); disarm(card); };
 /** A diff, asked of desolate's reviewer a page at a time (its bytes from `from` up to `next`):
  *  the first when opened, the next when the person asks for more. Nothing is cut: a long diff
  *  is a longer read, never a shorter one. */
@@ -418,34 +481,79 @@ const add = (push, issue) => {
     element.querySelector(".commit").textContent = push.commit;
     element.querySelector(".onto").textContent = push.onto ? `The remote's ${push.branch} moves from ${push.onto} to this commit, or not at all.` : `The remote has no ${push.branch}: this creates it.`;
   }
-  const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), squash: wrap.classList.contains("squash"), armedAt: 0, overSince: 0, visible: VISIBILITY ? false : undefined }));
-  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false };
+  const kindOf = (wrap) => ["squash", "refuse", "dismiss"].find((kind) => wrap.classList.contains(kind)) || "approve";
+  const arms = [...element.querySelectorAll(".arm")].map((wrap) => ({ wrap, button: wrap.querySelector("button"), kind: kindOf(wrap), squash: kindOf(wrap) === "squash", armedAt: 0, overSince: 0, came: false, visible: VISIBILITY ? false : undefined }));
+  const card = { element, push, issue, arms, hint: element.querySelector(".hint"), summary: element.querySelector(".summary"), changedAt: performance.now(), saidUntil: 0, done: false, busy: false, shown: "", replaces: false, typed: false, reviewed: false, approved: false, refuse: arms.find((a) => a.kind === "refuse"), dismiss: arms.find((a) => a.kind === "dismiss") };
+  // (Focused by the page alone, as a card's state changes: never a stop for Tab.)
+  element.tabIndex = -1;
   for (const arm of arms) {
     if (watcher) watcher.observe(arm.wrap);
     // (A disabled button gets no pointer events in every browser: these are on its wrapper,
     // and the button lets them through while disabled: approve.css.)
     arm.wrap.addEventListener("pointermove", () => {
+      // Only a movement brings the pointer to a button.
+      if (!pointerMoved) return;
+      arm.came = true;
       if (!arm.overSince) arm.overSince = performance.now();
       tryArm(card, arm);
     });
-    arm.wrap.addEventListener("pointerleave", () => { arm.overSince = 0; disarm(card); });
+    arm.wrap.addEventListener("pointerleave", () => { arm.overSince = 0; arm.came = false; disarm(card); });
     // A click on a button not armed (the wrapper has it: approve.css) does nothing, and says
     // why, for a few seconds: a click ignored in silence read as a page that did not work.
+    // (Dismiss's says it on the button itself: the line under it says what became of the push.)
     arm.wrap.addEventListener("click", () => {
-      if (arm.armedAt || card.done || card.busy) return;
+      if (arm.armedAt || card.busy || arm.kind === "dismiss" || card.done) return;
       arming(card, `not armed yet: ${whyNotArmed(card)}`);
       card.saidUntil = performance.now() + SAID_MS;
     });
-    arm.button.addEventListener("click", async (event) => {
-      // A real pointer's click, on an armed button: not a key, not a script.
-      if (!event.isTrusted || event.detail === 0 || !arm.armedAt || card.busy || card.done || !confirmed(card)) return;
+    // A real pointer's click, on an armed button: not a key, not a script.
+    const real = (event) => event.isTrusted && event.detail !== 0 && arm.armedAt && !card.busy;
+    const refuseIt = async () => {
       card.busy = true;
-      const asked = performance.now();
+      try { await post("refuse", card); card.done = true; tellTerminal({ desolateDecided: true }); said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
+      catch (error) { said(card, error.message); }
+      finally { card.busy = false; disarm(card); }
+    };
+    if (arm.kind === "dismiss") arm.button.addEventListener("click", (event) => { if (real(event) && card.done) dismiss(card); });
+    else if (arm.kind === "refuse") arm.button.addEventListener("click", (event) => { if (real(event) && !card.done) void refuseIt(); });
+    if (!signs(arm)) {
+      // Focused by the person's Tab (this keydown's own default), or by anything else.
+      arm.button.addEventListener("focus", () => { arm.keyedAt = performance.now() - tabbedAt < 100 ? performance.now() : 0; });
+      arm.button.addEventListener("blur", () => { arm.keyedAt = 0; });
+      // A key's press of its own, a second after the Tab that came to it. (Its default, a click
+      // with no pointer, does nothing: `real`.)
+      arm.button.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        if (!event.isTrusted || event.repeat || !keyReady(card, arm)) {
+          if (arm.kind === "refuse" && !card.done) { arming(card, "not armed yet: move to Refuse with Tab, wait a second, then press Enter"); card.saidUntil = performance.now() + SAID_MS; }
+          return;
+        }
+        if (arm.kind === "dismiss") dismiss(card);
+        else void refuseIt();
+      });
+    }
+    else arm.button.addEventListener("click", async (event) => {
+      if (!real(event) || card.done || !confirmed(card)) return;
+      card.busy = true;
       arm.button.disabled = true;
       arming(card, issue ? "publishing..." : "approving...");
       // The issue's address, as text: the host took it from gh only if it is this repository's
       // issue page (shared/issues.ts, issueUrl).
-      try { const answer = await post("approve", card, arm.squash); card.done = true; card.squashed = arm.squash; tellTerminal({ desolateDecided: true }); said(card, issue ? `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}` : `approved${arm.squash ? ", squashed into one commit" : ""}: the root is pushing it now.${carryOn(card)}`); if (outcomesAt >= asked) for (const outcome of outcomes) ended(outcome); }
+      try {
+        const answer = await post("approve", card, arm.squash);
+        card.done = true;
+        tellTerminal({ desolateDecided: true });
+        if (issue) said(card, `published: ${typeof answer.url === "string" ? answer.url : "it is on GitHub now (its page is on the dashboard)"}`);
+        else {
+          // The focus stays on the card, not on a button that can no longer be pressed.
+          if (mayFocus()) card.element.focus({ preventScroll: true });
+          approved(card, Date.now(), arm.squash ? push.commit : null);
+          // (The host's record of it may have come before this answer did.)
+          card.busy = false;
+          heard();
+        }
+      }
       catch (error) { said(card, `not approved: ${error.message}`); card.saidUntil = performance.now() + SAID_MS; }
       finally { card.busy = false; disarm(card); }
     });
@@ -453,33 +561,181 @@ const add = (push, issue) => {
   // The replace's own step: the branch's name, typed.
   const typed = element.querySelector(".replace-name");
   if (typed) typed.addEventListener("input", () => { card.typed = typed.value === push.branch; disarm(card); });
-  element.querySelector(".refuse").addEventListener("click", async (event) => {
-    if (!event.isTrusted || card.busy || card.done) return;
-    card.busy = true;
-    try { await post("refuse", card); card.done = true; tellTerminal({ desolateDecided: true }); for (const arm of card.arms) arm.button.disabled = true; said(card, issue ? "not published: it is a draft on the dashboard again" : "refused: the push that asked gives up"); }
-    catch (error) { said(card, error.message); }
-    finally { card.busy = false; }
-  });
   disarm(card);
   return card;
 };
 
-/** After a squash, how the workspace's branch goes on from it. */
-const carryOn = (card) => card.squashed ? ` Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${card.push.branch} ${card.push.commit}` : "";
-/** How a push this page approved ended, as the host heard it from the pusher: said on its card,
- *  with the page to open its pull request (GitHub's, on github.com only). */
-const ended = (outcome) => {
-  const card = [...cards.values()].find((c) => c.push && c.done && !c.ended && c.push.token === outcome.token);
-  if (!card) return;
-  card.ended = true;
-  if (!outcome.pushed) return void said(card, `approved, but the pusher said: ${outcome.error}`);
-  said(card, `pushed${card.squashed ? ", squashed into one commit" : ""}: the remote's ${card.push.branch} has it. `);
-  // A suede proposal (docs/suede.md): the dependency's own Action opens its pull request.
-  if (/^downstream\//.test(card.push.branch)) card.hint.append("The dependency's own Action (suede-downstream-to-main) opens its pull request.");
-  else if (typeof outcome.link === "string" && outcome.link.startsWith("https://github.com/"))
-    card.hint.append(Object.assign(el("a", "Open a pull request"), { href: outcome.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
-  card.hint.append(carryOn(card));
+/** After a squash (`squashes`: the commit squashed), how the workspace's branch goes on from it. */
+const carryOn = (branch, squashes) => squashes ? ` Then, to carry on from the squash, in the workspace on the branch pushed: git fetch && git rebase --rebase-merges --autostash --onto origin/${branch} ${squashes}` : "";
+
+// After Approve. The page's word on a push it approved is the host's record of the approval
+// (approve-web.ts, `approved`): the names the Mac signed, and how the push ended once the
+// root's pusher said (its log, which only root writes: host/events.ts). The page says whose
+// word that is, shows its why as text, and acts on none of it: a card approved cannot arm
+// again, and a record names only an approval the host signed.
+/** How long a push approved here may go unheard of before its card says so. The approval
+ *  lasts two minutes unless the pusher takes it (root/keyring.ts, APPROVAL); an ordinary push
+ *  is then said to have landed within seconds (T2 04, 2026-11-24: the page heard it 5.5 s
+ *  after the click, the pusher's log read every 2 s). A large one can take longer to upload:
+ *  its card changes whenever word comes. */
+const NO_WORD_MS = 3 * 60_000;
+/** The host's record of each approval signed here, as its last answer gave it. */
+let records = [];
+/** Failures, and pushes not heard of, the person put away in this tab, with what each said
+ *  then: kept by the tab alone (a reload does not bring them back; another tab still shows
+ *  them), the last few. One put away with no word yet comes back when its word is not
+ *  "pushed" (a pushed one is under Pushed): its line said it would change. */
+const DISMISSED = "desolate-dismissed";
+const dismissed = new Map((() => { try { return Object.entries(JSON.parse(sessionStorage.getItem(DISMISSED) || "{}")); } catch { return []; } })());
+const remember = () => { try { sessionStorage.setItem(DISMISSED, JSON.stringify(Object.fromEntries([...dismissed].slice(-16)))); } catch { /* kept until a reload */ } };
+const pushedList = document.querySelector("#pushed ul");
+const pushedLines = new Map();
+/** Cards that ended, holding their place (`keep`) until the pointer is off the list. */
+const kept = new Set();
+// The page moves the focus only when the person's last act was in it (a press or a key) and
+// it has the focus: beside the git terminal, never away from the terminal.
+let actedHere = false;
+for (const kind of ["pointerdown", "keydown"]) document.addEventListener(kind, () => { actedHere = true; }, true);
+window.addEventListener("blur", () => { actedHere = false; });
+const mayFocus = () => actedHere && document.hasFocus();
+/** How much of the pusher's words a card shows before "Show all": a few lines. */
+const QUOTED = 300;
+
+/** A card is approved: it cannot be approved again (its buttons go), and it says what became
+ *  of the push from here on. `at`: when, by this Mac's clock. */
+const approved = (card, at, squashes) => {
+  card.done = card.approved = true;
+  card.approvedAt = at;
+  card.squashes = squashes;
+  disarm(card);
+  card.element.classList.remove("gone");
+  showApproved(card);
 };
+/** The pusher's words on a card, set apart from the page's own: quoted, said to be its, a few
+ *  lines of them, the rest on asking. */
+const quote = (card, words) => {
+  if (card.quoted === words) return;
+  card.quoted = words;
+  const figure = card.element.querySelector(".reported");
+  const block = figure.querySelector("blockquote");
+  const all = figure.querySelector(".all");
+  const chars = [...words];
+  block.textContent = chars.length > QUOTED ? `${chars.slice(0, QUOTED).join("")}…` : words;
+  all.hidden = chars.length <= QUOTED;
+  all.textContent = `Show all of it (${count(chars.length)} characters)`;
+  all.onclick = () => { block.textContent = words; all.hidden = true; };
+  figure.hidden = false;
+};
+/** What a card approved says now: being pushed; not pushed, or perhaps not, with the pusher's
+ *  words quoted, kept until dismissed; or no word yet. Pushed, it ends (`keep`), and its line
+ *  is added under Pushed. */
+const showApproved = (card) => {
+  const record = card.record;
+  if (record && record.pushed) return void keep(card, pushedText(record), pushedLine(record));
+  const failed = record && record.error !== undefined;
+  const state = failed ? (record.uncertain ? "uncertain" : "failed") : record && record.unmarked ? "unmarked" : Date.now() - card.approvedAt >= NO_WORD_MS ? "unheard" : "pushing";
+  const branch = card.push.branch;
+  // (Each the same while it stands: a line that changed by itself would move what is below.)
+  const text =
+    state === "failed" ? "Not pushed: the root's pusher reports it failed, in its words above. To try again, push it again (the dashboard's Push, desolate push, or git push in the git VM) and approve it here."
+    : state === "uncertain" ? `Perhaps not pushed: the root's pusher reports it may or may not have reached the remote, in its words above. See what the remote's ${branch} has (desolate fetch, then the dashboard) before you push it again.`
+    : state === "unmarked" ? "Approved: the root is pushing it, but desolate could not note where the pusher's log stood as you approved it, so it cannot tell you here how this ends: desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended."
+    : state === "unheard" ? `No word from the root's pusher in the ${NO_WORD_MS / 60_000} minutes since you approved this. A large push can take longer, and this changes when word comes. If none does, desolate events --all on this Mac says what the pusher did, and the terminal or dashboard that pushed says how it ended; to try again, push it again.`
+    : `Approved${card.squashes ? ", squashed into one commit" : ""}: the root is pushing it to the remote now. This card goes when the root's pusher reports the remote has it.`;
+  if (failed) quote(card, record.error);
+  for (const name of ["pushing", "failed", "uncertain", "unheard", "unmarked"]) card.element.classList.toggle(name, name === state);
+  // Pushing, a card approved here keeps its buttons (disabled): nothing moves under the
+  // pointer that clicked. Ended, or not heard of, Dismiss shows, at the far end of the bar,
+  // where no Approve was.
+  const bare = state !== "pushing" || card.drawn;
+  for (const arm of card.arms) if (arm.kind !== "dismiss" && bare) arm.wrap.hidden = true;
+  card.dismiss.wrap.hidden = state === "pushing";
+  card.state = state;
+  // (Said only when it changes: a live region reads each change out.)
+  if (card.hint.textContent !== text) said(card, text);
+};
+/** A card that ended (pushed, or dismissed) keeps its place, its height, and nothing to press:
+ *  what it says instead (`text`) holds it until the pointer is off the list of cards, which
+ *  the page looks at four times a second (`collapse`). Then nothing can come under the
+ *  pointer as it goes. The focus, if it was on the card and may move, stays on its place. */
+const keep = (card, text, then) => {
+  const element = card.element;
+  const focused = element.contains(document.activeElement);
+  element.style.height = `${element.getBoundingClientRect().height}px`;
+  element.classList.add("kept");
+  const note = el("p", text, "kept-note");
+  note.tabIndex = -1;
+  element.replaceChildren(note, el("p", "This place goes once the pointer is off the list of cards, so that nothing moves under it.", "kept-note"));
+  element.then = then;
+  cards.delete(card.push.token);
+  kept.add(element);
+  counted();
+  if (focused && mayFocus()) note.focus({ preventScroll: true });
+};
+/** The places held go, once the pointer is off the list. The focus, if it was on one and may
+ *  move, goes to what it said under Pushed, else to the first card, else to the heading. */
+const collapse = () => {
+  const held = [...kept].find((k) => k.contains(document.activeElement));
+  for (const element of kept) element.remove();
+  kept.clear();
+  counted();
+  if (held && mayFocus()) (held.then || list.querySelector(".card") || document.querySelector("h1")).focus({ preventScroll: true });
+};
+const dismiss = (card) => {
+  dismissed.set(card.push.token, card.state);
+  remember();
+  keep(card, "Dismissed.", null);
+};
+/** What the pusher reports a pushed approval did, as a line of text. */
+const pushedText = (record) => `${record.repo} ${record.branch} ${record.commit.slice(0, 12)}: ${record.error !== undefined ? "the root's pusher first reported a failure, then that the remote has it" : "the root's pusher reports the remote has it"}${record.squashes ? ", squashed into one commit" : ""}. Approved at ${new Date(record.at).toTimeString().slice(0, 8)}.`;
+/** A pushed approval's line under "Pushed", newest first, once: what the pusher reports the
+ *  remote took, the page to open its pull request, and how to go on after a squash. */
+const pushedLine = (record) => {
+  if (pushedLines.has(record.token)) return pushedLines.get(record.token);
+  const li = el("li");
+  li.tabIndex = -1;
+  li.append(el("code", record.repo), " ", el("code", record.branch), " ", el("code", record.commit.slice(0, 12)), pushedText(record).slice(`${record.repo} ${record.branch} ${record.commit.slice(0, 12)}`.length));
+  // A suede proposal (docs/suede.md): the dependency's own Action opens its pull request.
+  if (/^downstream\//.test(record.branch)) li.append(" The dependency's own Action (suede-downstream-to-main) opens its pull request.");
+  else if (typeof record.link === "string" && record.link.startsWith("https://github.com/"))
+    li.append(" ", Object.assign(el("a", "Open a pull request"), { href: record.link, target: "_blank", rel: "noopener noreferrer" }), " on GitHub, as yourself.");
+  li.append(carryOn(record.branch, record.squashes));
+  pushedList.prepend(li);
+  pushedLines.set(record.token, li);
+  pushedList.parentElement.hidden = false;
+  return li;
+};
+/** Each record the host gave: the card it belongs to (by the token over the text signed),
+ *  drawn if this page has none (a reload, another tab's approval), and how it stands. A push
+ *  still waiting here, and not approved here, is its own card's until the root takes the
+ *  approval (it then leaves the list): a record never decides a card that can still arm. */
+const heard = () => {
+  for (const record of records) {
+    let card = cards.get(record.token);
+    if (card && (card.issue || card.busy || (!card.approved && !card.gone))) continue;
+    if (!card) {
+      if (record.pushed) { pushedLine(record); continue; }
+      // Put away: back only if it said no word yet and the word has come.
+      const was = dismissed.get(record.token);
+      if (was !== undefined && !(was === "unheard" && record.error !== undefined)) continue;
+      if (was !== undefined) { dismissed.delete(record.token); remember(); }
+      card = add({ repo: record.repo, branch: record.branch, commit: record.commit, onto: record.onto, token: record.token });
+      card.gone = true;
+      cards.set(record.token, card);
+      list.append(card.element);
+    }
+    card.record = record;
+    // Approved, but not by a click in this tab: nothing of it was under this tab's pointer, so
+    // its buttons go at once.
+    if (!card.approved) { card.drawn = true; approved(card, record.at, record.squashes); }
+    else { card.approvedAt = record.at; showApproved(card); }
+  }
+  // The lines of approvals the host no longer keeps (OUTCOMES_KEPT) go.
+  for (const [token, li] of pushedLines) if (!records.some((r) => r.token === token)) { li.remove(); pushedLines.delete(token); }
+  pushedList.parentElement.hidden = pushedLines.size === 0;
+  counted();
+};
+setInterval(() => { for (const card of cards.values()) if (card.approved) showApproved(card); }, 1000);
 
 /** What the reviewer said decides the choices: a squash, and a replace's typed name. */
 const choicesOf = (card, review) => {
@@ -488,7 +744,7 @@ const choicesOf = (card, review) => {
   card.replaces = Boolean(account) && account.fastForward === false;
   const squash = card.arms.find((a) => a.squash);
   if (squash) squash.wrap.hidden = !(account && account.squash);
-  const main = card.arms.find((a) => !a.squash);
+  const main = card.arms.find((a) => a.kind === "approve");
   main.button.textContent = card.replaces ? `Replace ${card.push.branch}` : "Approve push";
   if (squash) squash.button.textContent = card.replaces ? `Replace ${card.push.branch}, squashed into one commit` : "Approve, squashed into one commit";
   const row = card.element.querySelector(".confirm-replace");
@@ -514,11 +770,28 @@ const render = (pending, issues) => {
   for (const push of pending) {
     seen.add(push.token);
     let card = cards.get(push.token);
+    // Drawn as approved from a record the host no longer has, and listed as waiting again (the
+    // keyring refused it): drawn again as waiting.
+    if (card && card.drawn && !records.some((r) => r.token === push.token)) {
+      card.element.remove();
+      cards.delete(push.token);
+      card = undefined;
+    }
     if (!card) {
+      // One the host has signed is not waiting for the person, whatever the root still lists:
+      // its record says what became of it (`heard`).
+      if (records.some((r) => r.token === push.token)) continue;
       card = add(push);
       cards.set(push.token, card);
       list.append(card.element);
       changed = added = true;
+      // Signed here before, its record gone since (16 more, or the daemon restarted): never
+      // one to approve (its text is spent: the keyring takes no second signature).
+      if (push.signedAt) {
+        card.done = card.signed = true;
+        for (const arm of card.arms) if (arm.kind !== "dismiss") arm.wrap.hidden = true;
+        said(card, `Already approved here at ${new Date(push.signedAt).toTimeString().slice(0, 8)}: the root still lists it. It cannot be approved again; the terminal or dashboard that pushed says how it ended.`);
+      }
       if (askedFor.commit === push.commit && askedFor.repo === push.repo && askedFor.branch === push.branch) {
         askedFor.commit = "";
         card.element.classList.add("asked");
@@ -526,6 +799,8 @@ const render = (pending, issues) => {
         scrollTo = card.element;
       }
     }
+    // Decided here: what the root lists of it changes nothing on its card.
+    if (card.done) continue;
     // (How long the reviewer has been at it is not a change: the page counts that itself.)
     const shown = JSON.stringify(push.review && push.review.working ? { working: { ...push.review.working, seconds: 0 } } : push.review);
     if (shown !== card.shown) {
@@ -542,7 +817,7 @@ const render = (pending, issues) => {
         card.summary.replaceChildren(el("p", `this account of the push could not be shown: ${error.message}. It cannot be approved here.`, "error"));
         choicesOf(card, null);
       }
-      card.changedAt = performance.now();
+      stirred(card);
       changed = true;
     }
   }
@@ -551,16 +826,21 @@ const render = (pending, issues) => {
     if (!seen.has((card.issue || card.push).token) && !card.gone) {
       card.gone = true;
       if (!card.done) { card.done = true; for (const arm of card.arms) arm.button.disabled = true; said(card, "no longer waiting (approved elsewhere, refused, or given up)"); }
-      card.element.classList.add("gone");
+      // (One approved says what became of it, at full strength.)
+      if (!card.approved) card.element.classList.add("gone");
       changed = true;
     }
   // Something new to decide: what was decided before folds to its names and its outcome, so
   // the new card is not pushed below the fold (dogfooding, 2026-11-21: two refused cards above
   // the live one, beside the git terminal). The page moved: every card waits its second again.
-  if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); card.changedAt = performance.now(); }
+  if (added) for (const card of cards.values()) { if (card.done) card.element.classList.add("folded"); stirred(card); }
   if (scrollTo) scrollTo.scrollIntoView({ block: "start" });
   if (changed) disarmAll();
-  const waiting = [...cards.values()].filter((card) => !card.gone).length;
+  counted();
+};
+/** How many wait, in the tab's title and to the git terminal; and nothing on the page, said. */
+const counted = () => {
+  const waiting = [...cards.values()].filter((card) => !card.gone && !card.signed).length;
   document.title = waiting ? `(${waiting}) desolate: waiting for you` : "desolate: nothing waiting";
   // Beside the git terminal: how many wait, so its page shows this frame when one does.
   // (A number, to that one origin.)
@@ -568,7 +848,8 @@ const render = (pending, issues) => {
   // Nothing waiting: said as a state of its own, with what makes something appear here. A
   // grey line alone read as a page that did not work (dogfooding, 2026-11-17, after
   // `desolate approve --web --open` with nothing waiting).
-  const empty = [...cards.values()].length === 0;
+  // (A card that ended and holds its place counts until it goes: nothing moves before.)
+  const empty = cards.size === 0 && kept.size === 0;
   document.getElementById("empty").hidden = !empty;
   document.body.classList.toggle("nothing", empty);
   say(waiting || empty ? "" : "Nothing else is waiting. A push that waits is shown here as it comes.");
@@ -579,10 +860,6 @@ const render = (pending, issues) => {
 // The issues to publish are asked for every second.
 let pending = null;
 let issues = [];
-/** How the pushes approved here ended, as the host last said: kept, as an approval's own
- *  answer can come after the word that it was pushed. */
-let outcomes = [];
-let outcomesAt = 0;
 const poll = async (tag) => {
   const began = performance.now();
   let next = null;
@@ -590,7 +867,7 @@ const poll = async (tag) => {
     const answer = await fetch(tag ? `/pending?since=${tag}` : "/pending", { credentials: sendCookie, headers: credential });
     const body = await answer.json();
     if (!answer.ok) { current = false; moved(); say(body.error || `HTTP ${answer.status}`); }
-    else { pending = body.pending; render(pending, issues); outcomes = body.done || []; outcomesAt = performance.now(); for (const outcome of outcomes) ended(outcome); current = true; next = body.tag; }
+    else { pending = body.pending; records = body.approved; render(pending, issues); heard(); current = true; next = body.tag; }
   } catch (error) { current = false; moved(); say(`the host daemon did not answer: ${error.message}`); }
   setTimeout(() => poll(next), Math.max(0, 1000 - (performance.now() - began)));
 };
