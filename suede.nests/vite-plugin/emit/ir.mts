@@ -8,7 +8,7 @@ export type Expr =
   | { kind: "array"; elements: Expr[] }
   | { kind: "object"; entries: [key: string, value: Expr][] }
   // `imported`: a value the test imports as a type (a harness function), re-imported to run
-  // `awaited`: an alias of an async call, which names the call started once: each use awaits it
+  // `awaited`: an alias of an async call started before an AdvanceTimers (`settled`): each use awaits it
   | {
       kind: "name";
       name: string;
@@ -115,6 +115,8 @@ export type Param = {
 // a user alias the test reaches: a `const`, or an arrow when generic
 export type Binding = {
   name: string;
+  // an alias of an async call started and not awaited where it is declared (`settled`)
+  started?: boolean;
   params: Param[] | null;
   // `Fixture<T, …>` keeps `T`
   annotation: string | null;
@@ -222,6 +224,60 @@ export const startable = (e: Expr): boolean =>
 /** The same expression, started and not awaited. */
 export const started = (e: Expr): Expr =>
   startable(e) ? ({ ...e, awaited: false } as Expr) : e;
+
+// every name node in a value, rewritten; anything else copied as it is
+const renamed = <T,>(value: T, f: (e: Expr & { kind: "name" }) => Expr): T => {
+  if (Array.isArray(value)) return value.map((v) => renamed(v, f)) as T;
+  if (!value || typeof value !== "object" || value instanceof Map) return value;
+  const copy = Object.fromEntries(
+    Object.entries(value).map(([k, v]) => [k, renamed(v, f)]),
+  ) as T;
+  return (copy as { kind?: string }).kind === "name"
+    ? (f(copy as Expr & { kind: "name" }) as T)
+    : copy;
+};
+
+/**
+ * Where each alias of an async call is awaited, once the test's body is known.
+ * Where it is declared, as any alias's value is had there: the calls after it
+ * never overlap it. The one exception is an alias declared on its own effect
+ * just before an `AdvanceTimers`, whose time it waits on: that one is started
+ * there, and awaited at each use after the time has moved.
+ */
+export function settled(t: TestCase): TestCase {
+  const before = placed(t);
+  const starts = new Set(
+    t.bindings
+      .filter((b) => {
+        if (b.params || !startable(b.value)) return false;
+        const i = before.findIndex((list) => list.includes(b));
+        const [at, next] = [t.body[i], t.body[i + 1]];
+        return (
+          at?.kind === "effect" &&
+          at.expr.kind === "name" &&
+          at.expr.name === b.name &&
+          next?.kind === "effect" &&
+          next.expr.kind === "advanceTimers"
+        );
+      })
+      .map((b) => b.name),
+  );
+  const settle = <T,>(value: T) =>
+    renamed(value, (e) => {
+      if (!e.awaited || starts.has(e.name)) return e;
+      const { awaited: _, ...name } = e;
+      return name;
+    });
+  return {
+    ...t,
+    bindings: t.bindings.map((b) => ({
+      ...settle(b),
+      ...(starts.has(b.name) ? { started: true } : {}),
+    })),
+    body: settle(t.body),
+    setup: settle(t.setup),
+  };
+}
 
 /** What each DSL value is called where a test writes it, and what its printed form needs. */
 export const DSL_KINDS: Partial<

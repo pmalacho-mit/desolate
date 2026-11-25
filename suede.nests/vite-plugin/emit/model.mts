@@ -1,7 +1,7 @@
 import ts from "@typescript/typescript6";
 
 import { isFirstPartySpecifier } from "../fork.mts";
-import { awaits, startable } from "./ir.mts";
+import { awaits, settled, startable } from "./ir.mts";
 import { isCondition } from "./print.mts";
 
 import { docTextOf, tagsIn, tagsOf } from "./declarations.mts";
@@ -1371,10 +1371,16 @@ function tableCases(
   });
 }
 
-export function lowerAlias(
+export const lowerAlias = (
   cx: EmitContext,
   decl: ts.TypeAliasDeclaration,
   path: string[] = [],
+): TestCase[] => casesOf(cx, decl, path).map(settled);
+
+function casesOf(
+  cx: EmitContext,
+  decl: ts.TypeAliasDeclaration,
+  path: string[],
 ): TestCase[] {
   cx.resetTest();
   const alias = decl.name.text;

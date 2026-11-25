@@ -327,6 +327,19 @@ export const ruleNames = (findings: Finding[]) => findings.map((f) => f.rule);
 export const later = (ms: number, value: string): Promise<string> =>
   new Promise((resolve) => setTimeout(() => resolve(value), ms));
 
+/** A store of its own: `put` keeps a value after a real tick, and answers it; `read` is what it holds now. */
+export const aStore = () => {
+  const held: string[] = [];
+  return {
+    put: async (value: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      held.push(value);
+      return value;
+    },
+    read: () => [...held],
+  };
+};
+
 /** A rejection with `message`, after a timer of `ms`. */
 export const failsLater = async (ms: number, message: string): Promise<never> => {
   await later(ms, "");

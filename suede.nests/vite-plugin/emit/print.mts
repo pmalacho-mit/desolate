@@ -31,6 +31,7 @@ import type {
 
 import type {
   AdvanceTimers,
+  Call,
   FakeTimers,
   Given,
   Table,
@@ -39,6 +40,7 @@ import type {
   Throws,
 } from "../../dsl.import.meta.vitest.ts";
 import type {
+  aStore,
   failsLater,
   later,
   printAlias,
@@ -780,7 +782,7 @@ declare namespace printBody {
   export type AwaitedInTurn = Expect<
     Invoke<typeof printAlias, [Later, "RealTime"]>,
     "startsWith",
-    'test("later > RealTime", async () => {\n  const Waited = later(1000);\n  await Waited;\n  await later(1);\n'
+    'test("later > RealTime", async () => {\n  const Waited = await later(1000);\n  Waited;\n  await later(1);\n'
   >;
 
   type Waits = Invoke<typeof later, [ms: 1000, value: "done"]>;
@@ -797,17 +799,56 @@ declare namespace printBody {
     [FakeTimers, Fails, AdvanceTimers<1_000>],
     Throws<Fails, "late">
   >;
+
+  type Overlap = `
+    const write = async (what: string): Promise<void> => {};
+    const read = async (): Promise<string> => "x";
+    const put = async (what: string): Promise<string> => what;
+    const both = (a: void, b: string) => b;
+    declare namespace read {
+      type Wrote = Invoke<typeof write, [what: "x"]>;
+      type Read = Invoke<typeof read>;
+      type P = Invoke<typeof put, [what: "a"]>;
+      export type Two = Expect<Invoke<typeof both, [Wrote, Read]>, "=", "x">;
+      export type After = Expect<Invoke<typeof read>, "=", P>;
+    }
+  `;
+
+  /**
+   * outside that one shape, an async alias is awaited where it is declared, so
+   * what comes after never overlaps it: the write, then the read (both were
+   * started at once and awaited together)
+   */
+  export type AwaitedWhereDeclared = [
+    Expect<
+      Invoke<typeof printAlias, [Overlap, "Two"]>,
+      "=",
+      'test("read > Two", async () => {\n  const Wrote = await write("x");\n  const Read = await read();\n  const actual = both(Wrote, Read);\n  const expected = "x";\n  expect(actual).toEqual(expected);\n});'
+    >,
+    Expect<
+      Invoke<typeof printAlias, [Overlap, "After"]>,
+      "=",
+      'test("read > After", async () => {\n  const P = await put("a");\n  const actual = await read();\n  expect(actual).toEqual(P);\n});'
+    >,
+  ];
+
+  type Store = Invoke<typeof aStore>;
+  type Put = Call<Store, "put", [value: "a"]>;
+
+  /** run: the store is read after the put has finished, not while it waits on its tick */
+  export type PutThenRead = Expect<Call<Store, "read">, "=", [Put]>;
+
 }
 
 const printParam = (p: Param) =>
   `${p.name}: ${p.type}${p.fallback ? ` = ${printExpr(p.fallback)}` : ""}`;
 
-// an alias of an async call holds the call, started here; each use awaits it
+// an alias of an async call is awaited here, unless it is started for an AdvanceTimers (`settled`)
 const printBinding = (b: Binding) =>
   b.params
     ? // an object literal as an arrow's body reads as a block: parenthesise it
       `const ${b.name} = ${awaits(b.value) ? "async " : ""}(${b.params.map(printParam).join(", ")}) => ${b.value.kind === "object" ? `(${printExpr(b.value)})` : printExpr(b.value)};`
-    : `const ${b.name}${b.annotation ? `: ${b.annotation}` : ""} = ${printExpr(started(b.value))};`;
+    : `const ${b.name}${b.annotation ? `: ${b.annotation}` : ""} = ${printExpr(b.started ? started(b.value) : b.value)};`;
 
 export type Needs = {
   /** `readFileSync`, for `FromFile`. */

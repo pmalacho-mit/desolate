@@ -342,12 +342,12 @@ root and then makes the offer, whether `Offered` is written inline or named. An
 alias the effects do not name is reached after them, just before the first
 expectation (or the alias) that uses it; one only a setup uses comes first.
 
-**Async calls, and fake time.** An alias of an async call names that one call:
-it is started where the test reaches it, and each use awaits it, so the code
-and the expectation see the same answer. An effect is awaited before the next
-one runs, with one exception: an `AdvanceTimers` runs _while the effect before
-it waits_. That effect is started, the time moved, and only then is it awaited,
-by the next statement that uses it (an `Expect`, a `Throws`), or else just
+**Async calls, and fake time.** An alias of an async call is awaited where it
+is declared, like any alias's value, so nothing after it runs while it is still
+going; and an effect is awaited before the next one runs. There is one
+exception, for fake time: an `AdvanceTimers` runs _while the effect just before
+it waits_. That effect is started, the time moved, and only then is it awaited:
+an alias at each use after (an `Expect`, a `Throws`), an inline call just
 before the next statement. Without that, a call that waits on a fake timer
 could never finish, because the time that runs the timer would not move until
 it had:
@@ -374,6 +374,11 @@ const actual = await Sent;
 So, under fake time, write the call, then the `AdvanceTimers` that moves the
 time it waits on, then what you expect of it. A rejection while the time moves
 is not an unhandled one: a `Throws` after it sees it.
+
+Outside that shape an alias of a call that throws (or rejects) throws where it
+is declared, so `Throws<Boom>` with `type Boom = Invoke<typeof boom>` fails the
+test with boom's error rather than checking it. Write the call inside the
+`Throws` (`Throws<Invoke<typeof boom>, …>`), or name the error with `Caught`.
 
 A `Throws` matcher's fields beyond `instanceOf`, `name`, `message` and
 `matches` are the error's own, compared as `"matches"` compares:
