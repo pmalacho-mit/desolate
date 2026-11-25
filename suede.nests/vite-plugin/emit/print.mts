@@ -32,6 +32,7 @@ import type {
 import type {
   AdvanceTimers,
   Call,
+  Caught,
   FakeTimers,
   Given,
   Table,
@@ -108,7 +109,8 @@ export function printExpr(e: Expr): string {
       return `vi.mocked(${printExpr(e.inner)})`;
     case "caught":
       // a rejection is caught by awaiting it, so an awaited expression is caught in an async thunk
-      return `${e.awaited ? "await " : ""}nt.caught(${e.awaited ? "async " : ""}() => (${printExpr(e.inner)}), ${quote(e.source)})`;
+      // started and not yet awaited, the thunk is still async
+      return `${e.awaited ? "await " : ""}nt.caught(${awaits(e.inner) ? "async " : ""}() => (${printExpr(e.inner)}), ${quote(e.source)})`;
     case "spy":
       return `vi.fn(${e.impl ? printExpr(e.impl) : ""})`;
     case "calls":
@@ -838,6 +840,50 @@ declare namespace printBody {
   /** run: the store is read after the put has finished, not while it waits on its tick */
   export type PutThenRead = Expect<Call<Store, "read">, "=", [Put]>;
 
+  type Caught_ = `
+    const failsLater = async (ms: number, message: string): Promise<never> => { throw new Error(message); };
+    declare namespace failsLater {
+      type E = Caught<Invoke<typeof failsLater, [ms: 1, message: "x"]>>;
+      export type Alias = Expect<E, "matches", { message: "x" }>;
+      export type Inline = Given<
+        [FakeTimers, Caught<Invoke<typeof failsLater, [ms: 10, message: "x"]>>, AdvanceTimers<10>],
+        Expect<1, "=", 1>
+      >;
+    }
+  `;
+
+  /**
+   * a Caught of an async call catches it in an async thunk, awaited where it
+   * stands or started before an AdvanceTimers (it printed \`await\` inside a
+   * plain arrow, which does not parse)
+   */
+  export type CaughtAsync = [
+    Expect<
+      Invoke<typeof printAlias, [Caught_, "Alias"]>,
+      "includes",
+      'const E = await nt.caught(async () => (await failsLater(1, "x")), "Invoke<typeof failsLater, [ms: 1, message: \\"x\\"]>");'
+    >,
+    Expect<
+      Invoke<typeof printAlias, [Caught_, "Inline"]>,
+      "includes",
+      'const pending = nt.caught(async () => (await failsLater(10, "x")), "Invoke<typeof failsLater, [ms: 10, message: \\"x\\"]>");\n  pending.catch(() => {});'
+    >,
+  ];
+
+  type Late = Caught<Invoke<typeof failsLater, [ms: 1_000, message: "late"]>>;
+
+  /** run: and the error is the one the call rejected with */
+  export type CaughtRuns = Expect<
+    Caught<Invoke<typeof failsLater, [ms: 1, message: "soon"]>>,
+    "matches",
+    { message: "soon" }
+  >;
+
+  /** under fake time too, started before the time that rejects it moves */
+  export type CaughtUnderFakeTime = Given<
+    [FakeTimers, Late, AdvanceTimers<1_000>],
+    Expect<Late, "matches", { message: "late" }>
+  >;
 }
 
 const printParam = (p: Param) =>
