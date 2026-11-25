@@ -79,6 +79,12 @@ declare namespace restatement {
 
 const RESTATES = 0.8;
 
+// a line's `// …` is a harness function's own words, filled in: not what the test checks
+const ownCode = (line: string) => line.replace(/  \/\/ .*$/, "");
+
+// a function that never returns has no case to accept: every claim of it is a refusal by nature
+const neverReturns = (signature: string) => /\): never$/.test(signature);
+
 const HOT = 10;
 
 const at = (file: string, c: ClaimDoc) => ({ file, line: c.line });
@@ -105,7 +111,7 @@ export function lint(
           rule: "missing-claim",
           message: `${c.row === null ? c.name : qualifiedName(c).replaceAll(".", " > ")} has no /** … */ saying what it shows`,
         });
-      else if (words && restatement(words, c.shorthand) >= RESTATES)
+      else if (words && restatement(words, c.shorthand.map(ownCode)) >= RESTATES)
         out.push({
           ...at(f.file, c),
           rule: "restates",
@@ -117,6 +123,7 @@ export function lint(
       const kinds = claims.map((c) => c.kind);
       if (
         kinds.length &&
+        !neverReturns(s.signature) &&
         kinds.every((k) => k === "refuses") &&
         !claims.some((c) => c.tags.some((t) => t.name === "control"))
       )
@@ -186,13 +193,37 @@ declare namespace lint {
           /** parsePort 81 is 81 */
           export type Again = Expect<Invoke<typeof parsePort, [t: "81"]>, "=", 81>;
         }
-        export const refuse = (t: string): never => { throw new Error(t); };
+        export const refuse = (t: string): number => { if (t) throw new Error(t); return 0; };
         declare namespace refuse {
-          /** it never returns */
+          /** anything is refused */
           export type Throws_ = Throws<Invoke<typeof refuse, [t: "x"]>>;
+        }
+        export const stop = (t: string): never => { throw new Error(t); };
+        declare namespace stop {
+          /** it never returns, so there is no case it accepts to show */
+          export type Throws_ = Throws<Invoke<typeof stop, [t: "x"]>>;
         }
       `,
     ]
+  >;
+
+  /**
+   * words that say again what a harness function says of itself (its own
+   * JSDoc, written beside its call) do not restate what the test checks: 4 of
+   * desolate's restates findings were such
+   */
+  export type HarnessWords = Expect<
+    Invoke<
+      typeof harness.ruleNames,
+      [
+        findings: Invoke<
+          typeof lint,
+          [project: Invoke<typeof harness.projectAt, [file: "harnessed/code.ts"]>]
+        >,
+      ]
+    >,
+    "excludes",
+    "restates"
   >;
 
   /** a stub that lacks the DSL's newer exports is said, with the command that writes it again */
@@ -212,7 +243,10 @@ declare namespace lint {
     ]
   >;
 
-  /** each rule, where the reader would trip */
+  /**
+   * each rule, where the reader would trip; a function that never returns
+   * (`stop`) is not asked for a case it accepts, since it has none
+   */
   export type Rules = Expect<
     Invoke<
       typeof harness.ruleNames,

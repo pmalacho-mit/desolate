@@ -548,10 +548,12 @@ of, and fails `--check` as a removed claim does. An added tag, and a changed
 `@standsIn` or `@realIn`, is listed for the reader and fails nothing.
 
 **`docs lint`** finds: tests with no words of their own (`missing-claim`), words
-that only say the assertion again (`restates`), `{@link}`s to tests that do not
+that only say the assertion again (`restates`; a harness function's own words
+beside its call are not the assertion), `{@link}`s to tests that do not
 exist (`unresolved-link`), a description that cites some claims and not others
 (`uncited`), a function whose every claim is a refusal and none a
-`@control` (`no-control`), claims that open with a refusal (`refusal-first`),
+`@control` (`no-control`; not one that never returns, which has no case to
+accept), claims that open with a refusal (`refusal-first`),
 functions called from ten places or more with no claims (`unclaimed-hot`),
 and an optional-dependency stub that lacks some of the DSL's exports
 (`stale-stub`, [below](#keeping-nests-optional-for-consumers)).

@@ -12,6 +12,12 @@ declare namespace keepAll {
     "=",
     ["a", "b"]
   >;
+  /** the items it asks for */
+  export type Asked = Expect<
+    Invoke<typeof keepAll, [xs: Invoke<typeof fakeItems, [count: 3]>]>,
+    "=",
+    ["a", "b", "c"]
+  >;
   /** none kept, none loaded */
   export type Loaded = Expect<Invoke<typeof load>, "=", []>;
 }
