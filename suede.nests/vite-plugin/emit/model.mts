@@ -1,7 +1,7 @@
 import ts from "@typescript/typescript6";
 
 import { isFirstPartySpecifier } from "../fork.mts";
-import { awaits, settled } from "./ir.mts";
+import { awaits, children, exprsOfTest, settled } from "./ir.mts";
 import { isCondition } from "./print.mts";
 
 import { docTextOf, tagsIn, tagsOf } from "./declarations.mts";
@@ -918,22 +918,33 @@ declare namespace throwsAtDeclaration {
     const boom = async (): Promise<never> => { throw new Error("no"); };
     declare namespace boom {
       type Boom = Invoke<typeof boom>;
+      type Again = Boom;
+      type One = 1;
+      type Later<X extends number = 1> = Invoke<typeof boom>;
       export type Alias = Throws<Boom, "no">;
+      export type OfAlias = Throws<Again, "no">;
+      export type CaughtAlias = Expect<Caught<Boom>, "matches", { message: "no" }>;
       export type Inline = Throws<Invoke<typeof boom>, "no">;
       export type Timed = Given<[FakeTimers, Boom, AdvanceTimers<5>], Throws<Boom, "no">>;
+      export type Literal = Throws<One, "no">;
+      export type Parameterised = Throws<Later, "no">;
     }
   `;
 
   /**
-   * a Throws of an alias of a call is said where it is written: the alias throws
-   * where it is declared. The controls: the call inside Throws, and the alias
-   * started before an AdvanceTimers, which Throws does see
+   * a Throws or a Caught of an alias of a call, through aliases of aliases, is
+   * said where it is written: the alias throws where it is declared (the alias
+   * of an alias and the Caught were not said). The controls: the call inside
+   * the Throws, the alias started before an AdvanceTimers, which Throws does
+   * see, an alias of a literal, and a parameterised alias, called where used
    */
   export type Said = Expect<
     Invoke<typeof harness.moduleWarnings, [Boom]>,
     "=",
     [
-      "`Throws<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before Throws can check it. Write the call inside Throws, or name the error with Caught",
+      "`Throws<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
+      "`Throws<Again>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
+      "`Caught<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
     ]
   >;
 }
@@ -1402,23 +1413,41 @@ export function lowerAlias(
   return cases;
 }
 
-// `Throws<Boom>` with `type Boom = Invoke<…>`: the call runs where Boom is declared, before Throws
-const throwsAtDeclaration = (t: TestCase) =>
-  t.body.flatMap((s) => {
-    if (s.kind !== "assert" || s.condition !== "throws") return [];
-    const b =
-      s.actual.kind === "name" &&
-      t.bindings.find((b) => b.name === (s.actual as { name: string }).name);
-    return b &&
-      !b.params &&
-      !b.started &&
-      ["call", "method", "construct"].includes(b.value.kind)
-      ? [b.name]
-      : [];
-  });
+// `Throws<Boom>` or `Caught<Boom>` with `type Boom = Invoke<…>` (or an alias of it): the call
+// runs where Boom is declared, before either can check it
+const throwsAtDeclaration = (t: TestCase) => {
+  const byName = new Map(
+    t.bindings.filter((b) => !b.params).map((b) => [b.name, b]),
+  );
+  const nameOf = (e: Expr) => (e.kind === "name" && !e.imported ? e.name : null);
+  // through aliases of aliases, to an alias of a call that is had where it is declared
+  const callAt = (name: string | null) => {
+    const seen = new Set<string>();
+    for (let b = name === null ? undefined : byName.get(name); b; ) {
+      if (seen.has(b.name) || b.started) return false;
+      seen.add(b.name);
+      const next = nameOf(b.value);
+      if (next === null)
+        return ["call", "method", "construct"].includes(b.value.kind);
+      b = byName.get(next);
+    }
+    return false;
+  };
+  const found: string[] = [];
+  for (const s of t.body)
+    if (s.kind === "assert" && s.condition === "throws" && callAt(nameOf(s.actual)))
+      found.push(`Throws<${nameOf(s.actual)}>`);
+  const walk = (e: Expr): void => {
+    if (e.kind === "caught" && callAt(nameOf(e.inner)))
+      found.push(`Caught<${nameOf(e.inner)}>`);
+    children(e).forEach(walk);
+  };
+  exprsOfTest(t).forEach(walk);
+  return found;
+};
 
-const THROWS_ALIAS = (name: string) =>
-  `\`Throws<${name}>\` names an alias of a call, which runs where the alias is declared: what it throws fails the test before Throws can check it. Write the call inside Throws, or name the error with Caught`;
+const THROWS_ALIAS = (written: string) =>
+  `\`${written}\` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught`;
 
 function casesOf(
   cx: EmitContext,
