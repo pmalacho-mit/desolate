@@ -14,6 +14,7 @@
 // This is test-only code. Modules must import it *as a type only*, so that it
 // is erased from any build and can only ever run through the generated tests.
 import path from "node:path";
+import vm from "node:vm";
 import { createHash } from "node:crypto";
 import ts from "@typescript/typescript6";
 
@@ -257,6 +258,42 @@ export const printHeader = (code: string, root?: string): string[] =>
  */
 export const minimalForFixture = (fixture: string, testName: string): string =>
   minimalFor(path.join(import.meta.dirname, "fixtures", fixture), testName);
+
+/**
+ * The syntax errors in the module the printer writes for `code`: TypeScript's,
+ * then what JavaScript's own parser (V8's) refuses once the types are stripped,
+ * such as an `await` in a function that is not async, which TypeScript leaves
+ * to its checker. A parse check only: it says nothing of types, nor of what the
+ * test does when it runs.
+ */
+export function syntaxErrorsIn(code: string): string[] {
+  const printed = printModule(code);
+  const lines = printed.split("\n");
+  const { outputText, diagnostics = [] } = ts.transpileModule(printed, {
+    reportDiagnostics: true,
+    // CommonJS, so the parser takes it as a script: the imports become calls, the rest is as printed
+    compilerOptions: {
+      target: ts.ScriptTarget.ES2022,
+      module: ts.ModuleKind.CommonJS,
+    },
+  });
+  const errors = diagnostics.map((d) => {
+    const line =
+      d.file && d.start !== undefined
+        ? d.file.getLineAndCharacterOfPosition(d.start).line
+        : -1;
+    return `${ts.flattenDiagnosticMessageText(d.messageText, " ")}: ${lines[line]?.trim() ?? ""}`;
+  });
+  try {
+    new vm.Script(outputText);
+  } catch (error) {
+    const at = /:(\d+)\n/.exec(String((error as Error).stack))?.[1];
+    errors.push(
+      `${(error as Error).message}: ${outputText.split("\n")[Number(at) - 1]?.trim() ?? ""}`,
+    );
+  }
+  return errors;
+}
 
 /** The whole generated module: preamble, then every test. */
 export const printModule = (code: string, root?: string): string =>

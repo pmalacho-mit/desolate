@@ -49,6 +49,7 @@ import type {
   printAlias,
   printMatcher,
   printStatements,
+  syntaxErrorsIn,
 } from "../../_internal/harness.mts";
 
 const quote = (s: string) => JSON.stringify(s);
@@ -1072,6 +1073,50 @@ declare namespace printBody {
     [Expect<1, "=", 1>, Throws<FailsAgain, "late">]
   >;
 
+  type Matrix = `    const later = (ms: number): Promise<string> => new Promise((r) => setTimeout(() => r("done"), ms));
+    const fails = async (ms: number): Promise<string> => { throw new Error("late"); };
+    const g = (x: string): string => x + "!";
+    const ga = async (x: string): Promise<string> => x + "?";
+    const box = async () => ({ get: async (k: string) => k });
+    declare namespace later {
+      type A = Invoke<typeof later, [ms: 10]>;
+      type AA = A;
+      type E = Caught<Invoke<typeof fails, [ms: 10]>>;
+      type F = Invoke<typeof fails, [ms: 10]>;
+      type B = Invoke<typeof box>;
+      type Fx = Fixture<string, A>;
+      type P<X extends string = "x"> = Invoke<typeof g, [A]>;
+      type D<X extends string = A> = Invoke<typeof g, [X]>;
+      type Sh<A extends string = "x"> = Invoke<typeof g, [A]>;
+      export type Value = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<A, "=", "done">>;
+      export type Argument = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<Invoke<typeof g, [A]>, "=", "done!">>;
+      export type Receiver = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<Call<A, "toUpperCase">, "=", "DONE">>;
+      export type Method = Given<[FakeTimers, B, AdvanceTimers<10>], Expect<Call<B, "get", [k: "k"]>, "=", "k">>;
+      export type Shapes = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<{ k: A; l: [A, AA] }, "=", { k: "done"; l: ["done", "done"] }>>;
+      export type UnderCaught = Given<[FakeTimers, E, AdvanceTimers<10>], Expect<E, "matches", { message: "late" }>>;
+      export type UnderThrows = Given<[FakeTimers, F, AdvanceTimers<10>], [Expect<1, "=", 1>, Throws<F, "late">]>;
+      export type OfAlias = Given<[FakeTimers, AA, AdvanceTimers<10>], Expect<A, "=", "done">>;
+      export type InBody = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<P, "=", "done!">>;
+      export type AsDefault = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<D, "=", "done!">>;
+      export type Shadowed = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<Sh, "=", "x!">>;
+      export type UnderFixture = Given<[FakeTimers, Fx, AdvanceTimers<10>], Expect<Fx, "=", "done">>;
+      export type Row = Table<typeof g, [[args: [A], expected: "done!"]]>;
+      export type Twice = Given<[FakeTimers, A, AdvanceTimers<5>, AdvanceTimers<5>], Expect<A, "=", "done">>;
+      export type Last = Given<[FakeTimers, A, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type Inline = Given<[FakeTimers, Invoke<typeof later, [ms: 10]>, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type InlineArgument = Given<[FakeTimers, Invoke<typeof ga, [A]>, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type InlineMethod = Given<[FakeTimers, Call<B, "get", [k: "k"]>, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type InlineCaught = Given<[FakeTimers, Caught<Invoke<typeof fails, [ms: 10]>>, AdvanceTimers<10>], Expect<1, "=", 1>>;
+      export type InlineTwice = Given<[FakeTimers, Invoke<typeof later, [ms: 10]>, AdvanceTimers<5>, AdvanceTimers<5>], Expect<1, "=", 1>>;
+    }
+`;
+
+  /**
+   * every shape with a started alias or a started inline call prints a test
+   * that parses: rounds of review found `await` in a plain arrow and in a
+   * parameter's default. A parse check only, as syntaxErrorsIn says
+   */
+  export type Parses = Expect<Invoke<typeof syntaxErrorsIn, [Matrix]>, "=", []>;
 
 }
 
