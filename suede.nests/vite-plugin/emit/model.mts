@@ -1,7 +1,13 @@
 import ts from "@typescript/typescript6";
 
 import { isFirstPartySpecifier } from "../fork.mts";
-import { awaits, children, exprsOfTest, settled } from "./ir.mts";
+import {
+  awaits,
+  children,
+  DEFAULT_WAITS,
+  exprsOfTest,
+  settled,
+} from "./ir.mts";
 import { isCondition } from "./print.mts";
 
 import { docTextOf, tagsIn, tagsOf } from "./declarations.mts";
@@ -928,6 +934,12 @@ declare namespace throwsAtDeclaration {
       export type Timed = Given<[FakeTimers, Boom, AdvanceTimers<5>], Throws<Boom, "no">>;
       export type Literal = Throws<One, "no">;
       export type Parameterised = Throws<Later, "no">;
+      type Named = Boom;
+      type Held = Caught<Boom>;
+      export type NamesStarted = Given<
+        [FakeTimers, Held, AdvanceTimers<5>],
+        [Expect<Held, "matches", {}>, Throws<Named, "no">]
+      >;
     }
   `;
 
@@ -936,7 +948,8 @@ declare namespace throwsAtDeclaration {
    * said where it is written: the alias throws where it is declared (the alias
    * of an alias and the Caught were not said). The controls: the call inside
    * the Throws, the alias started before an AdvanceTimers, which Throws does
-   * see, an alias of a literal, and a parameterised alias, called where used
+   * see (and an alias that only names one started so), an alias of a
+   * literal, and a parameterised alias, called where used
    */
   export type Said = Expect<
     Invoke<typeof harness.moduleWarnings, [Boom]>,
@@ -945,6 +958,24 @@ declare namespace throwsAtDeclaration {
       "`Throws<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
       "`Throws<Again>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
       "`Caught<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
+    ]
+  >;
+
+  type Clash = `
+    const boom = async (): Promise<never> => { throw new Error("no"); };
+    const Boom = 1;
+    declare namespace boom {
+      type Boom = Invoke<typeof boom>;
+      export type Alias = Throws<Boom, "no">;
+    }
+  `;
+
+  /** an alias whose name a value also has is said as written, not as printed (`Boom$`) */
+  export type AsWritten = Expect<
+    Invoke<typeof harness.moduleWarnings, [Clash]>,
+    "=",
+    [
+      "`Throws<Boom>` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught",
     ]
   >;
 }
@@ -1410,6 +1441,19 @@ export function lowerAlias(
   const cases = casesOf(cx, decl, path).map(settled);
   for (const name of new Set(cases.flatMap(throwsAtDeclaration)))
     cx.warn(decl, THROWS_ALIAS(name));
+  for (const why of new Set(
+    cases.flatMap((t) =>
+      t.bindings.flatMap((b) =>
+        (b.params ?? []).flatMap((p) =>
+          p.fallback?.kind === "unsupported" &&
+          p.fallback.source === DEFAULT_WAITS(p.name)
+            ? [`\`${b.name}\`: ${p.fallback.source}`]
+            : [],
+        ),
+      ),
+    ),
+  ))
+    cx.warn(decl, why);
   return cases;
 }
 
@@ -1436,15 +1480,18 @@ const throwsAtDeclaration = (t: TestCase) => {
   const found: string[] = [];
   for (const s of t.body)
     if (s.kind === "assert" && s.condition === "throws" && callAt(nameOf(s.actual)))
-      found.push(`Throws<${nameOf(s.actual)}>`);
+      found.push(`Throws<${written(nameOf(s.actual)!)}>`);
   const walk = (e: Expr): void => {
     if (e.kind === "caught" && callAt(nameOf(e.inner)))
-      found.push(`Caught<${nameOf(e.inner)}>`);
+      found.push(`Caught<${written(nameOf(e.inner)!)}>`);
     children(e).forEach(walk);
   };
   exprsOfTest(t).forEach(walk);
   return found;
 };
+
+// an alias whose name clashes with a value is printed with a `$`; the diagnostic says it as written
+const written = (name: string) => name.replace(/\$$/, "");
 
 const THROWS_ALIAS = (written: string) =>
   `\`${written}\` names an alias of a call, which runs where the alias is declared: what it throws fails the test before it can be checked. Write the call inside the Throws or the Caught`;

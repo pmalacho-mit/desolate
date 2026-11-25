@@ -241,6 +241,24 @@ const rebuilt = <T,>(value: T, f: (e: Expr) => Expr): T => {
 const aliasName = (e: Expr) =>
   e.kind === "name" && !e.imported ? e.name : null;
 
+/** What a refused default says when the test runs, and the printer where it is written. */
+export const DEFAULT_WAITS = (param: string) =>
+  `the default of ${param} names an alias started before an AdvanceTimers, which a default cannot wait for: pass it where the alias with ${param} is used`;
+
+/** Every alias in the test started for an AdvanceTimers, with the ones that only name it: one promise each. */
+export const startedGroups = (t: TestCase): Map<string, Set<string>> => {
+  const started = t.bindings.filter((b) => b.started);
+  const group = new Map(started.map((b) => [b.name, new Set([b.name])]));
+  for (const b of started) {
+    const named = aliasName(b.value);
+    const other = named === null ? undefined : group.get(named);
+    if (!other) continue;
+    const merged = new Set([...group.get(b.name)!, ...other]);
+    for (const n of merged) group.set(n, merged);
+  }
+  return group;
+};
+
 /**
  * Where each alias of an async call is awaited, once the test's body is known.
  * Lowering awaits every alias where it is declared, as any alias's value is had
@@ -286,22 +304,44 @@ export function settled(t: TestCase): TestCase {
       start(b);
   }
   if (!starts.size) return t;
+  // an alias that only names a started one is that same call, started with it
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const b of byName.values()) {
+      const named = aliasName(b.value);
+      if (!starts.has(b.name) && named !== null && starts.has(named)) {
+        starts.add(b.name);
+        grew = true;
+      }
+    }
+  }
   // the started aliases' names are awaited at each use, and what awaits because of them is recomputed
   const generic = new Map<string, boolean>();
-  const settle = <T,>(value: T) =>
+  const settle = <T,>(value: T, own: Set<string> = new Set()) =>
     rebuilt(value, (e) => {
       const name = aliasName(e);
-      if (name !== null && starts.has(name)) return { ...e, awaited: true };
+      // a binding's own parameter is not the alias it shadows
+      if (name !== null && starts.has(name) && !own.has(name))
+        return { ...e, awaited: true };
       if (e.kind === "caught") return { ...e, awaited: awaits(e.inner) };
       const callee = e.kind === "call" ? aliasName(e.callee) : null;
       return e.kind === "call" && callee !== null && generic.has(callee)
         ? { ...e, awaited: generic.get(callee)! }
         : e;
     });
+  // a parameter's default cannot wait for a call (an arrow's default may not
+  // await), so one that names a started alias is refused where the test runs
+  const defaulted = (p: Param): Param =>
+    p.fallback &&
+    some(p.fallback, (e) => aliasName(e) !== null && starts.has(aliasName(e)!))
+      ? { ...p, fallback: { kind: "unsupported", source: DEFAULT_WAITS(p.name) } }
+      : p;
   // in order, so an alias is settled before the ones that use it
   const bindings = t.bindings.map((b) => {
-    const settledBinding = {
-      ...settle(b),
+    const settledBinding: Binding = {
+      ...b,
+      params: b.params?.map(defaulted) ?? null,
+      value: settle(b.value, new Set(b.params?.map((p) => p.name))),
       ...(starts.has(b.name) ? { started: true } : {}),
     };
     if (b.params) generic.set(b.name, awaits(settledBinding.value));
