@@ -902,13 +902,48 @@ function registerSetup(
     return [];
   }
   if (!a0) return [effect(arity(cx, node, 2), line)];
+  const name = literalText(cx, a0);
+  // set before the test's code runs, so a second value for the name is the only one ever seen
+  if (cx.test.setup.some((s) => s.kind === "stubEnv" && s.name === name))
+    cx.warn(node, SECOND_VALUE(name));
   cx.test.setup.push({
     kind: "stubEnv",
-    name: literalText(cx, a0),
+    name,
     value: given(a1) ? lowerExpr(cx, a1) : null,
     line,
   });
   return [];
+}
+
+const SECOND_VALUE = (name: string) =>
+  `\`${name}\` is stubbed twice in one test: a StubEnv applies to the whole test, before its code runs, so only the last value is ever seen. Give each value a test of its own`;
+
+declare namespace registerSetup {
+  type Twice = `
+    const kind = () => process.env.BACKEND;
+    declare namespace kind {
+      export type Both = [
+        Given<StubEnv<"BACKEND", "fake">, Expect<Invoke<typeof kind>, "=", "fake">>,
+        Given<StubEnv<"BACKEND", "vz">, Expect<Invoke<typeof kind>, "=", "vz">>,
+      ];
+      export type Two = Given<
+        [StubEnv<"BACKEND", "fake">, StubEnv<"HOME", "/tmp">],
+        Expect<Invoke<typeof kind>, "=", "fake">
+      >;
+    }
+  `;
+
+  /**
+   * a second value for one variable in one test is said where it is written:
+   * the first was silently never seen. The control: two variables are fine
+   */
+  export type SecondValue = Expect<
+    Invoke<typeof harness.moduleWarnings, [Twice]>,
+    "=",
+    [
+      "`BACKEND` is stubbed twice in one test: a StubEnv applies to the whole test, before its code runs, so only the last value is ever seen. Give each value a test of its own",
+    ]
+  >;
 }
 
 const lowerEffect = (cx: EmitContext, e: ts.TypeNode): Statement[] =>

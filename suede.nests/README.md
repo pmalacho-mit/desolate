@@ -329,7 +329,9 @@ declare namespace copy {
 
 `FakeTimers` and `StubEnv` apply to the whole test, as `Mock` does: whatever
 their place among a `Given`'s effects, they come first, and each is undone when
-the test ends. `AdvanceTimers` and `WriteFile` run where they are written. Like
+the test ends, so one variable has one value in a test: a second `StubEnv` of
+the same name is a mistake the printer says where it is written. `AdvanceTimers`
+and `WriteFile` run where they are written. Like
 any alias, a `Spy`, a `TempDir` or a `Caught` named once is one value in a test:
 the code and the expectation hold the same spy, the same directory, the same
 error.

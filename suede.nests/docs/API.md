@@ -725,7 +725,9 @@ export type InOrder = Given<
 > **StubEnv**\<`Name`, `Value`\> = [`SetupNode`](Namespace.Internal.md#setupnode)\<`"stubEnv"`, \[`Name`, `Value`\]\>
 
 An environment variable set (or, as `undefined`, unset) for one test, and
-put back when it ends. Like `Mock`, it applies before the test's code runs.
+put back when it ends. Like `Mock`, it applies before the test's code runs,
+so a variable has one value in a test: a second `StubEnv` of the same name
+is reported where it is written.
 
 ```ts
 export type FakeBackend = Given<
